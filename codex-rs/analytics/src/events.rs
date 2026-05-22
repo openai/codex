@@ -14,6 +14,7 @@ use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadStartType;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -161,6 +162,7 @@ pub(crate) struct CodexAppServerStartedEventRequest {
 
 #[derive(Default, Serialize)]
 pub(crate) struct ThreadStartTimingEventParams {
+    pub(crate) thread_start_type: Option<ThreadStartType>,
     pub(crate) thread_start_duration_ms: Option<u64>,
     pub(crate) thread_start_prepare_duration_ms: Option<u64>,
     pub(crate) thread_start_spawn_duration_ms: Option<u64>,

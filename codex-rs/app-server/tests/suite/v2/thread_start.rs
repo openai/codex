@@ -18,6 +18,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
@@ -44,10 +45,10 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use super::analytics::ANALYTICS_TEST_TIMEOUT;
 use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
-use super::analytics::wait_for_analytics_event;
+use super::analytics::thread_initialized_event;
+use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
@@ -436,10 +437,10 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
 
-    let event =
-        wait_for_analytics_event(&server, ANALYTICS_TEST_TIMEOUT, "codex_thread_initialized")
-            .await?;
-    assert_basic_thread_initialized_event(&event, &thread.id, "mock-model", "new", "user");
+    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
+    assert_eq!(payload["events"].as_array().expect("events array").len(), 1);
+    let event = thread_initialized_event(&payload)?;
+    assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "new", "user", "new");
     let thread_start_timings = [
         "thread_start_duration_ms",
         "thread_start_prepare_duration_ms",
@@ -448,6 +449,44 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     ]
     .map(|field| event["event_params"][field].as_u64().is_some());
     assert_eq!(thread_start_timings, [true, true, true, true]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_clear_tracks_thread_initialized_analytics() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(ANALYTICS_TEST_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            session_start_source: Some(ThreadStartSource::Clear),
+            thread_source: Some(ThreadSource::User),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        ANALYTICS_TEST_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
+    let event = thread_initialized_event(&payload)?;
+    assert_basic_thread_initialized_event(
+        event,
+        &thread.id,
+        "mock-model",
+        "new",
+        "user",
+        "cleared",
+    );
     Ok(())
 }
 

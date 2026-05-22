@@ -39,6 +39,7 @@ pub use facts::SkillInvocation;
 pub use facts::SubAgentThreadStartedInput;
 pub use facts::ThreadInitializationMode;
 pub use facts::ThreadStartTimingFact;
+pub use facts::ThreadStartType;
 pub use facts::TrackEventsContext;
 pub use facts::TurnResolvedConfigFact;
 pub use facts::TurnStatus;

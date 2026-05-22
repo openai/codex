@@ -66,6 +66,7 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::ThreadStartTimingFact;
+use crate::facts::ThreadStartType;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
@@ -1331,6 +1332,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             subagent_source: None,
             parent_thread_id: None,
             thread_start_timing: ThreadStartTimingEventParams {
+                thread_start_type: Some(ThreadStartType::New),
                 thread_start_duration_ms: Some(321),
                 thread_start_prepare_duration_ms: Some(111),
                 thread_start_spawn_duration_ms: Some(123),
@@ -1367,6 +1369,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
+                "thread_start_type": "new",
                 "thread_start_duration_ms": 321,
                 "thread_start_prepare_duration_ms": 111,
                 "thread_start_spawn_duration_ms": 123,
@@ -1685,6 +1688,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         payload[0]["event_params"]["runtime"]["runtime_arch"],
         "x86_64"
     );
+    assert_eq!(payload[0]["event_params"]["thread_start_type"], json!(null));
     assert_eq!(
         payload[0]["event_params"]["thread_start_duration_ms"],
         json!(null)
@@ -1753,6 +1757,7 @@ async fn thread_start_timing_fact_enriches_thread_initialized_event() {
             AnalyticsFact::Custom(CustomAnalyticsFact::ThreadStartTiming(
                 ThreadStartTimingFact {
                     thread_id: "thread-1".to_string(),
+                    thread_start_type: ThreadStartType::Cleared,
                     duration_ms: 222,
                     prepare_duration_ms: 12,
                     spawn_duration_ms: 123,
@@ -1777,6 +1782,72 @@ async fn thread_start_timing_fact_enriches_thread_initialized_event() {
 
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload[0]["event_type"], json!("codex_thread_initialized"));
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_type"],
+        json!("cleared")
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_duration_ms"],
+        json!(222)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_prepare_duration_ms"],
+        json!(12)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_spawn_duration_ms"],
+        json!(123)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_finalize_duration_ms"],
+        json!(87)
+    );
+}
+
+#[tokio::test]
+async fn thread_start_timing_fact_enriches_resumed_thread_initialized_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_initialize(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadStartTiming(
+                ThreadStartTimingFact {
+                    thread_id: "thread-1".to_string(),
+                    thread_start_type: ThreadStartType::Resumed,
+                    duration_ms: 222,
+                    prepare_duration_ms: 12,
+                    spawn_duration_ms: 123,
+                    finalize_duration_ms: 87,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                response: Box::new(sample_thread_resume_response(
+                    "thread-1", /*ephemeral*/ true, "gpt-5",
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload[0]["event_type"], json!("codex_thread_initialized"));
+    assert_eq!(
+        payload[0]["event_params"]["initialization_mode"],
+        json!("resumed")
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_type"],
+        json!("resumed")
+    );
     assert_eq!(
         payload[0]["event_params"]["thread_start_duration_ms"],
         json!(222)

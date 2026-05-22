@@ -92,6 +92,15 @@ pub enum ThreadInitializationMode {
     Resumed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadStartType {
+    New,
+    Cleared,
+    Forked,
+    Resumed,
+}
+
 #[derive(Clone)]
 pub struct TurnTokenUsageFact {
     pub turn_id: String,
@@ -283,6 +292,7 @@ pub(crate) struct AppServerStartedInput {
 
 pub struct ThreadStartTimingFact {
     pub thread_id: String,
+    pub thread_start_type: ThreadStartType,
     pub duration_ms: u64,
     pub prepare_duration_ms: u64,
     pub spawn_duration_ms: u64,

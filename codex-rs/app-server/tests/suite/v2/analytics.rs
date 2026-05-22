@@ -142,6 +142,7 @@ pub(crate) fn assert_basic_thread_initialized_event(
     expected_model: &str,
     initialization_mode: &str,
     expected_thread_source: &str,
+    expected_thread_start_type: &str,
 ) {
     assert_eq!(event["event_params"]["thread_id"], thread_id);
     assert_eq!(
@@ -173,6 +174,10 @@ pub(crate) fn assert_basic_thread_initialized_event(
     assert_eq!(
         event["event_params"]["initialization_mode"],
         initialization_mode
+    );
+    assert_eq!(
+        event["event_params"]["thread_start_type"],
+        expected_thread_start_type
     );
     assert!(event["event_params"]["created_at"].as_u64().is_some());
 }

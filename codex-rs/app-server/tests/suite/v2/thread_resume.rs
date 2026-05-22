@@ -92,6 +92,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+use super::analytics::ANALYTICS_TEST_TIMEOUT;
 use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
@@ -419,9 +420,25 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
 
     let event =
-        wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_thread_initialized").await?;
-    assert_basic_thread_initialized_event(&event, &thread.id, "gpt-5.3-codex", "resumed", "user");
+        wait_for_analytics_event(&server, ANALYTICS_TEST_TIMEOUT, "codex_thread_initialized")
+            .await?;
+    assert_basic_thread_initialized_event(
+        &event,
+        &thread.id,
+        "gpt-5.3-codex",
+        "resumed",
+        "user",
+        "resumed",
+    );
     assert_eq!(event["event_params"]["thread_source"], "user");
+    let thread_start_timings = [
+        "thread_start_duration_ms",
+        "thread_start_prepare_duration_ms",
+        "thread_start_spawn_duration_ms",
+        "thread_start_finalize_duration_ms",
+    ]
+    .map(|field| event["event_params"][field].as_u64().is_some());
+    assert_eq!(thread_start_timings, [true, true, true, true]);
     Ok(())
 }
 
