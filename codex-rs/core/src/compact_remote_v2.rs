@@ -111,7 +111,7 @@ async fn run_remote_compact_task_inner(
         turn_context.as_ref(),
         trigger,
         reason,
-        CompactionImplementation::Responses,
+        CompactionImplementation::ResponsesCompactionV2,
         phase,
     )
     .await;
