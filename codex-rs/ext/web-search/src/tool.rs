@@ -15,6 +15,7 @@ use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ToolExposure;
 use codex_tools::default_namespace_description;
 use http::HeaderMap;
 
@@ -56,6 +57,10 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
                 defer_loading: None,
             })],
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::DirectModelOnly
     }
 
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
