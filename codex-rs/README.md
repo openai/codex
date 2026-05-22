@@ -55,24 +55,18 @@ Use `codex exec --ephemeral ...` to run without persisting session rollout files
 
 ### Experimenting with the Codex Sandbox
 
-To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:
+To test to see what happens when a command is run under the sandbox provided by Codex, use the `sandbox` subcommand in Codex CLI:
 
 ```
-# macOS
-codex sandbox macos [--log-denials] [COMMAND]...
+# Uses the sandbox implementation for the current host OS:
+# Seatbelt on macOS, the Linux sandbox on Linux, and Windows restricted token on Windows.
+codex sandbox [COMMAND]...
 
-# Linux
-codex sandbox linux [COMMAND]...
-
-# Windows
-codex sandbox windows [COMMAND]...
-
-# Legacy aliases
-codex debug seatbelt [--log-denials] [COMMAND]...
-codex debug landlock [COMMAND]...
+# macOS-only diagnostic option
+codex sandbox --log-denials [COMMAND]...
 ```
 
-To try a writable legacy sandbox mode with these commands, pass an explicit config override such
+To try a writable legacy sandbox mode with this command, pass an explicit config override such
 as `-c 'sandbox_mode="workspace-write"'`.
 
 ### Selecting a sandbox policy via `--sandbox`

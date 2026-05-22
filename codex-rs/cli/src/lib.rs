@@ -20,8 +20,8 @@ pub use login::run_login_with_device_code;
 pub use login::run_login_with_device_code_fallback_to_browser;
 pub use login::run_logout;
 
-// TODO: Deduplicate these shared sandbox options if we remove the explicit
-// `codex sandbox <os>` platform subcommands.
+// These command structs share common sandbox options, but remain separate
+// because each host backend has a slightly different option surface.
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {
     /// Named permissions profile to apply from the active configuration stack.
