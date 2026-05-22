@@ -593,6 +593,7 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let session_source = options
             .session_source
+            .or_else(|| options.initial_history.get_resumed_session_source())
             .unwrap_or_else(|| self.state.session_source.clone());
         let thread_source = options
             .thread_source
@@ -678,17 +679,23 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
+        let session_source = initial_history
+            .get_resumed_session_source()
+            .unwrap_or_else(|| self.state.session_source.clone());
         let thread_source = initial_history.get_resumed_thread_source();
-        Box::pin(self.state.spawn_thread(
+        Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
             auth_manager,
             self.agent_control(),
+            session_source,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
             /*user_shell_override*/ None,
@@ -734,17 +741,23 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
+        let session_source = initial_history
+            .get_resumed_session_source()
+            .unwrap_or_else(|| self.state.session_source.clone());
         let thread_source = initial_history.get_resumed_thread_source();
-        Box::pin(self.state.spawn_thread(
+        Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
             auth_manager,
             self.agent_control(),
+            session_source,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),

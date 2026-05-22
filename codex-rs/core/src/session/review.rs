@@ -80,6 +80,7 @@ pub(super) async fn spawn_review_thread(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
         forked_from_thread_id,
+        &session_source,
         parent_turn_context.thread_source,
         review_turn_id.clone(),
         #[allow(deprecated)]
