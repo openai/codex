@@ -321,7 +321,7 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn additional_context_value_is_truncated_before_model_input() -> Result<()> {
+async fn additional_context_values_are_truncated_before_model_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     const MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES: usize = 5 * 1024;
@@ -336,30 +336,67 @@ async fn additional_context_value_is_truncated_before_model_input() -> Result<()
         .with_config(|config| config.include_environment_context = false)
         .build(&server)
         .await?;
-    let long_value = format!("{}tail", "a".repeat(40_000));
-    let untruncated_fragment =
-        format!("<external_browser_info>{long_value}</external_browser_info>");
+    let long_browser_value = format!("browser-head-{}browser-tail", "b".repeat(40_000));
+    let long_automation_value = format!("automation-head-{}automation-tail", "a".repeat(40_000));
+    let untruncated_browser_fragment =
+        format!("<external_browser_info>{long_browser_value}</external_browser_info>");
+    let untruncated_automation_fragment =
+        format!("<automation_info>{long_automation_value}</automation_info>");
 
     test.codex
         .submit(user_turn(
             "summarize context",
-            BTreeMap::from([("browser_info".to_string(), untrusted_context(&long_value))]),
+            BTreeMap::from([
+                (
+                    "automation_info".to_string(),
+                    trusted_context(&long_automation_value),
+                ),
+                (
+                    "browser_info".to_string(),
+                    untrusted_context(&long_browser_value),
+                ),
+            ]),
         ))
         .await?;
     wait_for_turn_complete(&test.codex).await;
 
-    let user_texts = request.single_request().message_input_texts("user");
+    let request = request.single_request();
+    let developer_texts = request
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text.starts_with("<automation_info>"))
+        .collect::<Vec<_>>();
+    let [automation_text] = developer_texts.as_slice() else {
+        panic!("expected trusted additional context, got {developer_texts:?}");
+    };
+    assert!(automation_text.starts_with(&format!(
+        "<automation_info>automation-head-{}",
+        "a".repeat(1024)
+    )));
+    assert!(automation_text.contains("tokens truncated"));
+    assert!(automation_text.ends_with("automation-tail</automation_info>"));
+    assert!(automation_text.len() < untruncated_automation_fragment.len());
+    assert!(
+        automation_text.len() <= MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES,
+        "trusted additional context was not capped before model input: {} bytes",
+        automation_text.len()
+    );
+
+    let user_texts = request.message_input_texts("user");
     let [external_text, user_text] = user_texts.as_slice() else {
         panic!("expected external context plus user input, got {user_texts:?}");
     };
     assert_eq!(user_text, "summarize context");
-    assert!(external_text.starts_with(&format!("<external_browser_info>{}", "a".repeat(1024))));
+    assert!(external_text.starts_with(&format!(
+        "<external_browser_info>browser-head-{}",
+        "b".repeat(1024)
+    )));
     assert!(external_text.contains("tokens truncated"));
-    assert!(external_text.ends_with("tail</external_browser_info>"));
-    assert!(external_text.len() < untruncated_fragment.len());
+    assert!(external_text.ends_with("browser-tail</external_browser_info>"));
+    assert!(external_text.len() < untruncated_browser_fragment.len());
     assert!(
         external_text.len() <= MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES,
-        "external context was not capped before model input: {} bytes",
+        "untrusted additional context was not capped before model input: {} bytes",
         external_text.len()
     );
 
