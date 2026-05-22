@@ -171,6 +171,9 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) thread_start_duration_ms: Option<u64>,
+    pub(crate) thread_start_prepare_duration_ms: Option<u64>,
+    pub(crate) thread_start_spawn_duration_ms: Option<u64>,
+    pub(crate) thread_start_finalize_duration_ms: Option<u64>,
     pub(crate) created_at: u64,
 }
 
@@ -1059,6 +1062,9 @@ pub(crate) fn subagent_thread_started_event_request(
             .parent_thread_id
             .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
         thread_start_duration_ms: None,
+        thread_start_prepare_duration_ms: None,
+        thread_start_spawn_duration_ms: None,
+        thread_start_finalize_duration_ms: None,
         created_at: input.created_at,
     };
     ThreadInitializedEvent {

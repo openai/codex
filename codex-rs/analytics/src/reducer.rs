@@ -151,7 +151,15 @@ struct ConnectionState {
 struct ThreadAnalyticsState {
     connection_id: Option<u64>,
     metadata: Option<ThreadMetadataState>,
-    thread_start_duration_ms: Option<u64>,
+    thread_start_timing: Option<ThreadStartTimingState>,
+}
+
+#[derive(Clone, Copy)]
+struct ThreadStartTimingState {
+    duration_ms: u64,
+    prepare_duration_ms: u64,
+    spawn_duration_ms: u64,
+    finalize_duration_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -568,10 +576,16 @@ impl AnalyticsReducer {
     }
 
     fn ingest_thread_start_timing(&mut self, input: ThreadStartTimingFact) {
+        let thread_start_timing = ThreadStartTimingState {
+            duration_ms: input.duration_ms,
+            prepare_duration_ms: input.prepare_duration_ms,
+            spawn_duration_ms: input.spawn_duration_ms,
+            finalize_duration_ms: input.finalize_duration_ms,
+        };
         self.threads
             .entry(input.thread_id)
             .or_default()
-            .thread_start_duration_ms = Some(input.duration_ms);
+            .thread_start_timing = Some(thread_start_timing);
     }
 
     fn ingest_guardian_review(
@@ -1279,8 +1293,8 @@ impl AnalyticsReducer {
         let thread_state = self.threads.entry(thread_id.clone()).or_default();
         thread_state.connection_id = Some(connection_id);
         thread_state.metadata = Some(thread_metadata.clone());
-        let thread_start_duration_ms = matches!(initialization_mode, ThreadInitializationMode::New)
-            .then_some(thread_state.thread_start_duration_ms)
+        let thread_start_timing = matches!(initialization_mode, ThreadInitializationMode::New)
+            .then_some(thread_state.thread_start_timing)
             .flatten();
         out.push(TrackEventRequest::ThreadInitialized(
             ThreadInitializedEvent {
@@ -1295,7 +1309,13 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
-                    thread_start_duration_ms,
+                    thread_start_duration_ms: thread_start_timing.map(|timing| timing.duration_ms),
+                    thread_start_prepare_duration_ms: thread_start_timing
+                        .map(|timing| timing.prepare_duration_ms),
+                    thread_start_spawn_duration_ms: thread_start_timing
+                        .map(|timing| timing.spawn_duration_ms),
+                    thread_start_finalize_duration_ms: thread_start_timing
+                        .map(|timing| timing.finalize_duration_ms),
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },

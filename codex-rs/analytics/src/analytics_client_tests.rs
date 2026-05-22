@@ -1330,6 +1330,9 @@ fn thread_initialized_event_serializes_expected_shape() {
             subagent_source: None,
             parent_thread_id: None,
             thread_start_duration_ms: Some(321),
+            thread_start_prepare_duration_ms: Some(111),
+            thread_start_spawn_duration_ms: Some(123),
+            thread_start_finalize_duration_ms: Some(87),
             created_at: 1,
         },
     });
@@ -1362,6 +1365,9 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "subagent_source": null,
                 "parent_thread_id": null,
                 "thread_start_duration_ms": 321,
+                "thread_start_prepare_duration_ms": 111,
+                "thread_start_spawn_duration_ms": 123,
+                "thread_start_finalize_duration_ms": 87,
                 "created_at": 1
             }
         })
@@ -1680,6 +1686,18 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         payload[0]["event_params"]["thread_start_duration_ms"],
         json!(null)
     );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_prepare_duration_ms"],
+        json!(null)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_spawn_duration_ms"],
+        json!(null)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_finalize_duration_ms"],
+        json!(null)
+    );
 }
 
 #[tokio::test]
@@ -1733,6 +1751,9 @@ async fn thread_start_timing_fact_enriches_thread_initialized_event() {
                 ThreadStartTimingFact {
                     thread_id: "thread-1".to_string(),
                     duration_ms: 222,
+                    prepare_duration_ms: 12,
+                    spawn_duration_ms: 123,
+                    finalize_duration_ms: 87,
                 },
             )),
             &mut events,
@@ -1756,6 +1777,18 @@ async fn thread_start_timing_fact_enriches_thread_initialized_event() {
     assert_eq!(
         payload[0]["event_params"]["thread_start_duration_ms"],
         json!(222)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_prepare_duration_ms"],
+        json!(12)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_spawn_duration_ms"],
+        json!(123)
+    );
+    assert_eq!(
+        payload[0]["event_params"]["thread_start_finalize_duration_ms"],
+        json!(87)
     );
 }
 

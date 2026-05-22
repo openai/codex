@@ -281,9 +281,12 @@ pub(crate) struct AppServerStartedInput {
     pub completed_at: u64,
 }
 
-pub(crate) struct ThreadStartTimingFact {
+pub struct ThreadStartTimingFact {
     pub thread_id: String,
     pub duration_ms: u64,
+    pub prepare_duration_ms: u64,
+    pub spawn_duration_ms: u64,
+    pub finalize_duration_ms: u64,
 }
 
 #[allow(dead_code)]
