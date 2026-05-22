@@ -1,11 +1,12 @@
 use std::sync::Arc;
+use std::sync::Weak;
 
 use async_trait::async_trait;
+use codex_core::ThreadManager;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ResponseItemInjectorSlot;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
@@ -45,6 +46,7 @@ impl GoalExtensionConfig {
 pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
+    thread_manager: Weak<ThreadManager>,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
 }
 
@@ -58,11 +60,13 @@ impl<C> GoalExtension<C> {
     pub(crate) fn new_with_host_capabilities(
         state_dbs: Arc<codex_state::StateRuntime>,
         event_sink: Arc<dyn ExtensionEventSink>,
+        thread_manager: Weak<ThreadManager>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
             state_dbs,
             event_emitter: GoalEventEmitter::new(event_sink),
+            thread_manager,
             goals_enabled: Arc::new(goals_enabled),
         }
     }
@@ -81,9 +85,6 @@ where
         let accounting_state = input
             .thread_store
             .get_or_init::<GoalAccountingState>(GoalAccountingState::default);
-        let response_item_injector_slot = input
-            .thread_store
-            .get_or_init(ResponseItemInjectorSlot::default);
         let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
             return;
         };
@@ -92,7 +93,7 @@ where
                 thread_id,
                 Arc::clone(&self.state_dbs),
                 self.event_emitter.clone(),
-                response_item_injector_slot,
+                self.thread_manager.clone(),
                 accounting_state,
                 enabled,
             )
@@ -292,16 +293,7 @@ where
                 return;
             }
             let item = budget_limit_steering_item(&goal);
-            let Some(response_item_injector) = runtime.response_item_injector_slot().get() else {
-                return;
-            };
-            if response_item_injector
-                .inject_response_items(vec![item])
-                .await
-                .is_err()
-            {
-                tracing::debug!("skipping budget-limit goal steering because no turn is active");
-            }
+            runtime.inject_active_turn_steering(item).await;
         })
     }
 }
@@ -348,6 +340,7 @@ where
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
+    thread_manager: Weak<ThreadManager>,
     goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
 ) where
     C: Send + Sync + 'static,
@@ -355,6 +348,7 @@ pub fn install_with_backend<C>(
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
         registry.event_sink(),
+        thread_manager,
         goals_enabled,
     ));
     registry.thread_lifecycle_contributor(extension.clone());

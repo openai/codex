@@ -244,6 +244,17 @@ impl CodexThread {
             .await
     }
 
+    /// Injects hidden model-visible items into the currently active turn.
+    ///
+    /// This is the runtime-owned counterpart to user-facing `steer_input`.
+    /// It returns the unchanged items when this thread has no active turn.
+    pub async fn inject_response_items_into_active_turn(
+        &self,
+        items: Vec<ResponseInputItem>,
+    ) -> Result<(), Vec<ResponseInputItem>> {
+        self.codex.session.inject_response_items(items).await
+    }
+
     pub async fn set_app_server_client_info(
         &self,
         app_server_client_name: Option<String>,

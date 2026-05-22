@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use codex_extension_api::ResponseItemInjectorSlot;
+use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
@@ -21,7 +23,7 @@ struct GoalRuntimeInner {
     thread_id: ThreadId,
     state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
-    response_item_injector_slot: Arc<ResponseItemInjectorSlot>,
+    thread_manager: Weak<ThreadManager>,
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
 }
@@ -59,7 +61,7 @@ impl GoalRuntimeHandle {
         thread_id: ThreadId,
         state_dbs: Arc<codex_state::StateRuntime>,
         event_emitter: GoalEventEmitter,
-        response_item_injector_slot: Arc<ResponseItemInjectorSlot>,
+        thread_manager: Weak<ThreadManager>,
         accounting_state: Arc<GoalAccountingState>,
         enabled: bool,
     ) -> Self {
@@ -68,7 +70,7 @@ impl GoalRuntimeHandle {
                 thread_id,
                 state_dbs,
                 event_emitter,
-                response_item_injector_slot,
+                thread_manager,
                 accounting_state,
                 enabled: AtomicBool::new(enabled),
             }),
@@ -89,10 +91,6 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn accounting_state(&self) -> Arc<GoalAccountingState> {
         Arc::clone(&self.inner.accounting_state)
-    }
-
-    pub(crate) fn response_item_injector_slot(&self) -> Arc<ResponseItemInjectorSlot> {
-        Arc::clone(&self.inner.response_item_injector_slot)
     }
 
     pub async fn prepare_external_goal_mutation(&self) -> Result<(), String> {
@@ -129,9 +127,11 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
-        let objective_changed = previous_goal
-            .as_ref()
-            .is_some_and(|previous_goal| previous_goal.objective != goal.objective);
+        let should_steer_active_turn = previous_goal.as_ref().is_none_or(|previous_goal| {
+            previous_goal.goal_id != goal.goal_id
+                || previous_goal.status != codex_state::ThreadGoalStatus::Active
+                || previous_goal.objective != goal.objective
+        });
         match goal.status {
             codex_state::ThreadGoalStatus::Active => {
                 if self.inner.accounting_state.current_turn_id().is_some() {
@@ -144,20 +144,9 @@ impl GoalRuntimeHandle {
                         .accounting_state
                         .mark_idle_goal_active(goal.goal_id.clone());
                 }
-                if objective_changed
-                    && let Some(response_item_injector) =
-                        self.inner.response_item_injector_slot.get()
-                {
+                if should_steer_active_turn {
                     let item = objective_updated_steering_item(&protocol_goal_from_state(goal));
-                    if response_item_injector
-                        .inject_response_items(vec![item])
-                        .await
-                        .is_err()
-                    {
-                        tracing::debug!(
-                            "skipping objective-updated goal steering because no turn is active"
-                        );
-                    }
+                    self.inject_active_turn_steering(item).await;
                 }
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
@@ -182,6 +171,24 @@ impl GoalRuntimeHandle {
 
         self.inner.accounting_state.clear_active_goal();
         Ok(())
+    }
+
+    pub(crate) async fn inject_active_turn_steering(&self, item: ResponseInputItem) {
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            tracing::debug!("skipping goal steering because thread manager is unavailable");
+            return;
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            tracing::debug!("skipping goal steering because live thread is unavailable");
+            return;
+        };
+        if thread
+            .inject_response_items_into_active_turn(vec![item])
+            .await
+            .is_err()
+        {
+            tracing::debug!("skipping goal steering because no turn is active");
+        }
     }
 
     pub(crate) async fn account_active_goal_progress(

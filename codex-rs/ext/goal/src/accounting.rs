@@ -109,7 +109,9 @@ impl GoalAccountingState {
     pub(crate) fn mark_turn_goal_active(&self, turn_id: &str, goal_id: impl Into<String>) {
         let mut inner = self.inner();
         let goal_id = goal_id.into();
-        inner.budget_limit_reported_goal_id = None;
+        if inner.budget_limit_reported_goal_id.as_deref() != Some(goal_id.as_str()) {
+            inner.budget_limit_reported_goal_id = None;
+        }
         if let Some(turn) = inner.turns.get_mut(turn_id) {
             turn.active_goal_id = Some(goal_id.clone());
             if inner.current_turn_id.as_deref() == Some(turn_id) {
@@ -125,7 +127,9 @@ impl GoalAccountingState {
         let mut inner = self.inner();
         let turn_id = inner.current_turn_id.clone()?;
         let goal_id = goal_id.into();
-        inner.budget_limit_reported_goal_id = None;
+        if inner.budget_limit_reported_goal_id.as_deref() != Some(goal_id.as_str()) {
+            inner.budget_limit_reported_goal_id = None;
+        }
         let turn = inner.turns.get_mut(turn_id.as_str())?;
         turn.active_goal_id = Some(goal_id.clone());
         turn.reset_baseline_to_current();
@@ -135,7 +139,10 @@ impl GoalAccountingState {
 
     pub(crate) fn mark_idle_goal_active(&self, goal_id: impl Into<String>) {
         let mut inner = self.inner();
-        inner.budget_limit_reported_goal_id = None;
+        let goal_id = goal_id.into();
+        if inner.budget_limit_reported_goal_id.as_deref() != Some(goal_id.as_str()) {
+            inner.budget_limit_reported_goal_id = None;
+        }
         inner.wall_clock.mark_active_goal(goal_id);
     }
 
