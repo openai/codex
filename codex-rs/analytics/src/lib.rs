@@ -45,6 +45,7 @@ pub use facts::TurnStatus;
 pub use facts::TurnSteerRejectionReason;
 pub use facts::TurnSteerRequestError;
 pub use facts::TurnSteerResult;
+pub use facts::TurnTimingBreakdownFact;
 pub use facts::TurnTokenUsageFact;
 pub use facts::build_track_events_context;
 
