@@ -1,7 +1,6 @@
 use super::*;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
-const SEARCH_SERVICE_TOOL_NAME_PREFIX: &str = "search_service.";
 
 #[derive(Clone)]
 pub(crate) struct McpRequestProcessor {
@@ -403,14 +402,6 @@ impl McpRequestProcessor {
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
-        let meta = if should_forward_turn_metadata_to_mcp_tool(&params.server, &params.tool) {
-            with_mcp_tool_call_turn_metadata_meta(
-                meta,
-                thread.current_mcp_request_turn_metadata().await,
-            )
-        } else {
-            meta
-        };
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
@@ -422,38 +413,6 @@ impl McpRequestProcessor {
             outgoing.send_result(request_id, result).await;
         });
         Ok(())
-    }
-}
-
-fn should_forward_turn_metadata_to_mcp_tool(server: &str, tool: &str) -> bool {
-    server == CODEX_APPS_MCP_SERVER_NAME && tool.starts_with(SEARCH_SERVICE_TOOL_NAME_PREFIX)
-}
-
-fn with_mcp_tool_call_turn_metadata_meta(
-    meta: Option<serde_json::Value>,
-    turn_metadata: Option<serde_json::Value>,
-) -> Option<serde_json::Value> {
-    let Some(turn_metadata) = turn_metadata else {
-        return meta;
-    };
-
-    match meta {
-        Some(serde_json::Value::Object(mut map)) => {
-            map.insert(
-                codex_core::X_CODEX_TURN_METADATA_HEADER.to_string(),
-                turn_metadata,
-            );
-            Some(serde_json::Value::Object(map))
-        }
-        None => {
-            let mut map = serde_json::Map::new();
-            map.insert(
-                codex_core::X_CODEX_TURN_METADATA_HEADER.to_string(),
-                turn_metadata,
-            );
-            Some(serde_json::Value::Object(map))
-        }
-        other => other,
     }
 }
 
@@ -478,30 +437,5 @@ fn with_mcp_tool_call_thread_id_meta(
             Some(serde_json::Value::Object(map))
         }
         other => other,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn turn_metadata_is_forwarded_only_to_codex_apps_search_service_tools() {
-        assert!(should_forward_turn_metadata_to_mcp_tool(
-            CODEX_APPS_MCP_SERVER_NAME,
-            "search_service.web_run",
-        ));
-        assert!(should_forward_turn_metadata_to_mcp_tool(
-            CODEX_APPS_MCP_SERVER_NAME,
-            "search_service._web_run",
-        ));
-        assert!(!should_forward_turn_metadata_to_mcp_tool(
-            CODEX_APPS_MCP_SERVER_NAME,
-            "gmail.send_email",
-        ));
-        assert!(!should_forward_turn_metadata_to_mcp_tool(
-            "custom_mcp_server",
-            "search_service.web_run",
-        ));
     }
 }

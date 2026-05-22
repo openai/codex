@@ -1090,6 +1090,43 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
 }
 
 #[tokio::test]
+async fn mcp_tool_call_request_meta_includes_responsesapi_client_metadata() {
+    let (_, turn_context) = make_session_and_context().await;
+    let mcp_request_meta = serde_json::json!({
+        "user_location": {
+            "country": "US",
+            "region": "CA",
+            "city": "San Francisco",
+        },
+    })
+    .to_string();
+    turn_context
+        .turn_metadata_state
+        .set_responsesapi_client_metadata(HashMap::from([(
+            "mcp_request_meta".to_string(),
+            mcp_request_meta.clone(),
+        )]));
+
+    let meta = build_mcp_tool_call_request_meta(
+        &turn_context,
+        CODEX_APPS_MCP_SERVER_NAME,
+        "call-custom",
+        /*metadata*/ None,
+    )
+    .expect("Codex Apps MCP tools should receive turn metadata");
+    let turn_metadata = meta
+        .get(crate::X_CODEX_TURN_METADATA_HEADER)
+        .expect("turn metadata should be present");
+
+    assert_eq!(
+        turn_metadata
+            .get("mcp_request_meta")
+            .and_then(serde_json::Value::as_str),
+        Some(mcp_request_meta.as_str())
+    );
+}
+
+#[tokio::test]
 async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     let (_, turn_context) = make_session_and_context().await;
     let expected_turn_metadata = turn_context

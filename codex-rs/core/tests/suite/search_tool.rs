@@ -443,6 +443,14 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    let mcp_request_meta = json!({
+        "user_location": {
+            "country": "US",
+            "region": "CA",
+            "city": "San Francisco",
+        },
+    })
+    .to_string();
     test.codex
         .submit(Op::UserInput {
             environments: None,
@@ -451,7 +459,10 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
+            responsesapi_client_metadata: Some(HashMap::from([(
+                "mcp_request_meta".to_string(),
+                mcp_request_meta.clone(),
+            )])),
             thread_settings: Default::default(),
         })
         .await?;
@@ -565,6 +576,10 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     assert!(
         mcp_turn_started_at_unix_ms > 0,
         "apps tools/call should include a positive turn_started_at_unix_ms: {apps_tool_call:?}"
+    );
+    assert_eq!(
+        apps_tool_call.pointer("/params/_meta/x-codex-turn-metadata/mcp_request_meta"),
+        Some(&json!(mcp_request_meta))
     );
 
     let first_request_turn_metadata: Value = serde_json::from_str(
