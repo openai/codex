@@ -7361,19 +7361,6 @@
               }
             ]
           },
-          "profile": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "profiles": {
-            "additionalProperties": {
-              "$ref": "#/definitions/v2/ProfileV2"
-            },
-            "default": {},
-            "type": "object"
-          },
           "review_model": {
             "type": [
               "string",
@@ -13171,107 +13158,6 @@
           "cols",
           "rows"
         ],
-        "type": "object"
-      },
-      "ProfileV2": {
-        "additionalProperties": true,
-        "properties": {
-          "approval_policy": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/AskForApproval"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "approvals_reviewer": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ApprovalsReviewer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "[UNSTABLE] Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used."
-          },
-          "chatgpt_base_url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model_reasoning_effort": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReasoningEffort"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "model_reasoning_summary": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReasoningSummary"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "model_verbosity": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Verbosity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "service_tier": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "tools": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ToolsV2"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "web_search": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchMode"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
         "type": "object"
       },
       "RateLimitReachedType": {

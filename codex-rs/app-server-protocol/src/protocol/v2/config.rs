@@ -133,30 +133,6 @@ pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "snake_case")]
-#[ts(export_to = "v2/")]
-pub struct ProfileV2 {
-    pub model: Option<String>,
-    pub model_provider: Option<String>,
-    #[experimental(nested)]
-    pub approval_policy: Option<AskForApproval>,
-    /// [UNSTABLE] Optional profile-level override for where approval requests
-    /// are routed for review. If omitted, the enclosing config default is
-    /// used.
-    #[experimental("config/read.approvalsReviewer")]
-    pub approvals_reviewer: Option<ApprovalsReviewer>,
-    pub service_tier: Option<String>,
-    pub model_reasoning_effort: Option<ReasoningEffort>,
-    pub model_reasoning_summary: Option<ReasoningSummary>,
-    pub model_verbosity: Option<Verbosity>,
-    pub web_search: Option<WebSearchMode>,
-    pub tools: Option<ToolsV2>,
-    pub chatgpt_base_url: Option<String>,
-    #[serde(default, flatten)]
-    pub additional: HashMap<String, JsonValue>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
@@ -266,10 +242,6 @@ pub struct Config {
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,
-    pub profile: Option<String>,
-    #[experimental(nested)]
-    #[serde(default)]
-    pub profiles: HashMap<String, ProfileV2>,
     pub instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
