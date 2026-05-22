@@ -231,6 +231,55 @@ fn mcp_tool_output_response_item_preserves_content_items() {
 }
 
 #[test]
+fn model_visible_rewrite_output_keeps_original_mcp_code_mode_result() {
+    let large_content = "large structured value ".repeat(1_000);
+    let output = ModelVisibleRewriteOutput::new(
+        Box::new(McpToolOutput {
+            result: CallToolResult {
+                content: vec![serde_json::json!({
+                    "type": "text",
+                    "text": "ignored",
+                })],
+                structured_content: Some(serde_json::json!({
+                    "content": large_content,
+                })),
+                is_error: Some(false),
+                meta: None,
+            },
+            tool_input: json!({}),
+            wall_time: std::time::Duration::from_millis(1250),
+            original_image_detail_supported: false,
+            truncation_policy: TruncationPolicy::Bytes(64),
+        }),
+        "rewritten".to_string(),
+    );
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+
+    match output.to_response_item("mcp-call-1", &payload) {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            assert_eq!(call_id, "mcp-call-1");
+            assert_eq!(output.body.to_text().as_deref(), Some("rewritten"));
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+    assert_eq!(
+        output.code_mode_result(&payload),
+        serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "ignored",
+            }],
+            "structuredContent": {
+                "content": "large structured value ".repeat(1_000),
+            },
+            "isError": false,
+        })
+    );
+}
+
+#[test]
 fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
     let large_content = "large structured value ".repeat(1_000);
     let output = McpToolOutput {

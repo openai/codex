@@ -1,13 +1,8 @@
 use super::*;
-use crate::tools::context::McpToolOutput;
-use crate::tools::context::ModelVisibleRewriteOutput;
 use crate::tools::handlers::GetGoalHandler;
 use crate::tools::handlers::goal_spec::GET_GOAL_TOOL_NAME;
 use crate::tools::handlers::goal_spec::create_get_goal_tool;
-use codex_protocol::mcp::CallToolResult;
 use pretty_assertions::assert_eq;
-use serde_json::json;
-use std::time::Duration;
 
 struct TestHandler {
     tool_name: codex_tools::ToolName,
@@ -65,58 +60,6 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
     );
-}
-
-#[test]
-fn model_visible_rewrite_preserves_code_mode_result() {
-    let result = mcp_result_with_model_visible_rewrite();
-
-    match result.into_response() {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            assert_eq!(call_id, "mcp-call-1");
-            assert_eq!(
-                output.body.to_text().as_deref(),
-                Some(r#"{"echo":"rewritten"}"#)
-            );
-        }
-        other => panic!("expected FunctionCallOutput, got {other:?}"),
-    }
-
-    assert_eq!(
-        mcp_result_with_model_visible_rewrite().code_mode_result(),
-        json!({
-            "content": [],
-            "structuredContent": {
-                "echo": "original",
-            },
-            "isError": false,
-        })
-    );
-}
-
-fn mcp_result_with_model_visible_rewrite() -> AnyToolResult {
-    AnyToolResult {
-        call_id: "mcp-call-1".to_string(),
-        payload: ToolPayload::Function {
-            arguments: "{}".to_string(),
-        },
-        result: Box::new(ModelVisibleRewriteOutput::new(
-            Box::new(McpToolOutput {
-                result: CallToolResult {
-                    content: Vec::new(),
-                    structured_content: Some(json!({ "echo": "original" })),
-                    is_error: Some(false),
-                    meta: None,
-                },
-                tool_input: json!({}),
-                wall_time: Duration::ZERO,
-                original_image_detail_supported: false,
-                truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
-            }),
-            json!({ "echo": "rewritten" }),
-        )),
-        post_tool_use_payload: None,
-    }
 }
 
 #[test]

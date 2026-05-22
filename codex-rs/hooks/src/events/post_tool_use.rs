@@ -40,7 +40,7 @@ pub struct PostToolUseOutcome {
     pub stop_reason: Option<String>,
     pub additional_contexts: Vec<String>,
     pub feedback_message: Option<String>,
-    pub updated_tool_output: Option<Value>,
+    pub updated_tool_output: Option<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -255,6 +255,7 @@ fn parse_completed(
                         }
                     }
                     let can_rewrite_output = parsed.universal.continue_processing
+                        && !parsed.should_block
                         && parsed.invalid_reason.is_none()
                         && parsed.invalid_block_reason.is_none();
                     if can_rewrite_output {
@@ -341,15 +342,17 @@ fn select_updated_tool_output(
     results: &mut [dispatcher::ParsedHandler<PostToolUseHandlerData>],
     tool_name: &str,
     original_tool_response: &Value,
-) -> Option<Value> {
+) -> Option<String> {
     let is_mcp_tool = tool_name.starts_with("mcp__");
+    let original_tool_response_kind = json_kind_name(original_tool_response);
     let mut selected = None;
 
     for result in results {
-        let candidate = if let Some(updated_tool_output) = result.data.updated_tool_output.take() {
+        let candidate = if let Some(updated_tool_output) = result.data.updated_tool_output.as_ref()
+        {
             Some(updated_tool_output)
         } else if is_mcp_tool {
-            result.data.updated_mcp_tool_output.take()
+            result.data.updated_mcp_tool_output.as_ref()
         } else if result.data.updated_mcp_tool_output.is_some() {
             result.completed.run.entries.push(HookOutputEntry {
                 kind: HookOutputEntryKind::Warning,
@@ -364,14 +367,16 @@ fn select_updated_tool_output(
             continue;
         };
 
-        if is_mcp_tool || json_kind_name(original_tool_response) == json_kind_name(&candidate) {
-            selected = Some(candidate);
+        if is_mcp_tool || original_tool_response_kind == json_kind_name(candidate) {
+            selected = Some(match candidate {
+                Value::String(text) => text.clone(),
+                _ => candidate.to_string(),
+            });
         } else {
             result.completed.run.entries.push(HookOutputEntry {
                 kind: HookOutputEntryKind::Warning,
                 text: format!(
-                    "ignored updatedToolOutput: expected {} to match tool_response shape",
-                    json_kind_name(original_tool_response)
+                    "ignored updatedToolOutput: expected {original_tool_response_kind} to match tool_response shape"
                 ),
             });
         }
@@ -651,7 +656,7 @@ mod tests {
 
         assert_eq!(
             super::select_updated_tool_output(&mut results, "Bash", &json!("old")),
-            Some(json!("second"))
+            Some("second".to_string())
         );
     }
 
@@ -695,7 +700,7 @@ mod tests {
 
         assert_eq!(
             super::select_updated_tool_output(&mut results, "mcp__memory__lookup", &json!({})),
-            Some(json!({"source": "generic"}))
+            Some(r#"{"source":"generic"}"#.to_string())
         );
     }
 
@@ -713,7 +718,7 @@ mod tests {
 
         assert_eq!(
             super::select_updated_tool_output(&mut results, "mcp__memory__lookup", &json!({})),
-            Some(json!({"source": "mcp"}))
+            Some(r#"{"source":"mcp"}"#.to_string())
         );
     }
 

@@ -293,13 +293,13 @@ impl ToolOutput for FunctionToolOutput {
 /// response item.
 pub(crate) struct ModelVisibleRewriteOutput {
     original_tool_output: Box<dyn ToolOutput>,
-    updated_tool_output: JsonValue,
+    updated_tool_output: String,
 }
 
 impl ModelVisibleRewriteOutput {
     pub(crate) fn new(
         original_tool_output: Box<dyn ToolOutput>,
-        updated_tool_output: JsonValue,
+        updated_tool_output: String,
     ) -> Self {
         Self {
             original_tool_output,
@@ -318,14 +318,8 @@ impl ToolOutput for ModelVisibleRewriteOutput {
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        FunctionToolOutput::from_text(
-            match &self.updated_tool_output {
-                JsonValue::String(text) => text.clone(),
-                _ => self.updated_tool_output.to_string(),
-            },
-            Some(true),
-        )
-        .to_response_item(call_id, payload)
+        FunctionToolOutput::from_text(self.updated_tool_output.clone(), Some(true))
+            .to_response_item(call_id, payload)
     }
 
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
