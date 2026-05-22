@@ -625,6 +625,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         call_id: call_id.to_string(),
         tool_name: codex_extension_api::ToolName::plain(tool_name),
         truncation_policy: TruncationPolicy::Bytes(1024),
+        conversation_history: codex_extension_api::ConversationHistory::default(),
         payload: ToolPayload::Function {
             arguments: arguments.to_string(),
         },
