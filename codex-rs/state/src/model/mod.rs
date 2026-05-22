@@ -5,6 +5,7 @@ mod log;
 mod memories;
 mod thread_goal;
 mod thread_metadata;
+mod usage;
 
 pub use agent_job::AgentJob;
 pub use agent_job::AgentJobCreateParams;
@@ -34,6 +35,11 @@ pub use thread_metadata::SortKey;
 pub use thread_metadata::ThreadMetadata;
 pub use thread_metadata::ThreadMetadataBuilder;
 pub use thread_metadata::ThreadsPage;
+pub use usage::UsageEntry;
+pub use usage::UsageHeadline;
+pub use usage::UsageRange;
+pub use usage::UsageReport;
+pub use usage::UsageSample;
 
 pub(crate) use agent_job::AgentJobItemRow;
 pub(crate) use agent_job::AgentJobRow;
