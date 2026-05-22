@@ -158,7 +158,6 @@ pub(crate) struct AnyToolResult {
     pub(crate) call_id: String,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
-    pub(crate) model_visible_override: Option<FunctionToolOutput>,
     pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
 }
 
@@ -168,13 +167,9 @@ impl AnyToolResult {
             call_id,
             payload,
             result,
-            model_visible_override,
             ..
         } = self;
-        model_visible_override.map_or_else(
-            || result.to_response_item(&call_id, &payload),
-            |output| output.to_response_item(&call_id, &payload),
-        )
+        result.to_response_item(&call_id, &payload)
     }
 
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
@@ -182,6 +177,29 @@ impl AnyToolResult {
             payload, result, ..
         } = self;
         result.code_mode_result(&payload)
+    }
+}
+
+struct PostToolUseFeedbackOutput {
+    original: Box<dyn ToolOutput>,
+    model_visible: FunctionToolOutput,
+}
+
+impl ToolOutput for PostToolUseFeedbackOutput {
+    fn log_preview(&self) -> String {
+        self.original.log_preview()
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.original.success_for_logging()
+    }
+
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        self.model_visible.to_response_item(call_id, payload)
+    }
+
+    fn code_mode_result(&self, payload: &ToolPayload) -> Value {
+        self.original.code_mode_result(payload)
     }
 }
 
@@ -590,11 +608,15 @@ impl ToolRegistry {
             };
             if let Some(replacement_text) = replacement_text {
                 let mut guard = response_cell.lock().await;
-                if let Some(result) = guard.as_mut() {
-                    result.model_visible_override = Some(FunctionToolOutput::from_text(
-                        replacement_text,
-                        /*success*/ None,
-                    ));
+                if let Some(mut result) = guard.take() {
+                    result.result = Box::new(PostToolUseFeedbackOutput {
+                        original: result.result,
+                        model_visible: FunctionToolOutput::from_text(
+                            replacement_text,
+                            /*success*/ None,
+                        ),
+                    });
+                    *guard = Some(result);
                 }
             }
         }
@@ -666,7 +688,6 @@ async fn handle_any_tool(
         call_id,
         payload,
         result: output,
-        model_visible_override: None,
         post_tool_use_payload,
     })
 }

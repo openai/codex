@@ -273,19 +273,21 @@ async fn write_stdin_does_not_expose_default_pre_tool_use_payload() {
 }
 
 #[test]
-fn model_visible_override_keeps_code_mode_result_typed() {
+fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
     let result = AnyToolResult {
         call_id: "call-1".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
-        result: Box::new(codex_tools::JsonToolOutput::new(
-            serde_json::json!({ "typed": true }),
-        )),
-        model_visible_override: Some(crate::tools::context::FunctionToolOutput::from_text(
-            "hook feedback".to_string(),
-            /*success*/ None,
-        )),
+        result: Box::new(PostToolUseFeedbackOutput {
+            original: Box::new(codex_tools::JsonToolOutput::new(
+                serde_json::json!({ "typed": true }),
+            )),
+            model_visible: crate::tools::context::FunctionToolOutput::from_text(
+                "hook feedback".to_string(),
+                /*success*/ None,
+            ),
+        }),
         post_tool_use_payload: None,
     };
 
@@ -304,13 +306,15 @@ fn model_visible_override_keeps_code_mode_result_typed() {
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
-        result: Box::new(codex_tools::JsonToolOutput::new(
-            serde_json::json!({ "typed": true }),
-        )),
-        model_visible_override: Some(crate::tools::context::FunctionToolOutput::from_text(
-            "hook feedback".to_string(),
-            /*success*/ None,
-        )),
+        result: Box::new(PostToolUseFeedbackOutput {
+            original: Box::new(codex_tools::JsonToolOutput::new(
+                serde_json::json!({ "typed": true }),
+            )),
+            model_visible: crate::tools::context::FunctionToolOutput::from_text(
+                "hook feedback".to_string(),
+                /*success*/ None,
+            ),
+        }),
         post_tool_use_payload: None,
     };
 
