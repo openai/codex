@@ -713,7 +713,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
 }
 
 #[tokio::test]
-async fn write_value_rejects_profile_feature_requirement_conflict() {
+async fn write_value_allows_profile_feature_requirement_conflict() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
 
@@ -731,7 +731,7 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
         }),
     );
 
-    let error = service
+    let response = service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "profiles.enterprise.features.personality".to_string(),
@@ -740,21 +740,12 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
             expected_version: None,
         })
         .await
-        .expect_err("conflicting profile feature write should fail");
+        .expect("profile feature write should succeed");
 
-    assert_eq!(
-        error.write_error_code(),
-        Some(ConfigWriteErrorCode::ConfigValidationError)
-    );
-    assert!(
-        error.to_string().contains(
-            "invalid value for `features`: `profiles.enterprise.features.personality=false`"
-        ),
-        "{error}"
-    );
+    assert_eq!(response.status, WriteStatus::Ok);
     assert_eq!(
         std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
-        ""
+        "[profiles.enterprise.features]\npersonality = false\n"
     );
 }
 
