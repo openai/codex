@@ -97,6 +97,17 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        if self.next_prompt_suggestion_key_should_accept(key_event) {
+            self.accept_next_prompt_suggestion();
+            return;
+        }
+        if matches!(
+            key_event.code,
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete
+        ) {
+            self.cancel_pending_next_prompt_suggestion();
+        }
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected

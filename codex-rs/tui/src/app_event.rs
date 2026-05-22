@@ -158,6 +158,13 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
         event: HistoryLookupResponse,
     },
+    /// Delivers one background next-prompt RPC result back onto the UI thread.
+    NextPromptSuggestionReady {
+        generation: u64,
+        thread_id: ThreadId,
+        latency_ms: u64,
+        result: Result<Option<String>, String>,
+    },
 
     /// Persist a submitted prompt in the cross-session message history.
     AppendMessageHistoryEntry {

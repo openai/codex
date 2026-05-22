@@ -1441,6 +1441,17 @@ impl App {
         app_server: &mut AppServerSession,
         event: ThreadBufferedEvent,
     ) -> Result<()> {
+        let next_prompt_suggestion_action = match &event {
+            ThreadBufferedEvent::Notification(ServerNotification::TurnStarted(_)) => Some(false),
+            ThreadBufferedEvent::Notification(ServerNotification::TurnCompleted(notification)) => {
+                match notification.turn.status {
+                    TurnStatus::Completed => Some(true),
+                    TurnStatus::Interrupted | TurnStatus::Failed => Some(false),
+                    TurnStatus::InProgress => None,
+                }
+            }
+            _ => None,
+        };
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(
@@ -1492,6 +1503,11 @@ impl App {
             self.pending_shutdown_exit_thread_id = None;
         }
         self.handle_thread_event_now(event);
+        match next_prompt_suggestion_action {
+            Some(true) => self.request_next_prompt_suggestion(app_server),
+            Some(false) => self.clear_next_prompt_suggestion(),
+            None => {}
+        }
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }

@@ -16,12 +16,7 @@ impl ChatWidget {
 
     pub(crate) fn set_side_conversation_active(&mut self, active: bool) {
         self.active_side_conversation = active;
-        let placeholder = if active {
-            self.side_placeholder_text.clone()
-        } else {
-            self.normal_placeholder_text.clone()
-        };
-        self.bottom_pane.set_placeholder_text(placeholder);
+        self.refresh_composer_placeholder();
         self.bottom_pane.set_side_conversation_active(active);
     }
 

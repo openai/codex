@@ -412,6 +412,7 @@ impl App {
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
         self.side_threads.clear();
+        self.clear_next_prompt_suggestion();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -546,9 +547,11 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        let thread_id = started.session.thread_id;
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
         self.backfill_loaded_subagent_threads(app_server).await;
+        self.request_next_prompt_suggestion_for_thread(app_server, thread_id);
         Ok(())
     }
 

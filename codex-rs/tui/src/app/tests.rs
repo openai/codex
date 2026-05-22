@@ -3809,6 +3809,8 @@ async fn make_test_app() -> App {
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_startup_thread_start: false,
+        next_prompt_suggestion_generation: 0,
+        pending_next_prompt_suggestion: None,
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
     }
@@ -3872,6 +3874,8 @@ async fn make_test_app_with_channels() -> (
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_startup_thread_start: false,
+            next_prompt_suggestion_generation: 0,
+            pending_next_prompt_suggestion: None,
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         },
@@ -4142,6 +4146,136 @@ fn thread_closed_notification(thread_id: ThreadId) -> ServerNotification {
     ServerNotification::ThreadClosed(ThreadClosedNotification {
         thread_id: thread_id.to_string(),
     })
+}
+
+#[tokio::test]
+async fn tab_accepts_next_prompt_suggestion_without_submitting() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget
+        .set_next_prompt_suggestion(Some("run the tests".to_string()));
+    let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+
+    assert!(app.next_prompt_suggestion_key_should_accept(tab));
+    assert!(app.accept_next_prompt_suggestion());
+
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "run the tests"
+    );
+    assert!(
+        op_rx.try_recv().is_err(),
+        "Tab acceptance should not submit"
+    );
+}
+
+#[tokio::test]
+async fn tab_does_not_accept_before_next_prompt_suggestion_arrives() {
+    let (app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+
+    assert!(!app.next_prompt_suggestion_key_should_accept(tab));
+    assert!(
+        op_rx.try_recv().is_err(),
+        "checking Tab acceptance should not submit"
+    );
+}
+
+#[tokio::test]
+async fn visible_next_prompt_suggestion_returns_after_draft_is_cleared() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget
+        .set_next_prompt_suggestion(Some("run the tests".to_string()));
+    app.chat_widget.apply_external_edit("x".to_string());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "x");
+    assert_eq!(
+        app.chat_widget.next_prompt_suggestion(),
+        Some("run the tests")
+    );
+
+    app.chat_widget.apply_external_edit(String::new());
+    let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+
+    assert!(app.next_prompt_suggestion_key_should_accept(tab));
+    assert!(app.accept_next_prompt_suggestion());
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "run the tests"
+    );
+    assert!(
+        op_rx.try_recv().is_err(),
+        "Tab acceptance should not submit"
+    );
+}
+
+#[tokio::test]
+async fn unavailable_composer_discards_completed_next_prompt_suggestion() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.active_thread_id = Some(thread_id);
+    app.next_prompt_suggestion_generation = 1;
+    app.chat_widget.apply_external_edit("draft".to_string());
+
+    app.handle_next_prompt_suggestion_ready(
+        /*generation*/ 1,
+        thread_id,
+        /*latency_ms*/ 0,
+        Ok(Some("run the tests".to_string())),
+    );
+
+    assert_eq!(app.chat_widget.next_prompt_suggestion(), None);
+}
+
+#[tokio::test]
+async fn stale_next_prompt_suggestion_result_is_ignored() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.active_thread_id = Some(thread_id);
+    app.next_prompt_suggestion_generation = 2;
+
+    app.handle_next_prompt_suggestion_ready(
+        /*generation*/ 1,
+        thread_id,
+        /*latency_ms*/ 0,
+        Ok(Some("run the tests".to_string())),
+    );
+
+    assert_eq!(app.chat_widget.next_prompt_suggestion(), None);
+}
+
+#[tokio::test]
+async fn typing_cancels_pending_next_prompt_suggestion_without_clearing_visible_suggestion() {
+    let mut app = make_test_app().await;
+    app.chat_widget
+        .set_next_prompt_suggestion(Some("run the tests".to_string()));
+    app.pending_next_prompt_suggestion = Some(PendingNextPromptSuggestion {
+        task: tokio::spawn(std::future::pending()),
+        cancel_request: None,
+    });
+
+    app.cancel_pending_next_prompt_suggestion();
+
+    assert!(app.pending_next_prompt_suggestion.is_none());
+    assert_eq!(
+        app.chat_widget.next_prompt_suggestion(),
+        Some("run the tests")
+    );
+}
+
+#[tokio::test]
+async fn thread_rollback_clears_visible_next_prompt_suggestion() {
+    let mut app = make_test_app().await;
+    app.chat_widget
+        .set_next_prompt_suggestion(Some("run the tests".to_string()));
+    app.transcript_cells = vec![Arc::new(UserHistoryCell {
+        message: "old message".to_string(),
+        text_elements: Vec::new(),
+        local_image_paths: Vec::new(),
+        remote_image_urls: Vec::new(),
+    }) as Arc<dyn HistoryCell>];
+
+    assert!(app.apply_non_pending_thread_rollback(/*num_turns*/ 1));
+
+    assert_eq!(app.chat_widget.next_prompt_suggestion(), None);
 }
 
 fn token_usage_notification(

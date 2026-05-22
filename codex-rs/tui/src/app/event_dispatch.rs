@@ -29,6 +29,15 @@ impl App {
                 self.handle_startup_thread_started(app_server, result)
                     .await?;
             }
+            AppEvent::NextPromptSuggestionReady {
+                generation,
+                thread_id,
+                latency_ms,
+                result,
+            } => {
+                self.handle_next_prompt_suggestion_ready(generation, thread_id, latency_ms, result);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();

@@ -436,6 +436,7 @@ impl ChatWidget {
     pub(super) fn refresh_plan_mode_nudge(&mut self) {
         self.bottom_pane
             .set_plan_mode_nudge_visible(self.should_show_plan_mode_nudge());
+        self.refresh_composer_placeholder();
     }
 
     /// Hides the nudge for the current thread scope until the user changes conversation context.

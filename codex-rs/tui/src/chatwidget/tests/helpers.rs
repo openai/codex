@@ -186,6 +186,7 @@ pub(super) async fn make_chatwidget_manual(
     widget.normal_placeholder_text = "Ask Codex to do anything".to_string();
     widget.side_placeholder_text =
         "Check recently modified functions for compatibility".to_string();
+    widget.next_prompt_suggestion = None;
     widget
         .bottom_pane
         .set_placeholder_text(widget.normal_placeholder_text.clone());

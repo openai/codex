@@ -205,6 +205,7 @@ mod event_dispatch;
 mod history_ui;
 mod input;
 mod loaded_threads;
+mod next_prompt_suggestion;
 mod pending_interactive_replay;
 mod pets;
 mod platform_actions;
@@ -551,6 +552,10 @@ pub(crate) struct App {
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
     pending_startup_thread_start: bool,
+    /// Monotonic token used to ignore async suggestion results from older UI state.
+    next_prompt_suggestion_generation: u64,
+    /// Current fire-and-forget suggestion request, if one is still in flight.
+    pending_next_prompt_suggestion: Option<PendingNextPromptSuggestion>,
     // Serialize plugin enablement writes per plugin so stale completions cannot
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
@@ -575,6 +580,17 @@ impl RuntimePermissionProfileOverride {
             network: config.permissions.network.clone(),
         }
     }
+}
+
+struct PendingNextPromptSuggestion {
+    task: JoinHandle<()>,
+    cancel_request: Option<NextPromptSuggestionCancelRequest>,
+}
+
+struct NextPromptSuggestionCancelRequest {
+    request_handle: AppServerRequestHandle,
+    thread_id: ThreadId,
+    cancellation_token: String,
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
@@ -1031,6 +1047,8 @@ See the Codex keymap documentation for supported actions and examples."
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_startup_thread_start,
+            next_prompt_suggestion_generation: 0,
+            pending_next_prompt_suggestion: None,
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
@@ -1042,6 +1060,7 @@ See the Codex keymap documentation for supported actions and examples."
             let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
+            app.request_next_prompt_suggestion_for_thread(&app_server, thread_id);
             if should_prompt_for_paused_goal_after_startup_resume {
                 app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
                     .await;
@@ -1247,6 +1266,7 @@ See the Codex keymap documentation for supported actions and examples."
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
+                    self.cancel_pending_next_prompt_suggestion();
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
@@ -1351,6 +1371,7 @@ See the Codex keymap documentation for supported actions and examples."
 
 impl Drop for App {
     fn drop(&mut self) {
+        self.cancel_pending_next_prompt_suggestion();
         if let Err(err) = self.chat_widget.clear_managed_terminal_title() {
             tracing::debug!(error = %err, "failed to clear terminal title on app drop");
         }

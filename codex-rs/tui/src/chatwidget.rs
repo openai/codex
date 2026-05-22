@@ -374,6 +374,7 @@ use self::plugins::PluginsCacheState;
 mod plan_implementation;
 use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod model_popups;
+mod next_prompt_suggestion;
 mod notifications;
 use self::notifications::Notification;
 mod permission_popups;
@@ -629,6 +630,8 @@ pub(crate) struct ChatWidget {
     active_side_conversation: bool,
     normal_placeholder_text: String,
     side_placeholder_text: String,
+    /// Stored model suggestion used only as empty-composer ghost text.
+    next_prompt_suggestion: Option<String>,
     forked_from: Option<ThreadId>,
     interrupted_turn_notice_mode: InterruptedTurnNoticeMode,
     frame_requester: FrameRequester,
@@ -1733,6 +1736,7 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
     ) {
+        self.clear_next_prompt_suggestion();
         self.bottom_pane
             .set_composer_text(text, text_elements, local_image_paths);
         self.refresh_plan_mode_nudge();
