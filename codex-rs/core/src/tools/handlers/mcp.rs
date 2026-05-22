@@ -44,7 +44,16 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
+        // Correctly implemented MCP servers should tolerate parallel calls to
+        // tools that advertise themselves as read-only.
         self.tool_info.supports_parallel_tool_calls
+            || self
+                .tool_info
+                .tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.read_only_hint)
+                .unwrap_or(false)
     }
 
     async fn handle(
@@ -373,6 +382,44 @@ mod tests {
                     "structuredContent": { "bytes": 5 }
                 }),
             })
+        );
+    }
+
+    #[test]
+    fn mcp_read_only_hint_supports_parallel_calls_without_server_opt_in() {
+        let mut read_only_info = tool_info("foo", "mcp__foo__", "read");
+        read_only_info.tool.annotations = Some(rmcp::model::ToolAnnotations::new().read_only(true));
+
+        assert!(
+            McpHandler::new(read_only_info)
+                .expect("MCP tool spec should build")
+                .supports_parallel_tool_calls()
+        );
+    }
+
+    #[test]
+    fn mcp_parallel_calls_require_read_only_hint_or_server_opt_in() {
+        let missing_hint_info = tool_info("foo", "mcp__foo__", "unannotated");
+        assert!(
+            !McpHandler::new(missing_hint_info)
+                .expect("MCP tool spec should build")
+                .supports_parallel_tool_calls()
+        );
+
+        let mut writable_info = tool_info("foo", "mcp__foo__", "write");
+        writable_info.tool.annotations = Some(rmcp::model::ToolAnnotations::new().read_only(false));
+        assert!(
+            !McpHandler::new(writable_info)
+                .expect("MCP tool spec should build")
+                .supports_parallel_tool_calls()
+        );
+
+        let mut server_opt_in_info = tool_info("foo", "mcp__foo__", "server_opt_in");
+        server_opt_in_info.supports_parallel_tool_calls = true;
+        assert!(
+            McpHandler::new(server_opt_in_info)
+                .expect("MCP tool spec should build")
+                .supports_parallel_tool_calls()
         );
     }
 
