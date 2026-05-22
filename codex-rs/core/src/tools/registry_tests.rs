@@ -257,6 +257,21 @@ async fn code_mode_wait_does_not_expose_default_hook_payloads() {
     assert_eq!(wait.post_tool_use_payload(&wait_invocation, &output), None);
 }
 
+#[tokio::test]
+async fn write_stdin_does_not_expose_default_pre_tool_use_payload() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+
+    let write_stdin = crate::tools::handlers::WriteStdinHandler;
+    let invocation = test_invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "write-stdin-call",
+        write_stdin.tool_name(),
+    );
+
+    assert_eq!(write_stdin.pre_tool_use_payload(&invocation), None);
+}
+
 #[test]
 fn model_visible_override_keeps_code_mode_result_typed() {
     let result = AnyToolResult {

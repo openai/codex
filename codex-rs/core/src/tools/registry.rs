@@ -68,10 +68,6 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        if !self.supports_default_function_tool_hooks() {
-            return None;
-        }
-
         let ToolPayload::Function { arguments } = &invocation.payload else {
             return None;
         };
@@ -102,10 +98,6 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        if !self.supports_default_function_tool_hooks() {
-            return None;
-        }
-
         let ToolPayload::Function { arguments } = &invocation.payload else {
             return None;
         };
@@ -125,38 +117,22 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         invocation: ToolInvocation,
         updated_input: Value,
     ) -> Result<ToolInvocation, FunctionCallError> {
-        if self.supports_default_function_tool_hooks() {
-            let ToolPayload::Function { .. } = &invocation.payload else {
-                return Err(FunctionCallError::RespondToModel(
-                    "hook input rewrite received unsupported function tool payload".to_string(),
-                ));
-            };
+        let ToolPayload::Function { .. } = &invocation.payload else {
+            return Err(FunctionCallError::RespondToModel(
+                "hook input rewrite received unsupported function tool payload".to_string(),
+            ));
+        };
 
-            let arguments = serde_json::to_string(&updated_input).map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to serialize rewritten {} arguments: {err}",
-                    flat_tool_name(&invocation.tool_name)
-                ))
-            })?;
-            return Ok(ToolInvocation {
-                payload: ToolPayload::Function { arguments },
-                ..invocation
-            });
-        }
-
-        Err(FunctionCallError::RespondToModel(
-            "tool does not support hook input rewriting".to_string(),
-        ))
-    }
-
-    /// Returns whether this tool uses the generic function-tool hook contract.
-    ///
-    /// Most local function tools expose their JSON arguments directly to hooks.
-    /// Tools with compatibility-specific hook contracts can override the hook
-    /// payload methods instead, while function tools that should not run hooks
-    /// can opt out here.
-    fn supports_default_function_tool_hooks(&self) -> bool {
-        true
+        let arguments = serde_json::to_string(&updated_input).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to serialize rewritten {} arguments: {err}",
+                flat_tool_name(&invocation.tool_name)
+            ))
+        })?;
+        Ok(ToolInvocation {
+            payload: ToolPayload::Function { arguments },
+            ..invocation
+        })
     }
 
     /// Creates an optional consumer for streamed tool argument diffs.
@@ -308,10 +284,6 @@ impl CoreToolRuntime for ExposureOverride {
     ) -> Result<ToolInvocation, FunctionCallError> {
         self.handler
             .with_updated_hook_input(invocation, updated_input)
-    }
-
-    fn supports_default_function_tool_hooks(&self) -> bool {
-        self.handler.supports_default_function_tool_hooks()
     }
 
     fn telemetry_tags<'a>(
