@@ -28,8 +28,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           components: rustfmt
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Rust benchmark smoke test
+        run: just bench-smoke
 
   cargo_shear:
     name: cargo shear
@@ -436,9 +441,9 @@ jobs:
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
-        name: Configure musl rusty_v8 artifact overrides and verify checksums
-        uses: ./.github/actions/setup-rusty-v8-musl
+      - if: ${{ !contains(matrix.target, 'windows') }}
+        name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
 

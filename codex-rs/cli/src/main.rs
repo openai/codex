@@ -10,9 +10,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
-use codex_cli::LandlockCommand;
-use codex_cli::SeatbeltCommand;
-use codex_cli::WindowsCommand;
 use codex_cli::read_access_token_from_stdin;
 use codex_cli::read_api_key_from_stdin;
 use codex_cli::run_login_status;
@@ -160,7 +157,7 @@ enum Subcommand {
     Doctor(DoctorCommand),
 
     /// Run commands within a Codex-provided sandbox.
-    Sandbox(SandboxArgs),
+    Sandbox(HostSandboxArgs),
 
     /// Debugging tools.
     Debug(DebugCommand),
@@ -343,24 +340,29 @@ struct ForkCommand {
     config_overrides: TuiCli,
 }
 
+#[cfg(target_os = "macos")]
+type HostSandboxArgs = codex_cli::SeatbeltCommand;
+#[cfg(target_os = "linux")]
+type HostSandboxArgs = codex_cli::LandlockCommand;
+#[cfg(target_os = "windows")]
+type HostSandboxArgs = codex_cli::WindowsCommand;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+type HostSandboxArgs = UnsupportedSandboxArgs;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 #[derive(Debug, Parser)]
-struct SandboxArgs {
-    #[command(subcommand)]
-    cmd: SandboxCommand,
-}
+struct UnsupportedSandboxArgs {
+    /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
+    #[arg(long = "profile", short = 'p')]
+    pub config_profile: Option<ProfileV2Name>,
 
-#[derive(Debug, clap::Subcommand)]
-enum SandboxCommand {
-    /// Run a command under Seatbelt (macOS only).
-    #[clap(visible_alias = "seatbelt")]
-    Macos(SeatbeltCommand),
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
 
-    /// Run a command under the Linux sandbox (bubblewrap by default).
-    #[clap(visible_alias = "landlock")]
-    Linux(LandlockCommand),
-
-    /// Run a command under Windows restricted token (Windows only).
-    Windows(WindowsCommand),
+    /// Full command args to run under the host sandbox.
+    #[arg(trailing_var_arg = true)]
+    pub command: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -918,7 +920,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
-            mcp_cli.run().await?;
+            let loader_overrides =
+                loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
+            mcp_cli.run(loader_overrides).await?;
         }
         Some(Subcommand::Plugin(plugin_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1236,56 +1240,48 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             codex_cloud_tasks::run_main(cloud_cli, arg0_paths.codex_linux_sandbox_exe.clone())
                 .await?;
         }
-        Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
-            SandboxCommand::Macos(mut seatbelt_cli) => {
-                reject_remote_mode_for_subcommand(
-                    root_remote.as_deref(),
-                    root_remote_auth_token_env.as_deref(),
-                    "sandbox macos",
-                )?;
-                prepend_config_flags(
-                    &mut seatbelt_cli.config_overrides,
-                    root_config_overrides.clone(),
-                );
-                codex_cli::run_command_under_seatbelt(
-                    seatbelt_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
+        Some(Subcommand::Sandbox(mut sandbox_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "sandbox",
+            )?;
+            let config_profile = sandbox_cli
+                .config_profile
+                .as_ref()
+                .or(interactive.config_profile_v2.as_ref());
+            let loader_overrides = loader_overrides_for_profile(config_profile)?;
+            prepend_config_flags(
+                &mut sandbox_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            #[cfg(target_os = "macos")]
+            codex_cli::run_command_under_seatbelt(
+                sandbox_cli,
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
+            )
+            .await?;
+            #[cfg(target_os = "linux")]
+            codex_cli::run_command_under_landlock(
+                sandbox_cli,
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
+            )
+            .await?;
+            #[cfg(target_os = "windows")]
+            codex_cli::run_command_under_windows_sandbox(
+                sandbox_cli,
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
+            )
+            .await?;
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+            {
+                let _ = loader_overrides;
+                anyhow::bail!("`codex sandbox` is not supported on this operating system");
             }
-            SandboxCommand::Linux(mut landlock_cli) => {
-                reject_remote_mode_for_subcommand(
-                    root_remote.as_deref(),
-                    root_remote_auth_token_env.as_deref(),
-                    "sandbox linux",
-                )?;
-                prepend_config_flags(
-                    &mut landlock_cli.config_overrides,
-                    root_config_overrides.clone(),
-                );
-                codex_cli::run_command_under_landlock(
-                    landlock_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
-            }
-            SandboxCommand::Windows(mut windows_cli) => {
-                reject_remote_mode_for_subcommand(
-                    root_remote.as_deref(),
-                    root_remote_auth_token_env.as_deref(),
-                    "sandbox windows",
-                )?;
-                prepend_config_flags(
-                    &mut windows_cli.config_overrides,
-                    root_config_overrides.clone(),
-                );
-                codex_cli::run_command_under_windows(
-                    windows_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
-            }
-        },
+        }
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
             DebugSubcommand::Models(cmd) => {
                 reject_remote_mode_for_subcommand(
@@ -1459,11 +1455,13 @@ fn profile_v2_for_subcommand<'a>(
         | Subcommand::Review(_)
         | Subcommand::Resume(_)
         | Subcommand::Fork(_)
+        | Subcommand::Mcp(_)
+        | Subcommand::Sandbox(_)
         | Subcommand::Debug(DebugCommand {
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -2264,6 +2262,18 @@ mod tests {
                 .as_deref(),
             Some("work")
         );
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile", "work", "mcp", "list"])
+                .expect("mcp supports profile-v2")
+                .as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile", "work", "sandbox"])
+                .expect("sandbox supports config profile")
+                .as_deref(),
+            Some("work")
+        );
     }
 
     #[test]
@@ -2491,12 +2501,12 @@ mod tests {
         assert!(matches!(cli.subcommand, Some(Subcommand::Update)));
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
-    fn sandbox_macos_parses_permissions_profile() {
+    fn sandbox_parses_permissions_profile() {
         let cli = MultitoolCli::try_parse_from([
             "codex",
             "sandbox",
-            "macos",
             "--permissions-profile",
             ":workspace",
             "--",
@@ -2504,20 +2514,33 @@ mod tests {
         ])
         .expect("parse");
 
-        let Some(Subcommand::Sandbox(SandboxArgs {
-            cmd: SandboxCommand::Macos(command),
-        })) = cli.subcommand
-        else {
-            panic!("expected sandbox macos command");
+        let Some(Subcommand::Sandbox(command)) = cli.subcommand else {
+            panic!("expected sandbox command");
         };
 
         assert_eq!(command.permissions_profile.as_deref(), Some(":workspace"));
         assert_eq!(command.command, vec!["echo"]);
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
-    fn sandbox_macos_rejects_explicit_profile_controls_without_profile() {
-        let err = MultitoolCli::try_parse_from(["codex", "sandbox", "macos", "-C", "/tmp"])
+    fn sandbox_parses_config_profile() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "sandbox", "--profile", "work", "--", "echo"])
+                .expect("parse");
+
+        let Some(Subcommand::Sandbox(command)) = cli.subcommand else {
+            panic!("expected sandbox command");
+        };
+
+        assert_eq!(command.config_profile.as_deref(), Some("work"));
+        assert_eq!(command.command, vec!["echo"]);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn sandbox_rejects_explicit_profile_controls_without_profile() {
+        let err = MultitoolCli::try_parse_from(["codex", "sandbox", "-C", "/tmp"])
             .expect_err("parse should fail");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
@@ -2570,8 +2593,7 @@ mod tests {
 
     #[test]
     fn sandbox_full_auto_no_longer_parses() {
-        let result =
-            MultitoolCli::try_parse_from(["codex", "sandbox", "linux", "--full-auto", "--"]);
+        let result = MultitoolCli::try_parse_from(["codex", "sandbox", "--full-auto", "--"]);
 
         assert!(result.is_err());
     }

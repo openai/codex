@@ -139,6 +139,7 @@ async fn read_tool_reads_memory_file() {
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::READ_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
+            conversation_history: codex_extension_api::ConversationHistory::default(),
             payload: payload.clone(),
         })
         .await
@@ -183,6 +184,7 @@ async fn search_tool_accepts_multiple_queries() {
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
+            conversation_history: codex_extension_api::ConversationHistory::default(),
             payload: payload.clone(),
         })
         .await
@@ -253,6 +255,7 @@ async fn search_tool_accepts_windowed_all_match_mode() {
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
+            conversation_history: codex_extension_api::ConversationHistory::default(),
             payload: payload.clone(),
         })
         .await
@@ -303,6 +306,7 @@ async fn search_tool_rejects_legacy_single_query() {
             call_id: "call-1".to_string(),
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
+            conversation_history: codex_extension_api::ConversationHistory::default(),
             payload,
         })
         .await;

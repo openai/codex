@@ -24,6 +24,7 @@ codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-string = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 time = { workspace = true, features = [

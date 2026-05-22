@@ -114,8 +114,8 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
-/// Takes a user message as input and runs a loop where, at each sampling request, the model
-/// replies with either:
+/// Takes initial turn input and runs a loop where, at each sampling request,
+/// the model replies with either:
 ///
 /// - requested function calls
 /// - an assistant message
@@ -132,7 +132,7 @@ pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_extension_data: Arc<codex_extension_api::ExtensionData>,
-    input: Vec<UserInput>,
+    input: Vec<TurnInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
@@ -172,26 +172,9 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
-    if !input.is_empty() {
-        let initial_turn_input = TurnInput::UserInput(input.clone());
-        let user_prompt_submit_outcome =
-            inspect_pending_input(&sess, &turn_context, &initial_turn_input).await;
-        if user_prompt_submit_outcome.should_stop {
-            record_additional_contexts(
-                &sess,
-                &turn_context,
-                user_prompt_submit_outcome.additional_contexts,
-            )
-            .await;
-            return None;
-        }
-        record_pending_input(
-            &sess,
-            &turn_context,
-            initial_turn_input,
-            user_prompt_submit_outcome.additional_contexts,
-        )
-        .await;
+    let mut can_drain_pending_input = input.is_empty();
+    if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
+        return None;
     }
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
@@ -232,9 +215,8 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
-    // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
+    // 1. At the start of a turn, so the fresh turn input in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
-    let mut can_drain_pending_input = input.is_empty();
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -246,27 +228,7 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        let mut blocked_pending_input = false;
-        let mut accepted_pending_input = false;
-        for pending_input_item in pending_input {
-            let hook_outcome =
-                inspect_pending_input(&sess, &turn_context, &pending_input_item).await;
-            if hook_outcome.should_stop {
-                blocked_pending_input = true;
-                record_additional_contexts(&sess, &turn_context, hook_outcome.additional_contexts)
-                    .await;
-            } else {
-                accepted_pending_input = true;
-                record_pending_input(
-                    &sess,
-                    &turn_context,
-                    pending_input_item,
-                    hook_outcome.additional_contexts,
-                )
-                .await;
-            }
-        }
-        if blocked_pending_input && !accepted_pending_input {
+        if run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await {
             break;
         }
 
@@ -450,6 +412,32 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
+async fn run_hooks_and_record_inputs(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &[TurnInput],
+) -> bool {
+    let mut blocked_input = false;
+    let mut accepted_input = false;
+    for input_item in input {
+        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+        if hook_outcome.should_stop {
+            blocked_input = true;
+            record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
+        } else {
+            accepted_input = true;
+            record_pending_input(
+                sess,
+                turn_context,
+                input_item.clone(),
+                hook_outcome.additional_contexts,
+            )
+            .await;
+        }
+    }
+    blocked_input && !accepted_input
+}
+
 #[expect(
     clippy::await_holding_invalid_type,
     reason = "MCP tool listing borrows the read guard across cancellation-aware await"
@@ -457,9 +445,18 @@ pub(crate) async fn run_turn(
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
     turn_context: &TurnContext,
-    input: &[UserInput],
+    input: &[TurnInput],
     cancellation_token: &CancellationToken,
 ) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
+    let user_input = input
+        .iter()
+        .filter_map(|item| match item {
+            TurnInput::UserInput(content) => Some(content.as_slice()),
+            TurnInput::ResponseInputItem(_) => None,
+        })
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
     let tracking = build_track_events_context(
         turn_context.model_info.slug.clone(),
         sess.conversation_id.to_string(),
@@ -473,7 +470,7 @@ async fn build_skills_and_plugins(
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
-        collect_explicit_plugin_mentions(input, loaded_plugins.capability_summaries());
+        collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
@@ -511,7 +508,7 @@ async fn build_skills_and_plugins(
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
     let mentioned_skills = collect_explicit_skill_mentions(
-        input,
+        &user_input,
         &skills_outcome.skills,
         &skills_outcome.disabled_paths,
         &connector_slug_counts,
@@ -553,7 +550,7 @@ async fn build_skills_and_plugins(
     );
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
-    let mut explicitly_enabled_connectors = collect_explicit_app_ids(input);
+    let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
     explicitly_enabled_connectors.extend(skill_connector_ids);
     let connector_names_by_id = available_connectors
         .iter()
@@ -589,7 +586,7 @@ async fn build_skills_and_plugins(
 async fn track_turn_resolved_config_analytics(
     sess: &Session,
     turn_context: &TurnContext,
-    input: &[UserInput],
+    input: &[TurnInput],
 ) {
     let thread_config = {
         let state = sess.state.lock().await;
@@ -606,6 +603,11 @@ async fn track_turn_resolved_config_analytics(
             thread_id: sess.conversation_id.to_string(),
             num_input_images: input
                 .iter()
+                .filter_map(|item| match item {
+                    TurnInput::UserInput(content) => Some(content.as_slice()),
+                    TurnInput::ResponseInputItem(_) => None,
+                })
+                .flatten()
                 .filter(|item| {
                     matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
                 })

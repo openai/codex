@@ -271,7 +271,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         multi_agent_v2: MultiAgentV2Config::default(),
         features: Default::default(),
         suppress_unstable_features_warning: false,
-        active_profile: None,
         active_project: ProjectConfig { trust_level: None },
         notices: Notice::default(),
         check_for_update_on_startup: false,

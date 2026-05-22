@@ -786,8 +786,7 @@ pub async fn run_main_with_transport_options(
     });
 
     let processor_handle = tokio::spawn({
-        let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        let auth_manager = Arc::clone(&auth_manager);
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
