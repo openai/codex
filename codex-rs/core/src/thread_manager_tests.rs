@@ -27,11 +27,32 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+struct CountingCodeModeSessionProvider {
+    created_sessions: Arc<AtomicUsize>,
+}
+
+impl codex_code_mode::CodeModeSessionProvider for CountingCodeModeSessionProvider {
+    fn create_session<'a>(
+        &'a self,
+        delegate: Arc<dyn codex_code_mode::CodeModeSessionDelegate>,
+    ) -> codex_code_mode::CodeModeSessionProviderFuture<'a> {
+        let created_sessions = Arc::clone(&self.created_sessions);
+        Box::pin(async move {
+            created_sessions.fetch_add(1, Ordering::Relaxed);
+            let session: Arc<dyn codex_code_mode::CodeModeSession> =
+                Arc::new(codex_code_mode::CodeModeService::with_delegate(delegate));
+            Ok(session)
+        })
+    }
+}
 
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -321,22 +342,26 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
         environment_manager,
     );
 
-    let result = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            initial_history: InitialHistory::New,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            persist_extended_history: false,
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: vec![TurnEnvironmentSelection {
-                environment_id: "local".to_string(),
-                cwd: config.cwd.clone(),
-            }],
-        })
-        .await;
+    let result =
+        manager
+            .start_thread_with_options(StartThreadOptions {
+                config: config.clone(),
+                initial_history: InitialHistory::New,
+                session_source: None,
+                thread_source: None,
+                code_mode_session_provider: Some(
+                    ThreadManager::in_process_code_mode_session_provider(),
+                ),
+                dynamic_tools: Vec::new(),
+                persist_extended_history: false,
+                metrics_service_name: None,
+                parent_trace: None,
+                environments: vec![TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: config.cwd.clone(),
+                }],
+            })
+            .await;
     let err = match result {
         Ok(_) => panic!("explicit local environment should not resolve when provider is disabled"),
         Err(err) => err,
@@ -439,6 +464,61 @@ args = ["dev", "cd /tmp && true"]
     assert!(!environment_context.contains("\n  <shell>"));
 }
 
+#[test]
+fn in_process_code_mode_session_provider_is_a_singleton() {
+    assert!(Arc::ptr_eq(
+        &ThreadManager::in_process_code_mode_session_provider(),
+        &ThreadManager::in_process_code_mode_session_provider(),
+    ));
+}
+
+#[tokio::test]
+async fn start_thread_options_code_mode_provider_is_propagated_to_spawned_agents() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let created_sessions = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn codex_code_mode::CodeModeSessionProvider> =
+        Arc::new(CountingCodeModeSessionProvider {
+            created_sessions: Arc::clone(&created_sessions),
+        });
+    let root = manager
+        .start_thread_with_options(StartThreadOptions {
+            config: config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            code_mode_session_provider: Some(provider),
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+        })
+        .await
+        .expect("root thread should start");
+
+    assert_eq!(created_sessions.load(Ordering::Relaxed), 1);
+    root.thread
+        .codex
+        .session
+        .services
+        .agent_control
+        .spawn_agent(config, Op::Shutdown, /*session_source*/ None)
+        .await
+        .expect("child thread should start");
+    assert_eq!(created_sessions.load(Ordering::Relaxed), 2);
+}
+
 #[tokio::test]
 async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     let temp_dir = tempdir().expect("tempdir");
@@ -453,22 +533,26 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
-    let thread = manager
-        .start_thread_with_options(StartThreadOptions {
-            config,
-            initial_history: InitialHistory::New,
-            session_source: Some(SessionSource::Internal(
-                InternalSessionSource::MemoryConsolidation,
-            )),
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            persist_extended_history: false,
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-        })
-        .await
-        .expect("internal thread should start");
+    let thread =
+        manager
+            .start_thread_with_options(StartThreadOptions {
+                config,
+                initial_history: InitialHistory::New,
+                session_source: Some(SessionSource::Internal(
+                    InternalSessionSource::MemoryConsolidation,
+                )),
+                thread_source: None,
+                code_mode_session_provider: Some(
+                    ThreadManager::in_process_code_mode_session_provider(),
+                ),
+                dynamic_tools: Vec::new(),
+                persist_extended_history: false,
+                metrics_service_name: None,
+                parent_trace: None,
+                environments: Vec::new(),
+            })
+            .await
+            .expect("internal thread should start");
 
     assert_eq!(manager.list_thread_ids().await, Vec::new());
     assert!(manager.get_thread(thread.thread_id).await.is_err());
@@ -517,6 +601,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            code_mode_session_provider: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -789,6 +874,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: Some(ThreadSource::User),
+            code_mode_session_provider: None,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,

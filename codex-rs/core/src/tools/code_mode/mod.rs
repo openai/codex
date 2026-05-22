@@ -11,6 +11,7 @@ use std::time::Duration;
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
+use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -63,6 +64,7 @@ pub(crate) struct CodeModeService {
 }
 
 impl CodeModeService {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
@@ -71,6 +73,20 @@ impl CodeModeService {
             ))),
             dispatch_broker,
         }
+    }
+
+    pub(crate) async fn from_provider(
+        provider: Option<Arc<dyn CodeModeSessionProvider>>,
+    ) -> Result<Self, String> {
+        let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
+        let session = match provider {
+            Some(provider) => Some(provider.create_session(dispatch_broker.clone()).await?),
+            None => None,
+        };
+        Ok(Self {
+            session,
+            dispatch_broker,
+        })
     }
 
     pub(crate) async fn execute(

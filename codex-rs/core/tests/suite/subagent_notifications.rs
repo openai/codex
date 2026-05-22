@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::ThreadManager;
 use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
@@ -744,20 +745,23 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
 
     // This matcher would catch the old synthetic "review" SubagentStop target
     // because the SubagentStop hook above intentionally matches all agent types.
-    let internal_thread = test
-        .thread_manager
-        .start_thread_with_options(StartThreadOptions {
-            config: test.config.clone(),
-            initial_history: InitialHistory::New,
-            session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            persist_extended_history: false,
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-        })
-        .await?;
+    let internal_thread =
+        test.thread_manager
+            .start_thread_with_options(StartThreadOptions {
+                config: test.config.clone(),
+                initial_history: InitialHistory::New,
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
+                thread_source: None,
+                code_mode_session_provider: Some(
+                    ThreadManager::in_process_code_mode_session_provider(),
+                ),
+                dynamic_tools: Vec::new(),
+                persist_extended_history: false,
+                metrics_service_name: None,
+                parent_trace: None,
+                environments: Vec::new(),
+            })
+            .await?;
 
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());

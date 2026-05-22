@@ -608,6 +608,7 @@ impl Codex {
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let code_mode_session_provider = agent_control.code_mode_session_provider();
 
         let session = Session::new(
             session_configuration,
@@ -623,6 +624,7 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
+            code_mode_session_provider,
             extensions,
             agent_control,
             environment_manager,

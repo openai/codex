@@ -497,6 +497,7 @@ impl Session {
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
+        code_mode_session_provider: Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
@@ -1052,7 +1053,11 @@ impl Session {
                         session_configuration.parent_thread_id,
                     ),
                 ),
-                code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+                code_mode_service: crate::tools::code_mode::CodeModeService::from_provider(
+                    code_mode_session_provider,
+                )
+                .await
+                .map_err(anyhow::Error::msg)?,
                 environment_manager,
             };
             services

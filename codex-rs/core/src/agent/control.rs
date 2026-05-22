@@ -161,13 +161,18 @@ pub(crate) struct AgentControl {
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
+    code_mode_session_provider: Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>>,
 }
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
-    pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
+    pub(crate) fn new(
+        manager: Weak<ThreadManagerState>,
+        code_mode_session_provider: Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>>,
+    ) -> Self {
         Self {
             manager,
+            code_mode_session_provider,
             ..Default::default()
         }
     }
@@ -179,6 +184,12 @@ impl AgentControl {
 
     pub(crate) fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub(crate) fn code_mode_session_provider(
+        &self,
+    ) -> Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>> {
+        self.code_mode_session_provider.clone()
     }
 
     /// Spawn a new agent thread and submit the initial prompt.

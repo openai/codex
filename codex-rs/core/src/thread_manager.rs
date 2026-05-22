@@ -68,6 +68,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -82,6 +83,9 @@ const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 /// In production builds this value should remain at its default (`false`) and
 /// must not be toggled.
 static FORCE_TEST_THREAD_MANAGER_BEHAVIOR: AtomicBool = AtomicBool::new(false);
+static IN_PROCESS_CODE_MODE_SESSION_PROVIDER: LazyLock<
+    Arc<dyn codex_code_mode::CodeModeSessionProvider>,
+> = LazyLock::new(|| Arc::new(codex_code_mode::InProcessCodeModeSessionProvider));
 
 type CapturedOps = Vec<(ThreadId, Op)>;
 type SharedCapturedOps = Arc<std::sync::Mutex<CapturedOps>>;
@@ -176,6 +180,7 @@ pub struct StartThreadOptions {
     pub initial_history: InitialHistory,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
+    pub code_mode_session_provider: Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub persist_extended_history: bool,
     pub metrics_service_name: Option<String>,
@@ -404,6 +409,11 @@ impl ThreadManager {
         self.state.session_source.clone()
     }
 
+    pub fn in_process_code_mode_session_provider()
+    -> Arc<dyn codex_code_mode::CodeModeSessionProvider> {
+        Arc::clone(&IN_PROCESS_CODE_MODE_SESSION_PROVIDER)
+    }
+
     pub fn auth_manager(&self) -> Arc<AuthManager> {
         self.state.auth_manager.clone()
     }
@@ -577,6 +587,7 @@ impl ThreadManager {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
+            code_mode_session_provider: Some(Self::in_process_code_mode_session_provider()),
             dynamic_tools,
             persist_extended_history,
             metrics_service_name: None,
@@ -605,11 +616,13 @@ impl ThreadManager {
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
         let session_source = options.session_source.unwrap_or(resumed_session_source);
         let thread_source = options.thread_source.or(resumed_thread_source);
+        let agent_control =
+            self.agent_control_with_code_mode_session_provider(options.code_mode_session_provider);
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
             Arc::clone(&self.state.auth_manager),
-            self.agent_control(),
+            agent_control,
             session_source,
             /*parent_thread_id*/ None,
             forked_from_thread_id,
@@ -944,7 +957,16 @@ impl ThreadManager {
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
-        AgentControl::new(Arc::downgrade(&self.state))
+        self.agent_control_with_code_mode_session_provider(Some(
+            Self::in_process_code_mode_session_provider(),
+        ))
+    }
+
+    fn agent_control_with_code_mode_session_provider(
+        &self,
+        code_mode_session_provider: Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>>,
+    ) -> AgentControl {
+        AgentControl::new(Arc::downgrade(&self.state), code_mode_session_provider)
     }
 
     #[cfg(test)]
