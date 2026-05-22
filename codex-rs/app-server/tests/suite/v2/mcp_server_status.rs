@@ -18,6 +18,7 @@ use axum::Router;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpAuthStatus;
+use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::RequestId;
@@ -448,6 +449,42 @@ client_id = "codex-app-server-test"
             .authorization_url
             .starts_with(&format!("{}/oauth/authorize?", remote_mcp.server_url()))
     );
+    let browser_response = reqwest::Client::new()
+        .get(&response.authorization_url)
+        .send()
+        .await?;
+    assert_eq!(browser_response.status(), reqwest::StatusCode::OK);
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("mcpServer/oauthLogin/completed"),
+    )
+    .await??;
+    let notification: McpServerOauthLoginCompletedNotification =
+        serde_json::from_value(notification.params.context("oauth completion params")?)?;
+    assert_eq!(
+        notification,
+        McpServerOauthLoginCompletedNotification {
+            name: "remote-oauth".to_string(),
+            success: true,
+            error: None,
+        }
+    );
+
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: ListMcpServerStatusResponse = to_response(response)?;
+    assert_eq!(response.data[0].auth_status, McpAuthStatus::OAuth);
 
     Ok(())
 }
