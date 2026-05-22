@@ -836,6 +836,30 @@
             },
             "method": {
               "enum": [
+                "usage/read"
+              ],
+              "title": "Usage/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/UsageReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Usage/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/installed"
               ],
               "title": "Plugin/installedRequestMethod",
@@ -18598,6 +18622,177 @@
         },
         "required": [
           "data"
+        ],
+        "type": "object"
+      },
+      "UsageContributorKind": {
+        "enum": [
+          "skill",
+          "subagent",
+          "agentTask",
+          "app",
+          "mcpServer",
+          "plugin"
+        ],
+        "type": "string"
+      },
+      "UsageEntry": {
+        "properties": {
+          "attributedTokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/definitions/v2/UsageContributorKind"
+          },
+          "label": {
+            "type": "string"
+          },
+          "percentOfUsage": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attributedTokens",
+          "id",
+          "kind",
+          "label",
+          "percentOfUsage"
+        ],
+        "type": "object"
+      },
+      "UsageHeadline": {
+        "properties": {
+          "entry": {
+            "$ref": "#/definitions/v2/UsageEntry"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entry"
+        ],
+        "type": "object"
+      },
+      "UsageRange": {
+        "enum": [
+          "day",
+          "week"
+        ],
+        "type": "string"
+      },
+      "UsageReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "range": {
+            "$ref": "#/definitions/v2/UsageRange"
+          }
+        },
+        "required": [
+          "range"
+        ],
+        "title": "UsageReadParams",
+        "type": "object"
+      },
+      "UsageReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "report": {
+            "$ref": "#/definitions/v2/UsageReport"
+          }
+        },
+        "required": [
+          "report"
+        ],
+        "title": "UsageReadResponse",
+        "type": "object"
+      },
+      "UsageReport": {
+        "properties": {
+          "agentTasks": {
+            "items": {
+              "$ref": "#/definitions/v2/UsageEntry"
+            },
+            "type": "array"
+          },
+          "apps": {
+            "items": {
+              "$ref": "#/definitions/v2/UsageEntry"
+            },
+            "type": "array"
+          },
+          "generatedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/UsageHeadline"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mcpServers": {
+            "items": {
+              "$ref": "#/definitions/v2/UsageEntry"
+            },
+            "type": "array"
+          },
+          "plugins": {
+            "items": {
+              "$ref": "#/definitions/v2/UsageEntry"
+            },
+            "type": "array"
+          },
+          "range": {
+            "$ref": "#/definitions/v2/UsageRange"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/definitions/v2/UsageEntry"
+            },
+            "type": "array"
+          },
+          "subagents": {
+            "items": {
+              "$ref": "#/definitions/v2/UsageEntry"
+            },
+            "type": "array"
+          },
+          "totalTokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "trackedFrom": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "agentTasks",
+          "apps",
+          "generatedAt",
+          "mcpServers",
+          "plugins",
+          "range",
+          "skills",
+          "subagents",
+          "totalTokens"
         ],
         "type": "object"
       },

@@ -36,6 +36,7 @@ use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
+use crate::request_processors::UsageRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
@@ -182,6 +183,7 @@ pub(crate) struct MessageProcessor {
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
+    usage_processor: UsageRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
     request_serialization_queues: RequestSerializationQueues,
 }
@@ -428,9 +430,10 @@ impl MessageProcessor {
             thread_watch_manager.clone(),
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
-            state_db,
+            state_db.clone(),
             Arc::clone(&skills_watcher),
         );
+        let usage_processor = UsageRequestProcessor::new(state_db);
         let turn_processor = TurnRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -507,6 +510,7 @@ impl MessageProcessor {
             thread_goal_processor,
             thread_processor,
             turn_processor,
+            usage_processor,
             windows_sandbox_processor,
             request_serialization_queues: RequestSerializationQueues::default(),
         }
@@ -1123,6 +1127,11 @@ impl MessageProcessor {
             ClientRequest::PluginList { params, .. } => {
                 self.plugin_processor.plugin_list(params).await
             }
+            ClientRequest::UsageRead { params, .. } => self
+                .usage_processor
+                .usage_read(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::PluginInstalled { params, .. } => {
                 self.plugin_processor.plugin_installed(params).await
             }

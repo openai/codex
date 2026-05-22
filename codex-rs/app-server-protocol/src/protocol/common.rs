@@ -635,6 +635,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::PluginListResponse,
     },
+    UsageRead => "usage/read" {
+        params: v2::UsageReadParams,
+        serialization: None,
+        response: v2::UsageReadResponse,
+    },
     PluginInstalled => "plugin/installed" {
         params: v2::PluginInstalledParams,
         serialization: None,
