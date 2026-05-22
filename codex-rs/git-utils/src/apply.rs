@@ -13,6 +13,10 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::safe_git_config::ATTRIBUTE_FILTER_CONFIG_REGEXP;
+use crate::safe_git_config::base_internal_git_config_overrides;
+use crate::safe_git_config::safe_attribute_filter_overrides_from_config_keys;
+
 /// Parameters for invoking [`apply_git_patch`].
 #[derive(Debug, Clone)]
 pub struct ApplyGitRequest {
@@ -40,6 +44,7 @@ pub struct ApplyGitResult {
 /// leaves the working tree untouched while still parsing the command output for diagnostics.
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let git_root = resolve_git_root(&req.cwd)?;
+    let safe_config_overrides = safe_worktree_git_config_overrides(&git_root)?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
@@ -48,7 +53,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
-        stage_paths(&git_root, &req.diff)?;
+        stage_paths_with_config_overrides(&git_root, &req.diff, &safe_config_overrides)?;
     }
 
     // Build git args
@@ -69,6 +74,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
             cfg_parts.push(p.to_string());
         }
     }
+    cfg_parts.extend(safe_config_overrides);
 
     args.push(patch_path.to_string_lossy().to_string());
 
@@ -139,6 +145,31 @@ fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
     }
     let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
     Ok(PathBuf::from(root))
+}
+
+fn safe_worktree_git_config_overrides(cwd: &Path) -> io::Result<Vec<String>> {
+    let mut config_overrides = base_internal_git_config_overrides();
+    let out = std::process::Command::new("git")
+        .args(&config_overrides)
+        .args([
+            "config",
+            "--name-only",
+            "--get-regexp",
+            ATTRIBUTE_FILTER_CONFIG_REGEXP,
+        ])
+        .current_dir(cwd)
+        .output()?;
+    if !out.status.success() && out.status.code() != Some(1) {
+        return Err(io::Error::other(format!(
+            "failed to query git configuration (exit {}): {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    config_overrides.extend(safe_attribute_filter_overrides_from_config_keys(
+        &String::from_utf8_lossy(&out.stdout),
+    ));
+    Ok(config_overrides)
 }
 
 fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
@@ -318,6 +349,15 @@ fn unescape_c_string(input: &str) -> String {
 
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
+    let config_overrides = safe_worktree_git_config_overrides(git_root)?;
+    stage_paths_with_config_overrides(git_root, diff, &config_overrides)
+}
+
+fn stage_paths_with_config_overrides(
+    git_root: &Path,
+    diff: &str,
+    config_overrides: &[String],
+) -> io::Result<()> {
     let paths = extract_paths_from_patch(diff);
     let mut existing: Vec<String> = Vec::new();
     for p in paths {
@@ -330,6 +370,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
         return Ok(());
     }
     let mut cmd = std::process::Command::new("git");
+    cmd.args(config_overrides);
     cmd.arg("add");
     cmd.arg("--");
     for p in &existing {
@@ -756,6 +797,60 @@ mod tests {
         assert_eq!(res_revert.exit_code, 0, "revert apply succeeded");
         let after_revert = read_file_normalized(&root.join("file.txt"));
         assert_eq!(after_revert, "orig\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_paths_ignores_repository_conversion_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "orig\n").unwrap();
+        let _ = run(root, &["git", "add", "file.txt"]);
+        let _ = run(root, &["git", "commit", "-m", "seed"]);
+
+        let marker_path = root.join("filter-ran");
+        let helper_path = root.join("clean-filter.sh");
+        std::fs::write(
+            &helper_path,
+            format!(
+                "#!/bin/sh\nprintf ran > \"{}\"\ncat\n",
+                marker_path.to_string_lossy()
+            ),
+        )
+        .expect("write filter helper");
+        let mut permissions = std::fs::metadata(&helper_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper_path, permissions).unwrap();
+        std::fs::write(
+            root.join(".git/info/attributes"),
+            "*.txt filter=codex-test\n",
+        )
+        .expect("configure attributes");
+        let _ = run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.codex-test.clean",
+                &format!("sh \"{}\"", helper_path.to_string_lossy()),
+            ],
+        );
+        let _ = run(
+            root,
+            &["git", "config", "filter.codex-test.required", "true"],
+        );
+        std::fs::write(root.join("file.txt"), "modified\n").unwrap();
+
+        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+modified\n";
+        stage_paths(root, diff).expect("stage paths");
+
+        assert!(
+            !marker_path.exists(),
+            "staging should ignore repository conversion configuration"
+        );
     }
 
     #[test]

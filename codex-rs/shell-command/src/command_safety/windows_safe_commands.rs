@@ -242,7 +242,7 @@ mod tests {
             "Get-ChildItem -Path .",
         ])));
 
-        assert!(is_safe_command_windows(&vec_str(&[
+        assert!(!is_safe_command_windows(&vec_str(&[
             "powershell.exe",
             "-NoProfile",
             "-Command",

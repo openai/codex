@@ -382,6 +382,58 @@ async fn test_get_has_changes_ignores_repo_fsmonitor_config() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn test_get_has_changes_ignores_configured_filters() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    let helper_path = repo_path.join("clean-filter.sh");
+    let marker_path = repo_path.join("filter-ran");
+
+    fs::write(
+        &helper_path,
+        format!(
+            "#!/bin/sh\nprintf ran > \"{}\"\ncat\n",
+            marker_path.to_string_lossy()
+        ),
+    )
+    .expect("write filter helper");
+    let mut permissions = fs::metadata(&helper_path)
+        .expect("read filter helper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&helper_path, permissions).expect("mark filter helper executable");
+    fs::write(
+        repo_path.join(".git/info/attributes"),
+        "*.txt filter=codex-test\n",
+    )
+    .expect("configure attributes");
+
+    Command::new("git")
+        .args([
+            "config",
+            "filter.codex-test.clean",
+            &format!("sh \"{}\"", helper_path.to_string_lossy()),
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure clean filter");
+    Command::new("git")
+        .args(["config", "filter.codex-test.required", "true"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure required filter");
+
+    fs::write(repo_path.join("test.txt"), "modified").expect("modify tracked file");
+    assert_eq!(get_has_changes(&repo_path).await, Some(true));
+    assert!(
+        !marker_path.exists(),
+        "metadata collection should not invoke configured filters"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn test_get_has_changes_ignores_configured_hooks_path() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let repo_path = create_test_git_repo(&temp_dir).await;
@@ -473,6 +525,67 @@ async fn test_get_git_working_tree_state_with_changes() {
     assert_eq!(state.sha, GitSha::new(&remote_sha));
     assert!(state.diff.contains("test.txt"));
     assert!(state.diff.contains("untracked.txt"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_get_git_working_tree_state_ignores_configured_filters() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (repo_path, _branch) = create_test_git_repo_with_remote(&temp_dir).await;
+    let helper_path = repo_path.join("clean-filter.sh");
+    let marker_path = repo_path.join("filter-ran");
+
+    fs::write(
+        &helper_path,
+        format!(
+            "#!/bin/sh\nprintf ran > \"{}\"\ncat\n",
+            marker_path.to_string_lossy()
+        ),
+    )
+    .expect("write filter helper");
+    let mut permissions = fs::metadata(&helper_path)
+        .expect("read filter helper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&helper_path, permissions).expect("mark filter helper executable");
+    fs::write(
+        repo_path.join(".git/info/attributes"),
+        "*.txt filter=codex-test\n",
+    )
+    .expect("configure attributes");
+
+    Command::new("git")
+        .args([
+            "config",
+            "filter.codex-test.clean",
+            &format!("sh \"{}\"", helper_path.to_string_lossy()),
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure clean filter");
+    Command::new("git")
+        .args(["config", "filter.codex-test.smudge", "cat"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure smudge filter");
+    Command::new("git")
+        .args(["config", "filter.codex-test.required", "true"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("configure required filter");
+
+    fs::write(repo_path.join("test.txt"), "modified").expect("modify tracked file");
+    let state = git_diff_to_remote(&repo_path)
+        .await
+        .expect("Should collect working tree state");
+    assert!(state.diff.contains("test.txt"));
+    assert!(
+        !marker_path.exists(),
+        "working tree state should not invoke configured filters"
+    );
 }
 
 #[tokio::test]

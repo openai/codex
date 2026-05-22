@@ -16,6 +16,9 @@ use tokio::time::timeout;
 use ts_rs::TS;
 
 use crate::GitSha;
+use crate::safe_git_config::ATTRIBUTE_FILTER_CONFIG_REGEXP;
+use crate::safe_git_config::base_internal_git_config_overrides;
+use crate::safe_git_config::safe_attribute_filter_overrides_from_config_keys;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -57,7 +60,6 @@ pub async fn get_git_repo_root_with_fs(
 
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
-const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct GitInfo {
@@ -279,7 +281,10 @@ fn trim_git_suffix(value: &str) -> &str {
 }
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
-    let output = run_git_command_with_timeout(&["status", "--porcelain"], cwd).await?;
+    let config_overrides = get_safe_attribute_filter_overrides(cwd).await?;
+    let output =
+        run_git_command_with_config_overrides(&["status", "--porcelain"], cwd, &config_overrides)
+            .await?;
     if !output.status.success() {
         return None;
     }
@@ -390,12 +395,19 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
+    run_git_command_with_config_overrides(args, cwd, &[]).await
+}
+
+async fn run_git_command_with_config_overrides(
+    args: &[&str],
+    cwd: &Path,
+    config_overrides: &[String],
+) -> Option<std::process::Output> {
     let mut command = Command::new("git");
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
-        // Keep internal Git helper commands independent of configured hook directories.
-        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
-        .args(["-c", "core.fsmonitor=false"])
+        .args(base_internal_git_config_overrides())
+        .args(config_overrides)
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
@@ -405,6 +417,26 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
         Ok(Ok(output)) => Some(output),
         _ => None, // Timeout or error
     }
+}
+
+async fn get_safe_attribute_filter_overrides(cwd: &Path) -> Option<Vec<String>> {
+    let output = run_git_command_with_timeout(
+        &[
+            "config",
+            "--name-only",
+            "--get-regexp",
+            ATTRIBUTE_FILTER_CONFIG_REGEXP,
+        ],
+        cwd,
+    )
+    .await?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        return None;
+    }
+
+    Some(safe_attribute_filter_overrides_from_config_keys(
+        &String::from_utf8(output.stdout).ok()?,
+    ))
 }
 
 async fn get_git_remotes(cwd: &Path) -> Option<Vec<String>> {
@@ -684,9 +716,13 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 }
 
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
-    let output =
-        run_git_command_with_timeout(&["diff", "--no-textconv", "--no-ext-diff", &sha.0], cwd)
-            .await?;
+    let config_overrides = get_safe_attribute_filter_overrides(cwd).await?;
+    let output = run_git_command_with_config_overrides(
+        &["diff", "--no-textconv", "--no-ext-diff", &sha.0],
+        cwd,
+        &config_overrides,
+    )
+    .await?;
     // 0 is success and no diff.
     // 1 is success but there is a diff.
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
@@ -709,6 +745,7 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
         if !untracked.is_empty() {
             // Use platform-appropriate null device and guard paths with `--`.
             let null_device: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+            let config_overrides = &config_overrides;
             let futures_iter = untracked.into_iter().map(|file| async move {
                 let file_owned = file;
                 let args_vec: Vec<&str> = vec![
@@ -722,7 +759,7 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
                     null_device,
                     &file_owned,
                 ];
-                run_git_command_with_timeout(&args_vec, cwd).await
+                run_git_command_with_config_overrides(&args_vec, cwd, config_overrides).await
             });
             let results = join_all(futures_iter).await;
             for extra in results.into_iter().flatten() {

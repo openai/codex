@@ -8,6 +8,10 @@
 use std::path::Path;
 use std::time::Duration;
 
+use codex_git_utils::ATTRIBUTE_FILTER_CONFIG_REGEXP;
+use codex_git_utils::base_internal_git_config_overrides;
+use codex_git_utils::safe_attribute_filter_overrides_from_config_keys;
+
 use crate::workspace_command::WorkspaceCommand;
 use crate::workspace_command::WorkspaceCommandExecutor;
 use crate::workspace_command::WorkspaceCommandOutput;
@@ -26,11 +30,17 @@ pub(crate) async fn get_git_diff(
     if !inside_git_repo(runner, cwd).await? {
         return Ok((false, String::new()));
     }
+    let config_overrides = safe_worktree_git_config_overrides(runner, cwd).await?;
 
     // Run tracked diff and untracked file listing in parallel.
     let (tracked_diff_res, untracked_output_res) = tokio::join!(
-        run_git_capture_diff(runner, cwd, &["diff", "--color"]),
-        run_git_capture_stdout(runner, cwd, &["ls-files", "--others", "--exclude-standard"]),
+        run_git_capture_diff(runner, cwd, &config_overrides, &["diff", "--color"]),
+        run_git_capture_stdout(
+            runner,
+            cwd,
+            &config_overrides,
+            &["ls-files", "--others", "--exclude-standard"],
+        ),
     );
     let tracked_diff = tracked_diff_res?;
     let untracked_output = untracked_output_res?;
@@ -49,7 +59,7 @@ pub(crate) async fn get_git_diff(
         .filter(|s| !s.is_empty())
     {
         let args = ["diff", "--color", "--no-index", "--", null_path, file];
-        let diff = run_git_capture_diff(runner, cwd, &args).await?;
+        let diff = run_git_capture_diff(runner, cwd, &config_overrides, &args).await?;
         untracked_diff.push_str(&diff);
     }
 
@@ -61,9 +71,10 @@ pub(crate) async fn get_git_diff(
 async fn run_git_capture_stdout(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
+    config_overrides: &[String],
     args: &[&str],
 ) -> Result<String, String> {
-    let output = run_git_command(runner, cwd, args).await?;
+    let output = run_git_command(runner, cwd, config_overrides, args).await?;
     if output.success() {
         Ok(output.stdout)
     } else {
@@ -79,9 +90,10 @@ async fn run_git_capture_stdout(
 async fn run_git_capture_diff(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
+    config_overrides: &[String],
     args: &[&str],
 ) -> Result<String, String> {
-    let output = run_git_command(runner, cwd, args).await?;
+    let output = run_git_command(runner, cwd, config_overrides, args).await?;
     if output.success() || output.exit_code == 1 {
         Ok(output.stdout)
     } else {
@@ -97,17 +109,50 @@ async fn inside_git_repo(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
 ) -> Result<bool, String> {
-    let output = run_git_command(runner, cwd, &["rev-parse", "--is-inside-work-tree"]).await?;
+    let output = run_git_command(runner, cwd, &[], &["rev-parse", "--is-inside-work-tree"]).await?;
     Ok(output.success())
+}
+
+async fn safe_worktree_git_config_overrides(
+    runner: &dyn WorkspaceCommandExecutor,
+    cwd: &Path,
+) -> Result<Vec<String>, String> {
+    let base_overrides = base_internal_git_config_overrides();
+    let output = run_git_command(
+        runner,
+        cwd,
+        &base_overrides,
+        &[
+            "config",
+            "--name-only",
+            "--get-regexp",
+            ATTRIBUTE_FILTER_CONFIG_REGEXP,
+        ],
+    )
+    .await?;
+    if !output.success() && output.exit_code != 1 {
+        return Err(format!(
+            "git config filter query failed with status {}",
+            output.exit_code
+        ));
+    }
+
+    let mut config_overrides = base_overrides;
+    config_overrides.extend(safe_attribute_filter_overrides_from_config_keys(
+        &output.stdout,
+    ));
+    Ok(config_overrides)
 }
 
 async fn run_git_command(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
+    config_overrides: &[String],
     args: &[&str],
 ) -> Result<WorkspaceCommandOutput, String> {
-    let mut argv = Vec::with_capacity(args.len() + 1);
+    let mut argv = Vec::with_capacity(config_overrides.len() + args.len() + 1);
     argv.push("git".to_string());
+    argv.extend(config_overrides.iter().cloned());
     argv.extend(args.iter().map(|arg| (*arg).to_string()));
     runner
         .run(
@@ -145,7 +190,7 @@ mod tests {
         assert_eq!(result, Ok((false, String::new())));
         assert_commands(
             &runner.commands(),
-            &[&["git", "rev-parse", "--is-inside-work-tree"]],
+            &[args(&["git", "rev-parse", "--is-inside-work-tree"])],
             &cwd,
         );
     }
@@ -159,26 +204,26 @@ mod tests {
                 /*exit_code*/ 0,
                 "true\n",
             ),
-            response(
-                &["git", "diff", "--color"],
+            response_vec(config_query_args(), /*exit_code*/ 1, ""),
+            response_vec(
+                guarded_args(&["diff", "--color"]),
                 /*exit_code*/ 1,
                 "tracked\n",
             ),
-            response(
-                &["git", "ls-files", "--others", "--exclude-standard"],
+            response_vec(
+                guarded_args(&["ls-files", "--others", "--exclude-standard"]),
                 /*exit_code*/ 0,
                 "new.txt\n",
             ),
-            response(
-                &[
-                    "git",
+            response_vec(
+                guarded_args(&[
                     "diff",
                     "--color",
                     "--no-index",
                     "--",
                     null_device(),
                     "new.txt",
-                ],
+                ]),
                 /*exit_code*/ 1,
                 "untracked\n",
             ),
@@ -190,18 +235,18 @@ mod tests {
         assert_commands(
             &runner.commands(),
             &[
-                &["git", "rev-parse", "--is-inside-work-tree"],
-                &["git", "diff", "--color"],
-                &["git", "ls-files", "--others", "--exclude-standard"],
-                &[
-                    "git",
+                args(&["git", "rev-parse", "--is-inside-work-tree"]),
+                config_query_args(),
+                guarded_args(&["diff", "--color"]),
+                guarded_args(&["ls-files", "--others", "--exclude-standard"]),
+                guarded_args(&[
                     "diff",
                     "--color",
                     "--no-index",
                     "--",
                     null_device(),
                     "new.txt",
-                ],
+                ]),
             ],
             &cwd,
         );
@@ -216,13 +261,14 @@ mod tests {
                 /*exit_code*/ 0,
                 "true\n",
             ),
-            response(
-                &["git", "diff", "--color"],
+            response_vec(config_query_args(), /*exit_code*/ 1, ""),
+            response_vec(
+                guarded_args(&["diff", "--color"]),
                 /*exit_code*/ 1,
                 "tracked\n",
             ),
-            response(
-                &["git", "ls-files", "--others", "--exclude-standard"],
+            response_vec(
+                guarded_args(&["ls-files", "--others", "--exclude-standard"]),
                 /*exit_code*/ 0,
                 "",
             ),
@@ -242,9 +288,10 @@ mod tests {
                 /*exit_code*/ 0,
                 "true\n",
             ),
-            response(&["git", "diff", "--color"], /*exit_code*/ 2, ""),
-            response(
-                &["git", "ls-files", "--others", "--exclude-standard"],
+            response_vec(config_query_args(), /*exit_code*/ 1, ""),
+            response_vec(guarded_args(&["diff", "--color"]), /*exit_code*/ 2, ""),
+            response_vec(
+                guarded_args(&["ls-files", "--others", "--exclude-standard"]),
                 /*exit_code*/ 0,
                 "",
             ),
@@ -261,8 +308,12 @@ mod tests {
     }
 
     fn response(argv: &[&str], exit_code: i32, stdout: &str) -> FakeResponse {
+        response_vec(args(argv), exit_code, stdout)
+    }
+
+    fn response_vec(argv: Vec<String>, exit_code: i32, stdout: &str) -> FakeResponse {
         FakeResponse {
-            argv: argv.iter().map(|arg| (*arg).to_string()).collect(),
+            argv,
             output: WorkspaceCommandOutput {
                 exit_code,
                 stdout: stdout.to_string(),
@@ -275,14 +326,34 @@ mod tests {
         if cfg!(windows) { "NUL" } else { "/dev/null" }
     }
 
-    fn assert_commands(commands: &[WorkspaceCommand], expected: &[&[&str]], cwd: &Path) {
+    fn args(argv: &[&str]) -> Vec<String> {
+        argv.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    fn config_query_args() -> Vec<String> {
+        let mut argv = vec!["git".to_string()];
+        argv.extend(base_internal_git_config_overrides());
+        argv.extend(args(&[
+            "config",
+            "--name-only",
+            "--get-regexp",
+            ATTRIBUTE_FILTER_CONFIG_REGEXP,
+        ]));
+        argv
+    }
+
+    fn guarded_args(args: &[&str]) -> Vec<String> {
+        let mut argv = vec!["git".to_string()];
+        argv.extend(base_internal_git_config_overrides());
+        argv.extend(safe_attribute_filter_overrides_from_config_keys(""));
+        argv.extend(args.iter().map(|arg| (*arg).to_string()));
+        argv
+    }
+
+    fn assert_commands(commands: &[WorkspaceCommand], expected: &[Vec<String>], cwd: &Path) {
         let actual: Vec<Vec<String>> = commands
             .iter()
             .map(|command| command.argv.clone())
-            .collect();
-        let expected: Vec<Vec<String>> = expected
-            .iter()
-            .map(|argv| argv.iter().map(|arg| (*arg).to_string()).collect())
             .collect();
         assert_eq!(actual, expected);
 
