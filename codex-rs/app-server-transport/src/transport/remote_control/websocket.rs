@@ -1225,7 +1225,7 @@ fn next_reconnect_delay(reconnect_attempt: &mut u64) -> (std::time::Duration, bo
 pub(super) async fn connect_remote_control_websocket(
     remote_control_target: &RemoteControlTarget,
     state_db: Option<&StateRuntime>,
-    auth_context: RemoteControlAuthContext<'_>,
+    mut auth_context: RemoteControlAuthContext<'_>,
     enrollment: &mut Option<RemoteControlEnrollment>,
     connect_options: RemoteControlConnectOptions<'_>,
     status_publisher: &RemoteControlStatusPublisher,
@@ -1234,11 +1234,6 @@ pub(super) async fn connect_remote_control_websocket(
     tungstenite::http::Response<()>,
 )> {
     ensure_rustls_crypto_provider();
-    let RemoteControlAuthContext {
-        auth_manager,
-        auth_recovery,
-        auth_change_rx,
-    } = auth_context;
 
     let Some(state_db) = state_db else {
         *enrollment = None;
@@ -1248,7 +1243,7 @@ pub(super) async fn connect_remote_control_websocket(
         ));
     };
 
-    let auth = match load_remote_control_auth(auth_manager).await {
+    let auth = match load_remote_control_auth(auth_context.auth_manager).await {
         Ok(auth) => auth,
         Err(err) => {
             if err.kind() == ErrorKind::PermissionDenied {
@@ -1293,67 +1288,22 @@ pub(super) async fn connect_remote_control_websocket(
         });
     }
 
-    loop {
-        if enrollment.is_none() {
-            info!(
-                "creating new remote control enrollment: websocket_url={}, enroll_url={}, account_id={}",
-                remote_control_target.websocket_url,
-                remote_control_target.enroll_url,
-                auth.account_id
-            );
-            let new_enrollment = match enroll_remote_control_server(
-                remote_control_target,
-                &auth,
-                connect_options.installation_id,
-                connect_options.server_name,
-            )
-            .await
-            {
-                Ok(new_enrollment) => new_enrollment,
-                Err(err)
-                    if err.kind() == ErrorKind::PermissionDenied
-                        && recover_remote_control_auth(auth_recovery, auth_change_rx).await =>
-                {
-                    return Err(io::Error::other(format!(
-                        "{err}; retrying after auth recovery"
-                    )));
-                }
-                Err(err) => return Err(err),
-            };
-            if let Err(err) = update_persisted_remote_control_enrollment(
-                Some(state_db),
-                remote_control_target,
-                &auth.account_id,
-                connect_options.app_server_client_name,
-                Some(&new_enrollment),
-            )
-            .await
-            {
-                return Err(io::Error::other(format!(
-                    "failed to persist remote control enrollment in sqlite state db: {err}"
-                )));
-            }
-            info!(
-                "created new remote control enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
-                remote_control_target.websocket_url,
-                new_enrollment.account_id,
-                new_enrollment.server_id,
-                new_enrollment.environment_id
-            );
-            status_publisher.publish_environment_id(Some(new_enrollment.environment_id.clone()));
-            *enrollment = Some(new_enrollment);
-        }
+    enroll_remote_control_server_if_missing(
+        remote_control_target,
+        state_db,
+        &auth,
+        &mut auth_context,
+        enrollment,
+        connect_options,
+        status_publisher,
+    )
+    .await?;
 
-        let should_refresh_server_token = enrollment
-            .as_ref()
-            .ok_or_else(|| {
-                io::Error::other("missing remote control enrollment after enrollment step")
-            })?
-            .should_refresh_server_token();
-        if !should_refresh_server_token {
-            break;
-        }
-
+    if enrollment
+        .as_ref()
+        .ok_or_else(|| io::Error::other("missing remote control enrollment after enrollment step"))?
+        .should_refresh_server_token()
+    {
         let enrollment_ref = enrollment.as_ref().ok_or_else(|| {
             io::Error::other("missing remote control enrollment after enrollment step")
         })?;
@@ -1379,7 +1329,7 @@ pub(super) async fn connect_remote_control_websocket(
         )
         .await
         {
-            Ok(()) => break,
+            Ok(()) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 info!(
                     "remote control server refresh returned HTTP 404; clearing stale enrollment before re-enrolling: websocket_url={}, account_id={}, server_id={}, environment_id={}",
@@ -1394,10 +1344,24 @@ pub(super) async fn connect_remote_control_websocket(
                     status_publisher,
                 )
                 .await;
+                enroll_remote_control_server_if_missing(
+                    remote_control_target,
+                    state_db,
+                    &auth,
+                    &mut auth_context,
+                    enrollment,
+                    connect_options,
+                    status_publisher,
+                )
+                .await?;
             }
             Err(err)
                 if err.kind() == ErrorKind::PermissionDenied
-                    && recover_remote_control_auth(auth_recovery, auth_change_rx).await =>
+                    && recover_remote_control_auth(
+                        auth_context.auth_recovery,
+                        auth_context.auth_change_rx,
+                    )
+                    .await =>
             {
                 return Err(io::Error::other(format!(
                     "{err}; retrying after auth recovery"
@@ -1503,6 +1467,71 @@ async fn clear_remote_control_enrollment(
     }
     *enrollment = None;
     status_publisher.publish_environment_id(/*environment_id*/ None);
+}
+
+async fn enroll_remote_control_server_if_missing(
+    remote_control_target: &RemoteControlTarget,
+    state_db: &StateRuntime,
+    auth: &RemoteControlConnectionAuth,
+    auth_context: &mut RemoteControlAuthContext<'_>,
+    enrollment: &mut Option<RemoteControlEnrollment>,
+    connect_options: RemoteControlConnectOptions<'_>,
+    status_publisher: &RemoteControlStatusPublisher,
+) -> io::Result<()> {
+    if enrollment.is_some() {
+        return Ok(());
+    }
+
+    info!(
+        "creating new remote control enrollment: websocket_url={}, enroll_url={}, account_id={}",
+        remote_control_target.websocket_url, remote_control_target.enroll_url, auth.account_id
+    );
+    let new_enrollment = match enroll_remote_control_server(
+        remote_control_target,
+        auth,
+        connect_options.installation_id,
+        connect_options.server_name,
+    )
+    .await
+    {
+        Ok(new_enrollment) => new_enrollment,
+        Err(err)
+            if err.kind() == ErrorKind::PermissionDenied
+                && recover_remote_control_auth(
+                    auth_context.auth_recovery,
+                    auth_context.auth_change_rx,
+                )
+                .await =>
+        {
+            return Err(io::Error::other(format!(
+                "{err}; retrying after auth recovery"
+            )));
+        }
+        Err(err) => return Err(err),
+    };
+    if let Err(err) = update_persisted_remote_control_enrollment(
+        Some(state_db),
+        remote_control_target,
+        &auth.account_id,
+        connect_options.app_server_client_name,
+        Some(&new_enrollment),
+    )
+    .await
+    {
+        return Err(io::Error::other(format!(
+            "failed to persist remote control enrollment in sqlite state db: {err}"
+        )));
+    }
+    info!(
+        "created new remote control enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
+        remote_control_target.websocket_url,
+        new_enrollment.account_id,
+        new_enrollment.server_id,
+        new_enrollment.environment_id
+    );
+    status_publisher.publish_environment_id(Some(new_enrollment.environment_id.clone()));
+    *enrollment = Some(new_enrollment);
+    Ok(())
 }
 
 async fn recover_remote_control_auth(
