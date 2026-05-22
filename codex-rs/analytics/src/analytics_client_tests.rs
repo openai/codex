@@ -4,6 +4,8 @@ use crate::events::CodexAcceptedLineFingerprintsEventParams;
 use crate::events::CodexAcceptedLineFingerprintsEventRequest;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
+use crate::events::CodexAppServerStartedEventParams;
+use crate::events::CodexAppServerStartedEventRequest;
 use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCommandExecutionEventParams;
 use crate::events::CodexCommandExecutionEventRequest;
@@ -41,6 +43,7 @@ use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
+use crate::facts::AppServerStartedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CompactionImplementation;
@@ -1363,6 +1366,39 @@ fn thread_initialized_event_serializes_expected_shape() {
 }
 
 #[test]
+fn app_server_started_event_serializes_expected_shape() {
+    let event = TrackEventRequest::AppServerStarted(CodexAppServerStartedEventRequest {
+        event_type: "codex_app_server_started",
+        event_params: CodexAppServerStartedEventParams {
+            runtime: sample_runtime_metadata(),
+            remote_control_enabled: true,
+            startup_duration_ms: 987,
+            completed_at: 12,
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize app-server started event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_app_server_started",
+            "event_params": {
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "remote_control_enabled": true,
+                "startup_duration_ms": 987,
+                "completed_at": 12
+            }
+        })
+    );
+}
+
+#[test]
 fn command_execution_event_serializes_expected_shape() {
     let event = TrackEventRequest::CommandExecution(CodexCommandExecutionEventRequest {
         event_type: "codex_command_execution_event",
@@ -1636,6 +1672,45 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(
         payload[0]["event_params"]["runtime"]["runtime_arch"],
         "x86_64"
+    );
+}
+
+#[tokio::test]
+async fn app_server_started_fact_emits_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppServerStarted(
+                AppServerStartedInput {
+                    runtime: sample_runtime_metadata(),
+                    remote_control_enabled: true,
+                    startup_duration_ms: 456,
+                    completed_at: 12,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(
+        payload,
+        json!([{
+            "event_type": "codex_app_server_started",
+            "event_params": {
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "remote_control_enabled": true,
+                "startup_duration_ms": 456,
+                "completed_at": 12
+            }
+        }])
     );
 }
 

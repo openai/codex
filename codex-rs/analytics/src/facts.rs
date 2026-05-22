@@ -274,6 +274,13 @@ pub struct CodexCompactionEvent {
     pub duration_ms: Option<u64>,
 }
 
+pub(crate) struct AppServerStartedInput {
+    pub runtime: CodexRuntimeMetadata,
+    pub remote_control_enabled: bool,
+    pub startup_duration_ms: u64,
+    pub completed_at: u64,
+}
+
 #[allow(dead_code)]
 pub(crate) enum AnalyticsFact {
     Initialize {
@@ -323,6 +330,7 @@ pub(crate) enum AnalyticsFact {
 }
 
 pub(crate) enum CustomAnalyticsFact {
+    AppServerStarted(AppServerStartedInput),
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),

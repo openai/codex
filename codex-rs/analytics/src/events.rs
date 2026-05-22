@@ -56,6 +56,7 @@ pub(crate) struct TrackEventsRequest {
 #[serde(untagged)]
 pub(crate) enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
+    AppServerStarted(CodexAppServerStartedEventRequest),
     ThreadInitialized(ThreadInitializedEvent),
     GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
@@ -142,6 +143,20 @@ pub(crate) struct CodexRuntimeMetadata {
     pub(crate) runtime_os: String,
     pub(crate) runtime_os_version: String,
     pub(crate) runtime_arch: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexAppServerStartedEventParams {
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) remote_control_enabled: bool,
+    pub(crate) startup_duration_ms: u64,
+    pub(crate) completed_at: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexAppServerStartedEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexAppServerStartedEventParams,
 }
 
 #[derive(Serialize)]
