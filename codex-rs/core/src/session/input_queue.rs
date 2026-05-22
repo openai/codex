@@ -161,6 +161,12 @@ impl InputQueue {
             .extend(input.into_iter().map(PendingInput::new));
     }
 
+    pub(crate) async fn clear_start_turn(&self) {
+        for pending_input in &mut self.state.lock().await.turn_pending_input {
+            pending_input.start_turn = false;
+        }
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
