@@ -80,37 +80,6 @@ pub(crate) struct RunningTask {
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
-pub(crate) struct RemovedTask {
-    pub(crate) records_turn_token_usage_on_span: bool,
-}
-
-impl ActiveTurn {
-    pub(crate) fn add_task(&mut self, task: RunningTask) {
-        assert!(
-            self.task.is_none(),
-            "active turn already has a running task"
-        );
-        self.task = Some(task);
-    }
-
-    pub(crate) fn remove_task(&mut self, sub_id: &str) -> Option<RemovedTask> {
-        let task = self.task.as_ref()?;
-        if task.turn_context.sub_id != sub_id {
-            return None;
-        }
-        let task = self.task.take()?;
-        let records_turn_token_usage_on_span = task.task.records_turn_token_usage_on_span();
-        task.handle.detach();
-        Some(RemovedTask {
-            records_turn_token_usage_on_span,
-        })
-    }
-
-    pub(crate) fn take_task(&mut self) -> Option<RunningTask> {
-        self.task.take()
-    }
-}
-
 /// Mutable state for a single turn.
 #[derive(Default)]
 pub(crate) struct TurnState {
