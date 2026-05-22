@@ -310,4 +310,18 @@ mod tests {
             .unwrap();
         assert_eq!(parsed, PowershellParseOutcome::Unsupported);
     }
+
+    #[test]
+    fn parser_process_rejects_param_blocks() {
+        let Some(powershell) = try_find_powershell_executable_blocking() else {
+            return;
+        };
+        let powershell = powershell.as_path().to_str().unwrap();
+        let mut parser = PowershellParserProcess::spawn(powershell).unwrap();
+
+        let parsed = parser
+            .parse("param([string]$path = (Get-Location)) Write-Output test")
+            .unwrap();
+        assert_eq!(parsed, PowershellParseOutcome::Unsupported);
+    }
 }

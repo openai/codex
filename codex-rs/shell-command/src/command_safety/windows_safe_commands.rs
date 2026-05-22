@@ -413,6 +413,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_powershell_param_blocks() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "param([string]$path = (Get-Location)) Write-Output test",
+        ])));
+    }
+
+    #[test]
     fn rejects_powershell_commands_with_side_effects() {
         assert!(!is_safe_command_windows(&vec_str(&[
             "powershell.exe",

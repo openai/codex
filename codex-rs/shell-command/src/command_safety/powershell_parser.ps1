@@ -42,6 +42,12 @@ function Invoke-ParseRequest {
         return @{ id = $RequestId; status = 'parse_errors' }
     }
 
+    # Script parameter blocks can contain expressions that are evaluated outside
+    # of the end-block statements we flatten below.
+    if ($ast.ParamBlock -ne $null) {
+        return @{ id = $RequestId; status = 'unsupported' }
+    }
+
     # PowerShell's stop-parsing marker hands the remaining source text to native
     # commands with runtime argument handling that does not match the AST shape we
     # flatten below. Keep that form out of the argv-like lowering path entirely.
