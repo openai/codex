@@ -252,7 +252,6 @@ pub struct WindowsSandboxSetupRequest {
     pub command_cwd: PathBuf,
     pub env_map: HashMap<String, String>,
     pub codex_home: PathBuf,
-    pub active_profile: Option<String>,
 }
 
 pub async fn run_windows_sandbox_setup(request: WindowsSandboxSetupRequest) -> anyhow::Result<()> {
@@ -291,7 +290,6 @@ async fn run_windows_sandbox_setup_and_persist(
     let command_cwd = request.command_cwd;
     let env_map = request.env_map;
     let codex_home = request.codex_home;
-    let active_profile = request.active_profile;
     let setup_codex_home = codex_home.clone();
 
     let setup_result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -325,7 +323,6 @@ async fn run_windows_sandbox_setup_and_persist(
     setup_result?;
 
     ConfigEditsBuilder::new(codex_home.as_path())
-        .with_profile(active_profile.as_deref())
         .set_windows_sandbox_mode(windows_sandbox_setup_mode_tag(mode))
         .clear_legacy_windows_sandbox_keys()
         .apply()

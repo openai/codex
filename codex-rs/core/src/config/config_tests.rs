@@ -4798,7 +4798,6 @@ model = "gpt-project-local"
         .build()
         .await?;
 
-    assert_eq!(config.active_profile, None);
     assert_eq!(config.model, None);
     assert!(
         config.startup_warnings.iter().any(|warning| {
@@ -5032,7 +5031,6 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -5063,7 +5061,6 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
     let empty = BTreeMap::new();
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(empty.clone())],
     )?;
     let loaded = load_global_mcp_servers(codex_home.path()).await?;
@@ -5379,7 +5376,6 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -5456,7 +5452,6 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -5518,7 +5513,6 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -5570,7 +5564,6 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -5625,7 +5618,6 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -5695,7 +5687,6 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
     )]);
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -5779,7 +5770,6 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
     let serialized_with_optional = std::fs::read_to_string(&config_path)?;
@@ -5814,7 +5804,6 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
     );
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -5913,7 +5902,6 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -6001,7 +5989,6 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -6052,7 +6039,6 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -6103,7 +6089,6 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -6160,7 +6145,6 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
 
     apply_blocking(
         codex_home.path(),
-        /*profile*/ None,
         &[ConfigEdit::ReplaceMcpServers(servers.clone())],
     )?;
 
@@ -6278,196 +6262,6 @@ model = "gpt-4.1"
             .get("dev")
             .and_then(|profile| profile.model.as_deref()),
         Some("gpt-4.1"),
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn set_model_updates_profile() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .with_profile(Some("dev"))
-        .set_model(Some("gpt-5.4"), Some(ReasoningEffort::Medium))
-        .apply()
-        .await?;
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    let parsed: ConfigToml = toml::from_str(&serialized)?;
-    let profile = parsed
-        .profiles
-        .get("dev")
-        .expect("profile should be created");
-
-    assert_eq!(profile.model.as_deref(), Some("gpt-5.4"));
-    assert_eq!(
-        profile.model_reasoning_effort,
-        Some(ReasoningEffort::Medium)
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn set_model_updates_existing_profile() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    let config_path = codex_home.path().join(CONFIG_TOML_FILE);
-
-    tokio::fs::write(
-        &config_path,
-        r#"
-[profiles.dev]
-model = "gpt-4"
-model_reasoning_effort = "medium"
-
-[profiles.prod]
-model = "gpt-5.4"
-"#,
-    )
-    .await?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .with_profile(Some("dev"))
-        .set_model(Some("o4-high"), Some(ReasoningEffort::Medium))
-        .apply()
-        .await?;
-
-    let serialized = tokio::fs::read_to_string(config_path).await?;
-    let parsed: ConfigToml = toml::from_str(&serialized)?;
-
-    let dev_profile = parsed
-        .profiles
-        .get("dev")
-        .expect("dev profile should survive updates");
-    assert_eq!(dev_profile.model.as_deref(), Some("o4-high"));
-    assert_eq!(
-        dev_profile.model_reasoning_effort,
-        Some(ReasoningEffort::Medium)
-    );
-
-    assert_eq!(
-        parsed
-            .profiles
-            .get("prod")
-            .and_then(|profile| profile.model.as_deref()),
-        Some("gpt-5.4"),
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .with_profile(Some("dev"))
-        .set_feature_enabled("guardian_approval", /*enabled*/ true)
-        .apply()
-        .await?;
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    let parsed: ConfigToml = toml::from_str(&serialized)?;
-    let profile = parsed
-        .profiles
-        .get("dev")
-        .expect("profile should be created");
-
-    assert_eq!(
-        profile
-            .features
-            .as_ref()
-            .and_then(|features| features.entries().get("guardian_approval").copied()),
-        Some(true),
-    );
-    assert_eq!(
-        parsed
-            .features
-            .as_ref()
-            .and_then(|features| features.entries().get("guardian_approval").copied()),
-        None,
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn set_feature_enabled_persists_feature_disable_in_profile() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .with_profile(Some("dev"))
-        .set_feature_enabled("guardian_approval", /*enabled*/ true)
-        .apply()
-        .await?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .with_profile(Some("dev"))
-        .set_feature_enabled("guardian_approval", /*enabled*/ false)
-        .apply()
-        .await?;
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    let parsed: ConfigToml = toml::from_str(&serialized)?;
-    let profile = parsed
-        .profiles
-        .get("dev")
-        .expect("profile should be created");
-
-    assert_eq!(
-        profile
-            .features
-            .as_ref()
-            .and_then(|features| features.entries().get("guardian_approval").copied()),
-        Some(false),
-    );
-    assert_eq!(
-        parsed
-            .features
-            .as_ref()
-            .and_then(|features| features.entries().get("guardian_approval").copied()),
-        None,
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .set_feature_enabled("guardian_approval", /*enabled*/ true)
-        .apply()
-        .await?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .with_profile(Some("dev"))
-        .set_feature_enabled("guardian_approval", /*enabled*/ false)
-        .apply()
-        .await?;
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    let parsed: ConfigToml = toml::from_str(&serialized)?;
-    let profile = parsed
-        .profiles
-        .get("dev")
-        .expect("profile should be created");
-
-    assert_eq!(
-        parsed
-            .features
-            .as_ref()
-            .and_then(|features| features.entries().get("guardian_approval").copied()),
-        Some(true),
-    );
-    assert_eq!(
-        profile
-            .features
-            .as_ref()
-            .and_then(|features| features.entries().get("guardian_approval").copied()),
-        Some(false),
     );
 
     Ok(())

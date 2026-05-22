@@ -958,9 +958,6 @@ pub struct Config {
     /// When `true`, suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: bool,
 
-    /// The active profile name used to derive this `Config` (if any).
-    pub active_profile: Option<String>,
-
     /// The currently active project config, resolved by checking if cwd:
     /// is (1) part of a git repo, (2) a git worktree, or (3) just using the cwd
     pub active_project: ProjectConfig,
@@ -3499,7 +3496,6 @@ impl Config {
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
                 .unwrap_or(false),
-            active_profile: None,
             active_project,
             notices,
             check_for_update_on_startup,
