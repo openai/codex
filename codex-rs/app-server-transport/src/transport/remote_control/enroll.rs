@@ -432,10 +432,14 @@ mod tests {
     #[test]
     fn preview_remote_control_response_body_redacts_server_token() {
         assert_eq!(
-            preview_remote_control_response_body(
+            serde_json::from_str::<serde_json::Value>(&preview_remote_control_response_body(
                 br#"{"server_id":"srv_e_test","remote_control_token":"secret"}"#
-            ),
-            r#"{"remote_control_token":"<redacted>","server_id":"srv_e_test"}"#
+            ))
+            .expect("redacted response preview should stay valid json"),
+            json!({
+                "server_id": "srv_e_test",
+                "remote_control_token": "<redacted>",
+            })
         );
     }
 
