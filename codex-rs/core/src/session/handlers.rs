@@ -51,7 +51,6 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 
-use crate::context::AdditionalContextFragment;
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::items::UserMessageItem;
@@ -251,11 +250,8 @@ pub(super) async fn user_input_or_turn_inner(
             .await;
             let accepted_items = items.clone();
             let additional_context_input = {
-                let fragments = {
-                    let mut state = sess.state.lock().await;
-                    state.additional_context.merge(additional_context)
-                };
-                AdditionalContextFragment::input_items(fragments)
+                let mut state = sess.state.lock().await;
+                state.additional_context.merge(additional_context)
             };
             let mut task_input = additional_context_input
                 .into_iter()

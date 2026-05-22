@@ -4,49 +4,26 @@ use codex_protocol::models::ResponseInputItem;
 use codex_utils_string::truncate_middle_with_token_budget;
 
 const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 1_000;
+const ADDITIONAL_CONTEXT_END_MARKER_SUFFIX: &str = ">";
+const ADDITIONAL_CONTEXT_START_MARKER_PREFIX: &str = "<external_";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AdditionalContextFragment {
-    pub(crate) key: String,
-    pub(crate) value: String,
-    pub(crate) is_untrusted: bool,
+pub(crate) struct AdditionalContextUserFragment {
+    key: String,
+    value: String,
 }
 
-impl AdditionalContextFragment {
-    const END_MARKER_SUFFIX: &'static str = ">";
-    const START_MARKER_PREFIX: &'static str = "<external_";
-
-    pub(crate) fn new(key: String, value: String, is_untrusted: bool) -> Self {
-        Self {
-            key,
-            value,
-            is_untrusted,
-        }
+impl AdditionalContextUserFragment {
+    pub(crate) fn new(key: String, value: String) -> Self {
+        Self { key, value }
     }
 
-    pub(crate) fn input_items(fragments: Vec<Self>) -> Vec<ResponseInputItem> {
-        fragments
-            .into_iter()
-            .map(|fragment| ResponseInputItem::Message {
-                role: fragment.role().to_string(),
-                content: vec![ContentItem::InputText {
-                    text: fragment.render(),
-                }],
-                phase: None,
-            })
-            .collect()
-    }
-
-    fn role(&self) -> &'static str {
-        if self.is_untrusted {
-            "user"
-        } else {
-            "developer"
-        }
+    pub(crate) fn into_input_item(self) -> ResponseInputItem {
+        additional_context_input_item(self)
     }
 }
 
-impl ContextualUserFragment for AdditionalContextFragment {
+impl ContextualUserFragment for AdditionalContextUserFragment {
     fn role() -> &'static str {
         "user"
     }
@@ -56,12 +33,65 @@ impl ContextualUserFragment for AdditionalContextFragment {
     }
 
     fn type_markers() -> (&'static str, &'static str) {
-        (Self::START_MARKER_PREFIX, Self::END_MARKER_SUFFIX)
+        (
+            ADDITIONAL_CONTEXT_START_MARKER_PREFIX,
+            ADDITIONAL_CONTEXT_END_MARKER_SUFFIX,
+        )
     }
 
     fn body(&self) -> String {
-        let value =
-            truncate_middle_with_token_budget(&self.value, MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS).0;
-        format!("{}>{value}</external_{}", self.key, self.key)
+        additional_context_body(&self.key, &self.value)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AdditionalContextDeveloperFragment {
+    key: String,
+    value: String,
+}
+
+impl AdditionalContextDeveloperFragment {
+    pub(crate) fn new(key: String, value: String) -> Self {
+        Self { key, value }
+    }
+
+    pub(crate) fn into_input_item(self) -> ResponseInputItem {
+        additional_context_input_item(self)
+    }
+}
+
+impl ContextualUserFragment for AdditionalContextDeveloperFragment {
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (
+            ADDITIONAL_CONTEXT_START_MARKER_PREFIX,
+            ADDITIONAL_CONTEXT_END_MARKER_SUFFIX,
+        )
+    }
+
+    fn body(&self) -> String {
+        additional_context_body(&self.key, &self.value)
+    }
+}
+
+fn additional_context_input_item<T: ContextualUserFragment>(fragment: T) -> ResponseInputItem {
+    ResponseInputItem::Message {
+        role: T::role().to_string(),
+        content: vec![ContentItem::InputText {
+            text: fragment.render(),
+        }],
+        phase: None,
+    }
+}
+
+fn additional_context_body(key: &str, value: &str) -> String {
+    let value = truncate_middle_with_token_budget(value, MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS).0;
+    format!("{key}>{value}</external_{key}")
 }

@@ -19,7 +19,6 @@ use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::connectors;
-use crate::context::AdditionalContextFragment;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AppsInstructions;
 use crate::context::AvailablePluginsInstructions;
@@ -3204,10 +3203,7 @@ impl Session {
                 state.additional_context.clone()
             };
             let fragments = additional_context_store.merge(additional_context);
-            (
-                AdditionalContextFragment::input_items(fragments),
-                additional_context_store,
-            )
+            (fragments, additional_context_store)
         };
         if input.is_empty() && additional_context_input.is_empty() {
             return Err(SteerInputError::EmptyInput);

@@ -5,6 +5,9 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -49,6 +52,12 @@ async fn wait_for_turn_complete(codex: &codex_core::CodexThread) {
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }
 
+fn additional_context_snapshot_options() -> ContextSnapshotOptions {
+    ContextSnapshotOptions::default()
+        .strip_capability_instructions()
+        .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 160 })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -69,7 +78,7 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
             "inspect the active tab",
             BTreeMap::from([
                 ("browser_info".to_string(), untrusted_context("tab one")),
-                ("automation_info".to_string(), untrusted_context("run one")),
+                ("automation_info".to_string(), trusted_context("run one")),
             ]),
         ))
         .await?;
@@ -91,10 +100,27 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
     );
     wait_for_turn_complete(&test.codex).await;
 
+    let request = request.single_request();
+    insta::assert_snapshot!(
+        "additional_context_simple_input",
+        context_snapshot::format_labeled_requests_snapshot(
+            "additional context is inserted before the user turn input.",
+            &[("Request", &request)],
+            &additional_context_snapshot_options(),
+        )
+    );
+    let developer_external_texts = request
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text.starts_with("<external_"))
+        .collect::<Vec<_>>();
     assert_eq!(
-        request.single_request().message_input_texts("user"),
+        developer_external_texts,
+        vec!["<external_automation_info>run one</external_automation_info>"]
+    );
+    assert_eq!(
+        request.message_input_texts("user"),
         vec![
-            "<external_automation_info>run one</external_automation_info>",
             "<external_browser_info>tab one</external_browser_info>",
             "inspect the active tab",
         ]
