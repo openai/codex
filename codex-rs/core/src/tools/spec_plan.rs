@@ -49,7 +49,6 @@ use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExposure;
-use crate::tools::registry::ToolRegistry;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use codex_features::Feature;
@@ -80,6 +79,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::warn;
 
+use self::planned_tools::PlannedTools;
+
 const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
 pub(crate) fn build_tool_router(
@@ -93,7 +94,7 @@ pub(crate) fn build_tool_router(
         extension_tool_executors,
         dynamic_tools,
     } = params;
-    let mut tools = ToolRegistry::default();
+    let mut tools = PlannedTools::default();
 
     add_shell_tools(turn_context, &mut tools);
     add_core_utility_tools(turn_context, discoverable_tools.as_deref(), &mut tools);
@@ -110,10 +111,10 @@ pub(crate) fn build_tool_router(
     prepend_code_mode_executors(turn_context, &mut tools);
 
     let model_visible_specs = model_visible_specs(turn_context, &tools);
-    ToolRouter::from_parts(tools, model_visible_specs)
+    ToolRouter::from_parts(tools.into_registry(), model_visible_specs)
 }
 
-fn model_visible_specs(turn_context: &TurnContext, tools: &ToolRegistry) -> Vec<ToolSpec> {
+fn model_visible_specs(turn_context: &TurnContext, tools: &PlannedTools) -> Vec<ToolSpec> {
     let mut specs = Vec::new();
     for tool in tools.iter() {
         let tool_name = tool.tool_name();
@@ -295,7 +296,7 @@ fn is_hidden_by_code_mode_only(
         ))
 }
 
-fn prepend_code_mode_executors(turn_context: &TurnContext, tools: &mut ToolRegistry) {
+fn prepend_code_mode_executors(turn_context: &TurnContext, tools: &mut PlannedTools) {
     let deferred_tools_available = search_tool_enabled(turn_context)
         && tools
             .iter()
@@ -307,7 +308,7 @@ fn prepend_code_mode_executors(turn_context: &TurnContext, tools: &mut ToolRegis
 
 fn build_code_mode_executors(
     turn_context: &TurnContext,
-    tools: &ToolRegistry,
+    tools: &PlannedTools,
     deferred_tools_available: bool,
 ) -> Vec<Arc<dyn CoreToolRuntime>> {
     if !code_mode_enabled(turn_context) {
@@ -421,7 +422,7 @@ fn code_mode_namespace_descriptions(
     namespace_descriptions
 }
 
-fn add_shell_tools(turn_context: &TurnContext, tools: &mut ToolRegistry) {
+fn add_shell_tools(turn_context: &TurnContext, tools: &mut PlannedTools) {
     let features = turn_context.features.get();
     let environment_mode = turn_context.tool_environment_mode();
     if !environment_mode.has_environment() {
@@ -448,10 +449,7 @@ fn add_shell_tools(turn_context: &TurnContext, tools: &mut ToolRegistry) {
 
             // Keep the legacy shell tool registered while unified exec is
             // model-visible.
-            tools.add_with_exposure(
-                ShellCommandHandler::new(shell_command_options),
-                ToolExposure::Hidden,
-            );
+            tools.add_hidden(ShellCommandHandler::new(shell_command_options));
         }
         ConfigShellToolType::Disabled => {}
         ConfigShellToolType::Default
@@ -465,7 +463,7 @@ fn add_shell_tools(turn_context: &TurnContext, tools: &mut ToolRegistry) {
 fn add_core_utility_tools(
     turn_context: &TurnContext,
     discoverable_tools: Option<&[DiscoverableTool]>,
-    tools: &mut ToolRegistry,
+    tools: &mut PlannedTools,
 ) {
     let features = turn_context.features.get();
     let environment_mode = turn_context.tool_environment_mode();
@@ -520,7 +518,7 @@ fn add_core_utility_tools(
     }
 }
 
-fn add_collaboration_tools(turn_context: &TurnContext, tools: &mut ToolRegistry) {
+fn add_collaboration_tools(turn_context: &TurnContext, tools: &mut PlannedTools) {
     if collab_tools_enabled(turn_context) {
         if multi_agent_v2_enabled(turn_context) {
             let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {
@@ -603,7 +601,7 @@ fn add_collaboration_tools(turn_context: &TurnContext, tools: &mut ToolRegistry)
 }
 
 fn add_multi_agent_v2_tool<T>(
-    tools: &mut ToolRegistry,
+    tools: &mut PlannedTools,
     tool: T,
     namespace: Option<&str>,
     exposure: ToolExposure,
@@ -624,7 +622,7 @@ fn add_multi_agent_v2_tool<T>(
 fn add_mcp_tools(
     mcp_tools: Option<&[ToolInfo]>,
     deferred_mcp_tools: Option<&[ToolInfo]>,
-    tools: &mut ToolRegistry,
+    tools: &mut PlannedTools,
 ) {
     if let Some(mcp_tools) = mcp_tools {
         tools.add(ListMcpResourcesHandler);
@@ -655,7 +653,7 @@ fn add_mcp_tools(
     }
 }
 
-fn add_dynamic_tools(dynamic_tools: &[DynamicToolSpec], tools: &mut ToolRegistry) {
+fn add_dynamic_tools(dynamic_tools: &[DynamicToolSpec], tools: &mut PlannedTools) {
     for tool in dynamic_tools {
         let Some(handler) = DynamicToolHandler::new(tool) else {
             tracing::error!(
@@ -669,7 +667,7 @@ fn add_dynamic_tools(dynamic_tools: &[DynamicToolSpec], tools: &mut ToolRegistry
     }
 }
 
-fn append_tool_search_executor(turn_context: &TurnContext, tools: &mut ToolRegistry) {
+fn append_tool_search_executor(turn_context: &TurnContext, tools: &mut PlannedTools) {
     if !(search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context)) {
         return;
     }
@@ -689,7 +687,7 @@ fn append_tool_search_executor(turn_context: &TurnContext, tools: &mut ToolRegis
 fn append_extension_tool_executors(
     turn_context: &TurnContext,
     executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
-    tools: &mut ToolRegistry,
+    tools: &mut PlannedTools,
 ) {
     // Extension ToolContributor implementations are resolved into executors
     // before planning. Core only adapts those executors into its runtime set.
@@ -748,6 +746,8 @@ fn code_mode_namespace_name<'a>(
         .and_then(|namespace| namespace_descriptions.get(namespace))
         .map(|namespace_description| namespace_description.name.as_str())
 }
+
+mod planned_tools;
 
 #[cfg(test)]
 #[path = "spec_plan_tests.rs"]

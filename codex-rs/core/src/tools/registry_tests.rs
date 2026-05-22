@@ -145,8 +145,7 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     let namespaced_handler = Arc::new(TestHandler {
         tool_name: namespaced_name.clone(),
     }) as Arc<dyn CoreToolRuntime>;
-    let mut registry = ToolRegistry::default();
-    registry.prepend([Arc::clone(&plain_handler), Arc::clone(&namespaced_handler)]);
+    let registry = ToolRegistry::from_tools([Arc::clone(&plain_handler), Arc::clone(&namespaced_handler)]);
 
     let plain = registry.tool(&plain_name);
     let namespaced = registry.tool(&namespaced_name);
@@ -190,8 +189,7 @@ async fn dispatch_notifies_tool_lifecycle_contributors() -> anyhow::Result<()> {
         tool_name: failing_tool.clone(),
         result: LifecycleTestResult::Err,
     }) as Arc<dyn CoreToolRuntime>;
-    let mut registry = ToolRegistry::default();
-    registry.prepend([ok_handler, failing_handler]);
+    let registry = ToolRegistry::from_tools([ok_handler, failing_handler]);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 

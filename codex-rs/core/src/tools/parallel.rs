@@ -328,8 +328,7 @@ mod tests {
         let handler = Arc::new(ImmediateHandler {
             tool_name: tool_name.clone(),
         }) as Arc<dyn CoreToolRuntime>;
-        let mut registry = ToolRegistry::default();
-        registry.prepend([handler]);
+        let registry = ToolRegistry::from_tools([handler]);
         let router = Arc::new(ToolRouter::from_parts(registry, Vec::new()));
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
         let runtime = ToolCallRuntime::new(router, session, turn_context, tracker);

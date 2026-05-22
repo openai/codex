@@ -20,6 +20,8 @@ use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
+use codex_tools::ToolExposure;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -42,6 +44,8 @@ struct ToolPlanProbe {
     visible_specs: Vec<ToolSpec>,
     visible_names: Vec<String>,
     namespace_functions: BTreeMap<String, Vec<String>>,
+    registered_names: Vec<String>,
+    exposures: BTreeMap<String, ToolExposure>,
 }
 
 impl ToolPlanProbe {
@@ -71,10 +75,25 @@ impl ToolPlanProbe {
                 | ToolSpec::Freeform(_) => None,
             })
             .collect::<BTreeMap<_, _>>();
+        let registered_tool_names = router.registered_tool_names_for_test();
+        let registered_names = registered_tool_names
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let exposures = registered_tool_names
+            .iter()
+            .filter_map(|name| {
+                router
+                    .tool_exposure_for_test(name)
+                    .map(|exposure| (name.to_string(), exposure))
+            })
+            .collect::<BTreeMap<_, _>>();
         Self {
             visible_specs,
             visible_names,
             namespace_functions,
+            registered_names,
+            exposures,
         }
     }
 
@@ -98,6 +117,31 @@ impl ToolPlanProbe {
         }
     }
 
+    fn assert_registered_contains(&self, expected: &[&str]) {
+        for name in expected {
+            assert!(
+                self.registered_names
+                    .iter()
+                    .any(|registered| registered == name),
+                "expected registered tool `{name}` in {:?}",
+                self.registered_names
+            );
+        }
+    }
+
+    fn assert_registered_lacks(&self, expected_absent: &[&str]) {
+        for name in expected_absent {
+            assert!(
+                !self
+                    .registered_names
+                    .iter()
+                    .any(|registered| registered == name),
+                "expected registered tool `{name}` to be absent from {:?}",
+                self.registered_names
+            );
+        }
+    }
+
     fn namespace_function_names(&self, namespace: &str) -> &[String] {
         self.namespace_functions
             .get(namespace)
@@ -109,6 +153,13 @@ impl ToolPlanProbe {
             .iter()
             .find(|spec| spec.name() == name)
             .unwrap_or_else(|| panic!("expected visible spec `{name}` in {:?}", self.visible_names))
+    }
+
+    fn exposure(&self, name: &str) -> ToolExposure {
+        *self
+            .exposures
+            .get(name)
+            .unwrap_or_else(|| panic!("expected registered tool `{name}`"))
     }
 }
 
@@ -287,7 +338,7 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
 }
 
 #[tokio::test]
-async fn shell_family_exposes_unified_exec_instead_of_legacy_shell() {
+async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
     let plan = probe(|turn| {
         set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
         set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
@@ -297,6 +348,8 @@ async fn shell_family_exposes_unified_exec_instead_of_legacy_shell() {
 
     plan.assert_visible_contains(&["exec_command", "write_stdin"]);
     plan.assert_visible_lacks(&["shell_command"]);
+    plan.assert_registered_contains(&["exec_command", "write_stdin", "shell_command"]);
+    assert_eq!(plan.exposure("shell_command"), ToolExposure::Hidden);
 }
 
 #[tokio::test]
@@ -308,6 +361,12 @@ async fn environment_count_controls_environment_backed_tools() {
     })
     .await;
     no_environment.assert_visible_lacks(&[
+        "shell_command",
+        "exec_command",
+        "apply_patch",
+        "view_image",
+    ]);
+    no_environment.assert_registered_lacks(&[
         "shell_command",
         "exec_command",
         "apply_patch",
@@ -451,10 +510,11 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     )
     .await;
     enabled.assert_visible_contains(&["tool_search"]);
+    enabled.assert_registered_contains(&["tool_search", "mcp__searchable__lookup"]);
 }
 
 #[tokio::test]
-async fn invalid_mcp_tools_are_not_exposed() {
+async fn invalid_mcp_tools_are_not_registered() {
     let plan = probe_with(
         |_| {},
         ToolPlanInputs {
@@ -469,6 +529,7 @@ async fn invalid_mcp_tools_are_not_exposed() {
     .await;
 
     plan.assert_visible_lacks(&["mcp__invalid__"]);
+    plan.assert_registered_lacks(&["mcp__invalid__lookup"]);
 }
 
 #[tokio::test]
@@ -700,6 +761,10 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     })
     .await;
     direct_model_only.assert_visible_contains(&["spawn_agent", "send_message", "wait_agent"]);
+    assert_eq!(
+        direct_model_only.exposure("spawn_agent"),
+        ToolExposure::DirectModelOnly
+    );
 }
 
 #[tokio::test]
@@ -719,6 +784,27 @@ async fn v1_multi_agent_tools_defer_when_tool_search_available() {
         "wait_agent",
         "close_agent",
     ]);
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        let namespaced_tool_name = ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, tool_name);
+        let namespaced_tool_name = namespaced_tool_name.to_string();
+        assert!(
+            plan.registered_names.contains(&namespaced_tool_name),
+            "expected namespaced runtime for {tool_name}"
+        );
+        assert!(
+            !plan
+                .registered_names
+                .contains(&ToolName::plain(tool_name).to_string()),
+            "expected no plain runtime for deferred {tool_name}"
+        );
+        assert_eq!(plan.exposure(&namespaced_tool_name), ToolExposure::Deferred);
+    }
     let ToolSpec::ToolSearch { description, .. } = plan.visible_spec("tool_search") else {
         panic!("expected visible tool_search spec");
     };
@@ -747,6 +833,18 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
         namespaced.assert_visible_lacks(&[tool_name]);
         assert!(
             namespaced
+                .registered_names
+                .contains(&ToolName::namespaced("agents", tool_name).to_string()),
+            "expected namespaced runtime for {tool_name}"
+        );
+        assert!(
+            !namespaced
+                .registered_names
+                .contains(&ToolName::plain(tool_name).to_string()),
+            "expected no plain runtime for {tool_name}"
+        );
+        assert!(
+            namespaced
                 .namespace_function_names("agents")
                 .iter()
                 .any(|name| name == tool_name),
@@ -768,6 +866,15 @@ async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support(
 
     plan.assert_visible_contains(&["spawn_agent", "send_message", "list_agents"]);
     plan.assert_visible_lacks(&["agents"]);
+    assert!(
+        plan.registered_names
+            .contains(&ToolName::plain("spawn_agent").to_string())
+    );
+    assert!(
+        !plan
+            .registered_names
+            .contains(&ToolName::namespaced("agents", "spawn_agent").to_string())
+    );
 }
 
 #[tokio::test]
