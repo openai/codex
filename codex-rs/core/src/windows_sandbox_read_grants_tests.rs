@@ -1,18 +1,18 @@
 use super::grant_read_root_non_elevated;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 
-fn policy() -> SandboxPolicy {
-    SandboxPolicy::new_workspace_write_policy()
+fn permission_profile() -> PermissionProfile {
+    PermissionProfile::workspace_write()
 }
 
 #[test]
 fn rejects_relative_path() {
     let tmp = TempDir::new().expect("tempdir");
     let err = grant_read_root_non_elevated(
-        &policy(),
+        &permission_profile(),
         tmp.path(),
         tmp.path(),
         &HashMap::new(),
@@ -28,7 +28,7 @@ fn rejects_missing_path() {
     let tmp = TempDir::new().expect("tempdir");
     let missing = tmp.path().join("does-not-exist");
     let err = grant_read_root_non_elevated(
-        &policy(),
+        &permission_profile(),
         tmp.path(),
         tmp.path(),
         &HashMap::new(),
@@ -45,7 +45,7 @@ fn rejects_file_path() {
     let file_path = tmp.path().join("file.txt");
     std::fs::write(&file_path, "hello").expect("write file");
     let err = grant_read_root_non_elevated(
-        &policy(),
+        &permission_profile(),
         tmp.path(),
         tmp.path(),
         &HashMap::new(),
