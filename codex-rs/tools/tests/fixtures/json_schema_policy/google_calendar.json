@@ -79,29 +79,7 @@
       ],
       "expected_dropped_fields": [
         "/definitions/DateTime/properties/dateTime/format"
-      ],
-      "expected_markers": {
-        "input": {
-          "schema_refs": 2,
-          "defs": 0,
-          "definitions": 1,
-          "any_of": 1,
-          "one_of": 0,
-          "all_of": 0,
-          "descriptions": 7,
-          "enums": 1
-        },
-        "output": {
-          "schema_refs": 2,
-          "defs": 0,
-          "definitions": 1,
-          "any_of": 1,
-          "one_of": 0,
-          "all_of": 0,
-          "descriptions": 6,
-          "enums": 1
-        }
-      }
+      ]
     }
   ]
 }

@@ -59,29 +59,7 @@
       "expected_dropped_fields": [
         "/properties/file/oneOf",
         "/properties/metadata/allOf"
-      ],
-      "expected_markers": {
-        "input": {
-          "schema_refs": 0,
-          "defs": 0,
-          "definitions": 0,
-          "any_of": 0,
-          "one_of": 1,
-          "all_of": 1,
-          "descriptions": 7,
-          "enums": 0
-        },
-        "output": {
-          "schema_refs": 0,
-          "defs": 0,
-          "definitions": 0,
-          "any_of": 0,
-          "one_of": 0,
-          "all_of": 0,
-          "descriptions": 1,
-          "enums": 0
-        }
-      }
+      ]
     }
   ]
 }

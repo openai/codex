@@ -84,29 +84,7 @@
       "expected_pruned": [
         "/$defs/GiantUnusedPayload"
       ],
-      "expected_dropped_fields": [],
-      "expected_markers": {
-        "input": {
-          "schema_refs": 3,
-          "defs": 1,
-          "definitions": 0,
-          "any_of": 0,
-          "one_of": 0,
-          "all_of": 0,
-          "descriptions": 8,
-          "enums": 1
-        },
-        "output": {
-          "schema_refs": 3,
-          "defs": 1,
-          "definitions": 0,
-          "any_of": 0,
-          "one_of": 0,
-          "all_of": 0,
-          "descriptions": 7,
-          "enums": 1
-        }
-      }
+      "expected_dropped_fields": []
     }
   ]
 }

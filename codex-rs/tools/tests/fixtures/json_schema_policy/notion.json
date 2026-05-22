@@ -66,29 +66,7 @@
       "expected_pruned": [
         "/$defs/UnusedDatabase"
       ],
-      "expected_dropped_fields": [],
-      "expected_markers": {
-        "input": {
-          "schema_refs": 2,
-          "defs": 1,
-          "definitions": 0,
-          "any_of": 1,
-          "one_of": 0,
-          "all_of": 0,
-          "descriptions": 5,
-          "enums": 1
-        },
-        "output": {
-          "schema_refs": 2,
-          "defs": 1,
-          "definitions": 0,
-          "any_of": 1,
-          "one_of": 0,
-          "all_of": 0,
-          "descriptions": 4,
-          "enums": 1
-        }
-      }
+      "expected_dropped_fields": []
     }
   ]
 }

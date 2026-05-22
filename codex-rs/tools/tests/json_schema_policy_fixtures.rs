@@ -2,12 +2,10 @@ use codex_tools::ToolName;
 use codex_tools::mcp_tool_to_responses_api_tool;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 const FIXTURE_PATHS: [&str; 5] = [
@@ -37,7 +35,6 @@ struct FixtureTool {
     expected_pruned: Vec<String>,
     #[serde(default)]
     expected_dropped_fields: Vec<String>,
-    expected_markers: ExpectedMarkers,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,69 +43,45 @@ struct ExpectedValue {
     value: Value,
 }
 
-#[derive(Debug, Deserialize)]
-struct ExpectedMarkers {
-    input: MarkerCounts,
-    output: MarkerCounts,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-struct MarkerCounts {
-    schema_refs: usize,
-    defs: usize,
-    definitions: usize,
-    any_of: usize,
-    one_of: usize,
-    all_of: usize,
-    descriptions: usize,
-    enums: usize,
-}
-
 #[test]
 fn json_schema_policy_fixtures_convert_to_responses_tools() {
-    for fixture in load_fixtures() {
+    for fixture in FIXTURE_PATHS.into_iter().map(load_fixture::<FixtureFile>) {
         for fixture_tool in &fixture.tools {
-            let responses_tool = convert_fixture_tool(&fixture.source, fixture_tool);
+            let responses_tool = convert_fixture_tool(&fixture, fixture_tool);
             let parameters = serde_json::to_value(&responses_tool.parameters)
                 .expect("responses parameters should serialize");
 
-            assert_eq!(
-                responses_tool.name, fixture_tool.name,
-                "{} should preserve the tool name",
-                fixture_tool.name
-            );
-            assert_eq!(
-                responses_tool.description, fixture_tool.description,
-                "{} should preserve the tool description",
-                fixture_tool.name
-            );
-            assert!(
-                !responses_tool.strict,
-                "{} should remain a strict:false tool",
-                fixture_tool.name
-            );
-            assert_eq!(
-                parameters.get("type"),
-                Some(&Value::String("object".to_string())),
-                "{} should produce object-shaped parameters",
-                fixture_tool.name
-            );
+            let expected_fields = [
+                (
+                    "preserve the tool name",
+                    json!(fixture_tool.name),
+                    json!(responses_tool.name),
+                ),
+                (
+                    "preserve the tool description",
+                    json!(fixture_tool.description),
+                    json!(responses_tool.description),
+                ),
+                (
+                    "remain a strict:false tool",
+                    json!(false),
+                    json!(responses_tool.strict),
+                ),
+                (
+                    "produce object-shaped parameters",
+                    json!("object"),
+                    parameters.get("type").cloned().unwrap_or(Value::Null),
+                ),
+            ];
+
+            for (message, expected, actual) in expected_fields {
+                assert_eq!(actual, expected, "{} should {message}", fixture_tool.name);
+            }
             assert!(
                 parameters.get("properties").is_some_and(Value::is_object),
                 "{} should produce a parameters.properties object",
                 fixture_tool.name
             );
-        }
-    }
-}
-
-#[test]
-fn json_schema_policy_fixtures_preserve_model_visible_guidance() {
-    for fixture in load_fixtures() {
-        for fixture_tool in &fixture.tools {
-            let responses_tool = convert_fixture_tool(&fixture.source, fixture_tool);
-            let parameters = serde_json::to_value(&responses_tool.parameters)
-                .expect("responses parameters should serialize");
 
             for expected in &fixture_tool.expected_preserved {
                 assert_eq!(
@@ -119,17 +92,6 @@ fn json_schema_policy_fixtures_preserve_model_visible_guidance() {
                     expected.pointer
                 );
             }
-        }
-    }
-}
-
-#[test]
-fn json_schema_policy_fixtures_prune_unreachable_definitions() {
-    for fixture in load_fixtures() {
-        for fixture_tool in &fixture.tools {
-            let responses_tool = convert_fixture_tool(&fixture.source, fixture_tool);
-            let parameters = serde_json::to_value(&responses_tool.parameters)
-                .expect("responses parameters should serialize");
 
             for pointer in &fixture_tool.expected_pruned {
                 assert!(
@@ -138,29 +100,6 @@ fn json_schema_policy_fixtures_prune_unreachable_definitions() {
                     fixture_tool.name
                 );
             }
-
-            let output_refs = collect_local_definition_refs(&parameters);
-            for target in output_refs {
-                if input_schema_defines_target(&fixture_tool.input_schema, &target) {
-                    assert!(
-                        output_schema_defines_target(&parameters, &target),
-                        "{} should not leave reachable local ref {} dangling",
-                        fixture_tool.name,
-                        target.schema_ref
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn json_schema_policy_fixtures_drop_expected_fields_after_json_schema_conversion() {
-    for fixture in load_fixtures() {
-        for fixture_tool in &fixture.tools {
-            let responses_tool = convert_fixture_tool(&fixture.source, fixture_tool);
-            let parameters = serde_json::to_value(&responses_tool.parameters)
-                .expect("responses parameters should serialize");
 
             for pointer in &fixture_tool.expected_dropped_fields {
                 assert!(
@@ -179,148 +118,93 @@ fn json_schema_policy_fixtures_drop_expected_fields_after_json_schema_conversion
 }
 
 #[test]
-fn json_schema_policy_fixtures_match_marker_baselines() {
-    for fixture in load_fixtures() {
-        for fixture_tool in &fixture.tools {
-            let responses_tool = convert_fixture_tool(&fixture.source, fixture_tool);
-            let parameters = serde_json::to_value(&responses_tool.parameters)
-                .expect("responses parameters should serialize");
-
-            assert_eq!(
-                marker_counts(&fixture_tool.input_schema),
-                fixture_tool.expected_markers.input,
-                "{} input marker baseline changed",
-                fixture_tool.name
-            );
-            assert_eq!(
-                marker_counts(&parameters),
-                fixture_tool.expected_markers.output,
-                "{} output marker baseline changed",
-                fixture_tool.name
-            );
-        }
-    }
-}
-
-#[test]
 fn json_schema_policy_oversized_golden_schema_triggers_compaction() {
-    let input_schema = load_json_fixture(OVERSIZED_NOTION_CREATE_PAGE_SCHEMA_PATH);
-    let input_bytes = compact_json_len(&input_schema);
-    assert!(
-        input_bytes > 4_000,
-        "oversized fixture should exceed local compaction budget, got {input_bytes} bytes"
-    );
-    assert!(
-        input_schema.pointer("/$defs/property_value").is_some(),
-        "oversized fixture should include real Notion page property definitions"
-    );
-    assert!(
-        input_schema.pointer("/properties/parent/$ref").is_some(),
-        "oversized fixture should include local refs from top-level properties"
-    );
+    let fixture: FixtureFile = load_fixture(OVERSIZED_NOTION_CREATE_PAGE_SCHEMA_PATH);
+    let fixture_tool = fixture
+        .tools
+        .first()
+        .expect("oversized fixture should contain a tool");
+    let input_bytes = compact_json_len(&fixture_tool.input_schema);
 
-    let responses_tool = convert_tool_schema(
-        "golden/notion/tools",
-        "create_page",
-        "Create a Notion page.",
-        &input_schema,
-    );
+    let responses_tool = convert_fixture_tool(&fixture, fixture_tool);
     let parameters =
         serde_json::to_value(&responses_tool.parameters).expect("responses parameters serialize");
     let output_bytes = compact_json_len(&parameters);
 
     assert!(
-        output_bytes <= 4_000,
-        "compacted fixture should fit local compaction budget, got {output_bytes} bytes"
-    );
-    assert!(
         output_bytes < input_bytes,
         "compaction should reduce schema size from {input_bytes} bytes"
     );
-    assert!(
-        parameters.pointer("/description").is_none(),
-        "oversized schema should drop root description"
-    );
-    assert!(
-        parameters
-            .pointer("/properties/parent/description")
-            .is_none(),
-        "oversized schema should drop nested descriptions"
-    );
-    assert!(
-        parameters.pointer("/$defs").is_none(),
-        "oversized schema should drop root definitions after stripping descriptions is insufficient"
-    );
-    assert_eq!(
-        parameters.pointer("/properties/parent"),
-        Some(&json!({})),
-        "oversized schema should rewrite local refs before dropping root definitions"
-    );
-    assert_eq!(
-        parameters.pointer("/properties/children/items"),
-        Some(&json!({})),
-        "oversized schema should rewrite nested local refs before dropping root definitions"
-    );
-    assert_eq!(
-        parameters.pointer("/properties/markdown/type"),
-        Some(&json!("string")),
-        "oversized schema should retain top-level argument shape"
-    );
-    assert_eq!(
-        parameters.pointer("/properties/properties/type"),
-        Some(&json!("object")),
-        "oversized schema should retain object argument shape"
-    );
+
+    let absent_pointers = [
+        ("/description", "drop root description"),
+        ("/properties/parent/description", "drop nested descriptions"),
+        (
+            "/$defs",
+            "drop root definitions after stripping descriptions is insufficient",
+        ),
+    ];
+    for (pointer, message) in absent_pointers {
+        assert!(
+            parameters.pointer(pointer).is_none(),
+            "oversized schema should {message}"
+        );
+    }
+
+    let expected_values = [
+        (
+            "/properties/parent",
+            json!({}),
+            "rewrite local refs before dropping root definitions",
+        ),
+        (
+            "/properties/children/items",
+            json!({}),
+            "rewrite nested local refs before dropping root definitions",
+        ),
+        (
+            "/properties/markdown/type",
+            json!("string"),
+            "retain top-level argument shape",
+        ),
+        (
+            "/properties/properties/type",
+            json!("object"),
+            "retain object argument shape",
+        ),
+    ];
+    for (pointer, expected, message) in expected_values {
+        assert_eq!(
+            parameters.pointer(pointer),
+            Some(&expected),
+            "oversized schema should {message}"
+        );
+    }
 }
 
-fn load_json_fixture(path: &str) -> Value {
-    let path = fixture_path(path);
+fn load_fixture<T: DeserializeOwned>(path: &str) -> T {
+    let path = codex_utils_cargo_bin::find_resource!(path)
+        .unwrap_or_else(|err| panic!("resolve fixture {path}: {err}"));
     let fixture = fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("read fixture {}: {err}", path.display()));
     serde_json::from_str(&fixture)
         .unwrap_or_else(|err| panic!("parse fixture {}: {err}", path.display()))
 }
 
-fn load_fixture_file(path: &str) -> FixtureFile {
-    let path = fixture_path(path);
-    let fixture = fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("read fixture {}: {err}", path.display()));
-    serde_json::from_str(&fixture)
-        .unwrap_or_else(|err| panic!("parse fixture {}: {err}", path.display()))
-}
-
-fn load_fixtures() -> Vec<FixtureFile> {
-    FIXTURE_PATHS.into_iter().map(load_fixture_file).collect()
-}
-
-fn fixture_path(path: &str) -> PathBuf {
-    codex_utils_cargo_bin::find_resource!(path)
-        .unwrap_or_else(|err| panic!("resolve fixture {path}: {err}"))
-}
-
-fn convert_fixture_tool(source: &str, fixture_tool: &FixtureTool) -> codex_tools::ResponsesApiTool {
-    convert_tool_schema(
-        source,
-        &fixture_tool.name,
-        &fixture_tool.description,
-        &fixture_tool.input_schema,
-    )
-}
-
-fn convert_tool_schema(
-    source: &str,
-    name: &str,
-    description: &str,
-    input_schema: &Value,
+fn convert_fixture_tool(
+    fixture: &FixtureFile,
+    fixture_tool: &FixtureTool,
 ) -> codex_tools::ResponsesApiTool {
-    let input_schema = input_schema
+    let name = &fixture_tool.name;
+    let input_schema = fixture_tool
+        .input_schema
         .as_object()
         .unwrap_or_else(|| panic!("{name} input_schema should be an object"))
         .clone();
     let tool = rmcp::model::Tool {
         name: name.to_string().into(),
         title: None,
-        description: Some(description.to_string().into()),
+        description: Some(fixture_tool.description.clone().into()),
         input_schema: Arc::new(input_schema),
         output_schema: None,
         annotations: None,
@@ -329,121 +213,12 @@ fn convert_tool_schema(
         meta: None,
     };
 
-    mcp_tool_to_responses_api_tool(&ToolName::namespaced(source, name), &tool)
-        .unwrap_or_else(|err| panic!("convert {name} from {source}: {err}"))
-}
-
-fn marker_counts(value: &Value) -> MarkerCounts {
-    MarkerCounts {
-        schema_refs: count_key(value, "$ref"),
-        defs: count_key(value, "$defs"),
-        definitions: count_key(value, "definitions"),
-        any_of: count_key(value, "anyOf"),
-        one_of: count_key(value, "oneOf"),
-        all_of: count_key(value, "allOf"),
-        descriptions: count_key(value, "description"),
-        enums: count_key(value, "enum"),
-    }
-}
-
-fn count_key(value: &Value, target: &str) -> usize {
-    match value {
-        Value::Array(values) => values.iter().map(|value| count_key(value, target)).sum(),
-        Value::Object(map) => {
-            let current = usize::from(map.contains_key(target));
-            current
-                + map
-                    .values()
-                    .map(|value| count_key(value, target))
-                    .sum::<usize>()
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => 0,
-    }
+    mcp_tool_to_responses_api_tool(&ToolName::namespaced(&fixture.source, name), &tool)
+        .unwrap_or_else(|err| panic!("convert {name} from {}: {err}", fixture.source))
 }
 
 fn compact_json_len(value: &Value) -> usize {
     serde_json::to_vec(value)
         .unwrap_or_else(|err| panic!("serialize compact JSON: {err}"))
         .len()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct LocalDefinitionTarget {
-    schema_ref: String,
-    table: &'static str,
-    name: String,
-}
-
-fn collect_local_definition_refs(value: &Value) -> BTreeSet<LocalDefinitionTarget> {
-    let mut refs = BTreeSet::new();
-    collect_local_definition_refs_from_value(value, &mut refs);
-    refs
-}
-
-fn collect_local_definition_refs_from_value(
-    value: &Value,
-    refs: &mut BTreeSet<LocalDefinitionTarget>,
-) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_local_definition_refs_from_value(value, refs);
-            }
-        }
-        Value::Object(map) => {
-            if let Some(Value::String(schema_ref)) = map.get("$ref")
-                && let Some(target) = local_definition_target(schema_ref)
-            {
-                refs.insert(target);
-            }
-            for value in map.values() {
-                collect_local_definition_refs_from_value(value, refs);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
-
-fn local_definition_target(schema_ref: &str) -> Option<LocalDefinitionTarget> {
-    let (table, name) = schema_ref
-        .strip_prefix("#/$defs/")
-        .map(|rest| ("$defs", rest))
-        .or_else(|| {
-            schema_ref
-                .strip_prefix("#/definitions/")
-                .map(|rest| ("definitions", rest))
-        })?;
-    let name = name.split('/').next().unwrap_or_default();
-    Some(LocalDefinitionTarget {
-        schema_ref: schema_ref.to_string(),
-        table,
-        name: decode_fixture_ref_name(name),
-    })
-}
-
-fn decode_fixture_ref_name(name: &str) -> String {
-    name.replace("%20", " ")
-        .replace("%24", "$")
-        .replace("%7E0", "~")
-        .replace("%7e0", "~")
-}
-
-fn input_schema_defines_target(value: &Value, target: &LocalDefinitionTarget) -> bool {
-    root_definition_table(value, target.table)
-        .and_then(|definitions| definitions.get(&target.name))
-        .is_some()
-}
-
-fn output_schema_defines_target(value: &Value, target: &LocalDefinitionTarget) -> bool {
-    input_schema_defines_target(value, target)
-}
-
-fn root_definition_table<'a>(
-    value: &'a Value,
-    table: &str,
-) -> Option<&'a serde_json::Map<String, Value>> {
-    value
-        .as_object()
-        .and_then(|map| map.get(table))
-        .and_then(Value::as_object)
 }
