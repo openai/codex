@@ -69,12 +69,17 @@ pub(super) async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
+    let forked_from_thread_id = {
+        let state = sess.state.lock().await;
+        state.session_configuration.forked_from_thread_id
+    };
 
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
+        forked_from_thread_id,
         parent_turn_context.thread_source,
         review_turn_id.clone(),
         #[allow(deprecated)]

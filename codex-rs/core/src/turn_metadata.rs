@@ -16,6 +16,7 @@ use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -74,6 +75,8 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    forked_from_thread_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_source: Option<ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
@@ -107,7 +110,15 @@ fn merge_turn_metadata(
     }
     if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
         for (key, value) in responsesapi_client_metadata {
-            if key == TURN_STARTED_AT_UNIX_MS_KEY {
+            if matches!(
+                key.as_str(),
+                "session_id"
+                    | "thread_id"
+                    | "thread_source"
+                    | "turn_id"
+                    | TURN_STARTED_AT_UNIX_MS_KEY
+                    | "forked_from_thread_id"
+            ) {
                 continue;
             }
             metadata
@@ -121,6 +132,7 @@ fn merge_turn_metadata(
 fn build_turn_metadata_bag(
     session_id: Option<String>,
     thread_id: Option<String>,
+    forked_from_thread_id: Option<ThreadId>,
     thread_source: Option<ThreadSource>,
     turn_id: Option<String>,
     sandbox: Option<String>,
@@ -137,6 +149,7 @@ fn build_turn_metadata_bag(
     TurnMetadataBag {
         session_id,
         thread_id,
+        forked_from_thread_id,
         thread_source,
         turn_id,
         workspaces,
@@ -167,6 +180,7 @@ pub async fn build_turn_metadata_header(
     build_turn_metadata_bag(
         /*session_id*/ None,
         /*thread_id*/ None,
+        /*forked_from_thread_id*/ None,
         /*thread_source*/ None,
         /*turn_id*/ None,
         sandbox.map(ToString::to_string),
@@ -198,6 +212,7 @@ impl TurnMetadataState {
     pub(crate) fn new(
         session_id: String,
         thread_id: String,
+        forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         turn_id: String,
         cwd: AbsolutePathBuf,
@@ -217,6 +232,7 @@ impl TurnMetadataState {
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
             Some(thread_id),
+            forked_from_thread_id,
             thread_source,
             Some(turn_id),
             sandbox,
@@ -346,19 +362,13 @@ impl TurnMetadataState {
             let Some(repo_root) = state.repo_root.clone() else {
                 return;
             };
-
-            let enriched_metadata = build_turn_metadata_bag(
-                state.base_metadata.session_id.clone(),
-                state.base_metadata.thread_id.clone(),
-                state.base_metadata.thread_source,
-                state.base_metadata.turn_id.clone(),
-                state.base_metadata.sandbox.clone(),
-                Some(repo_root),
-                Some(workspace_git_metadata),
-            );
-            if enriched_metadata.workspaces.is_empty() {
+            if workspace_git_metadata.is_empty() {
                 return;
             }
+            let mut enriched_metadata = state.base_metadata.clone();
+            enriched_metadata
+                .workspaces
+                .insert(repo_root, workspace_git_metadata.into());
 
             if let Some(header_value) = enriched_metadata.to_header_value() {
                 *state
