@@ -4,7 +4,11 @@ use crate::UsageHeadline;
 use crate::UsageRange;
 use crate::UsageReport;
 use crate::UsageSample;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::UsageContributorKind;
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 const USAGE_RETENTION_DAYS: i64 = 14;
 const USAGE_RETENTION_SECONDS: i64 = USAGE_RETENTION_DAYS * 24 * 60 * 60;
@@ -135,6 +139,7 @@ INSERT INTO usage_sample_contributors (
                 .read_usage_contributors(since, UsageContributorKind::Skill, total_tokens)
                 .await?,
             subagents: self.read_subagent_usage(since, total_tokens).await?,
+            agent_tasks: self.read_agent_task_usage(since, total_tokens).await?,
             apps: self
                 .read_usage_contributors(since, UsageContributorKind::App, total_tokens)
                 .await?,
@@ -193,8 +198,8 @@ ORDER BY attributed_tokens DESC, label ASC
         let rows = sqlx::query(
             r#"
 SELECT
-    COALESCE(NULLIF(threads.agent_role, ''), NULLIF(threads.agent_nickname, ''), 'unnamed') AS label,
-    COALESCE(NULLIF(threads.agent_role, ''), NULLIF(threads.agent_nickname, ''), 'unnamed') AS contributor_id,
+    COALESCE(NULLIF(threads.agent_role, ''), NULLIF(threads.agent_nickname, ''), 'default') AS label,
+    COALESCE(NULLIF(threads.agent_role, ''), NULLIF(threads.agent_nickname, ''), 'default') AS contributor_id,
     SUM(usage_samples.blended_tokens) AS attributed_tokens
 FROM usage_samples
 JOIN threads ON threads.id = usage_samples.thread_id
@@ -221,6 +226,55 @@ ORDER BY attributed_tokens DESC, label ASC
             })
             .collect()
     }
+
+    async fn read_agent_task_usage(
+        &self,
+        since: i64,
+        total_tokens: i64,
+    ) -> anyhow::Result<Vec<UsageEntry>> {
+        let rows = sqlx::query(
+            r#"
+SELECT threads.source AS source, SUM(usage_samples.blended_tokens) AS attributed_tokens
+FROM usage_samples
+JOIN threads ON threads.id = usage_samples.thread_id
+WHERE usage_samples.occurred_at >= ?
+  AND threads.thread_source = 'subagent'
+GROUP BY threads.source
+HAVING SUM(usage_samples.blended_tokens) > 0
+            "#,
+        )
+        .bind(since)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        let mut by_task = BTreeMap::<String, i64>::new();
+        for row in rows {
+            let label = agent_task_label(row.try_get("source")?);
+            let attributed_tokens: i64 = row.try_get("attributed_tokens")?;
+            by_task
+                .entry(label)
+                .and_modify(|tokens| {
+                    *tokens = tokens.saturating_add(attributed_tokens);
+                })
+                .or_insert(attributed_tokens);
+        }
+        let mut entries = by_task
+            .into_iter()
+            .map(|(label, attributed_tokens)| UsageEntry {
+                kind: UsageContributorKind::AgentTask,
+                id: label.clone(),
+                label,
+                attributed_tokens,
+                percent_of_usage: usage_percent(attributed_tokens, total_tokens),
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            right
+                .attributed_tokens
+                .cmp(&left.attributed_tokens)
+                .then_with(|| left.label.cmp(&right.label))
+        });
+        Ok(entries)
+    }
 }
 
 async fn prune_usage_samples_before(
@@ -242,6 +296,7 @@ fn usage_kind_key(kind: UsageContributorKind) -> &'static str {
     match kind {
         UsageContributorKind::Skill => "skill",
         UsageContributorKind::Subagent => "subagent",
+        UsageContributorKind::AgentTask => "agent_task",
         UsageContributorKind::App => "app",
         UsageContributorKind::McpServer => "mcp_server",
         UsageContributorKind::Plugin => "plugin",
@@ -264,6 +319,7 @@ fn usage_headline(report: &UsageReport) -> Option<UsageHeadline> {
         .skills
         .iter()
         .chain(report.subagents.iter())
+        .chain(report.agent_tasks.iter())
         .chain(report.apps.iter())
         .chain(report.mcp_servers.iter())
         .chain(report.plugins.iter())
@@ -284,12 +340,31 @@ fn usage_headline(report: &UsageReport) -> Option<UsageHeadline> {
     Some(UsageHeadline { entry, note })
 }
 
+fn agent_task_label(source: &str) -> String {
+    let parsed_source = serde_json::from_str(source)
+        .or_else(|_| serde_json::from_value::<SessionSource>(Value::String(source.to_string())));
+    match parsed_source.ok() {
+        Some(SessionSource::SubAgent(SubAgentSource::Review)) => "review".to_string(),
+        Some(SessionSource::SubAgent(SubAgentSource::Compact)) => "compact".to_string(),
+        Some(SessionSource::SubAgent(SubAgentSource::MemoryConsolidation)) => {
+            "memory-consolidation".to_string()
+        }
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })) => {
+            "thread-spawned".to_string()
+        }
+        Some(SessionSource::SubAgent(SubAgentSource::Other(other))) => other,
+        _ => "unknown".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use codex_protocol::protocol::ThreadSource;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::UsageAttributionContributor;
@@ -320,6 +395,15 @@ mod tests {
         let mut subagent_metadata =
             test_thread_metadata(&codex_home, subagent_thread_id, codex_home.clone());
         subagent_metadata.thread_source = Some(ThreadSource::Subagent);
+        subagent_metadata.source =
+            serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: user_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("code-review".to_string()),
+            }))
+            .expect("thread spawn source should serialize");
         subagent_metadata.agent_role = Some("code-review".to_string());
         runtime
             .upsert_thread(&subagent_metadata)
@@ -430,6 +514,13 @@ mod tests {
                     attributed_tokens: 40,
                     percent_of_usage: 25,
                 }],
+                agent_tasks: vec![UsageEntry {
+                    kind: UsageContributorKind::AgentTask,
+                    id: "thread-spawned".to_string(),
+                    label: "thread-spawned".to_string(),
+                    attributed_tokens: 40,
+                    percent_of_usage: 25,
+                }],
                 apps: vec![UsageEntry {
                     kind: UsageContributorKind::App,
                     id: "slack".to_string(),
@@ -444,7 +535,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn usage_report_labels_unnamed_subagents_as_unnamed() {
+    async fn usage_report_labels_default_subagents_as_default() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -463,7 +554,7 @@ mod tests {
         runtime
             .record_usage_sample(&usage_sample(
                 subagent_thread_id,
-                "unnamed-subagent",
+                "default-subagent",
                 /*occurred_at*/ now,
                 TokenUsage {
                     input_tokens: 10,
@@ -486,11 +577,146 @@ mod tests {
             report.subagents,
             vec![UsageEntry {
                 kind: UsageContributorKind::Subagent,
-                id: "unnamed".to_string(),
-                label: "unnamed".to_string(),
+                id: "default".to_string(),
+                label: "default".to_string(),
                 attributed_tokens: 15,
                 percent_of_usage: 100,
             }]
+        );
+        assert_eq!(
+            report.agent_tasks,
+            vec![UsageEntry {
+                kind: UsageContributorKind::AgentTask,
+                id: "unknown".to_string(),
+                label: "unknown".to_string(),
+                attributed_tokens: 15,
+                percent_of_usage: 100,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_report_groups_agent_tasks_by_subagent_source() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let parent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000906").expect("valid thread id");
+        let review_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000907").expect("valid thread id");
+        let guardian_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000908").expect("valid thread id");
+        let spawned_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000909").expect("valid thread id");
+        let unknown_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000910").expect("valid thread id");
+        let now = Utc::now().timestamp();
+
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                parent_thread_id,
+                codex_home.clone(),
+            ))
+            .await
+            .expect("parent thread insert should succeed");
+        for (thread_id, source) in [
+            (
+                review_thread_id,
+                serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::Review))
+                    .expect("review source should serialize"),
+            ),
+            (
+                guardian_thread_id,
+                serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::Other(
+                    "guardian".to_string(),
+                )))
+                .expect("guardian source should serialize"),
+            ),
+            (
+                spawned_thread_id,
+                serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_path: None,
+                    agent_nickname: Some("Bacon".to_string()),
+                    agent_role: None,
+                }))
+                .expect("thread spawn source should serialize"),
+            ),
+            (unknown_thread_id, "not-json".to_string()),
+        ] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+            metadata.thread_source = Some(ThreadSource::Subagent);
+            metadata.source = source;
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("subagent thread insert should succeed");
+        }
+
+        for (thread_id, sample_id, input_tokens) in [
+            (review_thread_id, "review-agent-task", 10),
+            (guardian_thread_id, "guardian-agent-task", 20),
+            (spawned_thread_id, "spawned-agent-task", 30),
+            (unknown_thread_id, "unknown-agent-task", 40),
+        ] {
+            runtime
+                .record_usage_sample(&usage_sample(
+                    thread_id,
+                    sample_id,
+                    /*occurred_at*/ now,
+                    TokenUsage {
+                        input_tokens,
+                        cached_input_tokens: 0,
+                        output_tokens: 0,
+                        reasoning_output_tokens: 0,
+                        total_tokens: input_tokens,
+                    },
+                    Vec::new(),
+                ))
+                .await
+                .expect("usage sample should persist");
+        }
+
+        let report = runtime
+            .read_usage_report(UsageRange::Day, now)
+            .await
+            .expect("usage report should load");
+
+        assert_eq!(
+            report.agent_tasks,
+            vec![
+                UsageEntry {
+                    kind: UsageContributorKind::AgentTask,
+                    id: "unknown".to_string(),
+                    label: "unknown".to_string(),
+                    attributed_tokens: 40,
+                    percent_of_usage: 40,
+                },
+                UsageEntry {
+                    kind: UsageContributorKind::AgentTask,
+                    id: "thread-spawned".to_string(),
+                    label: "thread-spawned".to_string(),
+                    attributed_tokens: 30,
+                    percent_of_usage: 30,
+                },
+                UsageEntry {
+                    kind: UsageContributorKind::AgentTask,
+                    id: "guardian".to_string(),
+                    label: "guardian".to_string(),
+                    attributed_tokens: 20,
+                    percent_of_usage: 20,
+                },
+                UsageEntry {
+                    kind: UsageContributorKind::AgentTask,
+                    id: "review".to_string(),
+                    label: "review".to_string(),
+                    attributed_tokens: 10,
+                    percent_of_usage: 10,
+                },
+            ]
         );
     }
 

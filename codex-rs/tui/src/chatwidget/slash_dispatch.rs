@@ -36,6 +36,13 @@ const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 
+fn usage_range_from_arg(arg: &str) -> Option<codex_app_server_protocol::UsageRange> {
+    match arg.to_ascii_lowercase().as_str() {
+        "week" | "weekly" => Some(codex_app_server_protocol::UsageRange::Week),
+        _ => None,
+    }
+}
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -616,6 +623,10 @@ impl ChatWidget {
                     self.emit_raw_output_mode_changed(/*enabled*/ false);
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
+            },
+            SlashCommand::Usage => match usage_range_from_arg(trimmed) {
+                Some(range) => self.add_usage_output_for_range(range),
+                None => self.add_error_message("Usage: /usage [week|weekly]".to_string()),
             },
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {

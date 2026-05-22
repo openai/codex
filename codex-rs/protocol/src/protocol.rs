@@ -1907,6 +1907,7 @@ pub struct TokenUsage {
 pub enum UsageContributorKind {
     Skill,
     Subagent,
+    AgentTask,
     App,
     McpServer,
     Plugin,

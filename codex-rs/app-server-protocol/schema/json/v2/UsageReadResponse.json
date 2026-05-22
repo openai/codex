@@ -5,6 +5,7 @@
       "enum": [
         "skill",
         "subagent",
+        "agentTask",
         "app",
         "mcpServer",
         "plugin"
@@ -67,6 +68,12 @@
     },
     "UsageReport": {
       "properties": {
+        "agentTasks": {
+          "items": {
+            "$ref": "#/definitions/UsageEntry"
+          },
+          "type": "array"
+        },
         "apps": {
           "items": {
             "$ref": "#/definitions/UsageEntry"
@@ -127,6 +134,7 @@
         }
       },
       "required": [
+        "agentTasks",
         "apps",
         "generatedAt",
         "mcpServers",

@@ -5,4 +5,4 @@ import type { UsageEntry } from "./UsageEntry";
 import type { UsageHeadline } from "./UsageHeadline";
 import type { UsageRange } from "./UsageRange";
 
-export type UsageReport = { range: UsageRange, generatedAt: number, trackedFrom: number | null, totalTokens: number, headline: UsageHeadline | null, skills: Array<UsageEntry>, subagents: Array<UsageEntry>, apps: Array<UsageEntry>, mcpServers: Array<UsageEntry>, plugins: Array<UsageEntry>, };
+export type UsageReport = { range: UsageRange, generatedAt: number, trackedFrom: number | null, totalTokens: number, headline: UsageHeadline | null, skills: Array<UsageEntry>, subagents: Array<UsageEntry>, agentTasks: Array<UsageEntry>, apps: Array<UsageEntry>, mcpServers: Array<UsageEntry>, plugins: Array<UsageEntry>, };

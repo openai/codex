@@ -53,6 +53,7 @@ pub struct UsageReport {
     pub headline: Option<UsageHeadline>,
     pub skills: Vec<UsageEntry>,
     pub subagents: Vec<UsageEntry>,
+    pub agent_tasks: Vec<UsageEntry>,
     pub apps: Vec<UsageEntry>,
     pub mcp_servers: Vec<UsageEntry>,
     pub plugins: Vec<UsageEntry>,
@@ -71,6 +72,7 @@ pub struct UsageReadResponse {
 pub enum UsageContributorKind {
     Skill,
     Subagent,
+    AgentTask,
     App,
     McpServer,
     Plugin,
@@ -81,6 +83,7 @@ impl From<CoreUsageContributorKind> for UsageContributorKind {
         match value {
             CoreUsageContributorKind::Skill => Self::Skill,
             CoreUsageContributorKind::Subagent => Self::Subagent,
+            CoreUsageContributorKind::AgentTask => Self::AgentTask,
             CoreUsageContributorKind::App => Self::App,
             CoreUsageContributorKind::McpServer => Self::McpServer,
             CoreUsageContributorKind::Plugin => Self::Plugin,

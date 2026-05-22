@@ -40,6 +40,7 @@ pub struct UsageReport {
     pub headline: Option<UsageHeadline>,
     pub skills: Vec<UsageEntry>,
     pub subagents: Vec<UsageEntry>,
+    pub agent_tasks: Vec<UsageEntry>,
     pub apps: Vec<UsageEntry>,
     pub mcp_servers: Vec<UsageEntry>,
     pub plugins: Vec<UsageEntry>,

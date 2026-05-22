@@ -43,6 +43,7 @@ impl UsageRequestProcessor {
                 }),
                 skills: report.skills.into_iter().map(usage_entry).collect(),
                 subagents: report.subagents.into_iter().map(usage_entry).collect(),
+                agent_tasks: report.agent_tasks.into_iter().map(usage_entry).collect(),
                 apps: report.apps.into_iter().map(usage_entry).collect(),
                 mcp_servers: report.mcp_servers.into_iter().map(usage_entry).collect(),
                 plugins: report.plugins.into_iter().map(usage_entry).collect(),

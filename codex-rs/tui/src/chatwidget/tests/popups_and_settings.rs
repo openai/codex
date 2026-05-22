@@ -171,6 +171,20 @@ async fn usage_output_snapshot() {
                         /*percent_of_usage*/ 9,
                     ),
                 ],
+                agent_tasks: vec![
+                    usage_entry(
+                        UsageContributorKind::AgentTask,
+                        "guardian",
+                        "guardian",
+                        /*percent_of_usage*/ 17,
+                    ),
+                    usage_entry(
+                        UsageContributorKind::AgentTask,
+                        "review",
+                        "review",
+                        /*percent_of_usage*/ 5,
+                    ),
+                ],
                 apps: vec![usage_entry(
                     UsageContributorKind::App,
                     "testmcp",
@@ -214,6 +228,7 @@ async fn usage_output_reports_unattributed_usage() {
                 headline: None,
                 skills: Vec::new(),
                 subagents: Vec::new(),
+                agent_tasks: Vec::new(),
                 apps: Vec::new(),
                 mcp_servers: Vec::new(),
                 plugins: Vec::new(),
@@ -224,14 +239,71 @@ async fn usage_output_reports_unattributed_usage() {
     let rendered = drain_insert_history(&mut rx)
         .into_iter()
         .map(|lines| lines_to_single_string(&lines))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        rendered,
-        vec![
-            "• Usage\n\nNo attributed skills, subagents, apps, MCP servers, or plugins in this range.\n"
-                .to_string()
-        ]
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_chatwidget_snapshot!("usage_output_unattributed", rendered);
+}
+
+#[tokio::test]
+async fn usage_output_weekly_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Usage, "week".to_string(), Vec::new());
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchUsage {
+            request_id: 0,
+            range: UsageRange::Week,
+        })
     );
+    chat.on_usage_loaded(
+        /*request_id*/ 0,
+        Ok(UsageReadResponse {
+            report: UsageReport {
+                range: UsageRange::Week,
+                generated_at: 1_700_000_000,
+                tracked_from: Some(/*tracked_from*/ 1_699_395_200),
+                total_tokens: 100,
+                headline: Some(UsageHeadline {
+                    entry: usage_entry(
+                        UsageContributorKind::AgentTask,
+                        "guardian",
+                        "guardian",
+                        /*percent_of_usage*/ 17,
+                    ),
+                    note: None,
+                }),
+                skills: vec![usage_entry(
+                    UsageContributorKind::Skill,
+                    "/skills/tmux",
+                    "/tmux",
+                    /*percent_of_usage*/ 8,
+                )],
+                subagents: vec![usage_entry(
+                    UsageContributorKind::Subagent,
+                    "default",
+                    "default",
+                    /*percent_of_usage*/ 13,
+                )],
+                agent_tasks: vec![usage_entry(
+                    UsageContributorKind::AgentTask,
+                    "guardian",
+                    "guardian",
+                    /*percent_of_usage*/ 17,
+                )],
+                apps: Vec::new(),
+                mcp_servers: Vec::new(),
+                plugins: Vec::new(),
+            },
+        }),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_chatwidget_snapshot!("usage_output_weekly", rendered);
 }
 
 #[tokio::test]
