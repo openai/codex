@@ -21,6 +21,12 @@ use wiremock::matchers::path;
 
 const SERVICE_VERSION: &str = "0.0.0-test";
 
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) const ANALYTICS_TEST_TIMEOUT: Duration = Duration::from_secs(25);
+
+#[cfg(not(any(target_os = "macos", windows)))]
+pub(crate) const ANALYTICS_TEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn set_metrics_exporter(config: &mut codex_core::config::Config) {
     config.otel.metrics_exporter = OtelExporterKind::OtlpHttp {
         endpoint: "http://localhost:4318".to_string(),
