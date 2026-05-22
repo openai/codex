@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RuntimeInstallParams;
+use codex_app_server_protocol::RuntimeInstallResponse;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 
@@ -25,6 +28,7 @@ use crate::protocol::EnvironmentInfo;
 use crate::protocol::ShellInfo;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
+use crate::rpc::internal_error;
 use codex_shell_command::shell_detect::DetectedShell;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
@@ -296,6 +300,7 @@ pub struct Environment {
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
     http_client: Arc<dyn HttpClient>,
+    runtime_installer: RuntimeInstaller,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
@@ -328,6 +333,41 @@ impl EnvironmentInfoProvider for RemoteEnvironmentInfoProvider {
     }
 }
 
+#[derive(Clone)]
+enum RuntimeInstaller {
+    Local,
+    Remote(LazyRemoteExecServerClient),
+}
+
+impl RuntimeInstaller {
+    async fn install_runtime(
+        &self,
+        params: RuntimeInstallParams,
+    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
+        match self {
+            RuntimeInstaller::Local => crate::runtime_install::install_runtime(params).await,
+            RuntimeInstaller::Remote(client) => {
+                let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
+                client
+                    .runtime_install(params)
+                    .await
+                    .map_err(exec_server_error_to_jsonrpc)
+            }
+        }
+    }
+}
+
+fn exec_server_error_to_jsonrpc(err: ExecServerError) -> JSONRPCErrorError {
+    match err {
+        ExecServerError::Server { code, message } => JSONRPCErrorError {
+            code,
+            data: None,
+            message,
+        },
+        _ => internal_error(err.to_string()),
+    }
+}
+
 impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
@@ -338,6 +378,7 @@ impl Environment {
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             http_client: Arc::new(ReqwestHttpClient),
+            runtime_installer: RuntimeInstaller::Local,
             local_runtime_paths: None,
         }
     }
@@ -397,6 +438,7 @@ impl Environment {
                 local_runtime_paths.clone(),
             )),
             http_client: Arc::new(ReqwestHttpClient),
+            runtime_installer: RuntimeInstaller::Local,
             local_runtime_paths: Some(local_runtime_paths),
         }
     }
@@ -426,6 +468,7 @@ impl Environment {
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
             Arc::new(RemoteFileSystem::new(client.clone()));
+        let http_client = client.clone();
 
         Self {
             exec_server_url,
@@ -433,7 +476,8 @@ impl Environment {
             info_provider: Arc::new(RemoteEnvironmentInfoProvider::new(client.clone())),
             exec_backend,
             filesystem,
-            http_client: Arc::new(client),
+            http_client: Arc::new(http_client),
+            runtime_installer: RuntimeInstaller::Remote(client),
             local_runtime_paths,
         }
     }
@@ -466,6 +510,13 @@ impl Environment {
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.filesystem)
+    }
+
+    pub async fn install_runtime(
+        &self,
+        params: RuntimeInstallParams,
+    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
+        self.runtime_installer.install_runtime(params).await
     }
 }
 

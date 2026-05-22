@@ -5,6 +5,8 @@ use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RuntimeInstallParams;
+use codex_app_server_protocol::RuntimeInstallResponse;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -288,6 +290,14 @@ impl ExecServerHandler {
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.copy(params).await
+    }
+
+    pub(crate) async fn runtime_install(
+        &self,
+        params: RuntimeInstallParams,
+    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
+        self.require_initialized_for("runtime")?;
+        crate::runtime_install::install_runtime(params).await
     }
 
     fn require_initialized_for(

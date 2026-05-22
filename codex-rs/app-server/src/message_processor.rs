@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
+use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
@@ -188,6 +189,7 @@ pub(crate) struct MessageProcessor {
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
+    environment_manager: Arc<EnvironmentManager>,
     environment_processor: EnvironmentRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
     feedback_processor: FeedbackRequestProcessor,
@@ -540,6 +542,7 @@ impl MessageProcessor {
             command_exec_processor,
             process_exec_processor,
             config_processor,
+            environment_manager: thread_manager.environment_manager(),
             environment_processor,
             external_agent_config_processor,
             feedback_processor,
@@ -1055,6 +1058,28 @@ impl MessageProcessor {
                 .model_provider_capabilities_read()
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::RuntimeInstall { params, .. } => {
+                let mut params = params;
+                let environment = if let Some(environment_id) = params.environment_id.take() {
+                    self.environment_manager
+                        .get_environment(&environment_id)
+                        .ok_or_else(|| {
+                            invalid_request(format!(
+                                "unknown runtime install environment id `{environment_id}`"
+                            ))
+                        })?
+                } else {
+                    self.environment_manager
+                        .default_or_local_environment()
+                        .ok_or_else(|| {
+                            internal_error("runtime install environment is not configured")
+                        })?
+                };
+                environment
+                    .install_runtime(params)
+                    .await
+                    .map(|response| Some(response.into()))
+            }
             ClientRequest::ThreadStart { params, .. } => {
                 self.thread_processor
                     .thread_start(

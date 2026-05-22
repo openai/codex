@@ -791,6 +791,11 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::PluginInstallResponse,
     },
+    RuntimeInstall => "runtime/install" {
+        params: v2::RuntimeInstallParams,
+        serialization: global("runtime-install"),
+        response: v2::RuntimeInstallResponse,
+    },
     PluginUninstall => "plugin/uninstall" {
         params: v2::PluginUninstallParams,
         serialization: global("config"),

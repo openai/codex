@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::RuntimeInstallParams;
+use codex_app_server_protocol::RuntimeInstallResponse;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -76,6 +78,7 @@ use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ProcessSignal;
+use crate::protocol::RUNTIME_INSTALL_METHOD;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::SignalParams;
@@ -473,6 +476,13 @@ impl ExecServerClient {
 
     pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
         self.call(FS_COPY_METHOD, &params).await
+    }
+
+    pub async fn runtime_install(
+        &self,
+        params: RuntimeInstallParams,
+    ) -> Result<RuntimeInstallResponse, ExecServerError> {
+        self.call(RUNTIME_INSTALL_METHOD, &params).await
     }
 
     pub(crate) async fn register_session(

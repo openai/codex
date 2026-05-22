@@ -1364,6 +1364,30 @@
             },
             "method": {
               "enum": [
+                "runtime/install"
+              ],
+              "title": "Runtime/installRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RuntimeInstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Runtime/installRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/uninstall"
               ],
               "title": "Plugin/uninstallRequestMethod",
@@ -15099,6 +15123,154 @@
             "type": "object"
           }
         ]
+      },
+      "RuntimeInstallManifest": {
+        "properties": {
+          "archiveName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "archiveSha256": {
+            "type": "string"
+          },
+          "archiveSizeBytes": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "archiveUrl": {
+            "type": "string"
+          },
+          "bundleFormatVersion": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "bundleVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeRootDirectoryName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "archiveSha256",
+          "archiveUrl"
+        ],
+        "type": "object"
+      },
+      "RuntimeInstallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "manifest": {
+            "$ref": "#/definitions/v2/RuntimeInstallManifest"
+          },
+          "release": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "manifest",
+          "release"
+        ],
+        "title": "RuntimeInstallParams",
+        "type": "object"
+      },
+      "RuntimeInstallPaths": {
+        "properties": {
+          "bundledPluginMarketplacePaths": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          },
+          "bundledSkillPaths": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          },
+          "nodeModulesPath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "nodePath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "pythonPath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "skillsToRemove": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundledPluginMarketplacePaths",
+          "bundledSkillPaths",
+          "nodeModulesPath",
+          "nodePath",
+          "pythonPath",
+          "skillsToRemove"
+        ],
+        "type": "object"
+      },
+      "RuntimeInstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "bundleVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paths": {
+            "$ref": "#/definitions/v2/RuntimeInstallPaths"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/RuntimeInstallStatus"
+          }
+        },
+        "required": [
+          "paths",
+          "status"
+        ],
+        "title": "RuntimeInstallResponse",
+        "type": "object"
+      },
+      "RuntimeInstallStatus": {
+        "enum": [
+          "already-current",
+          "installed"
+        ],
+        "type": "string"
       },
       "SandboxMode": {
         "enum": [

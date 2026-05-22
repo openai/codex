@@ -2927,6 +2927,82 @@
         }
       ]
     },
+    "RuntimeInstallManifest": {
+      "properties": {
+        "archiveName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "archiveSha256": {
+          "type": "string"
+        },
+        "archiveSizeBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "archiveUrl": {
+          "type": "string"
+        },
+        "bundleFormatVersion": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "bundleVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtimeRootDirectoryName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "archiveSha256",
+        "archiveUrl"
+      ],
+      "type": "object"
+    },
+    "RuntimeInstallParams": {
+      "properties": {
+        "environmentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manifest": {
+          "$ref": "#/definitions/RuntimeInstallManifest"
+        },
+        "release": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest",
+        "release"
+      ],
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -5606,6 +5682,30 @@
         "params"
       ],
       "title": "Plugin/installRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "runtime/install"
+          ],
+          "title": "Runtime/installRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RuntimeInstallParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Runtime/installRequest",
       "type": "object"
     },
     {

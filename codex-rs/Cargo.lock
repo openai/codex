@@ -2858,6 +2858,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2 0.10.9",
  "tempfile",
  "test-case",
  "thiserror 2.0.18",
@@ -2868,6 +2869,7 @@ dependencies = [
  "tracing",
  "uuid",
  "wiremock",
+ "zip 2.4.2",
 ]
 
 [[package]]
