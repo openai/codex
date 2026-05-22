@@ -27,11 +27,6 @@ const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
 #[derive(Clone, Debug)]
 pub struct ExecuteRequest {
-    /// Runtime cell id for this execution.
-    ///
-    /// Callers allocate this before execution so tracing, waits, and nested tool
-    /// calls can refer to the cell as soon as JavaScript starts.
-    pub cell_id: String,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
@@ -43,7 +38,6 @@ pub struct ExecuteRequest {
 pub struct WaitRequest {
     pub cell_id: String,
     pub yield_time_ms: u64,
-    pub terminate: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -131,16 +125,6 @@ pub struct CodeModeNestedToolCall {
     pub tool_name: ToolName,
     pub tool_kind: CodeModeToolKind,
     pub input: Option<JsonValue>,
-}
-
-#[derive(Debug)]
-pub(crate) enum TurnMessage {
-    ToolCall(CodeModeNestedToolCall),
-    Notify {
-        cell_id: String,
-        call_id: String,
-        text: String,
-    },
 }
 
 #[derive(Debug)]
@@ -460,7 +444,6 @@ mod tests {
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
-            cell_id: "1".to_string(),
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),

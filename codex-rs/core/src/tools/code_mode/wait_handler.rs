@@ -73,17 +73,23 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
-                let wait_response = exec
-                    .session
-                    .services
-                    .code_mode_service
-                    .wait(codex_code_mode::WaitRequest {
-                        cell_id: args.cell_id,
-                        yield_time_ms: args.yield_time_ms,
-                        terminate: args.terminate,
-                    })
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)?;
+                let wait_response = if args.terminate {
+                    exec.session
+                        .services
+                        .code_mode_service
+                        .terminate(args.cell_id)
+                        .await
+                } else {
+                    exec.session
+                        .services
+                        .code_mode_service
+                        .wait(codex_code_mode::WaitRequest {
+                            cell_id: args.cell_id,
+                            yield_time_ms: args.yield_time_ms,
+                        })
+                        .await
+                }
+                .map_err(FunctionCallError::RespondToModel)?;
                 if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response
                     && !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. })
                 {
