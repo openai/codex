@@ -1851,6 +1851,12 @@ async fn load_config_or_exit_with_fallback_cwd(
     strict_config: bool,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
+    let mut overrides = overrides;
+    if overrides.default_zsh_path.is_none() {
+        overrides.default_zsh_path =
+            codex_install_context::InstallContext::current().bundled_zsh_path();
+    }
+
     #[allow(clippy::print_stderr)]
     match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
