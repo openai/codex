@@ -57,8 +57,8 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&body_text)
-                        && let Some(error) = parsed.get("error")
+                    let parsed = serde_json::from_str::<Value>(&body_text).ok();
+                    if let Some(error) = parsed.as_ref().and_then(|parsed| parsed.get("error"))
                         && error.get("code").and_then(Value::as_str)
                             == Some(CYBER_POLICY_ERROR_CODE)
                     {
@@ -69,8 +69,13 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                             .map(str::to_string)
                             .unwrap_or_else(|| CYBER_POLICY_FALLBACK_MESSAGE.to_string());
                         CodexErr::CyberPolicy { message }
-                    } else if body_text
-                        .contains("The image data you provided does not represent a valid image")
+                    } else if parsed
+                        .as_ref()
+                        .and_then(|parsed| parsed.get("error"))
+                        .is_some_and(is_invalid_image_url_error)
+                        || body_text.contains(
+                            "The image data you provided does not represent a valid image",
+                        )
                     {
                         CodexErr::InvalidImageRequest()
                     } else {
@@ -145,6 +150,21 @@ const X_ERROR_JSON_HEADER: &str = "x-error-json";
 const CYBER_POLICY_ERROR_CODE: &str = "cyber_policy";
 const CYBER_POLICY_FALLBACK_MESSAGE: &str =
     "This request has been flagged for possible cybersecurity risk.";
+const IMAGE_URL_ERROR_MESSAGE: &str = "Expected a base64-encoded data URL with an image MIME type";
+
+fn is_invalid_image_url_error(error: &Value) -> bool {
+    let points_to_image_url = error
+        .get("param")
+        .and_then(Value::as_str)
+        .is_some_and(|param| param == "image_url" || param.ends_with(".image_url"));
+
+    error.get("code").and_then(Value::as_str) == Some("invalid_value")
+        && points_to_image_url
+        && error
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains(IMAGE_URL_ERROR_MESSAGE))
+}
 
 #[cfg(test)]
 #[path = "api_bridge_tests.rs"]

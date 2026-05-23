@@ -125,6 +125,72 @@ fn map_api_error_keeps_unknown_400_errors_generic() {
 }
 
 #[test]
+fn map_api_error_maps_empty_base64_image_url_to_invalid_image() {
+    let body = serde_json::json!({
+        "error": {
+            "type": "invalid_request_error",
+            "code": "invalid_value",
+            "message": "Invalid 'input[0].content[2].image_url'. Expected a base64-encoded data URL with an image MIME type (e.g. 'data:image/png;base64,aW1nIGJ5dGVzIGhlcmU='), but got empty base64-encoded bytes.",
+            "param": "input[0].content[2].image_url"
+        }
+    })
+    .to_string();
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::BAD_REQUEST,
+        url: Some("http://example.com/v1/responses".to_string()),
+        headers: None,
+        body: Some(body),
+    }));
+
+    assert!(matches!(err, CodexErr::InvalidImageRequest()));
+}
+
+#[test]
+fn map_api_error_maps_tool_output_image_url_to_invalid_image() {
+    let body = serde_json::json!({
+        "error": {
+            "type": "invalid_request_error",
+            "code": "invalid_value",
+            "message": "Invalid 'input[111].output[1].image_url'. Expected a base64-encoded data URL with an image MIME type (e.g. 'data:image/png;base64,aW1nIGJ5dGVzIGhlcmU='), but got empty base64-encoded bytes.",
+            "param": "input[111].output[1].image_url"
+        }
+    })
+    .to_string();
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::BAD_REQUEST,
+        url: Some("http://example.com/v1/responses".to_string()),
+        headers: None,
+        body: Some(body),
+    }));
+
+    assert!(matches!(err, CodexErr::InvalidImageRequest()));
+}
+
+#[test]
+fn map_api_error_keeps_non_image_url_invalid_value_generic() {
+    let body = serde_json::json!({
+        "error": {
+            "type": "invalid_request_error",
+            "code": "invalid_value",
+            "message": "Invalid 'input[0].name'. Expected a valid tool name.",
+            "param": "input[0].name"
+        }
+    })
+    .to_string();
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::BAD_REQUEST,
+        url: Some("http://example.com/v1/responses".to_string()),
+        headers: None,
+        body: Some(body.clone()),
+    }));
+
+    let CodexErr::InvalidRequest(message) = err else {
+        panic!("expected CodexErr::InvalidRequest, got {err:?}");
+    };
+    assert_eq!(message, body);
+}
+
+#[test]
 fn map_api_error_maps_usage_limit_limit_name_header() {
     let mut headers = HeaderMap::new();
     headers.insert(
