@@ -26,6 +26,7 @@ use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AdditionalContextEntry;
+use codex_app_server_protocol::AdditionalContextKind;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::AppSummary;

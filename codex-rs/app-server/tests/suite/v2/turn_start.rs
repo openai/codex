@@ -17,6 +17,7 @@ use app_test_support::write_models_cache;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::AdditionalContextEntry;
+use codex_app_server_protocol::AdditionalContextKind;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CollabAgentStatus;
@@ -342,7 +343,7 @@ async fn turn_start_additional_context_flows_to_model_input() -> Result<()> {
                 "custom_source".to_string(),
                 AdditionalContextEntry {
                     value: "source value".to_string(),
-                    is_untrusted: true,
+                    kind: AdditionalContextKind::Untrusted,
                 },
             )])),
             ..Default::default()

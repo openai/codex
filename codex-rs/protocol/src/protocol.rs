@@ -472,12 +472,19 @@ pub struct ThreadSettingsOverrides {
     pub personality: Option<Personality>,
 }
 
+/// Source classification for client-supplied context.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdditionalContextKind {
+    Untrusted,
+    Application,
+}
+
 /// Client-supplied context keyed by an opaque source identifier.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 pub struct AdditionalContextEntry {
     pub value: String,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub is_untrusted: bool,
+    pub kind: AdditionalContextKind,
 }
 
 /// Submission operation

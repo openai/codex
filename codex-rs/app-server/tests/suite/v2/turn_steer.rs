@@ -11,6 +11,7 @@ use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::AdditionalContextEntry;
+use codex_app_server_protocol::AdditionalContextKind;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -388,7 +389,7 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
         "browser_info".to_string(),
         AdditionalContextEntry {
             value: "tab one".to_string(),
-            is_untrusted: true,
+            kind: AdditionalContextKind::Untrusted,
         },
     )]));
     let steer_req = mcp

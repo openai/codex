@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::Op;
@@ -48,14 +49,14 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
                     "browser_info".to_string(),
                     AdditionalContextEntry {
                         value: "tab one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
                 (
                     "automation_info".to_string(),
                     AdditionalContextEntry {
                         value: "run one".to_string(),
-                        is_untrusted: false,
+                        kind: AdditionalContextKind::Application,
                     },
                 ),
             ]),
@@ -143,14 +144,14 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
                     "browser_info".to_string(),
                     AdditionalContextEntry {
                         value: "tab one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
                 (
                     "automation_info".to_string(),
                     AdditionalContextEntry {
                         value: "run one".to_string(),
-                        is_untrusted: false,
+                        kind: AdditionalContextKind::Application,
                     },
                 ),
             ]),
@@ -206,7 +207,7 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
         "browser_info".to_string(),
         AdditionalContextEntry {
             value: "same tab".to_string(),
-            is_untrusted: true,
+            kind: AdditionalContextKind::Untrusted,
         },
     )]);
 
@@ -304,14 +305,14 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
                     "automation_info".to_string(),
                     AdditionalContextEntry {
                         value: "run one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
                 (
                     "browser_info".to_string(),
                     AdditionalContextEntry {
                         value: "tab one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
             ]),
@@ -337,14 +338,14 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
                     "automation_info".to_string(),
                     AdditionalContextEntry {
                         value: "run one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
                 (
                     "terminal_info".to_string(),
                     AdditionalContextEntry {
                         value: "pty one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
             ]),
@@ -370,21 +371,21 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
                     "automation_info".to_string(),
                     AdditionalContextEntry {
                         value: "run one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
                 (
                     "browser_info".to_string(),
                     AdditionalContextEntry {
                         value: "tab one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
                 (
                     "terminal_info".to_string(),
                     AdditionalContextEntry {
                         value: "pty one".to_string(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
             ]),
@@ -467,14 +468,14 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
                     "automation_info".to_string(),
                     AdditionalContextEntry {
                         value: long_automation_value.clone(),
-                        is_untrusted: false,
+                        kind: AdditionalContextKind::Application,
                     },
                 ),
                 (
                     "browser_info".to_string(),
                     AdditionalContextEntry {
                         value: long_browser_value.clone(),
-                        is_untrusted: true,
+                        kind: AdditionalContextKind::Untrusted,
                     },
                 ),
             ]),
@@ -493,7 +494,7 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
         .filter(|text| text.starts_with("<automation_info>"))
         .collect::<Vec<_>>();
     let [automation_text] = developer_texts.as_slice() else {
-        panic!("expected trusted additional context, got {developer_texts:?}");
+        panic!("expected application additional context, got {developer_texts:?}");
     };
     assert!(automation_text.starts_with(&format!(
         "<automation_info>automation-head-{}",
@@ -504,7 +505,7 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
     assert!(automation_text.len() < untruncated_automation_fragment.len());
     assert!(
         automation_text.len() <= MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES,
-        "trusted additional context was not capped before model input: {} bytes",
+        "application additional context was not capped before model input: {} bytes",
         automation_text.len()
     );
 

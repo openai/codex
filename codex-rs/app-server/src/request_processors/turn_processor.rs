@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -42,7 +43,12 @@ fn map_additional_context(
                 key,
                 CoreAdditionalContextEntry {
                     value: entry.value,
-                    is_untrusted: entry.is_untrusted,
+                    kind: match entry.kind {
+                        AdditionalContextKind::Untrusted => CoreAdditionalContextKind::Untrusted,
+                        AdditionalContextKind::Application => {
+                            CoreAdditionalContextKind::Application
+                        }
+                    },
                 },
             )
         })

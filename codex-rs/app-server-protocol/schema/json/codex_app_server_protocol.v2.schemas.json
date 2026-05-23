@@ -164,6 +164,28 @@
       ],
       "type": "string"
     },
+    "AdditionalContextEntry": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/AdditionalContextKind"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "AdditionalContextKind": {
+      "enum": [
+        "untrusted",
+        "application"
+      ],
+      "type": "string"
+    },
     "AdditionalFileSystemPermissions": {
       "properties": {
         "entries": {

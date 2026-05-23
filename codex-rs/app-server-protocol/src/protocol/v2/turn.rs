@@ -41,13 +41,21 @@ pub struct TurnEnvironmentParams {
     pub cwd: AbsolutePathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum AdditionalContextKind {
+    Untrusted,
+    Application,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalContextEntry {
     pub value: String,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub is_untrusted: bool,
+    pub kind: AdditionalContextKind,
 }
 
 #[derive(

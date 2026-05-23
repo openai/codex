@@ -4,6 +4,7 @@ use crate::context::AdditionalContextDeveloperFragment;
 use crate::context::AdditionalContextUserFragment;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AdditionalContextStore {
@@ -18,11 +19,12 @@ impl AdditionalContextStore {
         let fragments = values
             .iter()
             .filter(|(key, value)| self.values.get(*key) != Some(*value))
-            .map(|(key, entry)| {
-                if entry.is_untrusted {
+            .map(|(key, entry)| match entry.kind {
+                AdditionalContextKind::Untrusted => {
                     AdditionalContextUserFragment::new(key.clone(), entry.value.clone())
                         .into_input_item()
-                } else {
+                }
+                AdditionalContextKind::Application => {
                     AdditionalContextDeveloperFragment::new(key.clone(), entry.value.clone())
                         .into_input_item()
                 }
