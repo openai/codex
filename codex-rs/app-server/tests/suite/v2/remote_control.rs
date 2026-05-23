@@ -21,6 +21,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -151,8 +152,12 @@ impl BlockingRemoteControlBackend {
         let (enroll_request_tx, enroll_request_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             match read_enroll_request(listener).await {
-                Ok(request_line) => {
+                Ok(PendingHttpRequest {
+                    request_line,
+                    connection,
+                }) => {
                     let _ = enroll_request_tx.send(Ok(request_line));
+                    let _connection = connection;
                     std::future::pending::<()>().await;
                 }
                 Err(err) => {
@@ -182,7 +187,12 @@ impl Drop for BlockingRemoteControlBackend {
     }
 }
 
-async fn read_enroll_request(listener: TcpListener) -> Result<String> {
+struct PendingHttpRequest {
+    request_line: String,
+    connection: BufReader<TcpStream>,
+}
+
+async fn read_enroll_request(listener: TcpListener) -> Result<PendingHttpRequest> {
     loop {
         let (stream, _) = listener.accept().await?;
         let mut reader = BufReader::new(stream);
@@ -216,6 +226,9 @@ async fn read_enroll_request(listener: TcpListener) -> Result<String> {
             continue;
         }
 
-        return Ok(request_line);
+        return Ok(PendingHttpRequest {
+            request_line,
+            connection: reader,
+        });
     }
 }
