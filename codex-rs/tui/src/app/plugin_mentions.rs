@@ -21,6 +21,17 @@ struct PluginMentionEntry {
 }
 
 impl PluginMentionEntry {
+    fn capability_summary_without_details(self) -> PluginCapabilitySummary {
+        PluginCapabilitySummary {
+            config_name: self.config_name,
+            display_name: self.display_name,
+            description: self.description,
+            has_skills: false,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        }
+    }
+
     fn capability_summary(
         self,
         capabilities_by_config_name: &HashMap<String, PluginCapabilitySummary>,
@@ -48,6 +59,17 @@ pub(super) async fn fetch_plugin_mentions(
     Ok(mention_entries
         .into_iter()
         .filter_map(|entry| entry.capability_summary(&capabilities_by_config_name))
+        .collect())
+}
+
+pub(super) async fn fetch_plugin_mentions_from_server_list(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> Result<Vec<PluginCapabilitySummary>> {
+    let response = request_plugin_list(request_handle, cwd).await?;
+    Ok(plugin_mention_entries_from_list_response(response)
+        .into_iter()
+        .map(PluginMentionEntry::capability_summary_without_details)
         .collect())
 }
 

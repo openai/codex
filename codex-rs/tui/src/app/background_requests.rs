@@ -5,6 +5,7 @@
 //! the main event loop remains single-threaded.
 
 use super::plugin_mentions::fetch_plugin_mentions;
+use super::plugin_mentions::fetch_plugin_mentions_from_server_list;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
 use codex_app_server_protocol::AppsListParams;
@@ -385,15 +386,22 @@ impl App {
 
     pub(super) fn refresh_plugin_mentions(&mut self, app_server: &AppServerSession) {
         let config = self.config.clone();
+        let uses_remote_workspace = app_server.uses_remote_workspace();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        if !config.features.enabled(Feature::Plugins) || app_server.uses_remote_workspace() {
+        if !config.features.enabled(Feature::Plugins) {
             app_event_tx.send(AppEvent::PluginMentionsLoaded { plugins: None });
             return;
         }
 
         tokio::spawn(async move {
-            match fetch_plugin_mentions(request_handle, config).await {
+            let result = if uses_remote_workspace {
+                fetch_plugin_mentions_from_server_list(request_handle, config.cwd.to_path_buf())
+                    .await
+            } else {
+                fetch_plugin_mentions(request_handle, config).await
+            };
+            match result {
                 Ok(plugins) => {
                     app_event_tx.send(AppEvent::PluginMentionsLoaded {
                         plugins: Some(plugins),
