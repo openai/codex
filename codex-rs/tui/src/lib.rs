@@ -1002,6 +1002,7 @@ pub async fn run_main(
     )
     .await;
 
+    let mut manually_selected_oss_provider = None;
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(cli.oss_provider.as_deref(), &config_toml);
 
@@ -1009,12 +1010,13 @@ pub async fn run_main(
             Some(provider)
         } else {
             // No provider configured, prompt the user
-            let provider = oss_selection::select_oss_provider(&codex_home).await?;
+            let provider = oss_selection::select_oss_provider().await?;
             if provider == "__CANCELLED__" {
                 return Err(std::io::Error::other(
                     "OSS provider selection was cancelled by user",
                 ));
             }
+            manually_selected_oss_provider = Some(provider.clone());
             Some(provider)
         }
     } else {
@@ -1256,6 +1258,7 @@ pub async fn run_main(
         app_server_target,
         remote_cwd_override,
         config,
+        manually_selected_oss_provider,
         overrides,
         cli_kv_overrides,
         cloud_requirements,
@@ -1277,6 +1280,7 @@ async fn run_ratatui_app(
     app_server_target: AppServerTarget,
     remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
+    manually_selected_oss_provider: Option<String>,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
@@ -1356,6 +1360,19 @@ async fn run_ratatui_app(
         }
     }
     .with_remote_cwd_override(remote_cwd_override.clone());
+    if let Some(provider) = manually_selected_oss_provider.as_deref()
+        && let Err(err) = config_update::write_config_batch(
+            app_server_session.request_handle(),
+            vec![config_update::build_oss_provider_edit(provider)],
+        )
+        .await
+    {
+        warn!(
+            %err,
+            provider,
+            "Failed to persist selected OSS provider preference"
+        );
+    }
     let mut app_server = Some(app_server_session);
 
     let should_show_trust_screen_flag =
