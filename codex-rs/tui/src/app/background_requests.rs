@@ -529,14 +529,13 @@ impl App {
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
     /// render either the full tool/resource listing or an error into chat history.
     ///
-    /// When both the local config and the app-server report zero servers, a special
-    /// "empty" cell is shown instead of the full table.
+    /// When the app-server reports zero servers, a special "empty" cell is shown
+    /// instead of the full table.
     pub(super) fn handle_mcp_inventory_result(
         &mut self,
         result: Result<Vec<McpServerStatus>, String>,
         detail: McpServerStatusDetail,
     ) {
-        let config = self.chat_widget.config_ref().clone();
         self.chat_widget.clear_mcp_inventory_loading();
         self.clear_committed_mcp_inventory_loading();
 
@@ -549,7 +548,7 @@ impl App {
             }
         };
 
-        if config.mcp_servers.get().is_empty() && statuses.is_empty() {
+        if statuses.is_empty() {
             self.chat_widget
                 .add_to_history(history_cell::empty_mcp_output());
             return;
@@ -557,7 +556,7 @@ impl App {
 
         self.chat_widget
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
-                &config, &statuses, detail,
+                &statuses, detail,
             ));
     }
 

@@ -11,7 +11,6 @@ use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::McpAuthStatus;
 use codex_config::types::McpServerConfig;
-use codex_config::types::McpServerDisabledReason;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -803,19 +802,8 @@ async fn mcp_tools_output_lists_tools_for_hyphenated_server_names() {
     insta::assert_snapshot!(rendered);
 }
 
-#[tokio::test]
-async fn mcp_tools_output_from_statuses_renders_status_only_servers() {
-    let mut config = test_config().await;
-    let mut plugin_docs =
-        stdio_server_config("docs-server", vec!["--stdio"], /*env*/ None, vec![]);
-    plugin_docs.enabled = false;
-    plugin_docs.disabled_reason = Some(McpServerDisabledReason::Unknown);
-    let servers = HashMap::from([("plugin_docs".to_string(), plugin_docs)]);
-    config
-        .mcp_servers
-        .set(servers)
-        .expect("test mcp servers should accept any configuration");
-
+#[test]
+fn mcp_tools_output_from_statuses_renders_status_only_servers() {
     let statuses = vec![McpServerStatus {
         name: "plugin_docs".to_string(),
         tools: HashMap::from([(
@@ -836,27 +824,15 @@ async fn mcp_tools_output_from_statuses_renders_status_only_servers() {
         auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
     }];
 
-    let cell = new_mcp_tools_output_from_statuses(
-        &config,
-        &statuses,
-        McpServerStatusDetail::ToolsAndAuthOnly,
-    );
+    let cell =
+        new_mcp_tools_output_from_statuses(&statuses, McpServerStatusDetail::ToolsAndAuthOnly);
     let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
     insta::assert_snapshot!(rendered);
 }
 
-#[tokio::test]
-async fn mcp_tools_output_from_statuses_renders_verbose_inventory() {
-    let mut config = test_config().await;
-    let plugin_docs =
-        stdio_server_config("docs-server", vec!["--stdio"], /*env*/ None, vec![]);
-    let servers = HashMap::from([("plugin_docs".to_string(), plugin_docs)]);
-    config
-        .mcp_servers
-        .set(servers)
-        .expect("test mcp servers should accept any configuration");
-
+#[test]
+fn mcp_tools_output_from_statuses_renders_verbose_inventory() {
     let statuses = vec![McpServerStatus {
         name: "plugin_docs".to_string(),
         tools: HashMap::from([(
@@ -894,7 +870,7 @@ async fn mcp_tools_output_from_statuses_renders_verbose_inventory() {
         auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
     }];
 
-    let cell = new_mcp_tools_output_from_statuses(&config, &statuses, McpServerStatusDetail::Full);
+    let cell = new_mcp_tools_output_from_statuses(&statuses, McpServerStatusDetail::Full);
     let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
     insta::assert_snapshot!(rendered);
