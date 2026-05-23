@@ -221,15 +221,33 @@ impl App {
         let user_config_table = user_config
             .as_table_mut()
             .ok_or_else(|| color_eyre::eyre::eyre!("effective user config was not a table"))?;
+        let origins = response.origins;
         let mut server_config = response.config.additional;
         for table_name in ["plugins", "marketplaces"] {
             match server_config.remove(table_name) {
                 Some(config_table) => {
-                    let config_table = serde_json::from_value::<TomlValue>(config_table)
+                    let mut config_table = serde_json::from_value::<TomlValue>(config_table)
                         .wrap_err_with(|| {
                             format!("failed to decode app-server `{table_name}` config")
                         })?;
-                    user_config_table.insert(table_name.to_string(), config_table);
+                    if let Some(table) = config_table.as_table_mut() {
+                        table.retain(|entry_name, _| {
+                            let entry_path = format!("{table_name}.{entry_name}");
+                            let entry_prefix = format!("{entry_path}.");
+                            origins.iter().any(|(path, metadata)| {
+                                matches!(metadata.name, ConfigLayerSource::User { .. })
+                                    && (path == &entry_path || path.starts_with(&entry_prefix))
+                            })
+                        });
+                    }
+                    if config_table
+                        .as_table()
+                        .is_some_and(toml::map::Map::is_empty)
+                    {
+                        user_config_table.remove(table_name);
+                    } else {
+                        user_config_table.insert(table_name.to_string(), config_table);
+                    }
                 }
                 None => {
                     user_config_table.remove(table_name);
@@ -1266,17 +1284,61 @@ enabled = true
                     "source_type": "git",
                     "source": "https://example.com/remote.git",
                 },
+                "project": {
+                    "source_type": "git",
+                    "source": "https://example.com/project.git",
+                },
             },
         });
+        let remote_home = tempdir()?;
+        let user_origin = codex_app_server_protocol::ConfigLayerMetadata {
+            name: ConfigLayerSource::User {
+                file: remote_home.path().join("config.toml").abs(),
+                profile: None,
+            },
+            version: "remote-user-version".to_string(),
+        };
+        let project_home = tempdir()?;
+        let project_origin = codex_app_server_protocol::ConfigLayerMetadata {
+            name: ConfigLayerSource::Project {
+                dot_codex_folder: project_home.path().join(".codex").abs(),
+            },
+            version: "project-version".to_string(),
+        };
         let response = ConfigReadResponse {
-            config: serde_json::from_value(server_config.clone())?,
-            origins: HashMap::new(),
+            config: serde_json::from_value(server_config)?,
+            origins: HashMap::from([
+                (
+                    "plugins.remote@market.enabled".to_string(),
+                    user_origin.clone(),
+                ),
+                (
+                    "marketplaces.remote.source_type".to_string(),
+                    user_origin.clone(),
+                ),
+                ("marketplaces.remote.source".to_string(), user_origin),
+                (
+                    "marketplaces.project.source_type".to_string(),
+                    project_origin.clone(),
+                ),
+                ("marketplaces.project.source".to_string(), project_origin),
+            ]),
             layers: None,
         };
 
         app.sync_plugin_config_from_app_server_response(response)?;
 
-        let expected_config: TomlValue = serde_json::from_value(server_config)?;
+        let expected_config: TomlValue = serde_json::from_value(serde_json::json!({
+            "plugins": {
+                "remote@market": { "enabled": false },
+            },
+            "marketplaces": {
+                "remote": {
+                    "source_type": "git",
+                    "source": "https://example.com/remote.git",
+                },
+            },
+        }))?;
         let effective_config = app.config.config_layer_stack.effective_config();
         assert_eq!(
             effective_config.get("plugins"),
