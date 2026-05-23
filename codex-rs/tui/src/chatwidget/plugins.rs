@@ -2075,6 +2075,7 @@ fn marketplace_add_source_is_git(source: &str) -> bool {
     let source = source.trim();
     !source.is_empty()
         && !Path::new(source).is_absolute()
+        && !source.starts_with('/')
         && !source.starts_with("./")
         && !source.starts_with(".\\")
         && !source.starts_with("../")
