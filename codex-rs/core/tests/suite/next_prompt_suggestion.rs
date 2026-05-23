@@ -96,6 +96,32 @@ async fn suggest_next_prompt_samples_history_without_tools() -> Result<()> {
             .used_percent,
         42.0
     );
+    assert_eq!(test.codex.token_usage_info().await, None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suggest_next_prompt_skips_early_history_without_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let first_turn_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg-1", "first turn complete"),
+        ev_completed("resp-1"),
+    ]);
+    let responses = mount_sse_sequence(&server, vec![first_turn_response]).await;
+
+    let test = test_codex().build(&server).await?;
+    test.submit_turn("first task").await?;
+
+    let suggestion = test
+        .codex
+        .suggest_next_prompt(CancellationToken::new())
+        .await?;
+    assert_eq!(suggestion, None);
+    assert_eq!(responses.requests().len(), 1);
 
     Ok(())
 }

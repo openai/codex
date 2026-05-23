@@ -28,6 +28,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsageInfo;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
 use std::collections::HashSet;
@@ -181,11 +182,14 @@ pub(crate) async fn suggest_next_prompt(
                 token_usage,
                 ..
             } => {
-                let should_emit_token_count = token_usage.is_some() || latest_rate_limits.is_some();
-                sess.record_token_usage_info(&turn_context, token_usage.as_ref())
-                    .await;
+                let token_usage_info = TokenUsageInfo::new_or_append(
+                    &sess.token_usage_info().await,
+                    &token_usage,
+                    turn_context.model_context_window(),
+                );
+                let should_emit_token_count =
+                    token_usage_info.is_some() || latest_rate_limits.is_some();
                 if should_emit_token_count {
-                    let token_usage_info = sess.token_usage_info().await;
                     // App-server clients key usage updates by turn id. Attribute hidden
                     // suggestion sampling to the latest real turn instead of the ephemeral
                     // lightweight turn used to configure the request.
