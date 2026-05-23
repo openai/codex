@@ -1405,7 +1405,7 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        trust_decision_was_made = onboarding_result.directory_trust_decision.is_some();
+        trust_decision_was_made = onboarding_result.directory_trust_persisted;
         // If this onboarding run included the login step, always refresh cloud requirements and
         // rebuild config. This avoids missing newly available cloud requirements due to login
         // status detection edge cases.
@@ -1421,7 +1421,7 @@ async fn run_ratatui_app(
 
         // If the user made an explicit trust decision, or we showed the login flow, reload config
         // so current process state reflects persisted trust/auth changes.
-        if onboarding_result.directory_trust_decision.is_some()
+        if onboarding_result.directory_trust_persisted
             || (show_login_screen && !uses_remote_workspace)
         {
             load_config_or_exit(
