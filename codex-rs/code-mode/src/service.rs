@@ -138,15 +138,6 @@ pub trait CodeModeSession: Send + Sync {
 
     fn terminate<'a>(&'a self, cell_id: String) -> CodeModeSessionResultFuture<'a, WaitOutcome>;
 
-    fn stored_values<'a>(
-        &'a self,
-    ) -> Pin<Box<dyn Future<Output = HashMap<String, JsonValue>> + Send + 'a>>;
-
-    fn replace_stored_values<'a>(
-        &'a self,
-        values: HashMap<String, JsonValue>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-
     fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()>;
 }
 
@@ -213,14 +204,6 @@ impl CodeModeService {
         }
     }
 
-    async fn stored_values(&self) -> HashMap<String, JsonValue> {
-        self.inner.stored_values.lock().await.clone()
-    }
-
-    pub async fn replace_stored_values(&self, values: HashMap<String, JsonValue>) {
-        *self.inner.stored_values.lock().await = values;
-    }
-
     fn allocate_cell_id(&self) -> CellId {
         CellId(
             self.inner
@@ -283,7 +266,7 @@ impl CodeModeService {
         let cell_id_text = cell_id.to_string();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (control_tx, control_rx) = mpsc::unbounded_channel();
-        let stored_values = self.stored_values().await;
+        let stored_values = self.inner.stored_values.lock().await.clone();
         let cancellation_token = CancellationToken::new();
         let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = {
             let mut sessions = self.inner.sessions.lock().await;
@@ -467,19 +450,6 @@ impl CodeModeSession for CodeModeService {
 
     fn terminate<'a>(&'a self, cell_id: String) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
         Box::pin(CodeModeService::terminate(self, cell_id))
-    }
-
-    fn stored_values<'a>(
-        &'a self,
-    ) -> Pin<Box<dyn Future<Output = HashMap<String, JsonValue>> + Send + 'a>> {
-        Box::pin(CodeModeService::stored_values(self))
-    }
-
-    fn replace_stored_values<'a>(
-        &'a self,
-        values: HashMap<String, JsonValue>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(CodeModeService::replace_stored_values(self, values))
     }
 
     fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {
