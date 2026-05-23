@@ -250,6 +250,7 @@ mod tests {
             "turn-1",
             &EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".to_string(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
@@ -314,6 +315,7 @@ mod tests {
     fn turn_started_event(turn_id: &str) -> EventMsg {
         EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_id.to_string(),
+            trace_id: None,
             started_at: None,
             model_context_window: None,
             collaboration_mode_kind: Default::default(),
