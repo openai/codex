@@ -513,8 +513,8 @@ impl App {
                 let marketplace_contents_changed =
                     matches!(&result, Ok(response) if !response.upgraded_roots.is_empty());
                 if marketplace_contents_changed {
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.refresh_plugin_mentions_after_config_write(app_server)
+                        .await;
                 }
                 self.chat_widget
                     .on_marketplace_upgrade_loaded(cwd.clone(), result);
@@ -549,8 +549,8 @@ impl App {
                 );
                 if remove_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
                 {
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.refresh_plugin_mentions_after_config_write(app_server)
+                        .await;
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }
@@ -597,8 +597,8 @@ impl App {
             } => {
                 let install_succeeded = result.is_ok();
                 if install_succeeded {
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.refresh_plugin_mentions_after_config_write(app_server)
+                        .await;
                 }
                 let should_refresh_plugin_detail = self.chat_widget.on_plugin_install_loaded(
                     cwd.clone(),
@@ -650,8 +650,8 @@ impl App {
                     self.pending_plugin_enabled_writes.remove(&plugin_id);
                     let update_succeeded = result.is_ok();
                     if update_succeeded {
-                        self.chat_widget.refresh_plugin_mentions();
-                        self.chat_widget.submit_op(AppCommand::reload_user_config());
+                        self.refresh_plugin_mentions_after_config_write(app_server)
+                            .await;
                     }
                     self.chat_widget
                         .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
@@ -1311,8 +1311,8 @@ impl App {
             } => {
                 let uninstall_succeeded = result.is_ok();
                 if uninstall_succeeded {
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.refresh_plugin_mentions_after_config_write(app_server)
+                        .await;
                 }
                 self.chat_widget.on_plugin_uninstall_loaded(
                     cwd.clone(),
@@ -2085,6 +2085,15 @@ impl App {
                     .add_error_message(format!("Failed to save shortcut: {err}"));
             }
         }
+    }
+
+    async fn refresh_plugin_mentions_after_config_write(&mut self, app_server: &AppServerSession) {
+        if !app_server.uses_remote_workspace() {
+            self.refresh_in_memory_config_from_disk_best_effort("updating plugin configuration")
+                .await;
+        }
+        self.chat_widget.refresh_plugin_mentions();
+        self.chat_widget.submit_op(AppCommand::reload_user_config());
     }
 
     async fn apply_keymap_clear(&mut self, context: String, action: String) {
