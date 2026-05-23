@@ -91,6 +91,13 @@ fn ignores_regular_user_text() {
 }
 
 #[test]
+fn ignores_next_prompt_suggestion_tags_in_regular_user_text() {
+    assert!(!is_contextual_user_fragment(&ContentItem::InputText {
+        text: "<next_prompt_suggestion>\nrun the tests\n</next_prompt_suggestion>".to_string(),
+    }));
+}
+
+#[test]
 fn detects_hook_prompt_fragment_and_roundtrips_escaping() {
     let message = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
         r#"Retry with "waves" & <tides>"#,

@@ -81,6 +81,10 @@ pub(crate) async fn suggest_next_prompt(
         return Ok(None);
     }
     let mut prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    if !history_ends_at_assistant_response(&prompt_input) {
+        tracing::debug!("next prompt suggestion skipped before assistant boundary");
+        return Ok(None);
+    }
     if assistant_message_count(&prompt_input) < 2 {
         return Ok(None);
     }
@@ -312,6 +316,10 @@ fn assistant_message_count(items: &[ResponseItem]) -> usize {
         .count()
 }
 
+fn history_ends_at_assistant_response(items: &[ResponseItem]) -> bool {
+    matches!(items.last(), Some(ResponseItem::Message { role, .. }) if role == "assistant")
+}
+
 fn assistant_output_text(item: &ResponseItem) -> Option<String> {
     let ResponseItem::Message { role, content, .. } = item else {
         return None;
@@ -441,6 +449,7 @@ fn preset_supports_effort(preset: &ModelPreset, effort: ReasoningEffort) -> bool
 /// replies, assistant-voice phrasing, and sentence-like outputs are rejected so
 /// the UI only receives concise text the user could plausibly type verbatim.
 fn filter_next_prompt_suggestion(raw: &str) -> Option<String> {
+    let raw = raw.trim();
     let suggestion = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     if suggestion.is_empty()
         || raw.chars().any(|ch| matches!(ch, '\n' | '\r' | '\t'))

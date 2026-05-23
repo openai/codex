@@ -1,6 +1,7 @@
 use super::HistorySnapshot;
 use super::filter_next_prompt_suggestion;
 use super::has_unpaired_tool_flow;
+use super::history_ends_at_assistant_response;
 use super::history_matches_snapshot;
 use super::suggestion_prompt_has_headroom;
 use crate::context_manager::ContextManager;
@@ -14,6 +15,14 @@ use pretty_assertions::assert_eq;
 fn filter_keeps_specific_prompt() {
     assert_eq!(
         filter_next_prompt_suggestion("run the tests"),
+        Some("run the tests".to_string())
+    );
+}
+
+#[test]
+fn filter_keeps_prompt_with_edge_whitespace() {
+    assert_eq!(
+        filter_next_prompt_suggestion(" run the tests\n"),
         Some("run the tests".to_string())
     );
 }
@@ -66,6 +75,49 @@ fn history_snapshot_detects_appends_and_rewrites() {
     let appended_snapshot = HistorySnapshot::from_history(&history);
     history.replace(history.raw_items().to_vec());
     assert!(!history_matches_snapshot(&history, appended_snapshot));
+}
+
+#[test]
+fn history_boundary_requires_final_assistant_message() {
+    let assistant = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "done".to_string(),
+        }],
+        phase: None,
+    };
+    let user = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "next".to_string(),
+        }],
+        phase: None,
+    };
+
+    assert!(history_ends_at_assistant_response(std::slice::from_ref(
+        &assistant
+    )));
+    assert!(!history_ends_at_assistant_response(&[assistant, user]));
+}
+
+#[test]
+fn history_boundary_rejects_tool_output_tail() {
+    assert!(!history_ends_at_assistant_response(&[
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "calling tool".to_string(),
+            }],
+            phase: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("done".to_string()),
+        },
+    ]));
 }
 
 #[test]
