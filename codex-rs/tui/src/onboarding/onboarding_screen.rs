@@ -703,7 +703,8 @@ mod tests {
             should_exit: false,
         };
 
-        let persisted = persist_selected_trust(&mut onboarding_screen, None).await;
+        let persisted =
+            persist_selected_trust(&mut onboarding_screen, /*request_handle*/ None).await;
 
         assert!(!persisted);
         let Step::TrustDirectory(widget) = &onboarding_screen.steps[0] else {
