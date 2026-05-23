@@ -513,7 +513,7 @@ impl ChatWidget {
     pub(crate) fn on_marketplace_add_loaded(
         &mut self,
         cwd: PathBuf,
-        source: String,
+        _source: String,
         result: Result<MarketplaceAddResponse, String>,
     ) {
         if self.config.cwd.as_path() != cwd.as_path() {
@@ -526,10 +526,6 @@ impl ChatWidget {
                 self.plugins_active_tab_id = Some(marketplace_tab_id.clone());
                 self.newly_installed_marketplace_tab_id =
                     (!response.already_added).then_some(marketplace_tab_id);
-                self.marketplace_action_override_can_upgrade.insert(
-                    response.marketplace_name.clone(),
-                    marketplace_add_source_is_git(&source),
-                );
                 let message = if response.already_added {
                     format!(
                         "Marketplace {} is already added.",
@@ -574,8 +570,6 @@ impl ChatWidget {
         match result {
             Ok(response) => {
                 self.plugins_active_tab_id = Some(ALL_PLUGINS_TAB_ID.to_string());
-                self.marketplace_action_override_can_upgrade
-                    .remove(&response.marketplace_name);
                 self.add_info_message(
                     format!("Removed marketplace {marketplace_display_name}."),
                     Some(match response.installed_root {
@@ -700,23 +694,6 @@ impl ChatWidget {
         }
     }
 
-    fn marketplace_can_remove(&self, marketplace: &PluginMarketplaceEntry) -> bool {
-        self.marketplace_action_override_can_upgrade
-            .contains_key(&marketplace.name)
-            || marketplace_is_user_configured(&self.config, &marketplace.name)
-    }
-
-    fn marketplace_can_upgrade(&self, marketplace: &PluginMarketplaceEntry) -> bool {
-        if marketplace.path.is_none() {
-            return false;
-        }
-
-        self.marketplace_action_override_can_upgrade
-            .get(&marketplace.name)
-            .copied()
-            .unwrap_or_else(|| marketplace_is_user_configured_git(&self.config, &marketplace.name))
-    }
-
     pub(crate) fn handle_plugins_popup_key_event(&mut self, key_event: KeyEvent) -> bool {
         let remove_marketplace = key_hint::ctrl(KeyCode::Char('r')).is_press(key_event);
         let upgrade_marketplace = key_hint::ctrl(KeyCode::Char('u')).is_press(key_event);
@@ -736,7 +713,7 @@ impl ChatWidget {
         };
         let Some(marketplace) = plugins_response.marketplaces.iter().find(|marketplace| {
             marketplace_tab_id(marketplace) == active_tab_id
-                && self.marketplace_can_remove(marketplace)
+                && marketplace_is_user_configured(&self.config, &marketplace.name)
         }) else {
             return false;
         };
@@ -748,7 +725,9 @@ impl ChatWidget {
             );
             return true;
         }
-        if !self.marketplace_can_upgrade(marketplace) {
+        if marketplace.path.is_none()
+            || !marketplace_is_user_configured_git(&self.config, &marketplace.name)
+        {
             return false;
         }
         if key_event.kind != KeyEventKind::Press {
@@ -1554,8 +1533,10 @@ impl ChatWidget {
                 .filter(|(_, plugin, _)| plugin.installed)
                 .count();
             let tab_id = marketplace_tab_id(marketplace);
-            let can_remove_marketplace = self.marketplace_can_remove(marketplace);
-            let can_upgrade_marketplace = self.marketplace_can_upgrade(marketplace);
+            let can_remove_marketplace =
+                marketplace_is_user_configured(&self.config, &marketplace.name);
+            let can_upgrade_marketplace = marketplace.path.is_some()
+                && marketplace_is_user_configured_git(&self.config, &marketplace.name);
             if can_remove_marketplace || can_upgrade_marketplace {
                 tab_footer_hints.push((
                     tab_id.clone(),
@@ -2064,30 +2045,6 @@ fn marketplace_is_user_configured_git(config: &Config, marketplace_name: &str) -
         .is_some_and(|source_type| source_type == "git")
 }
 
-fn marketplace_add_source_is_git(source: &str) -> bool {
-    let source = source.trim();
-    !source.is_empty()
-        && !Path::new(source).is_absolute()
-        && !source.starts_with('/')
-        && !source.starts_with("./")
-        && !source.starts_with(".\\")
-        && !source.starts_with("../")
-        && !source.starts_with("..\\")
-        && !source.starts_with("~/")
-        && source != "."
-        && source != ".."
-        && !looks_like_windows_path(source)
-}
-
-fn looks_like_windows_path(source: &str) -> bool {
-    let bytes = source.as_bytes();
-    (bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'\\' | b'/'))
-        || source.starts_with(r"\\")
-}
-
 fn plugin_display_name(plugin: &PluginSummary) -> String {
     plugin
         .interface
@@ -2232,29 +2189,5 @@ fn plugin_mcp_summary(plugin: &PluginDetail) -> String {
         "No plugin MCP servers.".to_string()
     } else {
         plugin.mcp_servers.join(", ")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-
-    use super::marketplace_add_source_is_git;
-
-    #[test]
-    fn marketplace_add_source_is_git_matches_supported_source_shapes() {
-        assert_eq!(marketplace_add_source_is_git("owner/repo"), true);
-        assert_eq!(
-            marketplace_add_source_is_git("https://github.com/owner/repo.git"),
-            true
-        );
-        assert_eq!(
-            marketplace_add_source_is_git("git@github.com:owner/repo.git"),
-            true
-        );
-        assert_eq!(marketplace_add_source_is_git("./marketplace"), false);
-        assert_eq!(marketplace_add_source_is_git("/tmp/marketplace"), false);
-        assert_eq!(marketplace_add_source_is_git("~/marketplace"), false);
-        assert_eq!(marketplace_add_source_is_git(r"C:\marketplace"), false);
     }
 }
