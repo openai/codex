@@ -48,6 +48,7 @@ async fn suggest_next_prompt_samples_history_without_tools() -> Result<()> {
     let test = test_codex().build(&server).await?;
     test.submit_turn("first task").await?;
     test.submit_turn("second task").await?;
+    let token_usage_before_suggestion = test.codex.token_usage_info().await;
 
     let suggestion = test
         .codex
@@ -88,7 +89,10 @@ async fn suggest_next_prompt_samples_history_without_tools() -> Result<()> {
             .used_percent,
         42.0
     );
-    assert_eq!(test.codex.token_usage_info().await, None);
+    assert_eq!(
+        test.codex.token_usage_info().await,
+        token_usage_before_suggestion
+    );
 
     Ok(())
 }
