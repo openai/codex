@@ -56,6 +56,8 @@ use tokio::time::timeout;
 
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
+const PROMPT_STOP_FAILURE_REASON: &str =
+    "The final answer must mention tests and provide a concise summary.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
@@ -185,6 +187,23 @@ else:
         "hooks": {
             "Stop": [{
                 "hooks": hook_entries,
+            }]
+        }
+    });
+
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_prompt_stop_hook(home: &Path) -> Result<()> {
+    let hooks = serde_json::json!({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{
+                    "type": "prompt",
+                    "prompt": "Evaluate the final answer against every criterion. $ARGUMENTS",
+                    "timeout": 10,
+                }]
             }]
         }
     });
@@ -1156,6 +1175,89 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
         hook_prompt_texts.contains(&SECOND_CONTINUATION_PROMPT.to_string()),
         "rollout should persist the second continuation prompt",
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn prompt_stop_hook_uses_thread_model_and_continues_on_failed_criteria() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "draft without tests"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-hook-1"),
+                ev_assistant_message(
+                    "msg-hook-1",
+                    &serde_json::json!({
+                        "ok": false,
+                        "reason": PROMPT_STOP_FAILURE_REASON,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-hook-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "summary plus tests"),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-hook-2"),
+                ev_assistant_message(
+                    "msg-hook-2",
+                    &serde_json::json!({
+                        "ok": true,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-hook-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_prompt_stop_hook(home) {
+                panic!("failed to write prompt stop hook fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("answer with a summary and test status")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[1].body_json()["model"].as_str(), Some("gpt-5.4"));
+    assert_eq!(requests[3].body_json()["model"].as_str(), Some("gpt-5.4"));
+
+    let first_prompt_hook_request = requests[1].message_input_texts("user").join("\n");
+    assert!(first_prompt_hook_request.contains("Evaluate the final answer"));
+    assert!(first_prompt_hook_request.contains("last_assistant_message"));
+    assert!(first_prompt_hook_request.contains("draft without tests"));
+    assert_eq!(
+        request_hook_prompt_texts(&requests[2]),
+        vec![PROMPT_STOP_FAILURE_REASON.to_string()],
+        "main continuation should include the failed prompt hook criteria",
+    );
+    let second_prompt_hook_request = requests[3].message_input_texts("user").join("\n");
+    assert!(second_prompt_hook_request.contains("summary plus tests"));
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let rollout_text = fs::read_to_string(&rollout_path)?;
+    let hook_prompt_texts = rollout_hook_prompt_texts(&rollout_text)?;
+    assert!(hook_prompt_texts.contains(&PROMPT_STOP_FAILURE_REASON.to_string()));
 
     Ok(())
 }

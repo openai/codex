@@ -7968,6 +7968,26 @@
           },
           {
             "properties": {
+              "continueOnBlock": {
+                "type": "boolean"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "prompt": {
+                "type": "string"
+              },
+              "timeoutSec": {
+                "format": "uint64",
+                "minimum": 0.0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "type": {
                 "enum": [
                   "prompt"
@@ -7977,6 +7997,8 @@
               }
             },
             "required": [
+              "continueOnBlock",
+              "prompt",
               "type"
             ],
             "title": "PromptConfiguredHookHandler",

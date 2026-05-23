@@ -22,6 +22,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
 use super::HookListEntry;
 use crate::config_rules::hook_states_from_stack;
 use crate::events::common::matcher_pattern_for_event;
@@ -462,8 +463,7 @@ fn append_matcher_groups(
                         r#async,
                         status_message: status_message.clone(),
                     };
-                    let current_hash =
-                        command_hook_hash(event_name, matcher, &group, normalized_handler);
+                    let current_hash = hook_hash(event_name, matcher, &group, normalized_handler);
                     let command = source.env.iter().fold(command, |command, (key, value)| {
                         command.replace(&format!("${{{key}}}"), value)
                     });
@@ -502,8 +502,10 @@ fn append_matcher_groups(
                         handlers.push(ConfiguredHandler {
                             event_name,
                             matcher: matcher.map(ToOwned::to_owned),
-                            command,
-                            timeout_sec,
+                            kind: ConfiguredHandlerKind::Command {
+                                command,
+                                timeout_sec,
+                            },
                             status_message,
                             source_path: source.path.clone(),
                             source: source.source,
@@ -513,10 +515,88 @@ fn append_matcher_groups(
                     }
                     *display_order += 1;
                 }
-                HookHandlerConfig::Prompt {} => warnings.push(format!(
-                    "skipping prompt hook in {}: prompt hooks are not supported yet",
-                    source.path.display()
-                )),
+                HookHandlerConfig::Prompt {
+                    prompt,
+                    model,
+                    timeout_sec,
+                    continue_on_block,
+                } => {
+                    if !prompt_event_supported(event_name) {
+                        warnings.push(format!(
+                            "skipping prompt hook for {} in {}: prompt hooks are not supported for this event",
+                            crate::hook_event_key_label(event_name),
+                            source.path.display()
+                        ));
+                        continue;
+                    }
+                    if prompt.trim().is_empty() {
+                        warnings.push(format!(
+                            "skipping empty prompt hook in {}",
+                            source.path.display()
+                        ));
+                        continue;
+                    }
+                    let timeout_sec = timeout_sec.unwrap_or(30).max(1);
+                    let model = model.filter(|model| !model.trim().is_empty());
+                    let normalized_handler = HookHandlerConfig::Prompt {
+                        prompt: prompt.clone(),
+                        model: model.clone(),
+                        timeout_sec: Some(timeout_sec),
+                        continue_on_block,
+                    };
+                    let current_hash = hook_hash(event_name, matcher, &group, normalized_handler);
+                    let prompt = source.env.iter().fold(prompt, |prompt, (key, value)| {
+                        prompt.replace(&format!("${{{key}}}"), value)
+                    });
+                    let key =
+                        crate::hook_key(&source.key_source, event_name, group_index, handler_index);
+                    let state = source.hook_states.get(&key);
+                    let enabled = hook_enabled(source.is_managed, state);
+                    let trusted_hash = hook_trusted_hash(source.is_managed, state);
+                    let trust_status =
+                        hook_trust_status(source.is_managed, &current_hash, trusted_hash);
+                    hook_entries.push(HookListEntry {
+                        key,
+                        event_name,
+                        handler_type: HookHandlerType::Prompt,
+                        matcher: matcher.map(ToOwned::to_owned),
+                        command: None,
+                        timeout_sec,
+                        status_message: None,
+                        source_path: source.path.clone(),
+                        source: source.source,
+                        plugin_id: source.plugin_id.clone(),
+                        display_order: *display_order,
+                        enabled,
+                        is_managed: source.is_managed,
+                        current_hash,
+                        trust_status,
+                    });
+                    if enabled
+                        && (source.bypass_hook_trust
+                            || matches!(
+                                trust_status,
+                                HookTrustStatus::Managed | HookTrustStatus::Trusted
+                            ))
+                    {
+                        handlers.push(ConfiguredHandler {
+                            event_name,
+                            matcher: matcher.map(ToOwned::to_owned),
+                            kind: ConfiguredHandlerKind::Prompt {
+                                prompt,
+                                model,
+                                timeout_sec,
+                                continue_on_block,
+                            },
+                            status_message: None,
+                            source_path: source.path.clone(),
+                            source: source.source,
+                            display_order: *display_order,
+                            env: source.env.clone(),
+                        });
+                    }
+                    *display_order += 1;
+                }
                 HookHandlerConfig::Agent {} => warnings.push(format!(
                     "skipping agent hook in {}: agent hooks are not supported yet",
                     source.path.display()
@@ -535,7 +615,7 @@ struct NormalizedHookIdentity {
     group: MatcherGroup,
 }
 
-fn command_hook_hash(
+fn hook_hash(
     event_name: codex_protocol::protocol::HookEventName,
     matcher: Option<&str>,
     group: &MatcherGroup,
@@ -552,6 +632,21 @@ fn command_hook_hash(
         unreachable!("normalized hook identity should serialize to TOML");
     };
     version_for_toml(&value)
+}
+
+fn prompt_event_supported(event_name: codex_protocol::protocol::HookEventName) -> bool {
+    match event_name {
+        codex_protocol::protocol::HookEventName::PreToolUse
+        | codex_protocol::protocol::HookEventName::PermissionRequest
+        | codex_protocol::protocol::HookEventName::PostToolUse
+        | codex_protocol::protocol::HookEventName::UserPromptSubmit
+        | codex_protocol::protocol::HookEventName::Stop => true,
+        codex_protocol::protocol::HookEventName::PreCompact
+        | codex_protocol::protocol::HookEventName::PostCompact
+        | codex_protocol::protocol::HookEventName::SessionStart
+        | codex_protocol::protocol::HookEventName::SubagentStart
+        | codex_protocol::protocol::HookEventName::SubagentStop => false,
+    }
 }
 
 fn hook_trust_status(
@@ -624,6 +719,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::ConfiguredHandler;
+    use super::ConfiguredHandlerKind;
     use super::append_matcher_groups;
     use codex_config::HookHandlerConfig;
     use codex_config::HookStateToml;
@@ -709,8 +805,10 @@ mod tests {
             vec![ConfiguredHandler {
                 event_name: HookEventName::UserPromptSubmit,
                 matcher: None,
-                command: "echo hello".to_string(),
-                timeout_sec: 600,
+                kind: ConfiguredHandlerKind::Command {
+                    command: "echo hello".to_string(),
+                    timeout_sec: 600,
+                },
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
@@ -744,8 +842,10 @@ mod tests {
             vec![ConfiguredHandler {
                 event_name: HookEventName::PreToolUse,
                 matcher: Some("^Bash$".to_string()),
-                command: "echo hello".to_string(),
-                timeout_sec: 600,
+                kind: ConfiguredHandlerKind::Command {
+                    command: "echo hello".to_string(),
+                    timeout_sec: 600,
+                },
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
@@ -931,11 +1031,11 @@ mod tests {
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(handlers.len(), 1);
         assert_eq!(
-            handlers[0].command,
+            handlers[0].command(),
             if cfg!(windows) {
-                "echo windows"
+                Some("echo windows")
             } else {
-                "echo unix"
+                Some("echo unix")
             }
         );
     }

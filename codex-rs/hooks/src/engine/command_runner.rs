@@ -9,6 +9,7 @@ use tokio::time::timeout;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
 
 #[derive(Debug)]
 pub(crate) struct CommandRunResult {
@@ -30,7 +31,10 @@ pub(crate) async fn run_command(
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
 
-    let mut command = build_command(shell, handler);
+    let mut command = match build_command(shell, handler, started_at, started) {
+        Ok(command) => command,
+        Err(result) => return result,
+    };
     command
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -68,7 +72,8 @@ pub(crate) async fn run_command(
         };
     }
 
-    let timeout_duration = Duration::from_secs(handler.timeout_sec);
+    let timeout_sec = handler.timeout_sec();
+    let timeout_duration = Duration::from_secs(timeout_sec);
     match timeout(timeout_duration, child.wait_with_output()).await {
         Ok(Ok(output)) => CommandRunResult {
             started_at,
@@ -95,25 +100,46 @@ pub(crate) async fn run_command(
             exit_code: None,
             stdout: String::new(),
             stderr: String::new(),
-            error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
+            error: Some(format!("hook timed out after {timeout_sec}s")),
         },
     }
 }
 
-fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
+fn build_command(
+    shell: &CommandShell,
+    handler: &ConfiguredHandler,
+    started_at: i64,
+    started: Instant,
+) -> Result<Command, CommandRunResult> {
+    let ConfiguredHandlerKind::Command {
+        command: hook_command,
+        ..
+    } = &handler.kind
+    else {
+        return Err(CommandRunResult {
+            started_at,
+            completed_at: chrono::Utc::now().timestamp(),
+            duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some("prompt handler cannot be run as a command hook".to_string()),
+        });
+    };
+
     let mut command = if shell.program.is_empty() {
         default_shell_command()
     } else {
         Command::new(&shell.program)
     };
     if shell.program.is_empty() {
-        command.arg(&handler.command);
+        command.arg(hook_command);
     } else {
         command.args(&shell.args);
-        command.arg(&handler.command);
+        command.arg(hook_command);
     }
     command.envs(&handler.env);
-    command
+    Ok(command)
 }
 
 fn default_shell_command() -> Command {

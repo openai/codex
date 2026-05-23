@@ -218,6 +218,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        prompt_hook_runner: None,
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -710,7 +711,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
         tool_input: serde_json::json!({ "command": "echo hello" }),
     });
     assert_eq!(preview.len(), 1);
-    assert_eq!(engine.handlers[0].command, "echo hi");
+    assert_eq!(engine.handlers[0].command(), Some("echo hi"));
     assert_eq!(
         engine.handlers[0].source_path,
         AbsolutePathBuf::try_from(missing_dir).expect("absolute missing dir")
@@ -990,7 +991,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
         engine
             .handlers
             .iter()
-            .map(|handler| handler.command.as_str())
+            .map(|handler| handler.command().expect("command handler"))
             .collect::<Vec<_>>(),
         vec![
             "python3 /tmp/requirements-hook.py",
@@ -1213,6 +1214,7 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        prompt_hook_runner: None,
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
@@ -1302,15 +1304,16 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
         },
     );
 
+    let expected_command = format!(
+        "run {} {} {} {}",
+        plugin_root.display(),
+        plugin_root.display(),
+        plugin_data_root.display(),
+        plugin_data_root.display()
+    );
     assert_eq!(
-        engine.handlers[0].command,
-        format!(
-            "run {} {} {} {}",
-            plugin_root.display(),
-            plugin_root.display(),
-            plugin_data_root.display(),
-            plugin_data_root.display()
-        )
+        engine.handlers[0].command(),
+        Some(expected_command.as_str())
     );
     assert_eq!(
         engine.handlers[0].env,

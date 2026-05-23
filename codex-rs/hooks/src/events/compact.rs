@@ -15,6 +15,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::engine::prompt_runner::PromptHookRunner;
 use crate::schema::PostCompactCommandInput;
 use crate::schema::PreCompactCommandInput;
 use crate::schema::SubagentCommandInputFields;
@@ -72,6 +73,7 @@ pub(crate) fn preview_pre(
 pub(crate) async fn run_pre(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    prompt_runner: Option<&PromptHookRunner>,
     request: PreCompactRequest,
 ) -> PreCompactOutcome {
     let matched = dispatcher::select_handlers(
@@ -103,11 +105,15 @@ pub(crate) async fn run_pre(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
+        dispatcher::HandlerExecutionContext {
+            shell,
+            prompt_runner,
+            cwd: request.cwd.as_path(),
+            default_model: request.model.clone(),
+        },
         matched,
         input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
+        Some(request.turn_id.clone()),
         parse_pre_completed,
     )
     .await;
@@ -154,6 +160,7 @@ pub(crate) fn preview_post(
 pub(crate) async fn run_post(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    prompt_runner: Option<&PromptHookRunner>,
     request: PostCompactRequest,
 ) -> StatelessHookOutcome {
     let matched = dispatcher::select_handlers(
@@ -185,11 +192,15 @@ pub(crate) async fn run_post(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
+        dispatcher::HandlerExecutionContext {
+            shell,
+            prompt_runner,
+            cwd: request.cwd.as_path(),
+            default_model: request.model.clone(),
+        },
         matched,
         input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
+        Some(request.turn_id.clone()),
         parse_post_completed,
     )
     .await;
@@ -597,8 +608,10 @@ mod tests {
         ConfiguredHandler {
             event_name,
             matcher: None,
-            command: "python3 compact_hook.py".to_string(),
-            timeout_sec: 5,
+            kind: crate::engine::ConfiguredHandlerKind::Command {
+                command: "python3 compact_hook.py".to_string(),
+                timeout_sec: 5,
+            },
             status_message: Some("running compact hook".to_string()),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,

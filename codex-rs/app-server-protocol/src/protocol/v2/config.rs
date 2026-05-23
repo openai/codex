@@ -445,7 +445,16 @@ pub enum ConfiguredHookHandler {
     },
     #[serde(rename = "prompt")]
     #[ts(rename = "prompt")]
-    Prompt {},
+    Prompt {
+        prompt: String,
+        model: Option<String>,
+        #[serde(rename = "timeoutSec")]
+        #[ts(rename = "timeoutSec")]
+        timeout_sec: Option<u64>,
+        #[serde(rename = "continueOnBlock")]
+        #[ts(rename = "continueOnBlock")]
+        continue_on_block: bool,
+    },
     #[serde(rename = "agent")]
     #[ts(rename = "agent")]
     Agent {},

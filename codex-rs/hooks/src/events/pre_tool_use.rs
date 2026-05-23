@@ -16,6 +16,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::engine::prompt_runner::PromptHookRunner;
 use crate::schema::PreToolUseCommandInput;
 use crate::schema::SubagentCommandInputFields;
 
@@ -71,6 +72,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    prompt_runner: Option<&PromptHookRunner>,
     request: PreToolUseRequest,
 ) -> PreToolUseOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
@@ -103,10 +105,14 @@ pub(crate) async fn run(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
+        dispatcher::HandlerExecutionContext {
+            shell,
+            prompt_runner,
+            cwd: request.cwd.as_path(),
+            default_model: request.model.clone(),
+        },
         matched,
         input_json,
-        request.cwd.as_path(),
         Some(request.turn_id.clone()),
         parse_completed,
     )
@@ -742,8 +748,10 @@ mod tests {
         ConfiguredHandler {
             event_name: HookEventName::PreToolUse,
             matcher: Some("^Bash$".to_string()),
-            command: "echo hook".to_string(),
-            timeout_sec: 5,
+            kind: crate::engine::ConfiguredHandlerKind::Command {
+                command: "echo hook".to_string(),
+                timeout_sec: 5,
+            },
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,

@@ -15,6 +15,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::engine::prompt_runner::PromptHookRunner;
 use crate::schema::NullableString;
 use crate::schema::SessionStartCommandInput;
 use crate::schema::SubagentStartCommandInput;
@@ -108,6 +109,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    prompt_runner: Option<&PromptHookRunner>,
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
@@ -181,10 +183,14 @@ pub(crate) async fn run(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
+        dispatcher::HandlerExecutionContext {
+            shell,
+            prompt_runner,
+            cwd: request.cwd.as_path(),
+            default_model: request.model.clone(),
+        },
         matched,
         input_json,
-        request.cwd.as_path(),
         turn_id,
         parse_completed,
     )
@@ -516,8 +522,10 @@ mod tests {
         ConfiguredHandler {
             event_name,
             matcher: None,
-            command: "echo hook".to_string(),
-            timeout_sec: 600,
+            kind: crate::engine::ConfiguredHandlerKind::Command {
+                command: "echo hook".to_string(),
+                timeout_sec: 600,
+            },
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
