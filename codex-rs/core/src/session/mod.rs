@@ -1805,7 +1805,7 @@ impl Session {
         self.deliver_event_raw(event).await;
     }
 
-    async fn deliver_event_raw(&self, event: Event) {
+    pub(crate) async fn deliver_event_raw(&self, event: Event) {
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);

@@ -131,6 +131,7 @@ pub(crate) async fn suggest_next_prompt(
     tokio::pin!(sample_deadline);
     let completed_response_id = loop {
         if !session_is_idle_for_suggestion(sess).await {
+            client_session.reset_websocket_session();
             return Ok(None);
         }
         let Some(event) = (tokio::select! {
@@ -138,16 +139,19 @@ pub(crate) async fn suggest_next_prompt(
                 Ok(event) => event,
                 Err(codex_async_utils::CancelErr::Cancelled) => {
                     tracing::debug!("next prompt suggestion canceled while sampling");
+                    client_session.reset_websocket_session();
                     return Ok(None);
                 }
             },
             _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
             _ = &mut sample_deadline => {
                 tracing::debug!("next prompt suggestion timed out while sampling");
+                client_session.reset_websocket_session();
                 return Ok(None);
             },
         }) else {
             tracing::debug!("next prompt suggestion stream closed before completion");
+            client_session.reset_websocket_session();
             return Ok(None);
         };
         let event = match event {
@@ -157,6 +161,7 @@ pub(crate) async fn suggest_next_prompt(
                     error = ?err,
                     "next prompt suggestion stream failed while sampling"
                 );
+                client_session.reset_websocket_session();
                 return Ok(None);
             }
         };
@@ -189,7 +194,7 @@ pub(crate) async fn suggest_next_prompt(
                         .await
                         .and_then(|item| item.turn_id)
                     {
-                        sess.send_event_raw(Event {
+                        sess.deliver_event_raw(Event {
                             id: turn_id,
                             msg: EventMsg::TokenCount(TokenCountEvent {
                                 info: token_usage_info,
