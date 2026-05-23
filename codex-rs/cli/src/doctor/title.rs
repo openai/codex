@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -5,6 +6,7 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_core::config::Config;
 use codex_git_utils::get_git_repo_root;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::CheckStatus;
 use super::DoctorCheck;
@@ -34,15 +36,19 @@ pub(super) fn terminal_title_check(config: &Config) -> DoctorCheck {
 }
 
 fn terminal_title_check_from_inputs(inputs: TerminalTitleInputs) -> DoctorCheck {
-    let (source, items) = match inputs.configured_items {
-        Some(items) if items.is_empty() => ("disabled", Vec::new()),
-        Some(items) => ("configured", items),
+    let (source, items, invalid_items) = match inputs.configured_items {
+        Some(items) if items.is_empty() => ("disabled", Vec::new(), Vec::new()),
+        Some(items) => {
+            let (items, invalid_items) = parse_terminal_title_items(items);
+            ("configured", items, invalid_items)
+        }
         None => (
             "default",
             DEFAULT_TERMINAL_TITLE_ITEMS
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            Vec::new(),
         ),
     };
     let mut details = vec![
@@ -57,6 +63,12 @@ fn terminal_title_check_from_inputs(inputs: TerminalTitleInputs) -> DoctorCheck 
         ),
         format!("terminal title activity: {}", activity_enabled(&items)),
     ];
+    if !invalid_items.is_empty() {
+        details.push(format!(
+            "terminal title invalid items: {}",
+            invalid_items.join(", ")
+        ));
+    }
 
     if project_title_selected(&items) {
         let (project_source, project_value) =
@@ -67,13 +79,73 @@ fn terminal_title_check_from_inputs(inputs: TerminalTitleInputs) -> DoctorCheck 
         }
     }
 
-    DoctorCheck::new(
-        "terminal.title",
-        "title",
-        CheckStatus::Ok,
-        format!("terminal title {source}"),
-    )
-    .details(details)
+    let status = if invalid_items.is_empty() {
+        CheckStatus::Ok
+    } else {
+        CheckStatus::Warning
+    };
+    let summary = if invalid_items.is_empty() {
+        format!("terminal title {source}")
+    } else {
+        format!("terminal title {source} with invalid items")
+    };
+    let mut check = DoctorCheck::new("terminal.title", "title", status, summary).details(details);
+    if !invalid_items.is_empty() {
+        check = check.issue(
+            super::DoctorIssue::new(
+                CheckStatus::Warning,
+                "terminal title configuration contains unknown item identifiers",
+            )
+            .measured(invalid_items.join(", "))
+            .expected("known terminal title item identifiers")
+            .remedy("Remove or replace the unknown entries in [tui].terminal_title.")
+            .field("terminal title invalid items"),
+        );
+    }
+    check
+}
+
+fn parse_terminal_title_items(items: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let mut invalid = Vec::new();
+    let mut invalid_seen = HashSet::new();
+    let mut parsed = Vec::new();
+    for item in items {
+        match terminal_title_item_id(&item) {
+            Some(id) => parsed.push(id.to_string()),
+            None => {
+                if invalid_seen.insert(item.clone()) {
+                    invalid.push(format!(r#""{item}""#));
+                }
+            }
+        }
+    }
+    (parsed, invalid)
+}
+
+fn terminal_title_item_id(item: &str) -> Option<&'static str> {
+    match item {
+        "app-name" => Some("app-name"),
+        "project-name" | "project" => Some("project-name"),
+        "current-dir" => Some("current-dir"),
+        "activity" | "spinner" => Some("activity"),
+        "run-state" | "status" => Some("run-state"),
+        "thread-title" | "thread" => Some("thread-title"),
+        "git-branch" => Some("git-branch"),
+        "context-remaining" => Some("context-remaining"),
+        "context-used" | "context-usage" => Some("context-used"),
+        "five-hour-limit" => Some("five-hour-limit"),
+        "weekly-limit" => Some("weekly-limit"),
+        "codex-version" => Some("codex-version"),
+        "used-tokens" => Some("used-tokens"),
+        "total-input-tokens" => Some("total-input-tokens"),
+        "total-output-tokens" => Some("total-output-tokens"),
+        "thread-id" | "session-id" => Some("thread-id"),
+        "fast-mode" => Some("fast-mode"),
+        "model" | "model-name" => Some("model"),
+        "model-with-reasoning" => Some("model-with-reasoning"),
+        "task-progress" => Some("task-progress"),
+        _ => None,
+    }
 }
 
 fn activity_enabled(items: &[String]) -> bool {
@@ -135,13 +207,20 @@ fn path_display_name(path: &Path) -> String {
 }
 
 fn truncate_title_part(value: String) -> String {
-    let mut truncated = value
-        .chars()
+    let mut graphemes = value.graphemes(true);
+    let head = graphemes
+        .by_ref()
         .take(PROJECT_TITLE_MAX_CHARS)
         .collect::<String>();
-    if value.chars().count() > PROJECT_TITLE_MAX_CHARS {
-        truncated.push_str("...");
+    if graphemes.next().is_none() || PROJECT_TITLE_MAX_CHARS <= 3 {
+        return head;
     }
+
+    let mut truncated = head
+        .graphemes(true)
+        .take(PROJECT_TITLE_MAX_CHARS - 3)
+        .collect::<String>();
+    truncated.push_str("...");
     truncated
 }
 
@@ -248,6 +327,79 @@ mod tests {
                 .details
                 .iter()
                 .any(|detail| detail.starts_with("terminal title project "))
+        );
+    }
+
+    #[test]
+    fn terminal_title_warns_for_invalid_configured_items() {
+        let check = terminal_title_check_from_inputs(TerminalTitleInputs {
+            configured_items: Some(vec![
+                "project".to_string(),
+                "bogus".to_string(),
+                "activity".to_string(),
+                "bogus".to_string(),
+            ]),
+            cwd: PathBuf::from("/workspace/project"),
+            project_root: Some(ProjectTitleRoot {
+                source: "project config",
+                path: PathBuf::from("/workspace/project"),
+            }),
+        });
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(
+            check.summary,
+            "terminal title configured with invalid items"
+        );
+        assert!(
+            check
+                .details
+                .contains(&"terminal title items: project-name, activity".to_string())
+        );
+        assert!(
+            check
+                .details
+                .contains(&r#"terminal title invalid items: "bogus""#.to_string())
+        );
+        assert_eq!(check.issues.len(), 1);
+    }
+
+    #[test]
+    fn terminal_title_warns_when_all_configured_items_are_invalid() {
+        let check = terminal_title_check_from_inputs(TerminalTitleInputs {
+            configured_items: Some(vec!["bogus".to_string()]),
+            cwd: PathBuf::from("/workspace/project"),
+            project_root: None,
+        });
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert!(
+            check
+                .details
+                .contains(&"terminal title items: none".to_string())
+        );
+        assert!(
+            check
+                .details
+                .contains(&r#"terminal title invalid items: "bogus""#.to_string())
+        );
+    }
+
+    #[test]
+    fn terminal_title_project_value_uses_tui_truncation_shape() {
+        let check = terminal_title_check_from_inputs(TerminalTitleInputs {
+            configured_items: Some(vec!["project".to_string()]),
+            cwd: PathBuf::from("/workspace/abcdefghijklmnopqrstuvwxyz"),
+            project_root: Some(ProjectTitleRoot {
+                source: "project config",
+                path: PathBuf::from("/workspace/abcdefghijklmnopqrstuvwxyz"),
+            }),
+        });
+
+        assert!(
+            check
+                .details
+                .contains(&"terminal title project value: abcdefghijklmnopqrstu...".to_string())
         );
     }
 }

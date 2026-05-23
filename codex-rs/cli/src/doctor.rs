@@ -421,7 +421,18 @@ async fn build_report(
         }
         Err(err) => {
             let reachability_plan = default_reachability_plan();
-            let (config_check, network_check, terminal_check, state_check, reachability_check) = tokio::join!(
+            let fallback_cwd = interactive
+                .cwd
+                .clone()
+                .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let (
+                config_check,
+                network_check,
+                terminal_check,
+                git_check,
+                state_check,
+                reachability_check,
+            ) = tokio::join!(
                 async {
                     run_sync_check("config", progress.clone(), || {
                         DoctorCheck::new(
@@ -440,6 +451,7 @@ async fn build_report(
                         terminal_check(command.no_color)
                     })
                 },
+                run_async_check("git", progress.clone(), git_check(fallback_cwd.as_path())),
                 async { run_sync_check("state", progress.clone(), fallback_state_check) },
                 run_async_check(
                     "provider reachability",
@@ -451,6 +463,7 @@ async fn build_report(
                 config_check,
                 network_check,
                 terminal_check,
+                git_check,
                 state_check,
                 reachability_check,
             ]);

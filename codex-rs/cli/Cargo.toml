@@ -81,6 +81,7 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
+unicode-segmentation = { workspace = true }
 which = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

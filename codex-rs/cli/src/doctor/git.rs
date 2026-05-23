@@ -110,7 +110,20 @@ fn git_check_from_inputs(inputs: GitCheckInputs) -> DoctorCheck {
     )
     .details(details);
 
-    if inputs.selected_git.is_none() && inputs.repo_root.is_some() {
+    if inputs.selected_git.is_some() && inputs.git_version.is_none() {
+        check.status = CheckStatus::Warning;
+        check.summary = "Git executable found but could not be run".to_string();
+        check = check.issue(
+            DoctorIssue::new(
+                CheckStatus::Warning,
+                "Git executable was found on PATH but did not return a version",
+            )
+            .expected("git --version succeeds")
+            .remedy("Fix the selected Git executable or PATH so Codex can inspect Git metadata.")
+            .field("git version")
+            .field("selected git"),
+        );
+    } else if inputs.selected_git.is_none() && inputs.repo_root.is_some() {
         check.status = CheckStatus::Warning;
         check.summary = "Git repository detected but git executable was not found".to_string();
         check = check.issue(
@@ -329,6 +342,18 @@ mod tests {
             check.summary,
             "Git repository detected but git executable was not found"
         );
+    }
+
+    #[test]
+    fn warns_when_selected_git_cannot_report_version() {
+        let check = git_check_from_inputs(GitCheckInputs {
+            selected_git: Some(PathBuf::from("/usr/bin/git")),
+            repo_root: Some(PathBuf::from("/repo")),
+            ..GitCheckInputs::default()
+        });
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.summary, "Git executable found but could not be run");
     }
 
     #[test]
