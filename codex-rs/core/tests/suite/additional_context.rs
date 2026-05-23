@@ -14,49 +14,14 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::collections::BTreeMap;
-
-fn untrusted_context(value: &str) -> AdditionalContextEntry {
-    AdditionalContextEntry {
-        value: value.to_string(),
-        is_untrusted: true,
-    }
-}
-
-fn trusted_context(value: &str) -> AdditionalContextEntry {
-    AdditionalContextEntry {
-        value: value.to_string(),
-        is_untrusted: false,
-    }
-}
-
-fn user_turn(text: &str, additional_context: BTreeMap<String, AdditionalContextEntry>) -> Op {
-    Op::UserInput {
-        environments: None,
-        items: vec![UserInput::Text {
-            text: text.to_string(),
-            text_elements: Vec::new(),
-        }],
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context,
-        thread_settings: Default::default(),
-    }
-}
-
-async fn wait_for_turn_complete(codex: &codex_core::CodexThread) {
-    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-}
-
-fn additional_context_snapshot_options() -> ContextSnapshotOptions {
-    ContextSnapshotOptions::default()
-        .strip_capability_instructions()
-        .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 160 })
-}
+use tokio::sync::oneshot;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Result<()> {
@@ -74,13 +39,32 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
         .await?;
 
     test.codex
-        .submit(user_turn(
-            "inspect the active tab",
-            BTreeMap::from([
-                ("browser_info".to_string(), untrusted_context("tab one")),
-                ("automation_info".to_string(), trusted_context("run one")),
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "inspect the active tab".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::from([
+                (
+                    "browser_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "tab one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+                (
+                    "automation_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "run one".to_string(),
+                        is_untrusted: false,
+                    },
+                ),
             ]),
-        ))
+            thread_settings: Default::default(),
+        })
         .await?;
 
     let user_item = wait_for_event_match(&test.codex, |event| match event {
@@ -98,7 +82,10 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
             text_elements: Vec::new(),
         }]
     );
-    wait_for_turn_complete(&test.codex).await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
 
     let request = request.single_request();
     insta::assert_snapshot!(
@@ -106,7 +93,9 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
         context_snapshot::format_labeled_requests_snapshot(
             "additional context is inserted before the user turn input.",
             &[("Request", &request)],
-            &additional_context_snapshot_options(),
+            &ContextSnapshotOptions::default()
+                .strip_capability_instructions()
+                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 160 }),
         )
     );
     let developer_context_texts = request
@@ -145,15 +134,37 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
         .await?;
 
     test.codex
-        .submit(user_turn(
-            "inspect context",
-            BTreeMap::from([
-                ("browser_info".to_string(), untrusted_context("tab one")),
-                ("automation_info".to_string(), trusted_context("run one")),
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "inspect context".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::from([
+                (
+                    "browser_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "tab one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+                (
+                    "automation_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "run one".to_string(),
+                        is_untrusted: false,
+                    },
+                ),
             ]),
-        ))
+            thread_settings: Default::default(),
+        })
         .await?;
-    wait_for_turn_complete(&test.codex).await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
 
     let request = request.single_request();
     let developer_context_texts = request
@@ -195,18 +206,49 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
         .with_config(|config| config.include_environment_context = false)
         .build(&server)
         .await?;
-    let additional_context =
-        BTreeMap::from([("browser_info".to_string(), untrusted_context("same tab"))]);
+    let additional_context = BTreeMap::from([(
+        "browser_info".to_string(),
+        AdditionalContextEntry {
+            value: "same tab".to_string(),
+            is_untrusted: true,
+        },
+    )]);
 
     test.codex
-        .submit(user_turn("first turn", additional_context.clone()))
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "first turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: additional_context.clone(),
+            thread_settings: Default::default(),
+        })
         .await?;
-    wait_for_turn_complete(&test.codex).await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
 
     test.codex
-        .submit(user_turn("second turn", additional_context))
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "second turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context,
+            thread_settings: Default::default(),
+        })
         .await?;
-    wait_for_turn_complete(&test.codex).await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
 
     assert_eq!(
         first_request.single_request().message_input_texts("user"),
@@ -253,38 +295,110 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
         .await?;
 
     test.codex
-        .submit(user_turn(
-            "first turn",
-            BTreeMap::from([
-                ("automation_info".to_string(), untrusted_context("run one")),
-                ("browser_info".to_string(), untrusted_context("tab one")),
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "first turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::from([
+                (
+                    "automation_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "run one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+                (
+                    "browser_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "tab one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
             ]),
-        ))
+            thread_settings: Default::default(),
+        })
         .await?;
-    wait_for_turn_complete(&test.codex).await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
 
     test.codex
-        .submit(user_turn(
-            "second turn",
-            BTreeMap::from([
-                ("automation_info".to_string(), untrusted_context("run one")),
-                ("terminal_info".to_string(), untrusted_context("pty one")),
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "second turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::from([
+                (
+                    "automation_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "run one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+                (
+                    "terminal_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "pty one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
             ]),
-        ))
+            thread_settings: Default::default(),
+        })
         .await?;
-    wait_for_turn_complete(&test.codex).await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
 
     test.codex
-        .submit(user_turn(
-            "third turn",
-            BTreeMap::from([
-                ("automation_info".to_string(), untrusted_context("run one")),
-                ("browser_info".to_string(), untrusted_context("tab one")),
-                ("terminal_info".to_string(), untrusted_context("pty one")),
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "third turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::from([
+                (
+                    "automation_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "run one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+                (
+                    "browser_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "tab one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+                (
+                    "terminal_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "pty one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
             ]),
-        ))
+            thread_settings: Default::default(),
+        })
         .await?;
-    wait_for_turn_complete(&test.codex).await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
 
     assert_eq!(
         first_request.single_request().message_input_texts("user"),
@@ -321,6 +435,179 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn additional_context_multiple_steers_dedupe_against_current_values() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (first_response_done_tx, first_response_done_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse(vec![ev_response_created("resp-1")]),
+        },
+        StreamingSseChunk {
+            gate: Some(first_response_done_rx),
+            body: sse(vec![ev_completed("resp-1")]),
+        },
+    ];
+    let second_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    let test = test_codex()
+        .with_config(|config| config.include_environment_context = false)
+        .build_with_streaming_server(&server)
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "initial turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::from([(
+                "browser_info".to_string(),
+                AdditionalContextEntry {
+                    value: "tab one".to_string(),
+                    is_untrusted: true,
+                },
+            )]),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    server.wait_for_request_count(1).await;
+
+    test.codex
+        .steer_input(
+            vec![UserInput::Text {
+                text: "first steer".to_string(),
+                text_elements: Vec::new(),
+            }],
+            BTreeMap::from([
+                (
+                    "automation_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "run one".to_string(),
+                        is_untrusted: false,
+                    },
+                ),
+                (
+                    "browser_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "tab two".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+            ]),
+            None,
+            None,
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("steer input: {err:?}"))?;
+    test.codex
+        .steer_input(
+            vec![UserInput::Text {
+                text: "second steer".to_string(),
+                text_elements: Vec::new(),
+            }],
+            BTreeMap::from([
+                (
+                    "automation_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "run two".to_string(),
+                        is_untrusted: false,
+                    },
+                ),
+                (
+                    "browser_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "tab two".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+                (
+                    "terminal_info".to_string(),
+                    AdditionalContextEntry {
+                        value: "pty one".to_string(),
+                        is_untrusted: true,
+                    },
+                ),
+            ]),
+            None,
+            None,
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("steer input: {err:?}"))?;
+
+    let _ = first_response_done_tx.send(());
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let second_body = serde_json::from_slice::<Value>(&requests[1])?;
+    let user_texts = second_body["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+        .flat_map(|item| {
+            item.get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        user_texts,
+        vec![
+            "<external_browser_info>tab one</external_browser_info>",
+            "initial turn",
+            "<external_browser_info>tab two</external_browser_info>",
+            "first steer",
+            "<external_terminal_info>pty one</external_terminal_info>",
+            "second steer",
+        ]
+    );
+    let developer_texts = second_body["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
+        .flat_map(|item| {
+            item.get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+        .filter(|text| text.starts_with("<automation_info>"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        developer_texts,
+        vec![
+            "<automation_info>run one</automation_info>",
+            "<automation_info>run two</automation_info>",
+        ]
+    );
+
+    server.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_context_values_are_truncated_before_model_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -344,21 +631,37 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
         format!("<automation_info>{long_automation_value}</automation_info>");
 
     test.codex
-        .submit(user_turn(
-            "summarize context",
-            BTreeMap::from([
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "summarize context".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::from([
                 (
                     "automation_info".to_string(),
-                    trusted_context(&long_automation_value),
+                    AdditionalContextEntry {
+                        value: long_automation_value.clone(),
+                        is_untrusted: false,
+                    },
                 ),
                 (
                     "browser_info".to_string(),
-                    untrusted_context(&long_browser_value),
+                    AdditionalContextEntry {
+                        value: long_browser_value.clone(),
+                        is_untrusted: true,
+                    },
                 ),
             ]),
-        ))
+            thread_settings: Default::default(),
+        })
         .await?;
-    wait_for_turn_complete(&test.codex).await;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
 
     let request = request.single_request();
     let developer_texts = request
