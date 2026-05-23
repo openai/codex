@@ -314,6 +314,9 @@ mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context;
     use crate::tools::context::ToolCallSource;
+    use crate::tools::hook_names::HookToolName;
+    use crate::tools::registry::PostToolUsePayload;
+    use crate::tools::registry::PreToolUsePayload;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -471,11 +474,6 @@ mod tests {
                 }),
             })
         );
-    }
-
-    #[test]
-    fn mcp_hook_tool_input_defaults_empty_args_to_object() {
-        assert_eq!(mcp_hook_tool_input("  "), json!({}));
     }
 
     #[test]

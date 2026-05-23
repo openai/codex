@@ -3463,42 +3463,35 @@ async fn pre_tool_use_blocks_apply_patch_with_write_alias() -> Result<()> {
 }
 
 #[tokio::test]
-async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
+async fn pre_tool_use_blocks_local_function_tool_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let call_id = "pretooluse-update-plan";
-    let args = serde_json::json!({
-        "plan": [{
-            "step": "watch the tide",
-            "status": "pending",
-        }]
-    });
+    let call_id = "pretooluse-local-function-tool";
+    let args = serde_json::json!({});
     let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                core_test_support::responses::ev_function_call(
-                    call_id,
-                    "update_plan",
-                    &serde_json::to_string(&args)?,
-                ),
+                ev_function_call(call_id, "test_sync_tool", &serde_json::to_string(&args)?),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "plan updated"),
+                ev_assistant_message("msg-1", "local function hook blocked it"),
                 ev_completed("resp-2"),
             ]),
         ],
     )
     .await;
 
+    let reason = "blocked local function pre hook";
     let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
         .with_pre_build_hook(|home| {
             if let Err(error) =
-                write_pre_tool_use_hook(home, /*matcher*/ None, "json_deny", "should not fire")
+                write_pre_tool_use_hook(home, Some("^test_sync_tool$"), "json_deny", reason)
             {
                 panic!("failed to write pre tool use hook test fixture: {error}");
             }
@@ -3506,7 +3499,8 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
 
-    test.submit_turn("update the plan").await?;
+    test.submit_turn("call the local function tool with the pre hook")
+        .await?;
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
@@ -3514,17 +3508,85 @@ async fn pre_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
-        .expect("update plan output string");
+        .expect("blocked local function tool output string");
     assert!(
-        !output.contains("should not fire"),
-        "non-shell tool output should not be blocked by PreToolUse",
+        output.contains(&format!(
+            "Tool call blocked by PreToolUse hook: {reason}. Tool: test_sync_tool"
+        )),
+        "blocked local function output should surface the hook reason and tool name",
     );
 
-    let hook_log_path = test.codex_home_path().join("pre_tool_use_hook_log.jsonl");
-    assert!(
-        !hook_log_path.exists(),
-        "plan tool should not trigger pre tool use hooks",
-    );
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PreToolUse");
+    assert_eq!(hook_inputs[0]["tool_name"], "test_sync_tool");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"], args);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_tool_use_rewrites_local_function_tool_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-local-function-tool-rewrite";
+    let original_args = serde_json::json!({
+        "barrier": {
+            "id": "pretooluse-local-function-invalid-barrier",
+            "participants": 0,
+        }
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "test_sync_tool",
+                    &serde_json::to_string(&original_args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "local function hook rewrote it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let updated_input = serde_json::json!({});
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_pre_build_hook(move |home| {
+            if let Err(error) =
+                write_updating_pre_tool_use_hook(home, "^test_sync_tool$", &updated_input)
+            {
+                panic!("failed to write updating pre tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("call the local function tool with the pre hook rewrite")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("rewritten local function tool output string");
+    assert_eq!(output, "ok");
+
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_input"], original_args);
 
     Ok(())
 }
@@ -4130,76 +4192,6 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
     assert_eq!(hook_inputs[0]["tool_name"], "apply_patch");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], patch);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn post_tool_use_does_not_fire_for_plan_tool() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let call_id = "posttooluse-update-plan";
-    let args = serde_json::json!({
-        "plan": [{
-            "step": "watch the tide",
-            "status": "pending",
-        }]
-    });
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                core_test_support::responses::ev_function_call(
-                    call_id,
-                    "update_plan",
-                    &serde_json::to_string(&args)?,
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "plan updated"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    let mut builder = test_codex()
-        .with_pre_build_hook(|home| {
-            if let Err(error) = write_post_tool_use_hook(
-                home,
-                /*matcher*/ None,
-                "decision_block",
-                "should not fire",
-            ) {
-                panic!("failed to write post tool use hook test fixture: {error}");
-            }
-        })
-        .with_config(trust_discovered_hooks);
-    let test = builder.build(&server).await?;
-
-    test.submit_turn("update the plan").await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    let output_item = requests[1].function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("update plan output string");
-    assert!(
-        !output.contains("should not fire"),
-        "non-shell tool output should not be affected by PostToolUse",
-    );
-
-    let hook_log_path = test.codex_home_path().join("post_tool_use_hook_log.jsonl");
-    assert!(
-        !hook_log_path.exists(),
-        "plan tool should not trigger post tool use hooks",
-    );
 
     Ok(())
 }
