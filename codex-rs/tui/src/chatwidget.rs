@@ -362,7 +362,6 @@ use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
 mod plugins;
-use self::plugins::MarketplaceActionOverride;
 use self::plugins::PluginInstallAuthFlowState;
 use self::plugins::PluginListFetchState;
 use self::plugins::PluginsCacheState;
@@ -590,7 +589,7 @@ pub(crate) struct ChatWidget {
     plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     plugins_active_tab_id: Option<String>,
     newly_installed_marketplace_tab_id: Option<String>,
-    marketplace_action_overrides: HashMap<String, MarketplaceActionOverride>,
+    marketplace_action_override_can_upgrade: HashMap<String, bool>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -1758,7 +1757,7 @@ impl ChatWidget {
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
         self.config.terminal_resize_reflow = config.terminal_resize_reflow;
-        self.marketplace_action_overrides.clear();
+        self.marketplace_action_override_can_upgrade.clear();
         self.sync_mentions_v2_enabled();
     }
 

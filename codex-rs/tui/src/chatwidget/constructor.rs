@@ -157,7 +157,7 @@ impl ChatWidget {
             plugin_install_auth_flow: None,
             plugins_active_tab_id: None,
             newly_installed_marketplace_tab_id: None,
-            marketplace_action_overrides: HashMap::new(),
+            marketplace_action_override_can_upgrade: HashMap::new(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),

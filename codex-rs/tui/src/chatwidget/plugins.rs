@@ -66,11 +66,6 @@ pub(super) struct PluginListFetchState {
     pub(super) in_flight_cwd: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct MarketplaceActionOverride {
-    can_upgrade: bool,
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct PluginInstallAuthFlowState {
     plugin_display_name: String,
@@ -531,11 +526,9 @@ impl ChatWidget {
                 self.plugins_active_tab_id = Some(marketplace_tab_id.clone());
                 self.newly_installed_marketplace_tab_id =
                     (!response.already_added).then_some(marketplace_tab_id);
-                self.marketplace_action_overrides.insert(
+                self.marketplace_action_override_can_upgrade.insert(
                     response.marketplace_name.clone(),
-                    MarketplaceActionOverride {
-                        can_upgrade: marketplace_add_source_is_git(&source),
-                    },
+                    marketplace_add_source_is_git(&source),
                 );
                 let message = if response.already_added {
                     format!(
@@ -581,7 +574,7 @@ impl ChatWidget {
         match result {
             Ok(response) => {
                 self.plugins_active_tab_id = Some(ALL_PLUGINS_TAB_ID.to_string());
-                self.marketplace_action_overrides
+                self.marketplace_action_override_can_upgrade
                     .remove(&response.marketplace_name);
                 self.add_info_message(
                     format!("Removed marketplace {marketplace_display_name}."),
@@ -708,7 +701,7 @@ impl ChatWidget {
     }
 
     fn marketplace_can_remove(&self, marketplace: &PluginMarketplaceEntry) -> bool {
-        self.marketplace_action_overrides
+        self.marketplace_action_override_can_upgrade
             .contains_key(&marketplace.name)
             || marketplace_is_user_configured(&self.config, &marketplace.name)
     }
@@ -718,9 +711,9 @@ impl ChatWidget {
             return false;
         }
 
-        self.marketplace_action_overrides
+        self.marketplace_action_override_can_upgrade
             .get(&marketplace.name)
-            .map(|override_state| override_state.can_upgrade)
+            .copied()
             .unwrap_or_else(|| marketplace_is_user_configured_git(&self.config, &marketplace.name))
     }
 
