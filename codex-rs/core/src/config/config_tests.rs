@@ -4471,6 +4471,25 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn default_zsh_path_sets_runtime_zsh_path() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let default_zsh_path = codex_home.path().join("packaged-zsh");
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            default_zsh_path: Some(default_zsh_path.abs()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(config.zsh_path, Some(default_zsh_path));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(

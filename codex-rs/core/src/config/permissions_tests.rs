@@ -82,7 +82,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
         },
         ConfigOverrides {
             cwd: Some(cwd.clone()),
-            zsh_path: Some(zsh_path.clone()),
+            default_zsh_path: Some(AbsolutePathBuf::try_from(zsh_path.clone())?),
             main_execve_wrapper_exe: Some(execve_wrapper),
             ..Default::default()
         },
