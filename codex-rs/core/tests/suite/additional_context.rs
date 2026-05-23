@@ -10,18 +10,17 @@ use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::streaming_sse::StreamingSseChunk;
-use core_test_support::streaming_sse::message_input_texts;
-use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
-use tokio::sync::oneshot;
+use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Result<()> {
@@ -438,26 +437,25 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
 async fn additional_context_multiple_steers_dedupe_against_current_values() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (first_response_done_tx, first_response_done_rx) = oneshot::channel();
-    let first_chunks = vec![
-        StreamingSseChunk {
-            gate: None,
-            body: sse(vec![ev_response_created("resp-1")]),
-        },
-        StreamingSseChunk {
-            gate: Some(first_response_done_rx),
-            body: sse(vec![ev_completed("resp-1")]),
-        },
-    ];
-    let second_chunks = vec![StreamingSseChunk {
-        gate: None,
-        body: sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-    }];
-    let (server, _completions) =
-        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    let server = start_mock_server().await;
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_response_created("resp-1"),
+                ev_completed("resp-1"),
+            ]))
+            .set_delay(Duration::from_secs(1)),
+            sse_response(sse(vec![
+                ev_response_created("resp-2"),
+                ev_completed("resp-2"),
+            ])),
+        ],
+    )
+    .await;
     let test = test_codex()
         .with_config(|config| config.include_environment_context = false)
-        .build_with_streaming_server(&server)
+        .build(&server)
         .await?;
 
     test.codex
@@ -479,7 +477,12 @@ async fn additional_context_multiple_steers_dedupe_against_current_values() -> R
             thread_settings: Default::default(),
         })
         .await?;
-    server.wait_for_request_count(1).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while responses.requests().len() < 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
 
     test.codex
         .steer_input(
@@ -543,16 +546,15 @@ async fn additional_context_multiple_steers_dedupe_against_current_values() -> R
         .await
         .map_err(|err| anyhow::anyhow!("steer input: {err:?}"))?;
 
-    let _ = first_response_done_tx.send(());
     wait_for_event_match(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())
     })
     .await;
 
-    let requests = server.requests().await;
+    let requests = responses.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(
-        message_input_texts(&requests[1], "user"),
+        requests[1].message_input_texts("user"),
         vec![
             "<external_browser_info>tab one</external_browser_info>",
             "initial turn",
@@ -562,7 +564,8 @@ async fn additional_context_multiple_steers_dedupe_against_current_values() -> R
             "second steer",
         ]
     );
-    let developer_context_texts = message_input_texts(&requests[1], "developer")
+    let developer_context_texts = requests[1]
+        .message_input_texts("developer")
         .into_iter()
         .filter(|text| text.starts_with("<automation_info>"))
         .collect::<Vec<_>>();
@@ -573,8 +576,6 @@ async fn additional_context_multiple_steers_dedupe_against_current_values() -> R
             "<automation_info>run two</automation_info>",
         ]
     );
-
-    server.shutdown().await;
 
     Ok(())
 }
