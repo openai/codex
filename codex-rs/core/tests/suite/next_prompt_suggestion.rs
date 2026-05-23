@@ -8,8 +8,10 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
@@ -264,6 +266,52 @@ async fn suggest_next_prompt_drops_stale_result_when_real_turn_starts() -> Resul
     assert_eq!(server.requests().await.len(), 4);
 
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suggest_next_prompt_times_out_during_stream_startup() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let first_turn_response = sse_response(sse(vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg-1", "first turn complete"),
+        ev_completed("resp-1"),
+    ]));
+    let second_turn_response = sse_response(sse(vec![
+        ev_response_created("resp-2"),
+        ev_assistant_message("msg-2", "second turn complete"),
+        ev_completed("resp-2"),
+    ]));
+    let delayed_suggestion_response = sse_response(sse(vec![
+        ev_response_created("resp-suggestion"),
+        ev_assistant_message("msg-suggestion", "run the tests"),
+        ev_completed("resp-suggestion"),
+    ]))
+    .set_delay(Duration::from_secs(/*secs*/ 30));
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            first_turn_response,
+            second_turn_response,
+            delayed_suggestion_response,
+        ],
+    )
+    .await;
+
+    let test = test_codex().build(&server).await?;
+    test.submit_turn("first task").await?;
+    test.submit_turn("second task").await?;
+
+    let suggestion = timeout(
+        Duration::from_secs(/*secs*/ 10),
+        test.codex.suggest_next_prompt(CancellationToken::new()),
+    )
+    .await??;
+    assert_eq!(suggestion, None);
+    assert_eq!(responses.requests().len(), 3);
+
     Ok(())
 }
 

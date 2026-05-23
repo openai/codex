@@ -12,7 +12,8 @@ pub(crate) struct TurnRequestProcessor {
     config: Arc<Config>,
     config_manager: ConfigManager,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
-    pending_next_prompt_suggestions: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
+    pending_next_prompt_suggestions:
+        Arc<Mutex<HashMap<NextPromptSuggestionCancellationKey, NextPromptSuggestionCancellation>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     thread_list_state_permit: Arc<Semaphore>,
@@ -70,6 +71,54 @@ struct ThreadSettingsBuildParams {
     summary: Option<ReasoningSummary>,
     collaboration_mode: Option<CollaborationMode>,
     personality: Option<Personality>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct NextPromptSuggestionCancellationKey {
+    thread_id: String,
+    cancellation_token: String,
+}
+
+impl NextPromptSuggestionCancellationKey {
+    fn new(thread_id: &str, cancellation_token: &str) -> Self {
+        Self {
+            thread_id: thread_id.to_string(),
+            cancellation_token: cancellation_token.to_string(),
+        }
+    }
+}
+
+enum NextPromptSuggestionCancellation {
+    Active(Arc<CancellationToken>),
+    /// One-shot marker for a cancel request that arrived before its matching
+    /// suggestion request reserved the token.
+    Cancelled {
+        expires_at: std::time::Instant,
+    },
+    /// Short-lived record for a request that was already cancelled or completed.
+    ///
+    /// This lets late duplicate cancels become no-ops instead of creating a
+    /// stale one-shot cancellation for a future request that reuses the token.
+    Retired {
+        expires_at: std::time::Instant,
+    },
+}
+
+const NEXT_PROMPT_SUGGESTION_RETIRED_TOKEN_TTL: std::time::Duration =
+    std::time::Duration::from_secs(/*secs*/ 60);
+
+fn prune_expired_next_prompt_suggestions(
+    pending_next_prompt_suggestions: &mut HashMap<
+        NextPromptSuggestionCancellationKey,
+        NextPromptSuggestionCancellation,
+    >,
+) {
+    let now = std::time::Instant::now();
+    pending_next_prompt_suggestions.retain(|_, cancellation| match cancellation {
+        NextPromptSuggestionCancellation::Active(_) => true,
+        NextPromptSuggestionCancellation::Cancelled { expires_at }
+        | NextPromptSuggestionCancellation::Retired { expires_at } => *expires_at > now,
+    });
 }
 
 impl TurnRequestProcessor {
@@ -726,9 +775,8 @@ impl TurnRequestProcessor {
             cancellation_token,
             cancel,
         } = params;
-        let cancel = cancel.unwrap_or_default();
         let suggestion_cancellation = self
-            .next_prompt_suggestion_cancellation(cancellation_token.as_deref(), cancel)
+            .next_prompt_suggestion_cancellation(&thread_id, cancellation_token.as_deref(), cancel)
             .await?;
         let Some(suggestion_cancellation) = suggestion_cancellation else {
             return Ok(ThreadSuggestNextPromptResponse { suggestion: None });
@@ -743,6 +791,7 @@ impl TurnRequestProcessor {
         }
         .await;
         self.clear_next_prompt_suggestion_cancellation(
+            &thread_id,
             cancellation_token.as_deref(),
             &suggestion_cancellation,
         )
@@ -753,6 +802,7 @@ impl TurnRequestProcessor {
 
     async fn next_prompt_suggestion_cancellation(
         &self,
+        thread_id: &str,
         cancellation_token: Option<&str>,
         cancel: bool,
     ) -> Result<Option<Arc<CancellationToken>>, JSONRPCErrorError> {
@@ -766,21 +816,71 @@ impl TurnRequestProcessor {
         };
 
         let mut pending_next_prompt_suggestions = self.pending_next_prompt_suggestions.lock().await;
-        if let Some(existing) = pending_next_prompt_suggestions.remove(cancellation_token) {
-            existing.cancel();
-        }
+        prune_expired_next_prompt_suggestions(&mut pending_next_prompt_suggestions);
+        let key = NextPromptSuggestionCancellationKey::new(thread_id, cancellation_token);
         if cancel {
+            match pending_next_prompt_suggestions.remove(&key) {
+                Some(NextPromptSuggestionCancellation::Active(existing)) => {
+                    existing.cancel();
+                    pending_next_prompt_suggestions.insert(
+                        key,
+                        NextPromptSuggestionCancellation::Retired {
+                            expires_at: std::time::Instant::now()
+                                + NEXT_PROMPT_SUGGESTION_RETIRED_TOKEN_TTL,
+                        },
+                    );
+                }
+                Some(NextPromptSuggestionCancellation::Cancelled { expires_at }) => {
+                    pending_next_prompt_suggestions.insert(
+                        key,
+                        NextPromptSuggestionCancellation::Cancelled { expires_at },
+                    );
+                }
+                Some(NextPromptSuggestionCancellation::Retired { expires_at }) => {
+                    pending_next_prompt_suggestions.insert(
+                        key,
+                        NextPromptSuggestionCancellation::Retired { expires_at },
+                    );
+                }
+                None => {
+                    pending_next_prompt_suggestions.insert(
+                        key,
+                        NextPromptSuggestionCancellation::Cancelled {
+                            expires_at: std::time::Instant::now()
+                                + NEXT_PROMPT_SUGGESTION_RETIRED_TOKEN_TTL,
+                        },
+                    );
+                }
+            }
             return Ok(None);
         }
 
+        match pending_next_prompt_suggestions.remove(&key) {
+            Some(NextPromptSuggestionCancellation::Active(existing)) => existing.cancel(),
+            Some(NextPromptSuggestionCancellation::Cancelled { .. }) => {
+                pending_next_prompt_suggestions.insert(
+                    key,
+                    NextPromptSuggestionCancellation::Retired {
+                        expires_at: std::time::Instant::now()
+                            + NEXT_PROMPT_SUGGESTION_RETIRED_TOKEN_TTL,
+                    },
+                );
+                return Ok(None);
+            }
+            Some(NextPromptSuggestionCancellation::Retired { .. }) | None => {}
+        }
+
         let cancellation = Arc::new(CancellationToken::new());
-        pending_next_prompt_suggestions
-            .insert(cancellation_token.to_string(), Arc::clone(&cancellation));
+        pending_next_prompt_suggestions.insert(
+            key,
+            NextPromptSuggestionCancellation::Active(Arc::clone(&cancellation)),
+        );
         Ok(Some(cancellation))
     }
 
     async fn clear_next_prompt_suggestion_cancellation(
         &self,
+        thread_id: &str,
         cancellation_token: Option<&str>,
         suggestion_cancellation: &Arc<CancellationToken>,
     ) {
@@ -789,11 +889,25 @@ impl TurnRequestProcessor {
         };
 
         let mut pending_next_prompt_suggestions = self.pending_next_prompt_suggestions.lock().await;
+        prune_expired_next_prompt_suggestions(&mut pending_next_prompt_suggestions);
+        let key = NextPromptSuggestionCancellationKey::new(thread_id, cancellation_token);
         if pending_next_prompt_suggestions
-            .get(cancellation_token)
-            .is_some_and(|current| Arc::ptr_eq(current, suggestion_cancellation))
+            .get(&key)
+            .is_some_and(|current| match current {
+                NextPromptSuggestionCancellation::Active(current) => {
+                    Arc::ptr_eq(current, suggestion_cancellation)
+                }
+                NextPromptSuggestionCancellation::Cancelled { .. }
+                | NextPromptSuggestionCancellation::Retired { .. } => false,
+            })
         {
-            pending_next_prompt_suggestions.remove(cancellation_token);
+            pending_next_prompt_suggestions.insert(
+                key,
+                NextPromptSuggestionCancellation::Retired {
+                    expires_at: std::time::Instant::now()
+                        + NEXT_PROMPT_SUGGESTION_RETIRED_TOKEN_TTL,
+                },
+            );
         }
     }
 

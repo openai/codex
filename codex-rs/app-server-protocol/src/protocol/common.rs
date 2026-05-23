@@ -587,8 +587,7 @@ client_request_definitions! {
     },
     ThreadSuggestNextPrompt => "thread/suggestNextPrompt" {
         params: v2::ThreadSuggestNextPromptParams,
-        // Suggestions do not mutate thread state, and cancellation requests must not queue
-        // behind the in-flight sampling request they are trying to stop.
+        // Hidden prediction must never queue interactive thread work behind its sampling request.
         serialization: None,
         response: v2::ThreadSuggestNextPromptResponse,
     },
@@ -2036,6 +2035,26 @@ mod tests {
                 "remote-control-clients"
             ))
         );
+
+        let suggest_next_prompt_cancel = ClientRequest::ThreadSuggestNextPrompt {
+            request_id: request_id(),
+            params: v2::ThreadSuggestNextPromptParams {
+                thread_id: "suggest-thread".to_string(),
+                cancellation_token: Some("suggestion-1".to_string()),
+                cancel: true,
+            },
+        };
+        assert_eq!(suggest_next_prompt_cancel.serialization_scope(), None);
+
+        let suggest_next_prompt = ClientRequest::ThreadSuggestNextPrompt {
+            request_id: request_id(),
+            params: v2::ThreadSuggestNextPromptParams {
+                thread_id: "suggest-thread".to_string(),
+                cancellation_token: Some("suggestion-1".to_string()),
+                cancel: false,
+            },
+        };
+        assert_eq!(suggest_next_prompt.serialization_scope(), None);
     }
 
     #[test]

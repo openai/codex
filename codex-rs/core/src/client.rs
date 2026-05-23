@@ -394,6 +394,10 @@ impl ModelClient {
         }
     }
 
+    /// Creates a streaming session isolated from the reusable turn WebSocket cache.
+    ///
+    /// Hidden best-effort requests use this so they cannot consume or reset the warm connection
+    /// reserved for the next real turn.
     pub(crate) fn new_isolated_session(&self) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),

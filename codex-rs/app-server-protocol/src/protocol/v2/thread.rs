@@ -1187,8 +1187,8 @@ pub struct ThreadSuggestNextPromptParams {
     /// When true, cancel the request identified by `cancellation_token` without sampling.
     ///
     /// This requires `cancellation_token`.
-    #[ts(optional = nullable)]
-    pub cancel: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancel: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

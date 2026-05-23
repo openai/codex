@@ -43,7 +43,7 @@ mod next_prompt_suggestion_tests;
 const NEXT_PROMPT_SUGGESTION_TOKEN_HEADROOM: i64 = 1_024;
 const NEXT_PROMPT_SUGGESTION_MAX_HISTORY_TOKENS: usize = 4_096;
 const NEXT_PROMPT_SUGGESTION_MAX_OUTPUT_TOKENS: u64 = 32;
-const NEXT_PROMPT_SUGGESTION_SAMPLE_TIMEOUT: Duration = Duration::from_secs(8);
+const NEXT_PROMPT_SUGGESTION_SAMPLE_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 8);
 
 #[derive(Clone, Copy)]
 struct HistorySnapshot {
@@ -115,38 +115,55 @@ pub(crate) async fn suggest_next_prompt(
         return None;
     }
     let mut client_session = sess.services.model_client.new_isolated_session();
-    let mut stream = match client_session
-        .stream(
-            &prompt,
-            &turn_context.model_info,
-            &turn_context.session_telemetry,
-            turn_context.reasoning_effort,
-            turn_context.reasoning_summary,
-            turn_context.config.service_tier.clone(),
-            /*turn_metadata_header*/ None,
-            &InferenceTraceContext::disabled(),
-        )
-        .or_cancel(&cancellation_token)
-        .await
-    {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(err)) => {
-            tracing::debug!(
-                error = ?err,
-                "next prompt suggestion failed before sampling started"
-            );
-            return None;
-        }
-        Err(codex_async_utils::CancelErr::Cancelled) => {
-            tracing::debug!("next prompt suggestion canceled before sampling started");
-            return None;
+    let sample_deadline = tokio::time::sleep(NEXT_PROMPT_SUGGESTION_SAMPLE_TIMEOUT);
+    tokio::pin!(sample_deadline);
+    let inference_trace = InferenceTraceContext::disabled();
+    let mut stream = {
+        let stream = client_session
+            .stream(
+                &prompt,
+                &turn_context.model_info,
+                &turn_context.session_telemetry,
+                turn_context.reasoning_effort,
+                turn_context.reasoning_summary,
+                turn_context.config.service_tier.clone(),
+                /*turn_metadata_header*/ None,
+                &inference_trace,
+            )
+            .or_cancel(&cancellation_token);
+        match tokio::select! {
+            result = stream => result,
+            _ = &mut sample_deadline => {
+                tracing::debug!("next prompt suggestion timed out before sampling started");
+                return None;
+            }
+        } {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(err)) => {
+                tracing::debug!(
+                    error = ?err,
+                    "next prompt suggestion failed before sampling started"
+                );
+                return None;
+            }
+            Err(codex_async_utils::CancelErr::Cancelled) => {
+                tracing::debug!("next prompt suggestion canceled before sampling started");
+                return None;
+            }
         }
     };
+    if cancellation_token.is_cancelled() {
+        tracing::debug!("next prompt suggestion skipped after cancellation");
+        client_session.reset_websocket_session();
+        return None;
+    }
+    if !session_is_idle_for_suggestion(sess).await {
+        client_session.reset_websocket_session();
+        return None;
+    }
     let mut streamed_text = String::new();
     let mut completed_text = None;
     let mut latest_rate_limits = None;
-    let sample_deadline = tokio::time::sleep(NEXT_PROMPT_SUGGESTION_SAMPLE_TIMEOUT);
-    tokio::pin!(sample_deadline);
     let completed_response_id = loop {
         if !session_is_idle_for_suggestion(sess).await {
             client_session.reset_websocket_session();
@@ -161,7 +178,7 @@ pub(crate) async fn suggest_next_prompt(
                     return None;
                 }
             },
-            _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+            _ = tokio::time::sleep(Duration::from_millis(/*millis*/ 100)) => continue,
             _ = &mut sample_deadline => {
                 tracing::debug!("next prompt suggestion timed out while sampling");
                 client_session.reset_websocket_session();
@@ -225,6 +242,10 @@ pub(crate) async fn suggest_next_prompt(
             .await;
     }
     client_session.reset_websocket_session();
+    if cancellation_token.is_cancelled() {
+        tracing::debug!("next prompt suggestion canceled after sampling completed");
+        return None;
+    }
     if !session_history_matches_snapshot(sess, history_snapshot).await {
         tracing::debug!("next prompt suggestion skipped after history changed");
         return None;
@@ -410,6 +431,7 @@ fn has_unpaired_tool_flow(items: &[ResponseItem]) -> bool {
                     client_tool_search_outputs.insert(call_id.clone());
                 }
             }
+            ResponseItem::ToolSearchOutput { execution, .. } if execution == "server" => {}
             ResponseItem::CustomToolCall { call_id, .. } => {
                 custom_tool_calls.insert(call_id.clone());
             }

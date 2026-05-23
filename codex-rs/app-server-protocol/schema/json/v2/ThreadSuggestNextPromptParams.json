@@ -4,10 +4,7 @@
   "properties": {
     "cancel": {
       "description": "When true, cancel the request identified by `cancellation_token` without sampling.\n\nThis requires `cancellation_token`.",
-      "type": [
-        "boolean",
-        "null"
-      ]
+      "type": "boolean"
     },
     "cancellationToken": {
       "description": "Optional client token used to cancel an older in-flight suggestion request.\n\nReusing a token cancels the older request before this request samples.",

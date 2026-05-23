@@ -25,4 +25,4 @@ cancellationToken?: string | null,
  *
  * This requires `cancellation_token`.
  */
-cancel?: boolean | null, };
+cancel?: boolean, };
