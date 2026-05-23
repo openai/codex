@@ -292,7 +292,7 @@ HAVING SUM(usage_samples.blended_tokens) > 0
                 })
                 .or_insert(attributed_tokens);
         }
-        let mut entries = by_task
+        let entries = by_task
             .into_iter()
             .map(|(label, attributed_tokens)| UsageEntry {
                 kind: UsageContributorKind::AgentTask,
@@ -302,12 +302,6 @@ HAVING SUM(usage_samples.blended_tokens) > 0
                 percent_of_usage: usage_percent(attributed_tokens, total_tokens),
             })
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| {
-            right
-                .attributed_tokens
-                .cmp(&left.attributed_tokens)
-                .then_with(|| left.label.cmp(&right.label))
-        });
         let stored = self
             .read_stored_contributors_for_non_derived_threads(
                 since,
@@ -499,10 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn usage_report_groups_forward_only_samples_by_range() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
+        let (codex_home, runtime) = usage_runtime().await;
         let user_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000901").expect("valid thread id");
         let subagent_thread_id =
@@ -540,13 +531,10 @@ mod tests {
                 user_thread_id,
                 "recent-user",
                 /*occurred_at*/ now - 100,
-                TokenUsage {
-                    input_tokens: 100,
-                    cached_input_tokens: 20,
-                    output_tokens: 40,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 140,
-                },
+                token_usage(
+                    /*input_tokens*/ 100, /*cached_input_tokens*/ 20,
+                    /*output_tokens*/ 40,
+                ),
                 vec![
                     contributor(
                         UsageContributorKind::Skill,
@@ -569,13 +557,10 @@ mod tests {
                 subagent_thread_id,
                 "recent-subagent",
                 /*occurred_at*/ now - 50,
-                TokenUsage {
-                    input_tokens: 30,
-                    cached_input_tokens: 0,
-                    output_tokens: 10,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 40,
-                },
+                token_usage(
+                    /*input_tokens*/ 30, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 10,
+                ),
                 Vec::new(),
             ))
             .await
@@ -585,13 +570,10 @@ mod tests {
                 user_thread_id,
                 "old-user",
                 /*occurred_at*/ now - UsageRange::Day.seconds() - 1,
-                TokenUsage {
-                    input_tokens: 10,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 10,
-                },
+                token_usage(
+                    /*input_tokens*/ 10, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 0,
+                ),
                 vec![contributor(
                     UsageContributorKind::McpServer,
                     "old-mcp",
@@ -606,13 +588,10 @@ mod tests {
                 user_thread_id,
                 "future-user",
                 /*occurred_at*/ now + 100,
-                TokenUsage {
-                    input_tokens: 1_000,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 1_000,
-                },
+                token_usage(
+                    /*input_tokens*/ 1_000, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 0,
+                ),
                 vec![contributor(
                     UsageContributorKind::Skill,
                     "/skills/future",
@@ -682,10 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn usage_report_labels_default_subagents_as_default() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
+        let (codex_home, runtime) = usage_runtime().await;
         let subagent_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000905").expect("valid thread id");
         let mut subagent_metadata =
@@ -702,13 +678,10 @@ mod tests {
                 subagent_thread_id,
                 "default-subagent",
                 /*occurred_at*/ now,
-                TokenUsage {
-                    input_tokens: 10,
-                    cached_input_tokens: 0,
-                    output_tokens: 5,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 15,
-                },
+                token_usage(
+                    /*input_tokens*/ 10, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 5,
+                ),
                 Vec::new(),
             ))
             .await
@@ -743,10 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn usage_report_groups_agent_tasks_by_subagent_source() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
+        let (codex_home, runtime) = usage_runtime().await;
         let parent_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000906").expect("valid thread id");
         let review_thread_id =
@@ -813,13 +783,11 @@ mod tests {
                     thread_id,
                     sample_id,
                     /*occurred_at*/ now,
-                    TokenUsage {
+                    token_usage(
                         input_tokens,
-                        cached_input_tokens: 0,
-                        output_tokens: 0,
-                        reasoning_output_tokens: 0,
-                        total_tokens: input_tokens,
-                    },
+                        /*cached_input_tokens*/ 0,
+                        /*output_tokens*/ 0,
+                    ),
                     Vec::new(),
                 ))
                 .await
@@ -868,10 +836,7 @@ mod tests {
 
     #[tokio::test]
     async fn usage_report_includes_stored_subagent_and_agent_task_contributors_for_user_threads() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
+        let (codex_home, runtime) = usage_runtime().await;
         let user_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000911").expect("valid thread id");
         let now = Utc::now().timestamp();
@@ -889,13 +854,10 @@ mod tests {
                 user_thread_id,
                 "stored-contributors",
                 /*occurred_at*/ now,
-                TokenUsage {
-                    input_tokens: 100,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 100,
-                },
+                token_usage(
+                    /*input_tokens*/ 100, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 0,
+                ),
                 vec![
                     contributor(
                         UsageContributorKind::Subagent,
@@ -943,10 +905,7 @@ mod tests {
 
     #[tokio::test]
     async fn usage_report_counts_memory_consolidation_as_agent_task() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
+        let (codex_home, runtime) = usage_runtime().await;
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000912").expect("valid thread id");
         let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
@@ -966,13 +925,10 @@ mod tests {
                 thread_id,
                 "memory-consolidation",
                 /*occurred_at*/ now,
-                TokenUsage {
-                    input_tokens: 25,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 25,
-                },
+                token_usage(
+                    /*input_tokens*/ 25, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 0,
+                ),
                 Vec::new(),
             ))
             .await
@@ -1013,10 +969,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_usage_sample_prunes_samples_older_than_retention() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
+        let (codex_home, runtime) = usage_runtime().await;
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000903").expect("valid thread id");
         runtime
@@ -1034,13 +987,10 @@ mod tests {
                 thread_id,
                 "stale",
                 /*occurred_at*/ now - USAGE_RETENTION_SECONDS - 1,
-                TokenUsage {
-                    input_tokens: 10,
-                    cached_input_tokens: 0,
-                    output_tokens: 5,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 15,
-                },
+                token_usage(
+                    /*input_tokens*/ 10, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 5,
+                ),
                 vec![contributor(
                     UsageContributorKind::Skill,
                     "/skills/stale",
@@ -1055,13 +1005,10 @@ mod tests {
                 thread_id,
                 "retained",
                 /*occurred_at*/ now - UsageRange::Week.seconds(),
-                TokenUsage {
-                    input_tokens: 10,
-                    cached_input_tokens: 0,
-                    output_tokens: 5,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 15,
-                },
+                token_usage(
+                    /*input_tokens*/ 10, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 5,
+                ),
                 vec![contributor(
                     UsageContributorKind::Skill,
                     "/skills/retained",
@@ -1078,10 +1025,7 @@ mod tests {
 
     #[tokio::test]
     async fn usage_startup_maintenance_prunes_stale_samples() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
+        let (codex_home, runtime) = usage_runtime().await;
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000904").expect("valid thread id");
         runtime
@@ -1098,13 +1042,10 @@ mod tests {
                 thread_id,
                 "stale-after-write",
                 /*occurred_at*/ now,
-                TokenUsage {
-                    input_tokens: 10,
-                    cached_input_tokens: 0,
-                    output_tokens: 5,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 15,
-                },
+                token_usage(
+                    /*input_tokens*/ 10, /*cached_input_tokens*/ 0,
+                    /*output_tokens*/ 5,
+                ),
                 vec![contributor(
                     UsageContributorKind::Skill,
                     "/skills/stale",
@@ -1148,6 +1089,24 @@ mod tests {
                 prompt_estimated_tokens: 100,
                 contributors,
             },
+        }
+    }
+
+    async fn usage_runtime() -> (std::path::PathBuf, std::sync::Arc<StateRuntime>) {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        (codex_home, runtime)
+    }
+
+    fn token_usage(input_tokens: i64, cached_input_tokens: i64, output_tokens: i64) -> TokenUsage {
+        TokenUsage {
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens: 0,
+            total_tokens: input_tokens + output_tokens,
         }
     }
 

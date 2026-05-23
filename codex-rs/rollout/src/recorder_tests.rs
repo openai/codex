@@ -217,66 +217,6 @@ async fn load_rollout_items_skips_legacy_ghost_snapshot_lines() -> std::io::Resu
 }
 
 #[tokio::test]
-async fn load_rollout_items_skips_legacy_usage_attribution_lines() -> std::io::Result<()> {
-    let home = TempDir::new().expect("temp dir");
-    let rollout_path = home.path().join("rollout.jsonl");
-    let mut file = File::create(&rollout_path)?;
-    let thread_id = ThreadId::new();
-    let ts = "2025-01-03T12:00:00Z";
-
-    writeln!(
-        file,
-        "{}",
-        serde_json::json!({
-            "timestamp": ts,
-            "type": "session_meta",
-            "payload": {
-                "id": thread_id,
-                "timestamp": ts,
-                "cwd": ".",
-                "originator": "test_originator",
-                "cli_version": "test_version",
-                "source": "cli",
-                "model_provider": "test-provider",
-            },
-        })
-    )?;
-    writeln!(
-        file,
-        "{}",
-        serde_json::json!({
-            "timestamp": ts,
-            "type": "usage_attribution",
-            "payload": {
-                "sample_id": "sample",
-                "turn_id": "turn",
-                "response_id": "response",
-                "occurred_at": 1_700_000_000,
-                "token_usage": {
-                    "input_tokens": 1,
-                    "cached_input_tokens": 0,
-                    "output_tokens": 1,
-                    "reasoning_output_tokens": 0,
-                    "total_tokens": 2,
-                },
-                "prompt_estimated_tokens": 1,
-                "contributors": [],
-            },
-        })
-    )?;
-
-    let (items, loaded_thread_id, parse_errors) =
-        RolloutRecorder::load_rollout_items(&rollout_path).await?;
-
-    assert_eq!(loaded_thread_id, Some(thread_id));
-    assert_eq!(parse_errors, 1);
-    assert_eq!(items.len(), 1);
-    assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn load_rollout_items_preserves_legacy_guardian_assessment_lines() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let rollout_path = home.path().join("rollout.jsonl");
