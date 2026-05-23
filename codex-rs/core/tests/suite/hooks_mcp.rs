@@ -291,10 +291,9 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution(
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("blocked MCP tool output string");
+    let Some(output) = output_item.get("output").and_then(Value::as_str) else {
+        panic!("blocked MCP tool output should be a string: {output_item:?}");
+    };
     assert!(
         output.contains(&format!(
             "Tool call blocked by PreToolUse hook: {block_reason}. Tool: {RMCP_ECHO_TOOL_NAME}"
@@ -318,9 +317,12 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution(
             "tool_input": { "message": RMCP_ECHO_MESSAGE },
         })
     );
-    let transcript_path = hook_inputs[0]["transcript_path"]
-        .as_str()
-        .expect("pre tool use hook transcript_path");
+    let Some(transcript_path) = hook_inputs[0]["transcript_path"].as_str() else {
+        panic!(
+            "pre tool use hook transcript_path should be a string: {:?}",
+            hook_inputs[0]["transcript_path"]
+        );
+    };
     assert!(
         Path::new(transcript_path).exists(),
         "pre tool use hook transcript_path should be materialized on disk",
@@ -379,10 +381,9 @@ async fn pre_tool_use_rewrites_mcp_tool_before_execution() -> Result<()> {
 
     let final_request = final_mock.single_request();
     let output_item = final_request.function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("MCP tool output string");
+    let Some(output) = output_item.get("output").and_then(Value::as_str) else {
+        panic!("MCP tool output should be a string: {output_item:?}");
+    };
     assert!(
         output.contains(&format!("ECHOING: {rewritten_message}")),
         "MCP tool should execute the rewritten input",
@@ -482,10 +483,9 @@ async fn post_tool_use_records_mcp_tool_payload_and_context(
         "follow-up request should include MCP post tool use additional context",
     );
     let output_item = final_request.function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("MCP tool output string");
+    let Some(output) = output_item.get("output").and_then(Value::as_str) else {
+        panic!("MCP tool output should be a string: {output_item:?}");
+    };
     assert!(
         output.contains(&format!("ECHOING: {RMCP_ECHO_MESSAGE}")),
         "MCP tool output should still reach the model",
@@ -516,9 +516,12 @@ async fn post_tool_use_records_mcp_tool_payload_and_context(
             },
         })
     );
-    let transcript_path = hook_inputs[0]["transcript_path"]
-        .as_str()
-        .expect("post tool use hook transcript_path");
+    let Some(transcript_path) = hook_inputs[0]["transcript_path"].as_str() else {
+        panic!(
+            "post tool use hook transcript_path should be a string: {:?}",
+            hook_inputs[0]["transcript_path"]
+        );
+    };
     assert!(
         Path::new(transcript_path).exists(),
         "post tool use hook transcript_path should be materialized on disk",
