@@ -37,7 +37,7 @@ pub(super) async fn git_check(cwd: &Path) -> DoctorCheck {
             let (version, exec_path, build_options, branch, fsmonitor) = tokio::join!(
                 git_output(git_path, cwd, &["--version"]),
                 git_output(git_path, cwd, &["--exec-path"]),
-                git_output(git_path, cwd, &["--build-options"]),
+                git_output(git_path, cwd, &["version", "--build-options"]),
                 git_output(git_path, cwd, &["rev-parse", "--abbrev-ref", "HEAD"]),
                 git_output(git_path, cwd, &["config", "--get", "core.fsmonitor"]),
             );
