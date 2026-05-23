@@ -955,6 +955,69 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_rejects_empty_base64_image_before_starting_turn() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        "http://localhost/unused",
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Image {
+                detail: None,
+                url: "data:image/png;base64,".to_string(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, INVALID_PARAMS_ERROR_CODE);
+    assert_eq!(
+        err.error.message,
+        "Could not attach image: empty image data."
+    );
+    let data = err.error.data.expect("expected structured error data");
+    assert_eq!(data["input_error_code"], "empty_base64_image_input");
+
+    let turn_started = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await;
+    assert!(
+        turn_started.is_err(),
+        "did not expect a turn/started notification for rejected input"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(

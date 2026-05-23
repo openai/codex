@@ -3,6 +3,7 @@ use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
 use crate::config_manager::ConfigManager;
+use crate::error_code::EMPTY_BASE64_IMAGE_INPUT_ERROR_CODE;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::invalid_params;
 use crate::models::supported_models;

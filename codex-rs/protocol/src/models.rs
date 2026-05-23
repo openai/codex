@@ -1062,6 +1062,22 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
     }
 }
 
+const EMPTY_BASE64_TOOL_IMAGE_TEXT: &str =
+    "Tool returned an empty image; skipped sending it to the model.";
+
+pub fn is_empty_base64_image_data_url(image_url: &str) -> bool {
+    let Some((metadata, payload)) = image_url.split_once(',') else {
+        return false;
+    };
+    let metadata = metadata.trim().to_ascii_lowercase();
+
+    metadata.starts_with("data:image/")
+        && metadata
+            .split(';')
+            .any(|segment| segment.trim() == "base64")
+        && payload.trim().is_empty()
+}
+
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     file_bytes: Vec<u8>,
@@ -1231,14 +1247,15 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::Image { image_url, detail } => {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
+                        let image_item = ContentItem::InputImage {
+                            image_url,
+                            detail: Some(detail),
+                        };
                         vec![
                             ContentItem::InputText {
                                 text: image_open_tag_text(),
                             },
-                            ContentItem::InputImage {
-                                image_url,
-                                detail: Some(detail),
-                            },
+                            image_item,
                             ContentItem::InputText {
                                 text: image_close_tag_text(),
                             },
@@ -1361,9 +1378,15 @@ impl From<crate::dynamic_tools::DynamicToolCallOutputContentItem>
                 Self::InputText { text }
             }
             crate::dynamic_tools::DynamicToolCallOutputContentItem::InputImage { image_url } => {
-                Self::InputImage {
-                    image_url,
-                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                if is_empty_base64_image_data_url(&image_url) {
+                    Self::InputText {
+                        text: EMPTY_BASE64_TOOL_IMAGE_TEXT.to_string(),
+                    }
+                } else {
+                    Self::InputImage {
+                        image_url,
+                        detail: Some(DEFAULT_IMAGE_DETAIL),
+                    }
                 }
             }
         }
@@ -1592,19 +1615,23 @@ fn convert_mcp_content_to_items(
                     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".into());
                     format!("data:{mime_type};base64,{data}")
                 };
-                FunctionCallOutputContentItem::InputImage {
-                    image_url,
-                    detail: meta
-                        .as_ref()
-                        .and_then(serde_json::Value::as_object)
-                        .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
-                        .and_then(serde_json::Value::as_str)
-                        .and_then(|detail| match detail {
-                            "high" => Some(ImageDetail::High),
-                            "original" => Some(ImageDetail::Original),
-                            _ => None,
-                        })
-                        .or(Some(DEFAULT_IMAGE_DETAIL)),
+                let detail = meta
+                    .as_ref()
+                    .and_then(serde_json::Value::as_object)
+                    .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|detail| match detail {
+                        "high" => Some(ImageDetail::High),
+                        "original" => Some(ImageDetail::Original),
+                        _ => None,
+                    })
+                    .or(Some(DEFAULT_IMAGE_DETAIL));
+                if is_empty_base64_image_data_url(&image_url) {
+                    FunctionCallOutputContentItem::InputText {
+                        text: EMPTY_BASE64_TOOL_IMAGE_TEXT.to_string(),
+                    }
+                } else {
+                    FunctionCallOutputContentItem::InputImage { image_url, detail }
                 }
             }
             Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
@@ -2211,6 +2238,24 @@ mod tests {
     }
 
     #[test]
+    fn empty_base64_dynamic_tool_image_output_is_replaced_with_text() -> Result<()> {
+        let item = FunctionCallOutputContentItem::from(
+            crate::dynamic_tools::DynamicToolCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,".to_string(),
+            },
+        );
+
+        assert_eq!(
+            item,
+            FunctionCallOutputContentItem::InputText {
+                text: EMPTY_BASE64_TOOL_IMAGE_TEXT.to_string(),
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn serializes_image_outputs_as_array() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![
@@ -2251,6 +2296,40 @@ mod tests {
 
         let output = v.get("output").expect("output field");
         assert!(output.is_array(), "expected array output");
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_base64_mcp_image_outputs_are_replaced_with_text() -> Result<()> {
+        for data in ["", "data:image/png;base64,"] {
+            let call_tool_result = CallToolResult {
+                content: vec![
+                    serde_json::json!({"type":"text","text":"caption"}),
+                    serde_json::json!({"type":"image","data":data,"mimeType":"image/png"}),
+                ],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            };
+
+            let payload = call_tool_result.into_function_call_output_payload();
+            assert_eq!(payload.success, Some(true));
+            let Some(items) = payload.content_items() else {
+                panic!("expected content items for {data:?}");
+            };
+            assert_eq!(
+                items,
+                [
+                    FunctionCallOutputContentItem::InputText {
+                        text: "caption".into(),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: EMPTY_BASE64_TOOL_IMAGE_TEXT.to_string(),
+                    },
+                ]
+            );
+        }
 
         Ok(())
     }

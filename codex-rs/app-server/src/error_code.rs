@@ -5,6 +5,7 @@ pub(crate) const METHOD_NOT_FOUND_ERROR_CODE: i64 = -32601;
 pub const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 pub(crate) const INTERNAL_ERROR_CODE: i64 = -32603;
 pub(crate) const OVERLOADED_ERROR_CODE: i64 = -32001;
+pub(crate) const EMPTY_BASE64_IMAGE_INPUT_ERROR_CODE: &str = "empty_base64_image_input";
 pub const INPUT_TOO_LARGE_ERROR_CODE: &str = "input_too_large";
 
 pub(crate) fn invalid_request(message: impl Into<String>) -> JSONRPCErrorError {

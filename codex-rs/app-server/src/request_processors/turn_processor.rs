@@ -46,6 +46,14 @@ struct ThreadSettingsBuildParams {
     personality: Option<Personality>,
 }
 
+fn is_empty_base64_image_input(item: &V2UserInput) -> bool {
+    matches!(
+        item,
+        V2UserInput::Image { url, .. }
+            if codex_protocol::models::is_empty_base64_image_data_url(url)
+    )
+}
+
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -344,6 +352,14 @@ impl TurnRequestProcessor {
         error
     }
 
+    fn empty_base64_image_input_error() -> JSONRPCErrorError {
+        let mut error = invalid_params("Could not attach image: empty image data.");
+        error.data = Some(serde_json::json!({
+            "input_error_code": EMPTY_BASE64_IMAGE_INPUT_ERROR_CODE,
+        }));
+        error
+    }
+
     fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
         let actual_chars: usize = items.iter().map(V2UserInput::text_char_count).sum();
         if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
@@ -365,6 +381,11 @@ impl TurnRequestProcessor {
                 &error,
                 Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
             );
+            return Err(error);
+        }
+        if params.input.iter().any(is_empty_base64_image_input) {
+            let error = Self::empty_base64_image_input_error();
+            self.track_error_response(&request_id, &error, /*error_type*/ None);
             return Err(error);
         }
         let (thread_id, thread) =
@@ -738,6 +759,11 @@ impl TurnRequestProcessor {
                 &error,
                 Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
             );
+            return Err(error);
+        }
+        if params.input.iter().any(is_empty_base64_image_input) {
+            let error = Self::empty_base64_image_input_error();
+            self.track_error_response(request_id, &error, /*error_type*/ None);
             return Err(error);
         }
 
