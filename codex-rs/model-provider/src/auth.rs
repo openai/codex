@@ -83,6 +83,10 @@ pub(crate) fn resolve_provider_auth(
         return Ok(Arc::new(auth));
     }
 
+    if !provider.requires_openai_auth {
+        return Ok(unauthenticated_auth_provider());
+    }
+
     Ok(match auth {
         Some(auth) => auth_provider_from_auth(auth),
         None => unauthenticated_auth_provider(),
@@ -131,6 +135,18 @@ mod tests {
         let provider =
             create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
         let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
+
+        assert!(auth.to_auth_headers().is_empty());
+    }
+
+    #[test]
+    fn provider_without_openai_auth_ignores_global_chatgpt_auth() {
+        let provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        let chatgpt_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let auth =
+            resolve_provider_auth(Some(&chatgpt_auth), &provider).expect("auth should resolve");
 
         assert!(auth.to_auth_headers().is_empty());
     }
