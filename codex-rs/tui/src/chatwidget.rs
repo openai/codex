@@ -1758,6 +1758,7 @@ impl ChatWidget {
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
         self.config.terminal_resize_reflow = config.terminal_resize_reflow;
+        self.marketplace_action_overrides.clear();
         self.sync_mentions_v2_enabled();
     }
 

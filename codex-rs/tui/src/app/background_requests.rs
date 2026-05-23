@@ -5,7 +5,7 @@
 //! the main event loop remains single-threaded.
 
 use super::plugin_mentions::fetch_plugin_mentions;
-use super::plugin_mentions::fetch_plugin_mentions_from_server_list;
+use super::plugin_mentions::fetch_plugin_mentions_from_app_server_details;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
 use codex_app_server_protocol::AppsListParams;
@@ -396,8 +396,11 @@ impl App {
 
         tokio::spawn(async move {
             let result = if uses_remote_workspace {
-                fetch_plugin_mentions_from_server_list(request_handle, config.cwd.to_path_buf())
-                    .await
+                fetch_plugin_mentions_from_app_server_details(
+                    request_handle,
+                    config.cwd.to_path_buf(),
+                )
+                .await
             } else {
                 fetch_plugin_mentions(request_handle, config).await
             };
