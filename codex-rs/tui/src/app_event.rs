@@ -24,6 +24,7 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::ReviewStorySnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_file_search::FileMatch;
@@ -885,12 +886,18 @@ pub(crate) enum AppEvent {
 
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
+    OpenReviewStoryPopup,
+    OpenReviewStoryBranchPicker(PathBuf),
 
     /// Open the commit picker option from the review popup.
     OpenReviewCommitPicker(PathBuf),
+    OpenReviewStoryCommitPicker(PathBuf),
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Open the review story overlay for a freshly generated snapshot.
+    ReviewStoryReady(ReviewStorySnapshot),
 
     /// Submit a user message with an explicit collaboration mask.
     SubmitUserMessageWithMode {

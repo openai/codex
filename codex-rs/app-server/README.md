@@ -167,6 +167,7 @@ Example with notification opt-out:
 - `thread/realtime/appendText` — append text input to the active realtime session (experimental); returns `{}`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `reviewStory/start` — build a persisted, read-only review story for a concrete source (`uncommittedChanges`, `baseBranch`, or `commit`). Codex collects stable change anchors from the diff, asks a constrained model task to group those anchors into cohesive story steps, validates that every model-referenced anchor exists, and falls back to file-level steps if model generation is unavailable. The response includes the initial `storySnapshot`, and the server emits `reviewStory/snapshot/updated` whenever a snapshot is written. Use `reviewStory/read` to fetch a snapshot by id and `reviewStory/list` to page saved stories for a thread.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.

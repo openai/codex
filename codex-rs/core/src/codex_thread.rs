@@ -1,4 +1,6 @@
 use crate::agent::AgentStatus;
+use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
@@ -11,6 +13,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -23,10 +26,12 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
@@ -41,11 +46,13 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use codex_rollout::state_db::StateDbHandle;
 
@@ -500,6 +507,68 @@ impl CodexThread {
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
+    }
+
+    /// Run a short-lived model task that produces structured JSON for a caller-owned workflow.
+    ///
+    /// This keeps app-server features from needing to know how to spawn sub-agents while still
+    /// reusing the same constrained delegate machinery as review mode.
+    pub async fn run_structured_model_task(
+        &self,
+        prompt: String,
+        base_instructions: String,
+        final_output_json_schema: Value,
+        subagent_source: SubAgentSource,
+    ) -> CodexResult<Option<String>> {
+        let ctx = self
+            .codex
+            .session
+            .new_default_turn_with_sub_id(format!("structured-task-{}", uuid::Uuid::now_v7()))
+            .await;
+        let mut sub_agent_config = ctx.config.as_ref().clone();
+        if let Err(err) = sub_agent_config
+            .web_search_mode
+            .set(WebSearchMode::Disabled)
+        {
+            panic!(
+                "by construction Constrained<WebSearchMode> must always support Disabled: {err}"
+            );
+        }
+        let _ = sub_agent_config.features.disable(Feature::SpawnCsv);
+        let _ = sub_agent_config.features.disable(Feature::Collab);
+        let _ = sub_agent_config.features.disable(Feature::MultiAgentV2);
+        sub_agent_config.permissions.approval_policy =
+            Constrained::allow_only(AskForApproval::Never);
+        sub_agent_config.base_instructions = Some(base_instructions);
+        let input = vec![UserInput::Text {
+            text: prompt,
+            text_elements: Vec::new(),
+        }];
+        let io = run_codex_thread_one_shot(
+            sub_agent_config,
+            Arc::clone(&self.codex.session.services.auth_manager),
+            Arc::clone(&self.codex.session.services.models_manager),
+            input,
+            Arc::clone(&self.codex.session),
+            ctx,
+            CancellationToken::new(),
+            subagent_source,
+            Some(final_output_json_schema),
+            /*initial_history*/ None,
+        )
+        .await?;
+        while let Ok(event) = io.next_event().await {
+            match event.msg {
+                EventMsg::TurnComplete(turn_complete) => {
+                    return Ok(turn_complete.last_agent_message);
+                }
+                EventMsg::TurnAborted(_) => {
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied

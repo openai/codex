@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "storySnapshotId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "storySnapshotId",
+    "threadId"
+  ],
+  "title": "ReviewStoryReadParams",
+  "type": "object"
+}

@@ -654,6 +654,14 @@ impl App {
                 app_server.review_start(thread_id, target.clone()).await?;
                 Ok(true)
             }
+            AppCommand::ReviewStory { target } => {
+                let response = app_server
+                    .review_story_start(thread_id, target.clone())
+                    .await?;
+                self.app_event_tx
+                    .send(AppEvent::ReviewStoryReady(response.snapshot));
+                Ok(true)
+            }
             AppCommand::CleanBackgroundTerminals => {
                 app_server
                     .thread_background_terminals_clean(thread_id)

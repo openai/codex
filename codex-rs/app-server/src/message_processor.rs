@@ -31,6 +31,7 @@ use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
 use crate::request_processors::ProcessExecRequestProcessor;
 use crate::request_processors::RemoteControlRequestProcessor;
+use crate::request_processors::ReviewStoryRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
@@ -177,6 +178,7 @@ pub(crate) struct MessageProcessor {
     mcp_processor: McpRequestProcessor,
     plugin_processor: PluginRequestProcessor,
     remote_control_processor: RemoteControlRequestProcessor,
+    review_story_processor: ReviewStoryRequestProcessor,
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_processor: ThreadRequestProcessor,
@@ -402,6 +404,11 @@ impl MessageProcessor {
             workspace_settings_cache,
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
+        let review_story_processor = ReviewStoryRequestProcessor::new(
+            Arc::clone(&thread_manager),
+            outgoing.clone(),
+            state_db.clone(),
+        );
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
@@ -498,6 +505,7 @@ impl MessageProcessor {
             mcp_processor,
             plugin_processor,
             remote_control_processor,
+            review_story_processor,
             search_processor,
             thread_goal_processor,
             thread_processor,
@@ -1221,6 +1229,15 @@ impl MessageProcessor {
             }
             ClientRequest::ReviewStart { params, .. } => {
                 self.turn_processor.review_start(&request_id, params).await
+            }
+            ClientRequest::ReviewStoryStart { params, .. } => {
+                self.review_story_processor.start(&request_id, params).await
+            }
+            ClientRequest::ReviewStoryRead { params, .. } => {
+                self.review_story_processor.read(params).await
+            }
+            ClientRequest::ReviewStoryList { params, .. } => {
+                self.review_story_processor.list(params).await
             }
             ClientRequest::McpServerOauthLogin { params, .. } => {
                 self.mcp_processor.mcp_server_oauth_login(params).await

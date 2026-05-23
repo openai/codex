@@ -7,6 +7,17 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
+            name: "Create review story".to_string(),
+            description: Some("Step-by-step walkthrough".into()),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenReviewStoryPopup);
+            })],
+            dismiss_on_select: false,
+            dismiss_parent_on_child_accept: true,
+            ..Default::default()
+        });
+
+        items.push(SelectionItem {
             name: "Review against a base branch".to_string(),
             description: Some("(PR Style)".into()),
             actions: vec![Box::new({
@@ -60,6 +71,53 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_review_story_popup(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        items.push(SelectionItem {
+            name: "Story against a base branch".to_string(),
+            description: Some("(PR Style)".into()),
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.to_path_buf();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewStoryBranchPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            dismiss_parent_on_child_accept: true,
+            ..Default::default()
+        });
+
+        items.push(SelectionItem {
+            name: "Story for uncommitted changes".to_string(),
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.review_story(ReviewTarget::UncommittedChanges);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        items.push(SelectionItem {
+            name: "Story for a commit".to_string(),
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.to_path_buf();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewStoryCommitPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            dismiss_parent_on_child_accept: true,
+            ..Default::default()
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select a review story source".into()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
         let branches = local_git_branches(cwd).await;
         let current_branch = current_branch_name(cwd)
@@ -73,6 +131,38 @@ impl ChatWidget {
                 name: format!("{current_branch} -> {branch}"),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     tx3.review(ReviewTarget::BaseBranch {
+                        branch: branch.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                search_value: Some(option),
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select a base branch".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search branches".to_string()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_story_branch_picker(&mut self, cwd: &Path) {
+        let branches = local_git_branches(cwd).await;
+        let current_branch = current_branch_name(cwd)
+            .await
+            .unwrap_or_else(|| "(detached HEAD)".to_string());
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(branches.len());
+
+        for option in branches {
+            let branch = option.clone();
+            items.push(SelectionItem {
+                name: format!("{current_branch} -> {branch}"),
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    tx3.review_story(ReviewTarget::BaseBranch {
                         branch: branch.clone(),
                     });
                 })],
@@ -117,6 +207,39 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select a commit to review".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search commits".to_string()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_story_commit_picker(&mut self, cwd: &Path) {
+        let commits = recent_commits(cwd, /*limit*/ 100).await;
+
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
+        for entry in commits {
+            let subject = entry.subject.clone();
+            let sha = entry.sha.clone();
+            let search_val = format!("{subject} {sha}");
+
+            items.push(SelectionItem {
+                name: subject.clone(),
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    tx3.review_story(ReviewTarget::Commit {
+                        sha: sha.clone(),
+                        title: Some(subject.clone()),
+                    });
+                })],
+                dismiss_on_select: true,
+                search_value: Some(search_val),
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select a commit for the story".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,

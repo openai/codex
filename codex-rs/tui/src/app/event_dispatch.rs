@@ -1835,11 +1835,28 @@ impl App {
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
             }
+            AppEvent::OpenReviewStoryPopup => {
+                self.chat_widget.open_review_story_popup();
+            }
+            AppEvent::OpenReviewStoryBranchPicker(cwd) => {
+                self.chat_widget.show_review_story_branch_picker(&cwd).await;
+            }
             AppEvent::OpenReviewCommitPicker(cwd) => {
                 self.chat_widget.show_review_commit_picker(&cwd).await;
             }
+            AppEvent::OpenReviewStoryCommitPicker(cwd) => {
+                self.chat_widget.show_review_story_commit_picker(&cwd).await;
+            }
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::ReviewStoryReady(snapshot) => {
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_static_with_lines(
+                    review_story_overlay_lines(snapshot),
+                    "R E V I E W   S T O R Y".to_string(),
+                    self.keymap.pager.clone(),
+                ));
             }
             AppEvent::SubmitUserMessageWithMode {
                 text,
@@ -2210,5 +2227,70 @@ impl App {
                 AppRunControl::Exit(ExitReason::UserRequested)
             }
         }
+    }
+}
+
+fn review_story_overlay_lines(
+    snapshot: codex_app_server_protocol::ReviewStorySnapshot,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(snapshot.title.bold().into());
+    lines.push(Line::from(""));
+    push_plain(&mut lines, "Overview", snapshot.overview.as_str());
+    lines.push(Line::from(vec![
+        "Source fingerprint: ".dim(),
+        snapshot.source_fingerprint.dim(),
+    ]));
+    lines.push(Line::from(""));
+
+    for step in snapshot.steps {
+        lines.push(Line::from(vec![
+            format!("{}. ", step.index).cyan().bold(),
+            step.title.bold(),
+        ]));
+        push_plain(&mut lines, "Goal", step.goal.as_str());
+        push_plain(&mut lines, "Summary", step.summary.as_str());
+        if !step.dependency_rationale.is_empty() {
+            push_plain(&mut lines, "Order", step.dependency_rationale.as_str());
+        }
+        if !step.review_focus.is_empty() {
+            lines.push("Focus".bold().into());
+            for focus in step.review_focus {
+                lines.push(Line::from(vec!["  - ".dim(), focus.into()]));
+            }
+        }
+        for anchor_id in step.anchor_ids {
+            if let Some(anchor) = snapshot
+                .anchors
+                .iter()
+                .find(|candidate| candidate.anchor_id == anchor_id)
+            {
+                lines.push(Line::from(vec![
+                    "Change ".bold(),
+                    anchor.anchor_id.clone().cyan(),
+                    ": ".into(),
+                    anchor.file_path.clone().into(),
+                ]));
+                if !anchor.summary.is_empty() {
+                    lines.push(Line::from(vec!["  ".into(), anchor.summary.clone().into()]));
+                }
+                for diff_line in anchor.diff.lines() {
+                    lines.push(diff_line.to_string().dim().into());
+                }
+            }
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines
+}
+
+fn push_plain(lines: &mut Vec<Line<'static>>, label: &str, text: &str) {
+    if text.trim().is_empty() {
+        return;
+    }
+    lines.push(label.to_string().bold().into());
+    for wrapped in textwrap::wrap(text, /*width*/ 100) {
+        lines.push(Line::from(wrapped.into_owned()));
     }
 }

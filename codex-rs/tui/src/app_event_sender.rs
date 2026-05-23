@@ -59,6 +59,10 @@ impl AppEventSender {
         self.send(AppEvent::CodexOp(AppCommand::review(target)));
     }
 
+    pub(crate) fn review_story(&self, target: ReviewTarget) {
+        self.send(AppEvent::CodexOp(AppCommand::review_story(target)));
+    }
+
     pub(crate) fn list_skills(&self, cwds: Vec<PathBuf>, force_reload: bool) {
         self.send(AppEvent::CodexOp(AppCommand::list_skills(
             cwds,

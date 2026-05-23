@@ -2671,6 +2671,61 @@
       ],
       "type": "object"
     },
+    "ReviewStoryListParams": {
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ReviewStoryReadParams": {
+      "properties": {
+        "storySnapshotId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "storySnapshotId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ReviewStoryStartParams": {
+      "properties": {
+        "target": {
+          "$ref": "#/definitions/ReviewTarget"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ReviewTarget": {
       "oneOf": [
         {
@@ -5423,6 +5478,78 @@
         "params"
       ],
       "title": "Review/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "reviewStory/start"
+          ],
+          "title": "ReviewStory/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ReviewStoryStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ReviewStory/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "reviewStory/read"
+          ],
+          "title": "ReviewStory/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ReviewStoryReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ReviewStory/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "reviewStory/list"
+          ],
+          "title": "ReviewStory/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ReviewStoryListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ReviewStory/listRequest",
       "type": "object"
     },
     {
