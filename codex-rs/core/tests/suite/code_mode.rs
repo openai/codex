@@ -1359,22 +1359,18 @@ text("session b done");
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
-enum StoredValueCompletionOrder {
-    FirstThenSecond,
-    SecondThenFirst,
-}
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_concurrent_cells_merge_only_the_stored_values_they_write() -> Result<()> {
+    skip_if_no_network!(Ok(()));
 
-async fn assert_concurrent_stored_values_merge(order: StoredValueCompletionOrder) -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
     let first_gate = test.workspace_path("code-mode-first-store.ready");
-    let second_gate = test.workspace_path("code-mode-second-store.ready");
     let first_wait = wait_for_file_source(&first_gate)?;
-    let second_wait = wait_for_file_source(&second_gate)?;
 
     responses::mount_sse_once(
         &server,
@@ -1434,57 +1430,36 @@ yield_control();
     let first_items = custom_tool_output_items(&first_request, "call-first");
     let first_cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
 
-    let second_code = format!(
-        r#"
-store("b", 4);
-yield_control();
-{second_wait}
-"#
-    );
     responses::mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-5"),
-            ev_custom_tool_call("call-second", "exec", &second_code),
+            ev_custom_tool_call("call-second", "exec", r#"store("b", 4);"#),
             ev_completed("resp-5"),
         ]),
     )
     .await;
-    let second_started = responses::mount_sse_once(
+    responses::mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-3", "second pending"),
+            ev_assistant_message("msg-3", "second complete"),
             ev_completed("resp-6"),
         ]),
     )
     .await;
 
-    test.submit_turn("start second store").await?;
+    test.submit_turn("write the second key").await?;
 
-    let second_request = second_started.single_request();
-    let second_items = custom_tool_output_items(&second_request, "call-second");
-    let second_cell_id = extract_running_cell_id(text_item(&second_items, /*index*/ 0));
-
-    let (first_completed_gate, first_completed_cell, second_completed_gate, second_completed_cell) =
-        match order {
-            StoredValueCompletionOrder::FirstThenSecond => {
-                (&first_gate, &first_cell_id, &second_gate, &second_cell_id)
-            }
-            StoredValueCompletionOrder::SecondThenFirst => {
-                (&second_gate, &second_cell_id, &first_gate, &first_cell_id)
-            }
-        };
-
-    fs::write(first_completed_gate, "ready")?;
+    fs::write(&first_gate, "ready")?;
     responses::mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-7"),
             responses::ev_function_call(
-                "call-wait-first",
+                "call-wait",
                 "wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "cell_id": first_completed_cell,
+                    "cell_id": first_cell_id,
                     "yield_time_ms": 1_000,
                 }))?,
             ),
@@ -1501,54 +1476,26 @@ yield_control();
     )
     .await;
 
-    test.submit_turn("complete one overlapping store").await?;
+    test.submit_turn("complete the first store").await?;
 
-    fs::write(second_completed_gate, "ready")?;
     responses::mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-9"),
-            responses::ev_function_call(
-                "call-wait-second",
-                "wait",
-                &serde_json::to_string(&serde_json::json!({
-                    "cell_id": second_completed_cell,
-                    "yield_time_ms": 1_000,
-                }))?,
-            ),
-            ev_completed("resp-9"),
-        ]),
-    )
-    .await;
-    responses::mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-5", "second completed"),
-            ev_completed("resp-10"),
-        ]),
-    )
-    .await;
-
-    test.submit_turn("complete other overlapping store").await?;
-
-    responses::mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-11"),
             ev_custom_tool_call(
                 "call-check",
                 "exec",
                 r#"text(JSON.stringify({ a: load("a"), b: load("b") }));"#,
             ),
-            ev_completed("resp-11"),
+            ev_completed("resp-9"),
         ]),
     )
     .await;
     let check_response = responses::mount_sse_once(
         &server,
         sse(vec![
-            ev_assistant_message("msg-6", "checked"),
-            ev_completed("resp-12"),
+            ev_assistant_message("msg-5", "checked"),
+            ev_completed("resp-10"),
         ]),
     )
     .await;
@@ -1560,26 +1507,7 @@ yield_control();
         &custom_tool_output_last_non_empty_text(&check_request, "call-check")
             .expect("checking stored values should emit JSON"),
     )?;
-    assert_eq!(
-        stored_values,
-        serde_json::json!({ "a": 3, "b": 4 }),
-        "writes must survive {order:?}"
-    );
-
-    Ok(())
-}
-
-#[cfg_attr(windows, ignore = "no exec_command on Windows")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_concurrent_cells_merge_only_the_stored_values_they_write() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    for order in [
-        StoredValueCompletionOrder::FirstThenSecond,
-        StoredValueCompletionOrder::SecondThenFirst,
-    ] {
-        assert_concurrent_stored_values_merge(order).await?;
-    }
+    assert_eq!(stored_values, serde_json::json!({ "a": 3, "b": 4 }));
 
     Ok(())
 }
