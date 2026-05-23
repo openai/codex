@@ -242,6 +242,46 @@ async fn function_hook_input_defaults_empty_arguments_to_object() {
 }
 
 #[tokio::test]
+async fn spawn_agent_function_tools_use_agent_matcher_alias() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let hook_payloads = [
+        codex_tools::ToolName::plain("spawn_agent"),
+        codex_tools::ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "spawn_agent"),
+    ]
+    .into_iter()
+    .map(|tool_name| {
+        let handler = TestHandler {
+            tool_name: tool_name.clone(),
+        };
+        let invocation = ToolInvocation {
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({ "message": "inspect this repo" }).to_string(),
+            },
+            ..test_invocation(Arc::clone(&session), Arc::clone(&turn), "call-1", tool_name)
+        };
+        handler.pre_tool_use_payload(&invocation)
+    })
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        hook_payloads,
+        vec![
+            Some(PreToolUsePayload {
+                tool_name: HookToolName::spawn_agent(),
+                tool_input: serde_json::json!({ "message": "inspect this repo" }),
+            }),
+            Some(PreToolUsePayload {
+                tool_name: HookToolName::spawn_agent(),
+                tool_input: serde_json::json!({ "message": "inspect this repo" }),
+            }),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn code_mode_wait_does_not_expose_default_hook_payloads() {
     let (session, turn) = crate::session::tests::make_session_and_context().await;
     let output = crate::tools::context::FunctionToolOutput::from_text("ok".to_string(), Some(true));
