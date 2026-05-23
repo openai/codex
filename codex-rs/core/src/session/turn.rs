@@ -142,25 +142,18 @@ pub(crate) async fn run_turn(
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    let pre_sampling_compact =
-        match run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
-            Ok(pre_sampling_compact) => pre_sampling_compact,
-            Err(err) => {
-                if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
-                    && let Err(err) = sess
-                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                            turn_context: turn_context.as_ref(),
-                        })
-                        .await
-                {
-                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
-                }
-                error!("Failed to run pre-sampling compact");
-                return None;
-            }
-        };
-    if pre_sampling_compact.reset_client_session {
-        client_session.reset_websocket_session();
+    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
+        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+            && let Err(err) = sess
+                .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                    turn_context: turn_context.as_ref(),
+                })
+                .await
+        {
+            warn!("failed to usage-limit active goal after usage-limit error: {err}");
+        }
+        error!("Failed to run pre-sampling compact");
+        return None;
     }
 
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
@@ -287,7 +280,7 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    let reset_client_session = match run_auto_compact(
+                    if let Err(err) = run_auto_compact(
                         &sess,
                         &turn_context,
                         &mut client_session,
@@ -297,24 +290,18 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        Ok(reset_client_session) => reset_client_session,
-                        Err(err) => {
-                            if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
-                                && let Err(err) = sess
-                                    .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                                        turn_context: turn_context.as_ref(),
-                                    })
-                                    .await
-                            {
-                                warn!(
-                                    "failed to usage-limit active goal after usage-limit error: {err}"
-                                );
-                            }
-                            return None;
+                        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                            && let Err(err) = sess
+                                .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+                                    turn_context: turn_context.as_ref(),
+                                })
+                                .await
+                        {
+                            warn!(
+                                "failed to usage-limit active goal after usage-limit error: {err}"
+                            );
                         }
-                    };
-                    if reset_client_session {
-                        client_session.reset_websocket_session();
+                        return None;
                     }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
@@ -636,10 +623,6 @@ async fn track_turn_resolved_config_analytics(
         });
 }
 
-struct PreSamplingCompactResult {
-    reset_client_session: bool,
-}
-
 #[derive(Debug)]
 struct AutoCompactTokenStatus {
     // Full active context usage, independent of the configured auto-compact scope.
@@ -710,14 +693,12 @@ async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
-) -> CodexResult<PreSamplingCompactResult> {
-    let mut pre_sampling_compacted =
-        maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
-    let mut reset_client_session = pre_sampling_compacted;
+) -> CodexResult<()> {
+    maybe_run_previous_model_inline_compact(sess, turn_context, client_session).await?;
     let token_status = auto_compact_token_status(sess.as_ref(), turn_context.as_ref()).await;
     // Compact if the configured auto-compaction budget or usable context window is exhausted.
     if token_status.token_limit_reached {
-        reset_client_session |= run_auto_compact(
+        run_auto_compact(
             sess,
             turn_context,
             client_session,
@@ -726,26 +707,21 @@ async fn run_pre_sampling_compact(
             CompactionPhase::PreTurn,
         )
         .await?;
-        pre_sampling_compacted = true;
     }
-    Ok(PreSamplingCompactResult {
-        reset_client_session: pre_sampling_compacted && reset_client_session,
-    })
+    Ok(())
 }
 
 /// Runs pre-sampling compaction against the previous model when switching to a smaller
 /// context-window model.
 ///
-/// Returns `Ok(true)` when compaction ran successfully, `Ok(false)` when compaction was skipped
-/// because the model/context-window preconditions were not met, and `Err(_)` only when compaction
-/// was attempted and failed.
+/// Returns `Err(_)` only when compaction was attempted and failed.
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
-) -> CodexResult<bool> {
+) -> CodexResult<()> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
-        return Ok(false);
+        return Ok(());
     };
     let previous_model_turn_context = Arc::new(
         turn_context
@@ -754,10 +730,10 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
-        return Ok(false);
+        return Ok(());
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(false);
+        return Ok(());
     };
     let active_context_tokens = sess.get_total_token_usage().await;
     let previous_model_limit_reached = match turn_context
@@ -778,7 +754,7 @@ async fn maybe_run_previous_model_inline_compact(
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {
-        let _ = run_auto_compact(
+        run_auto_compact(
             sess,
             &previous_model_turn_context,
             client_session,
@@ -787,9 +763,8 @@ async fn maybe_run_previous_model_inline_compact(
             CompactionPhase::PreTurn,
         )
         .await?;
-        return Ok(true);
     }
-    Ok(false)
+    Ok(())
 }
 
 async fn run_auto_compact(
@@ -799,7 +774,7 @@ async fn run_auto_compact(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
-) -> CodexResult<bool> {
+) -> CodexResult<()> {
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context.features.enabled(Feature::RemoteCompactionV2) {
             run_inline_remote_auto_compact_task_v2(
@@ -811,7 +786,7 @@ async fn run_auto_compact(
                 phase,
             )
             .await?;
-            return Ok(false);
+            return Ok(());
         }
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
@@ -831,7 +806,7 @@ async fn run_auto_compact(
         )
         .await?;
     }
-    Ok(true)
+    Ok(())
 }
 
 pub(super) fn collect_explicit_app_ids_from_skill_items(
