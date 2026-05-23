@@ -25,6 +25,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_rollout_trace::InferenceTraceContext;
@@ -175,17 +176,37 @@ pub(crate) async fn suggest_next_prompt(
                 token_usage,
                 ..
             } => {
+                let should_emit_token_count = token_usage.is_some() || latest_rate_limits.is_some();
                 sess.record_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
-                if let Some(rate_limits) = latest_rate_limits {
-                    sess.send_event(
-                        &turn_context,
-                        EventMsg::TokenCount(TokenCountEvent {
-                            info: None,
-                            rate_limits: Some(rate_limits),
-                        }),
-                    )
-                    .await;
+                if should_emit_token_count {
+                    let token_usage_info = sess.token_usage_info().await;
+                    // App-server clients key usage updates by turn id. Attribute hidden
+                    // suggestion sampling to the latest real turn instead of the ephemeral
+                    // lightweight turn used to configure the request.
+                    if let Some(turn_id) = sess
+                        .reference_context_item()
+                        .await
+                        .and_then(|item| item.turn_id)
+                    {
+                        sess.send_event_raw(Event {
+                            id: turn_id,
+                            msg: EventMsg::TokenCount(TokenCountEvent {
+                                info: token_usage_info,
+                                rate_limits: latest_rate_limits,
+                            }),
+                        })
+                        .await;
+                    } else if let Some(rate_limits) = latest_rate_limits {
+                        sess.send_event(
+                            &turn_context,
+                            EventMsg::TokenCount(TokenCountEvent {
+                                info: None,
+                                rate_limits: Some(rate_limits),
+                            }),
+                        )
+                        .await;
+                    }
                 }
                 break response_id;
             }
