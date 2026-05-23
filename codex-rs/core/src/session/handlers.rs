@@ -260,7 +260,7 @@ pub(super) async fn user_input_or_turn_inner(
             if !items.is_empty() {
                 task_input.push(TurnInput::UserInput(items));
             }
-            sess.spawn_task_with_input(
+            sess.spawn_task(
                 Arc::clone(&current_context),
                 task_input,
                 crate::tasks::RegularTask::new(),

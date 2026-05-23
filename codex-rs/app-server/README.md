@@ -158,9 +158,9 @@ Example with notification opt-out:
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Experimental `additionalContext` supplies hidden model-visible user context as arbitrary key/value entries. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; relative paths resolve against the effective turn cwd. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; relative paths resolve against the effective turn cwd. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
-- `turn/steer` — add user input or experimental hidden `additionalContext` to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
+- `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
@@ -643,10 +643,6 @@ You can optionally specify config overrides on the new turn. If specified, these
 { "method": "turn/start", "id": 30, "params": {
     "threadId": "thr_123",
     "input": [ { "type": "text", "text": "Run tests" } ],
-    // Experimental hidden client context, keyed by the client.
-    "additionalContext": {
-        "browser_info": { "value": "Active tab is CI failures." }
-    },
     // Below are optional config overrides
     "cwd": "/Users/me/project",
     // Experimental: turn-scoped environment selection.
@@ -838,18 +834,13 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 
 ### Example: Steer an active turn
 
-Use `turn/steer` to append additional user input or experimental hidden `additionalContext` to the
-currently active regular turn. A context-only steer is accepted when it contributes at least one
-new retained key/value entry. This does not emit `turn/started` and does not accept thread settings
-overrides.
+Use `turn/steer` to append additional user input to the currently active regular turn. This does
+not emit `turn/started` and does not accept thread settings overrides.
 
 ```json
 { "method": "turn/steer", "id": 32, "params": {
     "threadId": "thr_123",
     "input": [ { "type": "text", "text": "Actually focus on failing tests first." } ],
-    "additionalContext": {
-        "automation_info": { "value": "CI rerun is in progress." }
-    },
     "expectedTurnId": "turn_456"
 } }
 { "id": 32, "result": { "turnId": "turn_456" } }

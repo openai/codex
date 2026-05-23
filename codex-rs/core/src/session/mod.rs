@@ -3197,21 +3197,14 @@ impl Session {
             None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
-        let (additional_context_input, additional_context_store) = {
-            let mut additional_context_store = {
-                let state = self.state.lock().await;
-                state.additional_context.clone()
-            };
-            let fragments = additional_context_store.merge(additional_context);
-            (fragments, additional_context_store)
-        };
-        if input.is_empty() && additional_context_input.is_empty() {
+        if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
         }
-        {
+
+        let additional_context_input = {
             let mut state = self.state.lock().await;
-            state.additional_context = additional_context_store;
-        }
+            state.additional_context.merge(additional_context)
+        };
 
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
             && let Some((_, active_task)) = active_turn.tasks.first()
@@ -3226,9 +3219,7 @@ impl Session {
             .into_iter()
             .map(TurnInput::ResponseInputItem)
             .collect::<Vec<_>>();
-        if !input.is_empty() {
-            pending_input.push(TurnInput::UserInput(input));
-        }
+        pending_input.push(TurnInput::UserInput(input));
         self.input_queue
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 active_turn.turn_state.as_ref(),

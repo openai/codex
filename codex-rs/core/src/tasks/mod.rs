@@ -50,7 +50,6 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
-use codex_protocol::user_input::UserInput;
 
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
@@ -297,26 +296,8 @@ where
     }
 }
 
-fn user_input_to_turn_input(input: Vec<UserInput>) -> Vec<TurnInput> {
-    if input.is_empty() {
-        Vec::new()
-    } else {
-        vec![TurnInput::UserInput(input)]
-    }
-}
-
 impl Session {
     pub async fn spawn_task<T: SessionTask>(
-        self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
-        input: Vec<UserInput>,
-        task: T,
-    ) {
-        let input = user_input_to_turn_input(input);
-        self.spawn_task_with_input(turn_context, input, task).await;
-    }
-
-    pub(crate) async fn spawn_task_with_input<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
@@ -324,20 +305,10 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.start_task_with_input(turn_context, input, task).await;
+        self.start_task(turn_context, input, task).await;
     }
 
     pub(crate) async fn start_task<T: SessionTask>(
-        self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
-        input: Vec<UserInput>,
-        task: T,
-    ) {
-        let input = user_input_to_turn_input(input);
-        self.start_task_with_input(turn_context, input, task).await;
-    }
-
-    pub(crate) async fn start_task_with_input<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
