@@ -506,8 +506,6 @@ impl App {
                 self.chat_widget
                     .on_marketplace_add_loaded(cwd.clone(), source, result);
                 if add_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
-                    self.refresh_plugin_config_best_effort(app_server, "marketplace add")
-                        .await;
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }
@@ -551,8 +549,6 @@ impl App {
                 );
                 if remove_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
                 {
-                    self.refresh_plugin_config_best_effort(app_server, "marketplace remove")
-                        .await;
                     self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(AppCommand::reload_user_config());
                     self.fetch_plugins_list(app_server, cwd);
@@ -601,8 +597,6 @@ impl App {
             } => {
                 let install_succeeded = result.is_ok();
                 if install_succeeded {
-                    self.refresh_plugin_config_best_effort(app_server, "plugin install")
-                        .await;
                     self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(AppCommand::reload_user_config());
                 }
@@ -656,8 +650,6 @@ impl App {
                     self.pending_plugin_enabled_writes.remove(&plugin_id);
                     let update_succeeded = result.is_ok();
                     if update_succeeded {
-                        self.refresh_plugin_config_best_effort(app_server, "plugin toggle")
-                            .await;
                         self.chat_widget.refresh_plugin_mentions();
                         self.chat_widget.submit_op(AppCommand::reload_user_config());
                     }
@@ -1319,8 +1311,6 @@ impl App {
             } => {
                 let uninstall_succeeded = result.is_ok();
                 if uninstall_succeeded {
-                    self.refresh_plugin_config_best_effort(app_server, "plugin uninstall")
-                        .await;
                     self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(AppCommand::reload_user_config());
                 }

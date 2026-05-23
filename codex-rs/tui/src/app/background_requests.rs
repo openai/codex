@@ -384,16 +384,17 @@ impl App {
     }
 
     pub(super) fn refresh_plugin_mentions(&mut self, app_server: &AppServerSession) {
-        let config = self.config.clone();
+        let plugins_enabled = self.config.features.enabled(Feature::Plugins);
+        let cwd = self.config.cwd.to_path_buf();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        if !config.features.enabled(Feature::Plugins) {
+        if !plugins_enabled {
             app_event_tx.send(AppEvent::PluginMentionsLoaded { plugins: None });
             return;
         }
 
         tokio::spawn(async move {
-            match fetch_plugin_mentions(request_handle, config).await {
+            match fetch_plugin_mentions(request_handle, cwd).await {
                 Ok(plugins) => {
                     app_event_tx.send(AppEvent::PluginMentionsLoaded {
                         plugins: Some(plugins),
