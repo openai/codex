@@ -2430,8 +2430,6 @@ dependencies = [
 name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
- "async-channel",
- "async-trait",
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",
