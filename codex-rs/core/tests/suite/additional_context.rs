@@ -116,6 +116,56 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_context_like_user_text_remains_a_user_message_item() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| config.include_environment_context = false)
+        .build(&server)
+        .await?;
+    let user_input = UserInput::Text {
+        text: "<external_api>".to_string(),
+        text_elements: Vec::new(),
+    };
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![user_input.clone()],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::new(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let user_item = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::UserMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(user_item.content, vec![user_input]);
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
+
+    let request = request.single_request();
+    assert_eq!(request.message_input_texts("user"), vec!["<external_api>"]);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_context_trust_controls_message_role() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

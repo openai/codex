@@ -39,6 +39,19 @@ impl ContextualUserFragment for AdditionalContextUserFragment {
         )
     }
 
+    fn matches_text(text: &str) -> bool {
+        let trimmed = text.trim();
+        let Some(rest) = trimmed.strip_prefix(ADDITIONAL_CONTEXT_START_MARKER_PREFIX) else {
+            return false;
+        };
+        let Some((key, value_and_close)) = rest.split_once(ADDITIONAL_CONTEXT_END_MARKER_SUFFIX)
+        else {
+            return false;
+        };
+
+        value_and_close.ends_with(&format!("</external_{key}>"))
+    }
+
     fn body(&self) -> String {
         additional_context_body(&self.key, &self.value)
     }
