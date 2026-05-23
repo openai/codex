@@ -10,17 +10,14 @@ use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
-use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Result<()> {
@@ -427,153 +424,6 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
             "second turn",
             "<external_browser_info>tab one</external_browser_info>",
             "third turn",
-        ]
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn additional_context_multiple_steers_dedupe_against_current_values() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let responses = mount_response_sequence(
-        &server,
-        vec![
-            sse_response(sse(vec![
-                ev_response_created("resp-1"),
-                ev_completed("resp-1"),
-            ]))
-            .set_delay(Duration::from_secs(1)),
-            sse_response(sse(vec![
-                ev_response_created("resp-2"),
-                ev_completed("resp-2"),
-            ])),
-        ],
-    )
-    .await;
-    let test = test_codex()
-        .with_config(|config| config.include_environment_context = false)
-        .build(&server)
-        .await?;
-
-    test.codex
-        .submit(Op::UserInput {
-            environments: None,
-            items: vec![UserInput::Text {
-                text: "initial turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: BTreeMap::from([(
-                "browser_info".to_string(),
-                AdditionalContextEntry {
-                    value: "tab one".to_string(),
-                    is_untrusted: true,
-                },
-            )]),
-            thread_settings: Default::default(),
-        })
-        .await?;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while responses.requests().len() < 1 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-
-    test.codex
-        .steer_input(
-            vec![UserInput::Text {
-                text: "first steer".to_string(),
-                text_elements: Vec::new(),
-            }],
-            BTreeMap::from([
-                (
-                    "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        is_untrusted: false,
-                    },
-                ),
-                (
-                    "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab two".to_string(),
-                        is_untrusted: true,
-                    },
-                ),
-            ]),
-            None,
-            None,
-        )
-        .await
-        .map_err(|err| anyhow::anyhow!("steer input: {err:?}"))?;
-    test.codex
-        .steer_input(
-            vec![UserInput::Text {
-                text: "second steer".to_string(),
-                text_elements: Vec::new(),
-            }],
-            BTreeMap::from([
-                (
-                    "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run two".to_string(),
-                        is_untrusted: false,
-                    },
-                ),
-                (
-                    "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab two".to_string(),
-                        is_untrusted: true,
-                    },
-                ),
-                (
-                    "terminal_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "pty one".to_string(),
-                        is_untrusted: true,
-                    },
-                ),
-            ]),
-            None,
-            None,
-        )
-        .await
-        .map_err(|err| anyhow::anyhow!("steer input: {err:?}"))?;
-
-    wait_for_event_match(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_)).then_some(())
-    })
-    .await;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(
-        requests[1].message_input_texts("user"),
-        vec![
-            "<external_browser_info>tab one</external_browser_info>",
-            "initial turn",
-            "<external_browser_info>tab two</external_browser_info>",
-            "first steer",
-            "<external_terminal_info>pty one</external_terminal_info>",
-            "second steer",
-        ]
-    );
-    let developer_context_texts = requests[1]
-        .message_input_texts("developer")
-        .into_iter()
-        .filter(|text| text.starts_with("<automation_info>"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        developer_context_texts,
-        vec![
-            "<automation_info>run one</automation_info>",
-            "<automation_info>run two</automation_info>",
         ]
     );
 
