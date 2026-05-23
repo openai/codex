@@ -1486,6 +1486,22 @@ fn table_wraps_cell_content_when_width_is_narrow() {
 }
 
 #[test]
+fn table_wraps_file_paths_before_collapsing_narrative_columns_snapshot() {
+    let md = r#"| Unit | Files | Adds | Removes | What It Adds |
+|---|---:|---:|---:|---|
+| Suggestion engine and unit coverage | [next_prompt_suggestion.rs](/Users/example/code/codex/codex-rs/core/src/next_prompt_suggestion.rs:1), [next_prompt_suggestion_tests.rs](/Users/example/code/codex/codex-rs/core/src/next_prompt_suggestion_tests.rs:1) | 704 | 0 | Sampling workflow, stable-history checks, tool-flow suppression, fast reasoning profile, filtering rules, cancellation and timeout. |
+| Model instruction fragment and contextual isolation | [next_prompt_suggestion.rs](/Users/example/code/codex/codex-rs/core/src/context/next_prompt_suggestion.rs:1), [contextual_user_message_tests.rs](/Users/example/code/codex/codex-rs/core/src/context/contextual_user_message_tests.rs:1) | 54 | 0 | Synthetic suggestion prompt and an isolation test for ordinary user text. |
+"#;
+    let text = render_markdown_text_with_width_and_cwd(
+        md,
+        Some(/*width*/ 120),
+        Some(Path::new("/Users/example/code/codex")),
+    );
+
+    assert_snapshot!(plain_lines(&text).join("\n"));
+}
+
+#[test]
 fn table_inside_blockquote_has_quote_prefix() {
     let md = "> | A | B |\n> |---|---|\n> | 1 | 2 |\n";
     let text = render_markdown_text(md);
