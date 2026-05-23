@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
@@ -48,6 +49,23 @@ impl StreamingSseServer {
         let _ = self.shutdown.send(());
         let _ = self.task.await;
     }
+}
+
+/// Returns all `input_text` spans from a captured `/responses` request body for the provided role.
+pub fn message_input_texts(body: &[u8], role: &str) -> Vec<String> {
+    let body: Value = serde_json::from_slice(body)
+        .unwrap_or_else(|error| panic!("parse streaming SSE request body: {error}"));
+    body.get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+        .collect()
 }
 
 /// Starts a lightweight HTTP server that supports:

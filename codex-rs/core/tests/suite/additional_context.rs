@@ -15,11 +15,11 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::message_input_texts;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use std::collections::BTreeMap;
 use tokio::sync::oneshot;
 
@@ -551,24 +551,8 @@ async fn additional_context_multiple_steers_dedupe_against_current_values() -> R
 
     let requests = server.requests().await;
     assert_eq!(requests.len(), 2);
-    let second_body = serde_json::from_slice::<Value>(&requests[1])?;
-    let user_texts = second_body["input"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
-        .filter(|item| item.get("role").and_then(Value::as_str) == Some("user"))
-        .flat_map(|item| {
-            item.get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
-        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
-        .collect::<Vec<_>>();
     assert_eq!(
-        user_texts,
+        message_input_texts(&requests[1], "user"),
         vec![
             "<external_browser_info>tab one</external_browser_info>",
             "initial turn",
@@ -578,24 +562,12 @@ async fn additional_context_multiple_steers_dedupe_against_current_values() -> R
             "second steer",
         ]
     );
-    let developer_texts = second_body["input"]
-        .as_array()
+    let developer_context_texts = message_input_texts(&requests[1], "developer")
         .into_iter()
-        .flatten()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
-        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
-        .flat_map(|item| {
-            item.get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
-        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
         .filter(|text| text.starts_with("<automation_info>"))
         .collect::<Vec<_>>();
     assert_eq!(
-        developer_texts,
+        developer_context_texts,
         vec![
             "<automation_info>run one</automation_info>",
             "<automation_info>run two</automation_info>",
