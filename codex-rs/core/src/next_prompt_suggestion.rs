@@ -7,7 +7,7 @@
 //! tools, mutate transcript state, or decide whether the TUI should render the
 //! result.
 //!
-//! Suggestions are best-effort. The caller should treat `Ok(None)` as an
+//! Suggestions are best-effort. The caller should treat `None` as an
 //! expected silent outcome for early conversations, active turns, incomplete
 //! tool flow, model silence, or filtered output.
 
@@ -20,7 +20,6 @@ use crate::context_manager::ContextManager;
 use crate::session::session::Session;
 use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
-use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
@@ -53,40 +52,40 @@ struct HistorySnapshot {
 /// The sample uses the prompt-visible history from `sess` plus one synthetic
 /// suggestion instruction. Active turns and histories with unmatched tool call
 /// pairs are suppressed before sampling because those states do not represent a
-/// stable completed conversation boundary. Returning `Ok(None)` means there is
+/// stable completed conversation boundary. Returning `None` means there is
 /// no suggestion worth showing, not that the request failed.
 pub(crate) async fn suggest_next_prompt(
     sess: &Session,
     cancellation_token: CancellationToken,
-) -> CodexResult<Option<String>> {
+) -> Option<String> {
     if cancellation_token.is_cancelled() {
         tracing::debug!("next prompt suggestion skipped after cancellation");
-        return Ok(None);
+        return None;
     }
     if !session_is_idle_for_suggestion(sess).await {
-        return Ok(None);
+        return None;
     }
 
     let started_at = Instant::now();
     let mut turn_context = sess.new_lightweight_turn().await;
     prefer_fast_suggestion_profile(&mut turn_context);
     if !suggestion_prompt_fits_context_window(sess, &turn_context).await {
-        return Ok(None);
+        return None;
     }
 
     let history = sess.clone_history().await;
     let history_snapshot = HistorySnapshot::from_history(&history);
     if has_unpaired_tool_flow(history.raw_items()) {
         tracing::debug!("next prompt suggestion skipped for incomplete tool flow");
-        return Ok(None);
+        return None;
     }
     let mut prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     if !history_ends_at_assistant_response(&prompt_input) {
         tracing::debug!("next prompt suggestion skipped before assistant boundary");
-        return Ok(None);
+        return None;
     }
     if assistant_message_count(&prompt_input) < 2 {
-        return Ok(None);
+        return None;
     }
     prompt_input.push(ContextualUserFragment::into(
         NextPromptSuggestionInstructions,
@@ -102,7 +101,7 @@ pub(crate) async fn suggest_next_prompt(
         output_schema_strict: true,
     };
     if !session_is_idle_for_suggestion(sess).await {
-        return Ok(None);
+        return None;
     }
     let mut client_session = sess.services.model_client.new_session();
     let mut stream = match client_session
@@ -125,11 +124,11 @@ pub(crate) async fn suggest_next_prompt(
                 error = ?err,
                 "next prompt suggestion failed before sampling started"
             );
-            return Ok(None);
+            return None;
         }
         Err(codex_async_utils::CancelErr::Cancelled) => {
             tracing::debug!("next prompt suggestion canceled before sampling started");
-            return Ok(None);
+            return None;
         }
     };
     let mut streamed_text = String::new();
@@ -140,7 +139,7 @@ pub(crate) async fn suggest_next_prompt(
     let completed_response_id = loop {
         if !session_is_idle_for_suggestion(sess).await {
             client_session.reset_websocket_session();
-            return Ok(None);
+            return None;
         }
         let Some(event) = (tokio::select! {
             event = stream.next().or_cancel(&cancellation_token) => match event {
@@ -148,19 +147,19 @@ pub(crate) async fn suggest_next_prompt(
                 Err(codex_async_utils::CancelErr::Cancelled) => {
                     tracing::debug!("next prompt suggestion canceled while sampling");
                     client_session.reset_websocket_session();
-                    return Ok(None);
+                    return None;
                 }
             },
             _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
             _ = &mut sample_deadline => {
                 tracing::debug!("next prompt suggestion timed out while sampling");
                 client_session.reset_websocket_session();
-                return Ok(None);
+                return None;
             },
         }) else {
             tracing::debug!("next prompt suggestion stream closed before completion");
             client_session.reset_websocket_session();
-            return Ok(None);
+            return None;
         };
         let event = match event {
             Ok(event) => event,
@@ -170,7 +169,7 @@ pub(crate) async fn suggest_next_prompt(
                     "next prompt suggestion stream failed while sampling"
                 );
                 client_session.reset_websocket_session();
-                return Ok(None);
+                return None;
             }
         };
         match event {
@@ -226,10 +225,10 @@ pub(crate) async fn suggest_next_prompt(
     client_session.reset_websocket_session();
     if !session_history_matches_snapshot(sess, history_snapshot).await {
         tracing::debug!("next prompt suggestion skipped after history changed");
-        return Ok(None);
+        return None;
     }
     if !session_is_idle_for_suggestion(sess).await {
-        return Ok(None);
+        return None;
     }
 
     let raw = completed_text.unwrap_or(streamed_text);
@@ -242,7 +241,7 @@ pub(crate) async fn suggest_next_prompt(
         has_suggestion = suggestion.is_some(),
         "next prompt suggestion sampled"
     );
-    Ok(suggestion)
+    suggestion
 }
 
 impl HistorySnapshot {
@@ -276,35 +275,23 @@ async fn suggestion_prompt_fits_context_window(sess: &Session, turn_context: &Tu
         tracing::debug!("next prompt suggestion skipped without model context window");
         return false;
     };
-    let estimated_token_count = sess.get_estimated_token_count(turn_context).await;
-    if suggestion_prompt_has_headroom(estimated_token_count, Some(model_context_window)) {
-        return true;
+    if let Some(estimated_token_count) = sess.get_estimated_token_count(turn_context).await
+        && !suggestion_prompt_has_headroom(estimated_token_count, model_context_window)
+    {
+        let suggestion_prompt_limit =
+            model_context_window.saturating_sub(NEXT_PROMPT_SUGGESTION_TOKEN_HEADROOM);
+        tracing::debug!(
+            estimated_token_count,
+            model_context_window,
+            suggestion_prompt_limit,
+            "next prompt suggestion skipped near context window"
+        );
+        return false;
     }
-    let Some(estimated_token_count) = estimated_token_count else {
-        return true;
-    };
-    let suggestion_prompt_limit =
-        model_context_window.saturating_sub(NEXT_PROMPT_SUGGESTION_TOKEN_HEADROOM);
-
-    tracing::debug!(
-        estimated_token_count,
-        model_context_window,
-        suggestion_prompt_limit,
-        "next prompt suggestion skipped near context window"
-    );
-    false
+    true
 }
 
-fn suggestion_prompt_has_headroom(
-    estimated_token_count: Option<i64>,
-    model_context_window: Option<i64>,
-) -> bool {
-    let Some(model_context_window) = model_context_window else {
-        return false;
-    };
-    let Some(estimated_token_count) = estimated_token_count else {
-        return true;
-    };
+fn suggestion_prompt_has_headroom(estimated_token_count: i64, model_context_window: i64) -> bool {
     estimated_token_count
         < model_context_window.saturating_sub(NEXT_PROMPT_SUGGESTION_TOKEN_HEADROOM)
 }
@@ -350,6 +337,7 @@ fn has_unpaired_tool_flow(items: &[ResponseItem]) -> bool {
     let mut custom_tool_outputs = HashSet::new();
     let mut tool_search_calls = HashSet::new();
     let mut tool_search_outputs = HashSet::new();
+    let mut client_tool_search_outputs = HashSet::new();
 
     for item in items {
         match item {
@@ -365,12 +353,15 @@ fn has_unpaired_tool_flow(items: &[ResponseItem]) -> bool {
             } => {
                 tool_search_calls.insert(call_id.clone());
             }
-            ResponseItem::ToolSearchOutput { execution, .. } if execution == "server" => {}
             ResponseItem::ToolSearchOutput {
                 call_id: Some(call_id),
+                execution,
                 ..
             } => {
                 tool_search_outputs.insert(call_id.clone());
+                if execution != "server" {
+                    client_tool_search_outputs.insert(call_id.clone());
+                }
             }
             ResponseItem::CustomToolCall { call_id, .. } => {
                 custom_tool_calls.insert(call_id.clone());
@@ -400,7 +391,8 @@ fn has_unpaired_tool_flow(items: &[ResponseItem]) -> bool {
 
     function_calls != function_outputs
         || custom_tool_calls != custom_tool_outputs
-        || tool_search_calls != tool_search_outputs
+        || !tool_search_calls.is_subset(&tool_search_outputs)
+        || !client_tool_search_outputs.is_subset(&tool_search_calls)
 }
 
 /// Selects the fastest supported reasoning effort for an ephemeral suggestion sample.

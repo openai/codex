@@ -154,11 +154,11 @@ impl CodexThread {
         &self,
         cancellation_token: CancellationToken,
     ) -> CodexResult<Option<String>> {
-        crate::next_prompt_suggestion::suggest_next_prompt(
+        Ok(crate::next_prompt_suggestion::suggest_next_prompt(
             self.codex.session.as_ref(),
             cancellation_token,
         )
-        .await
+        .await)
     }
 
     /// Wait until the underlying session loop has terminated.

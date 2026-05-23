@@ -12,47 +12,21 @@ use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn filter_keeps_specific_prompt() {
-    assert_eq!(
-        filter_next_prompt_suggestion("run the tests"),
-        Some("run the tests".to_string())
-    );
-}
-
-#[test]
-fn filter_keeps_prompt_with_edge_whitespace() {
-    assert_eq!(
-        filter_next_prompt_suggestion(" run the tests\n"),
-        Some("run the tests".to_string())
-    );
-}
-
-#[test]
-fn filter_keeps_allowed_single_word_prompt() {
-    assert_eq!(
-        filter_next_prompt_suggestion("commit"),
-        Some("commit".to_string())
-    );
-}
-
-#[test]
-fn filter_keeps_code_identifier_prompt() {
-    assert_eq!(
-        filter_next_prompt_suggestion("set CODEX_HOME"),
-        Some("set CODEX_HOME".to_string())
-    );
-}
-
-#[test]
-fn filter_keeps_dotted_file_prompt() {
-    assert_eq!(
-        filter_next_prompt_suggestion("update Cargo.toml"),
-        Some("update Cargo.toml".to_string())
-    );
-    assert_eq!(
-        filter_next_prompt_suggestion("open app-server/README.md"),
-        Some("open app-server/README.md".to_string())
-    );
+fn filter_keeps_valid_prompts() {
+    for (suggestion, expected) in [
+        ("run the tests", "run the tests"),
+        (" run the tests\n", "run the tests"),
+        ("commit", "commit"),
+        ("set CODEX_HOME", "set CODEX_HOME"),
+        ("update Cargo.toml", "update Cargo.toml"),
+        ("open app-server/README.md", "open app-server/README.md"),
+    ] {
+        assert_eq!(
+            filter_next_prompt_suggestion(suggestion),
+            Some(expected.to_string()),
+            "expected {suggestion:?} to be retained"
+        );
+    }
 }
 
 #[test]
@@ -99,40 +73,24 @@ fn history_boundary_requires_final_assistant_message() {
     assert!(history_ends_at_assistant_response(std::slice::from_ref(
         &assistant
     )));
-    assert!(!history_ends_at_assistant_response(&[assistant, user]));
-}
-
-#[test]
-fn history_boundary_rejects_tool_output_tail() {
-    assert!(!history_ends_at_assistant_response(&[
-        ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "calling tool".to_string(),
-            }],
-            phase: None,
-        },
+    for tail in [
+        user,
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("done".to_string()),
         },
-    ]));
-}
-
-#[test]
-fn suggestion_prompt_skips_without_context_window() {
-    assert!(!suggestion_prompt_has_headroom(
-        /*estimated_token_count*/ Some(10),
-        /*model_context_window*/ None,
-    ));
+    ] {
+        assert!(!history_ends_at_assistant_response(&[
+            assistant.clone(),
+            tail,
+        ]));
+    }
 }
 
 #[test]
 fn suggestion_prompt_skips_near_context_window() {
     assert!(!suggestion_prompt_has_headroom(
-        /*estimated_token_count*/ Some(127_100),
-        /*model_context_window*/ Some(128_000)
+        /*estimated_token_count*/ 127_100, /*model_context_window*/ 128_000
     ));
 }
 
@@ -173,6 +131,25 @@ fn server_tool_search_output_without_call_is_allowed() {
         execution: "server".to_string(),
         tools: Vec::new(),
     }]));
+}
+
+#[test]
+fn completed_server_tool_search_flow_is_allowed() {
+    assert!(!has_unpaired_tool_flow(&[
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("call-1".to_string()),
+            status: Some("completed".to_string()),
+            execution: "server".to_string(),
+            arguments: serde_json::json!({"query": "tool"}),
+        },
+        ResponseItem::ToolSearchOutput {
+            call_id: Some("call-1".to_string()),
+            status: "completed".to_string(),
+            execution: "server".to_string(),
+            tools: Vec::new(),
+        },
+    ]));
 }
 
 #[test]
