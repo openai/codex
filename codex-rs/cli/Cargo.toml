@@ -94,6 +94,7 @@ windows-sys = { version = "0.52", features = [
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+insta = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 sqlx = { workspace = true }

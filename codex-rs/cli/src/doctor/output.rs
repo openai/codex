@@ -1286,6 +1286,14 @@ Background Server
     }
 
     #[test]
+    fn render_human_report_snapshot_covers_environment_rows() {
+        insta::assert_snapshot!(
+            "doctor_human_report_environment_rows",
+            render_human_report(&sample_report(), detailed_no_color_unicode_options())
+        );
+    }
+
+    #[test]
     fn render_human_report_supports_summary_output_without_color() {
         let rendered = render_human_report(&sample_report(), summary_no_color_unicode_options());
         let expected = format!(
