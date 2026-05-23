@@ -17,6 +17,8 @@ use codex_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -150,7 +152,7 @@ impl BlockingRemoteControlBackend {
         let (enroll_request_tx, enroll_request_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             match read_enroll_request(listener).await {
-                Ok((request_line, _reader)) => {
+                Ok(request_line) => {
                     let _ = enroll_request_tx.send(Ok(request_line));
                     std::future::pending::<()>().await;
                 }
@@ -181,20 +183,40 @@ impl Drop for BlockingRemoteControlBackend {
     }
 }
 
-async fn read_enroll_request(listener: TcpListener) -> Result<(String, BufReader<TcpStream>)> {
-    let (stream, _) = listener.accept().await?;
-    let mut reader = BufReader::new(stream);
-
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).await?;
-
+async fn read_enroll_request(listener: TcpListener) -> Result<String> {
     loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).await?;
-        if line == "\r\n" {
-            break;
-        }
-    }
+        let (stream, _) = listener.accept().await?;
+        let mut reader = BufReader::new(stream);
 
-    Ok((request_line.trim_end().to_string(), reader))
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).await?;
+
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await?;
+            if let Some(value) = line.strip_prefix("Content-Length: ") {
+                content_length = value.trim().parse().unwrap_or_default();
+            }
+            if line == "\r\n" {
+                break;
+            }
+        }
+
+        if content_length > 0 {
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).await?;
+        }
+
+        let request_line = request_line.trim_end().to_string();
+        if request_line.contains("/codex/analytics-events/events ") {
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await?;
+            continue;
+        }
+
+        return Ok(request_line);
+    }
 }
