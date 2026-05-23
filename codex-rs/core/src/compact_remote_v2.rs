@@ -35,6 +35,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
@@ -207,11 +208,16 @@ async fn run_remote_compact_task_inner_impl(
     .await?;
     let mut input = prompt_input.clone();
     input.push(ResponseItem::CompactionTrigger);
+    let usage_attribution = crate::usage::UsagePromptAttribution::from_prompt(
+        &input,
+        &tool_router,
+        base_instructions.text.as_str(),
+    );
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        usage_attribution: Default::default(),
+        usage_attribution,
         base_instructions,
         personality: turn_context.personality,
         output_schema: None,
@@ -249,9 +255,16 @@ async fn run_remote_compact_task_inner_impl(
     trace_attempt.record_result(
         compaction_output_result
             .as_ref()
-            .map(|(item, _)| std::slice::from_ref(item)),
+            .map(|(item, _, _)| std::slice::from_ref(item)),
     );
-    let (compaction_output, response_id) = compaction_output_result?;
+    let (compaction_output, response_id, token_usage) = compaction_output_result?;
+    sess.record_usage_attribution(
+        turn_context,
+        &prompt,
+        response_id.as_str(),
+        token_usage.as_ref(),
+    )
+    .await;
     let compacted_history = build_v2_compacted_history(&prompt_input, compaction_output);
     let new_history = process_compacted_history(
         sess.as_ref(),
@@ -294,7 +307,7 @@ async fn run_remote_compaction_request_v2(
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     turn_metadata_header: Option<&str>,
-) -> CodexResult<(ResponseItem, String)> {
+) -> CodexResult<(ResponseItem, String, Option<TokenUsage>)> {
     let max_retries = turn_context
         .provider
         .info()
@@ -364,11 +377,12 @@ async fn log_remote_compaction_request_failure(
 
 async fn collect_compaction_output(
     mut stream: ResponseStream,
-) -> CodexResult<(ResponseItem, String)> {
+) -> CodexResult<(ResponseItem, String, Option<TokenUsage>)> {
     let mut output_item_count = 0usize;
     let mut compaction_count = 0usize;
     let mut compaction_output = None;
     let mut completed_response_id = None;
+    let mut completed_token_usage = None;
     while let Some(event) = stream.next().await {
         match event? {
             ResponseEvent::OutputItemDone(item) => {
@@ -380,8 +394,13 @@ async fn collect_compaction_output(
                     }
                 }
             }
-            ResponseEvent::Completed { response_id, .. } => {
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+                ..
+            } => {
                 completed_response_id = Some(response_id);
+                completed_token_usage = token_usage;
                 break;
             }
             _ => {}
@@ -404,7 +423,7 @@ async fn collect_compaction_output(
     let Some(compaction_output) = compaction_output else {
         unreachable!("compaction output must exist when count is exactly one");
     };
-    Ok((compaction_output, response_id))
+    Ok((compaction_output, response_id, completed_token_usage))
 }
 
 fn build_v2_compacted_history(
@@ -728,6 +747,13 @@ mod tests {
         let compaction = ResponseItem::Compaction {
             encrypted_content: "encrypted".to_string(),
         };
+        let expected_token_usage = TokenUsage {
+            input_tokens: 100,
+            cached_input_tokens: 25,
+            output_tokens: 10,
+            reasoning_output_tokens: 0,
+            total_tokens: 110,
+        };
         let stream = response_stream(vec![
             Ok(ResponseEvent::OutputItemDone(message(
                 "assistant",
@@ -737,16 +763,17 @@ mod tests {
             Ok(ResponseEvent::OutputItemDone(compaction.clone())),
             Ok(ResponseEvent::Completed {
                 response_id: "resp-compact".to_string(),
-                token_usage: None,
+                token_usage: Some(expected_token_usage.clone()),
                 end_turn: Some(true),
             }),
         ]);
 
-        let (output, response_id) = collect_compaction_output(stream)
+        let (output, response_id, token_usage) = collect_compaction_output(stream)
             .await
             .expect("compaction should be collected");
 
         assert_eq!(output, compaction);
         assert_eq!(response_id, "resp-compact");
+        assert_eq!(token_usage, Some(expected_token_usage));
     }
 }
