@@ -215,20 +215,25 @@ fn build_model_visible_specs_and_registry(
             continue;
         }
         let exposure = runtime.exposure();
-        if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
-        {
-            let spec = runtime.spec();
-            let estimated_tokens = crate::usage::estimate_serialized_tokens(&spec);
-            let runtime_usage_contributors = runtime.usage_contributors();
+        let runtime_usage_contributors = runtime.usage_contributors();
+        if !runtime_usage_contributors.is_empty() {
             usage_contributors_by_tool_name
                 .insert(tool_name.clone(), runtime_usage_contributors.clone());
+        }
+        if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
+        {
+            let spec = spec_for_model_request(turn_context, exposure, runtime.spec());
+            if !namespace_tools_enabled(turn_context) && matches!(spec, ToolSpec::Namespace(_)) {
+                continue;
+            }
+            let estimated_tokens = crate::usage::estimate_serialized_tokens(&spec);
             usage_contributors.extend(runtime_usage_contributors.into_iter().map(|contributor| {
                 crate::usage::UsagePromptContributor {
                     contributor,
                     source_estimated_tokens: estimated_tokens,
                 }
             }));
-            specs.push(spec_for_model_request(turn_context, exposure, spec));
+            specs.push(spec);
         }
     }
     for spec in hosted_specs {

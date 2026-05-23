@@ -311,6 +311,10 @@ impl CoreToolRuntime for ExposureOverride {
         self.handler.post_tool_use_payload(invocation, result)
     }
 
+    fn usage_contributors(&self) -> Vec<UsageContributor> {
+        self.handler.usage_contributors()
+    }
+
     fn with_updated_hook_input(
         &self,
         invocation: ToolInvocation,
