@@ -24,6 +24,8 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+use super::analytics::wait_for_analytics_event;
+
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_PLUGIN_ID: &str = "plugins~Plugin_linear";
 const WORKSPACE_REMOTE_PLUGIN_ID: &str = "plugins_69f27c3e67848191a45cbaa5f2adb39d";
@@ -116,37 +118,25 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
     let response: PluginUninstallResponse = to_response(response)?;
     assert_eq!(response, PluginUninstallResponse {});
 
-    let payload = timeout(DEFAULT_TIMEOUT, async {
-        loop {
-            let Some(requests) = analytics_server.received_requests().await else {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-                continue;
-            };
-            if let Some(request) = requests.iter().find(|request| {
-                request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
-            }) {
-                break request.body.clone();
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
+    let event = wait_for_analytics_event(
+        &analytics_server,
+        DEFAULT_TIMEOUT,
+        "codex_plugin_uninstalled",
+    )
     .await?;
-    let payload: serde_json::Value = serde_json::from_slice(&payload).expect("analytics payload");
     assert_eq!(
-        payload,
+        event,
         json!({
-            "events": [{
-                "event_type": "codex_plugin_uninstalled",
-                "event_params": {
-                    "plugin_id": "sample-plugin@debug",
-                    "plugin_name": "sample-plugin",
-                    "marketplace_name": "debug",
-                    "has_skills": false,
-                    "mcp_server_count": 0,
-                    "connector_ids": [],
-                    "product_client_id": DEFAULT_CLIENT_NAME,
-                }
-            }]
+            "event_type": "codex_plugin_uninstalled",
+            "event_params": {
+                "plugin_id": "sample-plugin@debug",
+                "plugin_name": "sample-plugin",
+                "marketplace_name": "debug",
+                "has_skills": false,
+                "mcp_server_count": 0,
+                "connector_ids": [],
+                "product_client_id": DEFAULT_CLIENT_NAME,
+            }
         })
     );
     Ok(())

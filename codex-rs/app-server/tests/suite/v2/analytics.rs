@@ -111,7 +111,10 @@ pub(crate) async fn wait_for_analytics_event(
             };
             for request in &requests {
                 if request.method != "POST"
-                    || request.url.path() != "/codex/analytics-events/events"
+                    || !request
+                        .url
+                        .path()
+                        .ends_with("/codex/analytics-events/events")
                 {
                     continue;
                 }

@@ -58,6 +58,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
+use super::analytics::wait_for_analytics_event;
+
 // Plugin install tests wait on connector discovery after the install response path
 // starts, which is noticeably slower on Windows CI.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -727,22 +729,22 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
     let response: PluginInstallResponse = to_response(response)?;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
 
-    let payload = wait_for_plugin_analytics_payload(&analytics_server).await?;
+    let event =
+        wait_for_analytics_event(&analytics_server, DEFAULT_TIMEOUT, "codex_plugin_installed")
+            .await?;
     assert_eq!(
-        payload,
+        event,
         json!({
-            "events": [{
-                "event_type": "codex_plugin_installed",
-                "event_params": {
-                    "plugin_id": "sample-plugin@debug",
-                    "plugin_name": "sample-plugin",
-                    "marketplace_name": "debug",
-                    "has_skills": false,
-                    "mcp_server_count": 0,
-                    "connector_ids": [],
-                    "product_client_id": DEFAULT_CLIENT_NAME,
-                }
-            }]
+            "event_type": "codex_plugin_installed",
+            "event_params": {
+                "plugin_id": "sample-plugin@debug",
+                "plugin_name": "sample-plugin",
+                "marketplace_name": "debug",
+                "has_skills": false,
+                "mcp_server_count": 0,
+                "connector_ids": [],
+                "product_client_id": DEFAULT_CLIENT_NAME,
+            }
         })
     );
     Ok(())
@@ -780,22 +782,21 @@ async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
     let response: PluginInstallResponse = to_response(response)?;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
 
-    let payload = wait_for_plugin_analytics_payload(&server).await?;
+    let event =
+        wait_for_analytics_event(&server, DEFAULT_TIMEOUT, "codex_plugin_installed").await?;
     assert_eq!(
-        payload,
+        event,
         json!({
-            "events": [{
-                "event_type": "codex_plugin_installed",
-                "event_params": {
-                    "plugin_id": REMOTE_PLUGIN_ID,
-                    "plugin_name": "linear",
-                    "marketplace_name": "openai-curated-remote",
-                    "has_skills": true,
-                    "mcp_server_count": 0,
-                    "connector_ids": [],
-                    "product_client_id": DEFAULT_CLIENT_NAME,
-                }
-            }]
+            "event_type": "codex_plugin_installed",
+            "event_params": {
+                "plugin_id": REMOTE_PLUGIN_ID,
+                "plugin_name": "linear",
+                "marketplace_name": "openai-curated-remote",
+                "has_skills": true,
+                "mcp_server_count": 0,
+                "connector_ids": [],
+                "product_client_id": DEFAULT_CLIENT_NAME,
+            }
         })
     );
     Ok(())
@@ -1286,29 +1287,6 @@ async fn mount_backend_analytics_events(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"status":"ok"}"#))
         .mount(server)
         .await;
-}
-
-async fn wait_for_plugin_analytics_payload(server: &MockServer) -> Result<serde_json::Value> {
-    timeout(DEFAULT_TIMEOUT, async {
-        loop {
-            let Some(requests) = server.received_requests().await else {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-                continue;
-            };
-            if let Some(request) = requests.iter().find(|request| {
-                request.method == "POST"
-                    && request
-                        .url
-                        .path()
-                        .ends_with("/codex/analytics-events/events")
-            }) {
-                return serde_json::from_slice(&request.body)
-                    .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"));
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await?
 }
 
 fn write_remote_plugin_catalog_config(
