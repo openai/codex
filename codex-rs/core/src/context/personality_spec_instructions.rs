@@ -12,9 +12,17 @@ impl PersonalitySpecInstructions {
 }
 
 impl ContextualUserFragment for PersonalitySpecInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = "<personality_spec>";
-    const END_MARKER: &'static str = "</personality_spec>";
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<personality_spec>", "</personality_spec>")
+    }
 
     fn body(&self) -> String {
         format!(

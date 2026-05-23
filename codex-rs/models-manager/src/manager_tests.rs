@@ -367,6 +367,160 @@ async fn refresh_available_models_sorts_by_priority() {
 }
 
 #[tokio::test]
+async fn refresh_available_models_uses_remote_only_catalog_for_chatgpt_auth() {
+    let remote_models = vec![remote_model(
+        "chatgpt-visible-source-of-truth",
+        "ChatGPT Visible",
+        /*priority*/ 0,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![remote_models.clone()]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, remote_models);
+    assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
+}
+
+#[tokio::test]
+async fn refresh_available_models_uses_cached_remote_only_catalog_for_chatgpt_auth() {
+    let remote_models = vec![remote_model(
+        "chatgpt-cached-source-of-truth",
+        "ChatGPT Cached",
+        /*priority*/ 0,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let fetch_endpoint = TestModelsEndpoint::new(vec![remote_models.clone()]);
+    let fetch_manager =
+        openai_manager_for_tests(codex_home.path().to_path_buf(), fetch_endpoint.clone());
+
+    fetch_manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("initial refresh succeeds");
+
+    let cache_endpoint = TestModelsEndpoint::new(Vec::new());
+    let cache_manager =
+        openai_manager_for_tests(codex_home.path().to_path_buf(), cache_endpoint.clone());
+
+    cache_manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("cached refresh succeeds");
+
+    assert_eq!(cache_manager.get_remote_models().await, remote_models);
+    assert_eq!(
+        cache_endpoint.fetch_count(),
+        0,
+        "fresh cache should avoid a model fetch"
+    );
+}
+
+#[tokio::test]
+async fn get_model_info_uses_fallback_for_bundled_models_when_chatgpt_remote_is_authoritative() {
+    let remote_models = vec![remote_model(
+        "chatgpt-authoritative-model-info",
+        "ChatGPT Model Info",
+        /*priority*/ 0,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![remote_models]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint);
+    let bundled_slug = load_remote_models_from_file()
+        .expect("bundled models should parse")
+        .first()
+        .expect("bundled models should contain at least one model")
+        .slug
+        .clone();
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    let model_info = manager
+        .get_model_info(&bundled_slug, &ModelsManagerConfig::default())
+        .await;
+
+    assert_eq!(model_info.slug, bundled_slug);
+    assert!(model_info.used_fallback_model_metadata);
+}
+
+#[tokio::test]
+async fn refresh_available_models_preserves_bundled_catalog_for_empty_chatgpt_remote() {
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![Vec::new()]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint);
+    let expected = load_remote_models_from_file().expect("bundled models should parse");
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, expected);
+}
+
+#[tokio::test]
+async fn refresh_available_models_merges_hidden_only_chatgpt_remote_with_bundled_catalog() {
+    let hidden_remote = remote_model_with_visibility(
+        "chatgpt-hidden-only",
+        "ChatGPT Hidden",
+        /*priority*/ 0,
+        "hide",
+    );
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![vec![hidden_remote.clone()]]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint);
+    let mut expected = load_remote_models_from_file().expect("bundled models should parse");
+    expected.push(hidden_remote);
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, expected);
+}
+
+#[tokio::test]
+async fn refresh_available_models_keeps_merging_for_api_auth() {
+    let remote_models = vec![remote_model(
+        "api-auth-visible-remote",
+        "API Auth Visible",
+        /*priority*/ 0,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = Arc::new(TestModelsEndpoint {
+        has_command_auth: true,
+        uses_codex_backend: false,
+        responses: Mutex::new(vec![remote_models.clone()].into()),
+        fetch_count: AtomicUsize::new(0),
+    });
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+            "test-api-key",
+        ))),
+    );
+    let mut expected = load_remote_models_from_file().expect("bundled models should parse");
+    expected.extend(remote_models);
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, expected);
+    assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
+}
+
+#[tokio::test]
 async fn refresh_available_models_uses_cache_when_fresh() {
     let remote_models = vec![remote_model("cached", "Cached", /*priority*/ 5)];
     let codex_home = tempdir().expect("temp dir");

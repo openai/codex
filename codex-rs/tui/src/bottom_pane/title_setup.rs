@@ -26,6 +26,7 @@ use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
 use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
+use crate::keymap::ListKeymap;
 use crate::render::renderable::Renderable;
 
 /// Available items that can be displayed in the terminal title.
@@ -59,9 +60,9 @@ pub(crate) enum TerminalTitleItem {
     /// Percentage of context window used.
     #[strum(to_string = "context-used", serialize = "context-usage")]
     ContextUsed,
-    /// Remaining usage on the 5-hour rate limit.
+    /// Remaining usage on the primary rate limit.
     FiveHourLimit,
-    /// Remaining usage on the weekly rate limit.
+    /// Remaining usage on the secondary rate limit.
     WeeklyLimit,
     /// Codex application version.
     CodexVersion,
@@ -106,10 +107,10 @@ impl TerminalTitleItem {
                 "Percentage of context window used (omitted when unknown)"
             }
             TerminalTitleItem::FiveHourLimit => {
-                "Remaining usage on 5-hour usage limit (omitted when unavailable)"
+                "Remaining usage on the primary usage limit (omitted when unavailable)"
             }
             TerminalTitleItem::WeeklyLimit => {
-                "Remaining usage on weekly usage limit (omitted when unavailable)"
+                "Remaining usage on the secondary usage limit (omitted when unavailable)"
             }
             TerminalTitleItem::CodexVersion => "Codex application version",
             TerminalTitleItem::UsedTokens => "Total tokens used in session (omitted when zero)",
@@ -244,6 +245,7 @@ impl TerminalTitleSetupView {
         title_items: Option<&[String]>,
         preview_data: StatusSurfacePreviewData,
         app_event_tx: AppEventSender,
+        list_keymap: ListKeymap,
     ) -> Self {
         let selected_items = title_items
             .into_iter()
@@ -257,11 +259,13 @@ impl TerminalTitleSetupView {
             .collect::<std::collections::HashSet<_>>();
         let items = selected_items
             .into_iter()
-            .map(|item| Self::title_select_item(item, /*enabled*/ true))
+            .map(|item| Self::title_select_item(item, /*enabled*/ true, &preview_data))
             .chain(
                 TerminalTitleItem::iter()
                     .filter(|item| !selected_set.contains(item))
-                    .map(|item| Self::title_select_item(item, /*enabled*/ false)),
+                    .map(|item| {
+                        Self::title_select_item(item, /*enabled*/ false, &preview_data)
+                    }),
             )
             .collect();
 
@@ -271,10 +275,7 @@ impl TerminalTitleSetupView {
                 Some("Select which items to display in the terminal title.".to_string()),
                 app_event_tx,
             )
-            .instructions(vec![
-                "Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel."
-                    .into(),
-            ])
+            .list_keymap(list_keymap)
             .items(items)
             .enable_ordering()
             .on_preview(move |items| {
@@ -310,11 +311,28 @@ impl TerminalTitleSetupView {
         }
     }
 
-    fn title_select_item(item: TerminalTitleItem, enabled: bool) -> MultiSelectItem {
+    fn title_select_item(
+        item: TerminalTitleItem,
+        enabled: bool,
+        preview_data: &StatusSurfacePreviewData,
+    ) -> MultiSelectItem {
+        let default_name = item.to_string();
+        let default_description = item.description();
+        let (name, description) = match item.preview_item() {
+            Some(
+                preview_item @ (StatusSurfacePreviewItem::FiveHourLimit
+                | StatusSurfacePreviewItem::WeeklyLimit),
+            ) => (
+                preview_data.rate_limit_item_name(preview_item, &default_name),
+                preview_data.rate_limit_item_description(preview_item, default_description),
+            ),
+            _ => (default_name, default_description.to_string()),
+        };
+
         MultiSelectItem {
             id: item.to_string(),
-            name: item.to_string(),
-            description: Some(item.description().to_string()),
+            name,
+            description: Some(description),
             enabled,
             orderable: true,
             section_break_after: false,
@@ -387,8 +405,12 @@ mod tests {
             "run-state".to_string(),
             "thread-title".to_string(),
         ];
-        let view =
-            TerminalTitleSetupView::new(Some(&selected), StatusSurfacePreviewData::default(), tx);
+        let view = TerminalTitleSetupView::new(
+            Some(&selected),
+            StatusSurfacePreviewData::default(),
+            tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
+        );
         assert_snapshot!(
             "terminal_title_setup_basic",
             render_lines(&view, /*width*/ 84)

@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::collections::VecDeque;
 
 #[tokio::test]
 async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
@@ -596,6 +597,7 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
         vec![
             UserInput::Image {
                 url: "data:image/png;base64,placeholder".to_string(),
+                detail: None,
             },
             UserInput::Text {
                 text,

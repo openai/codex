@@ -8,13 +8,10 @@ use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::mcp::CallToolResult;
-use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::SearchToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
@@ -23,11 +20,20 @@ use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+pub use codex_tools::ToolOutput;
+pub use codex_tools::ToolPayload;
+
+pub(crate) fn boxed_tool_output<T>(output: T) -> Box<dyn ToolOutput>
+where
+    T: ToolOutput + 'static,
+{
+    Box::new(output)
+}
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
@@ -54,87 +60,6 @@ pub struct ToolInvocation {
     pub tool_name: ToolName,
     pub source: ToolCallSource,
     pub payload: ToolPayload,
-}
-
-#[derive(Clone, Debug)]
-pub enum ToolPayload {
-    Function {
-        arguments: String,
-    },
-    ToolSearch {
-        arguments: SearchToolCallParams,
-    },
-    Custom {
-        input: String,
-    },
-    LocalShell {
-        params: ShellToolCallParams,
-    },
-    Mcp {
-        server: String,
-        tool: String,
-        raw_arguments: String,
-    },
-}
-
-impl ToolPayload {
-    pub fn log_payload(&self) -> Cow<'_, str> {
-        match self {
-            ToolPayload::Function { arguments } => Cow::Borrowed(arguments),
-            ToolPayload::ToolSearch { arguments } => Cow::Owned(arguments.query.clone()),
-            ToolPayload::Custom { input } => Cow::Borrowed(input),
-            ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
-            ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
-        }
-    }
-}
-
-pub trait ToolOutput: Send {
-    fn log_preview(&self) -> String;
-
-    fn success_for_logging(&self) -> bool;
-
-    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
-
-    /// Returns the stable value exposed to `PostToolUse` hooks for this tool output.
-    ///
-    /// Tool handlers decide whether a tool participates in `PostToolUse`, but
-    /// this method lets the output type own any conversion from model-facing
-    /// response content to hook-facing data. Returning `None` means the output
-    /// should not produce a post-use hook payload, not merely that the tool had
-    /// empty output.
-    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
-        None
-    }
-
-    fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
-        response_input_to_code_mode_result(self.to_response_item("", payload))
-    }
-}
-
-impl ToolOutput for CallToolResult {
-    fn log_preview(&self) -> String {
-        let output = self.as_function_call_output_payload();
-        let preview = output.body.to_text().unwrap_or_else(|| output.to_string());
-        telemetry_preview(&preview)
-    }
-
-    fn success_for_logging(&self) -> bool {
-        self.success()
-    }
-
-    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
-        ResponseInputItem::McpToolCallOutput {
-            call_id: call_id.to_string(),
-            output: self.clone(),
-        }
-    }
-
-    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        serde_json::to_value(self).unwrap_or_else(|err| {
-            JsonValue::String(format!("failed to serialize mcp result: {err}"))
-        })
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -171,6 +96,10 @@ impl ToolOutput for McpToolOutput {
         serde_json::to_value(&self.result).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
         })
+    }
+
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(self.tool_input.clone())
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
@@ -363,10 +292,6 @@ impl ToolOutput for AbortedToolOutput {
                 execution: "client".to_string(),
                 tools: Vec::new(),
             },
-            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
-                call_id: call_id.to_string(),
-                output: CallToolResult::from_error_text(self.message.clone()),
-            },
             _ => function_tool_response(
                 call_id,
                 payload,
@@ -386,6 +311,7 @@ pub struct ExecCommandToolOutput {
     pub wall_time: Duration,
     /// Raw bytes returned for this unified exec call before any truncation.
     pub raw_output: Vec<u8>,
+    pub truncation_policy: TruncationPolicy,
     pub max_output_tokens: Option<usize>,
     pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
@@ -413,12 +339,28 @@ impl ToolOutput for ExecCommandToolOutput {
         )
     }
 
+    fn post_tool_use_id(&self, call_id: &str) -> String {
+        if self.event_call_id.is_empty() {
+            call_id.to_string()
+        } else {
+            self.event_call_id.clone()
+        }
+    }
+
+    fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
+        self.hook_command
+            .as_ref()
+            .map(|command| serde_json::json!({ "command": command }))
+    }
+
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
         if self.process_id.is_some() || self.hook_command.is_none() {
             return None;
         }
 
-        Some(JsonValue::String(self.truncated_output()))
+        Some(JsonValue::String(
+            self.truncated_output(self.model_output_max_tokens()),
+        ))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
@@ -442,7 +384,10 @@ impl ToolOutput for ExecCommandToolOutput {
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
-            output: self.truncated_output(),
+            output: match self.max_output_tokens {
+                Some(max_tokens) => self.truncated_output(max_tokens),
+                None => String::from_utf8_lossy(&self.raw_output).to_string(),
+            },
         };
 
         serde_json::to_value(result).unwrap_or_else(|err| {
@@ -452,9 +397,12 @@ impl ToolOutput for ExecCommandToolOutput {
 }
 
 impl ExecCommandToolOutput {
-    pub(crate) fn truncated_output(&self) -> String {
+    fn model_output_max_tokens(&self) -> usize {
+        resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget())
+    }
+
+    pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let max_tokens = resolve_max_tokens(self.max_output_tokens);
         formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens))
     }
 
@@ -481,68 +429,10 @@ impl ExecCommandToolOutput {
         }
 
         sections.push("Output:".to_string());
-        sections.push(self.truncated_output());
+        sections.push(self.truncated_output(self.model_output_max_tokens()));
 
         sections.join("\n")
     }
-}
-
-pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue {
-    match response {
-        ResponseInputItem::Message { content, .. } => content_items_to_code_mode_result(
-            &content
-                .into_iter()
-                .map(|item| match item {
-                    codex_protocol::models::ContentItem::InputText { text }
-                    | codex_protocol::models::ContentItem::OutputText { text } => {
-                        FunctionCallOutputContentItem::InputText { text }
-                    }
-                    codex_protocol::models::ContentItem::InputImage { image_url, detail } => {
-                        FunctionCallOutputContentItem::InputImage {
-                            image_url,
-                            detail: detail.or(Some(DEFAULT_IMAGE_DETAIL)),
-                        }
-                    }
-                })
-                .collect::<Vec<_>>(),
-        ),
-        ResponseInputItem::FunctionCallOutput { output, .. }
-        | ResponseInputItem::CustomToolCallOutput { output, .. } => match output.body {
-            FunctionCallOutputBody::Text(text) => JsonValue::String(text),
-            FunctionCallOutputBody::ContentItems(items) => {
-                content_items_to_code_mode_result(&items)
-            }
-        },
-        ResponseInputItem::ToolSearchOutput { tools, .. } => JsonValue::Array(tools),
-        ResponseInputItem::McpToolCallOutput { output, .. } => {
-            output.code_mode_result(&ToolPayload::Mcp {
-                server: String::new(),
-                tool: String::new(),
-                raw_arguments: String::new(),
-            })
-        }
-    }
-}
-
-fn content_items_to_code_mode_result(items: &[FunctionCallOutputContentItem]) -> JsonValue {
-    JsonValue::String(
-        items
-            .iter()
-            .filter_map(|item| match item {
-                FunctionCallOutputContentItem::InputText { text } if !text.trim().is_empty() => {
-                    Some(text.clone())
-                }
-                FunctionCallOutputContentItem::InputImage { image_url, .. }
-                    if !image_url.trim().is_empty() =>
-                {
-                    Some(image_url.clone())
-                }
-                FunctionCallOutputContentItem::InputText { .. }
-                | FunctionCallOutputContentItem::InputImage { .. } => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
 }
 
 fn function_tool_response(

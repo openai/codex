@@ -37,7 +37,6 @@ use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::WARNING_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::emit_failed_exec_end_for_unified_exec;
@@ -582,6 +581,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
+            truncation_policy: context.turn.truncation_policy,
             max_output_tokens: request.max_output_tokens,
             process_id: response_process_id,
             exit_code,
@@ -692,8 +692,8 @@ impl UnifiedExecProcessManager {
 
         // After polling, refresh_process_state tells us whether the PTY is
         // still alive or has exited and been removed from the store; we thread
-        // that through so the handler can tag TerminalInteraction with an
-        // appropriate process_id and exit_code.
+        // that through so the handler can tag or suppress TerminalInteraction
+        // with an appropriate process_id and exit_code.
         let status = if let Some(status) = status_after_write {
             status
         } else {
@@ -726,6 +726,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
+            truncation_policy: request.truncation_policy,
             max_output_tokens: request.max_output_tokens,
             process_id,
             exit_code,
@@ -827,11 +828,11 @@ impl UnifiedExecProcessManager {
             session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
-        let (number_processes, pruned_entry) = {
+        let pruned_entry = {
             let mut store = self.process_store.lock().await;
             let pruned_entry = Self::prune_processes_if_needed(&mut store);
             store.processes.insert(process_id, entry);
-            (store.processes.len(), pruned_entry)
+            pruned_entry
         };
         // prune_processes_if_needed runs while holding process_store; do async
         // network-approval cleanup only after dropping that lock.
@@ -839,16 +840,6 @@ impl UnifiedExecProcessManager {
             unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
-
-        if number_processes >= WARNING_UNIFIED_EXEC_PROCESSES {
-            context
-                .session
-                .record_model_warning(
-                    format!("The maximum number of unified exec processes you can keep open is {WARNING_UNIFIED_EXEC_PROCESSES} and you currently have {number_processes} processes open. Reuse older processes or close them to prevent automatic pruning of old processes"),
-                    &context.turn
-                )
-                .await;
-        };
 
         spawn_exit_watcher(
             Arc::clone(&process),
@@ -886,16 +877,43 @@ impl UnifiedExecProcessManager {
                     "windows sandbox: failed to resolve codex_home: {err}"
                 ))
             })?;
+            let additional_deny_write_paths = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .map(|overrides| overrides.additional_deny_write_paths.clone())
+                .unwrap_or_default();
+            let additional_deny_read_paths = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .map(|overrides| overrides.additional_deny_read_paths.clone())
+                .unwrap_or_default();
+            let elevated_read_roots_override = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.read_roots_override.clone());
+            let elevated_read_roots_include_platform_defaults = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
+            let elevated_write_roots_override = request
+                .windows_sandbox_filesystem_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.write_roots_override.clone());
             let spawned = match request.windows_sandbox_level {
                 codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
-                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
-                        policy_json.as_str(),
+                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile(
+                        &request.permission_profile,
                         request.windows_sandbox_policy_cwd.as_path(),
                         codex_home.as_ref(),
                         request.command.clone(),
                         request.cwd.as_path(),
                         request.env.clone(),
                         None,
+                        elevated_read_roots_override.as_deref(),
+                        elevated_read_roots_include_platform_defaults,
+                        elevated_write_roots_override.as_deref(),
+                        &additional_deny_read_paths,
+                        &additional_deny_write_paths,
                         tty,
                         tty,
                         request.windows_sandbox_private_desktop,
@@ -912,6 +930,8 @@ impl UnifiedExecProcessManager {
                         request.cwd.as_path(),
                         request.env.clone(),
                         None,
+                        &additional_deny_read_paths,
+                        &additional_deny_write_paths,
                         tty,
                         tty,
                         request.windows_sandbox_private_desktop,
@@ -996,10 +1016,8 @@ impl UnifiedExecProcessManager {
             local_policy_env,
         };
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = UnifiedExecRuntime::new(
-            self,
-            context.turn.tools_config.unified_exec_shell_mode.clone(),
-        );
+        let mut runtime =
+            UnifiedExecRuntime::new(self, context.turn.unified_exec_shell_mode.clone());
         let file_system_sandbox_policy = context.turn.file_system_sandbox_policy();
         let exec_approval_requirement = context
             .session
@@ -1010,7 +1028,9 @@ impl UnifiedExecProcessManager {
                 approval_policy: context.turn.approval_policy.value(),
                 permission_profile: context.turn.permission_profile(),
                 file_system_sandbox_policy: &file_system_sandbox_policy,
-                sandbox_cwd: cwd.as_path(),
+                // The process cwd may be model-controlled. Policy resolution
+                // stays anchored to the selected turn environment cwd instead.
+                sandbox_cwd: request.sandbox_cwd.as_path(),
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
@@ -1021,9 +1041,11 @@ impl UnifiedExecProcessManager {
             .await;
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
+            shell_type: request.shell_type.clone(),
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
             cwd,
+            sandbox_cwd: request.sandbox_cwd.clone(),
             environment: Arc::clone(&request.environment),
             env,
             exec_server_env_config: Some(exec_server_env_config),

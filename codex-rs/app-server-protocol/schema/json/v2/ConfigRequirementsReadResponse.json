@@ -60,11 +60,43 @@
         }
       ]
     },
+    "ComputerUseRequirements": {
+      "properties": {
+        "allowLockedComputerUse": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ConfigRequirements": {
       "properties": {
+        "allowAppshots": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowManagedHooksOnly": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowedApprovalPolicies": {
           "items": {
             "$ref": "#/definitions/AskForApproval"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowedPermissions": {
+          "items": {
+            "type": "string"
           },
           "type": [
             "array",
@@ -87,6 +119,16 @@
           "type": [
             "array",
             "null"
+          ]
+        },
+        "computerUse": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComputerUseRequirements"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "enforceResidency": {
@@ -120,6 +162,12 @@
             },
             "command": {
               "type": "string"
+            },
+            "commandWindows": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "statusMessage": {
               "type": [
@@ -249,6 +297,18 @@
           },
           "type": "array"
         },
+        "SubagentStart": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
+        "SubagentStop": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -276,6 +336,8 @@
         "PreToolUse",
         "SessionStart",
         "Stop",
+        "SubagentStart",
+        "SubagentStop",
         "UserPromptSubmit"
       ],
       "type": "object"

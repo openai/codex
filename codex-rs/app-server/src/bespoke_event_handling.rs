@@ -4,6 +4,7 @@ use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
+use crate::request_processors::thread_settings_from_core_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -60,6 +61,7 @@ use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -772,6 +774,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 requested_permissions,
                 request_cwd,
                 pending_request_id,
+                outgoing,
                 receiver: rx,
                 request_permissions_guard: permission_guard,
             };
@@ -1198,6 +1201,24 @@ pub(crate) async fn apply_bespoke_event_handling(
                     notification,
                 ))
                 .await;
+        }
+        EventMsg::ThreadSettingsApplied(thread_settings_event) => {
+            let thread_settings =
+                thread_settings_from_core_snapshot(thread_settings_event.thread_settings);
+            let changed = {
+                let mut state = thread_state.lock().await;
+                state.note_thread_settings(thread_settings.clone())
+            };
+            if changed {
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadSettingsUpdated(
+                        ThreadSettingsUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            thread_settings,
+                        },
+                    ))
+                    .await;
+            }
         }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(conversation_id, &event_turn_id, turn_diff_event, &outgoing).await;
@@ -1745,11 +1766,12 @@ async fn on_request_permissions_response(
         requested_permissions,
         request_cwd,
         pending_request_id,
+        outgoing,
         receiver,
         request_permissions_guard,
     } = pending_response;
     let response = receiver.await;
-    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id.clone()).await;
     drop(request_permissions_guard);
     let Some(response) = request_permissions_response_from_client_result(
         requested_permissions,
@@ -1758,6 +1780,7 @@ async fn on_request_permissions_response(
     ) else {
         return;
     };
+    outgoing.track_effective_permissions_approval_response(pending_request_id, response.clone());
 
     if let Err(err) = conversation
         .submit(Op::RequestPermissionsResponse {
@@ -1775,6 +1798,7 @@ struct PendingRequestPermissionsResponse {
     requested_permissions: CoreRequestPermissionProfile,
     request_cwd: AbsolutePathBuf,
     pending_request_id: RequestId,
+    outgoing: ThreadScopedOutgoingMessageSender,
     receiver: oneshot::Receiver<ClientRequestResult>,
     request_permissions_guard: ThreadWatchActiveGuard,
 }
@@ -2133,6 +2157,7 @@ mod tests {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             })),
             RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
                 message: "after rollback".to_string(),
@@ -3194,6 +3219,7 @@ mod tests {
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    trace_id: None,
                     started_at: Some(42),
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
@@ -3206,6 +3232,7 @@ mod tests {
                     images: None,
                     local_images: Vec::new(),
                     text_elements: Vec::new(),
+                    ..Default::default()
                 }),
             );
         }
@@ -3226,6 +3253,7 @@ mod tests {
                 id: "turn-1".to_string(),
                 msg: EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    trace_id: None,
                     started_at: Some(42),
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
@@ -3275,6 +3303,7 @@ mod tests {
                 &event_turn_id,
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: event_turn_id.clone(),
+                    trace_id: None,
                     started_at: Some(42),
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),

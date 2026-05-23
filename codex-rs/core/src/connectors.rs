@@ -35,7 +35,7 @@ use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
-use codex_mcp::McpRuntimeEnvironment;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
@@ -198,11 +198,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager =
-        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?;
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
+            .await?;
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
         force_refetch,
-        &environment_manager,
+        Arc::new(environment_manager),
     )
     .await
 }
@@ -210,7 +211,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
 pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     config: &Config,
     force_refetch: bool,
-    environment_manager: &EnvironmentManager,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
@@ -261,10 +262,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let environment = environment_manager
-        .default_environment()
-        .unwrap_or_else(|| environment_manager.local_environment());
-
     let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -273,7 +270,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         PermissionProfile::default(),
-        McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
+        // Connector discovery is threadless. Use an actually configured env if
+        // one exists, but do not reintroduce the old hidden-local fallback.
+        McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         host_owned_codex_apps_enabled,

@@ -62,6 +62,12 @@ mod thread_processor_behavior_tests {
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
@@ -211,6 +217,7 @@ mod thread_processor_behavior_tests {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         ))];
         let active_turn = Turn {
@@ -438,7 +445,7 @@ mod thread_processor_behavior_tests {
                         path: FileSystemPath::GlobPattern {
                             pattern: "/tmp/project/**/*.env".to_string(),
                         },
-                        access: FileSystemAccessMode::None,
+                        access: FileSystemAccessMode::Deny,
                     },
                 ]),
                 NetworkSandboxPolicy::Restricted,
@@ -467,14 +474,16 @@ mod thread_processor_behavior_tests {
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":workspace".to_string()),
+                default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
                 ..Default::default()
             },
             cwd.as_path()
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":danger-no-sandbox".to_string()),
+                default_permissions: Some(
+                    BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()
+                ),
                 ..Default::default()
             },
             cwd.as_path()
@@ -488,7 +497,7 @@ mod thread_processor_behavior_tests {
         ));
         assert!(!requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":read-only".to_string()),
+                default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
                 ..Default::default()
             },
             cwd.as_path()
@@ -582,6 +591,7 @@ mod thread_processor_behavior_tests {
             temp_dir.path().to_path_buf(),
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(vec![
@@ -630,6 +640,7 @@ mod thread_processor_behavior_tests {
             model_provider: None,
             service_tier: Some(Some("priority".to_string())),
             cwd: None,
+            runtime_workspace_roots: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
@@ -650,9 +661,20 @@ mod thread_processor_behavior_tests {
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             active_permission_profile: None,
             cwd,
+            workspace_roots: Vec::new(),
+            profile_workspace_roots: Vec::new(),
             ephemeral: false,
             reasoning_effort: None,
+            reasoning_summary: None,
             personality: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
             session_source: SessionSource::Cli,
             thread_source: None,
         };
@@ -1133,6 +1155,7 @@ mod thread_processor_behavior_tests {
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    trace_id: None,
                     started_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),

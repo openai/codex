@@ -76,31 +76,22 @@ impl Stage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
     // Stable.
-    /// Removed compatibility flag retained as a no-op so old configs can
-    /// still parse `undo`.
-    GhostCommit,
     /// Enable the default shell tool.
     ShellTool,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
 
     // Experimental
-    /// Removed compatibility flag for the deleted JavaScript REPL feature.
-    JsRepl,
     /// Enable JavaScript code mode backed by the in-process V8 runtime.
     CodeMode,
     /// Restrict model-visible tools to code mode entrypoints (`exec`, `wait`).
     CodeModeOnly,
-    /// Removed compatibility flag for the deleted JavaScript REPL tool-only mode.
-    JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Route shell tool execution through the zsh exec bridge.
     ShellZshFork,
     /// Reflow transcript scrollback when the terminal is resized.
     TerminalResizeReflow,
-    /// Include the freeform apply_patch tool.
-    ApplyPatchFreeform,
     /// Stream structured progress while apply_patch input is being generated.
     ApplyPatchStreamingEvents,
     /// Allow exec tools to request additional permissions while staying sandboxed.
@@ -112,30 +103,13 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Legacy search-tool feature flag kept for backward compatibility.
-    SearchTool,
-    /// Removed legacy Linux bubblewrap opt-in flag retained as a no-op so old
-    /// wrappers and config can still parse it.
-    UseLinuxSandboxBwrap,
     /// Use the legacy Landlock Linux sandbox fallback instead of the default
     /// bubblewrap pipeline.
     UseLegacyLandlock,
-    /// Allow the model to request approval and propose exec rules.
-    RequestRule,
-    /// Enable Windows sandbox (restricted token) on Windows.
-    WindowsSandbox,
-    /// Use the elevated Windows sandbox pipeline (setup + runner).
-    WindowsSandboxElevated,
-    /// Legacy remote models flag kept for backward compatibility.
-    RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
-    /// Enable git commit attribution guidance via model instructions.
-    CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
-    /// Persist rollout metadata to a local SQLite database.
-    Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
     /// Enable the Chronicle sidecar for passive screen-context memories.
@@ -158,19 +132,17 @@ pub enum Feature {
     EnableMcpApps,
     /// Use the new path for the host-owned apps MCP server.
     AppsMcpPathOverride,
-    /// Enable the tool_search tool for apps.
+    /// Removed compatibility flag retained as a no-op now that tool_search is always enabled.
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
     ToolSearchAlwaysDeferMcpTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
     NonPrefixedMcpToolNames,
-    /// Expose placeholder tools for unavailable historical tool calls.
-    UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
     Plugins,
-    /// Enable plugin-bundled lifecycle hooks.
+    /// Removed compatibility flag for plugin-bundled lifecycle hooks.
     PluginHooks,
     /// Allow the in-app browser pane in desktop apps.
     ///
@@ -190,28 +162,24 @@ pub enum Feature {
     ComputerUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
+    /// Enable remote plugin sharing flows.
+    PluginSharing,
     /// Show the startup prompt for migrating external agent config into Codex.
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
-    /// Prompt for missing skill env var dependencies.
+    /// Removed compatibility flag for deleted skill env var dependency prompting.
     SkillEnvVarDependencyPrompt,
     /// Enable the unified mention popup prototype.
     MentionsV2,
-    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
-    /// Kept for config backward compatibility; behavior is always steer-enabled.
-    Steer,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
-    /// Enable collaboration modes (Plan, Default).
-    /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
-    CollaborationModes,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -224,27 +192,64 @@ pub enum Feature {
     FastMode,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
-    /// Connect app-server to the ChatGPT remote control service.
-    RemoteControl,
-    /// Removed compatibility flag retained as a no-op so old wrappers can
-    /// still pass `--enable image_detail_original`.
-    ImageDetailOriginal,
-    /// Removed compatibility flag. The TUI now always uses the app-server implementation.
-    TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
-    /// Enable workspace-specific owner nudge copy and prompts in the TUI.
-    WorkspaceOwnerUsageNudge,
-    /// Legacy rollout flag for Responses API WebSocket transport experiments.
-    ResponsesWebsockets,
-    /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
-    ResponsesWebsocketsV2,
     /// Send `response.processed` over Responses API websockets after a turn response is recorded.
     ResponsesWebsocketResponseProcessed,
     /// Enable remote compaction v2 over the normal Responses API.
     RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
+
+    // Removed
+    /// Removed compatibility flag retained as a no-op so old configs can
+    /// still parse `undo`.
+    GhostCommit,
+    /// Removed compatibility flag for the deleted JavaScript REPL feature.
+    JsRepl,
+    /// Removed compatibility flag for the deleted JavaScript REPL tool-only mode.
+    JsReplToolsOnly,
+    /// Legacy search-tool feature flag kept for backward compatibility.
+    SearchTool,
+    /// Removed legacy Linux bubblewrap opt-in flag retained as a no-op so old
+    /// wrappers and config can still parse it.
+    UseLinuxSandboxBwrap,
+    /// Allow the model to request approval and propose exec rules.
+    RequestRule,
+    /// Enable Windows sandbox (restricted token) on Windows.
+    WindowsSandbox,
+    /// Use the elevated Windows sandbox pipeline (setup + runner).
+    WindowsSandboxElevated,
+    /// Legacy remote models flag kept for backward compatibility.
+    RemoteModels,
+    /// Removed legacy git commit attribution guidance flag.
+    CodexGitCommit,
+    /// Persist rollout metadata to a local SQLite database.
+    Sqlite,
+    /// Removed compatibility flag for the deleted apply_patch fallback feature.
+    ApplyPatchFreeform,
+    /// Removed compatibility flag for the deleted unavailable-tool placeholder backfill.
+    UnavailableDummyTools,
+    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
+    /// Kept for config backward compatibility; behavior is always steer-enabled.
+    Steer,
+    /// Enable collaboration modes (Plan, Default).
+    /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
+    CollaborationModes,
+    /// Removed compatibility flag for the deleted remote control feature.
+    RemoteControl,
+    /// Removed compatibility flag retained as a no-op so old wrappers can
+    /// still pass `--enable image_detail_original`.
+    ImageDetailOriginal,
+    /// Removed compatibility flag. The TUI now always uses the app-server implementation.
+    TuiAppServer,
+    /// Removed compatibility flag retained as a no-op now that workspace owner
+    /// usage nudges are always enabled.
+    WorkspaceOwnerUsageNudge,
+    /// Legacy rollout flag for Responses API WebSocket transport experiments.
+    ResponsesWebsockets,
+    /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
+    ResponsesWebsocketsV2,
 }
 
 impl Feature {
@@ -285,25 +290,17 @@ pub struct Features {
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
-    pub include_apply_patch_tool: Option<bool>,
     pub web_search_request: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeatureConfigSource<'a> {
     pub features: Option<&'a FeaturesToml>,
-    pub include_apply_patch_tool: Option<bool>,
-    pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
 }
 
 impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
-        LegacyFeatureToggles {
-            include_apply_patch_tool: self.include_apply_patch_tool,
-            ..Default::default()
-        }
-        .apply(features);
         if let Some(enabled) = self.web_search_request {
             if enabled {
                 features.enable(Feature::WebSearchRequest);
@@ -427,7 +424,22 @@ impl Features {
                 "js_repl_tools_only" => {
                     continue;
                 }
+                "remote_control" => {
+                    continue;
+                }
+                "apply_patch_freeform" => {
+                    continue;
+                }
+                "tool_search" => {
+                    continue;
+                }
                 "image_detail_original" => {
+                    continue;
+                }
+                "plugin_hooks" => {
+                    continue;
+                }
+                "skill_env_var_dependency_prompt" => {
                     continue;
                 }
                 "use_legacy_landlock" => {
@@ -468,8 +480,6 @@ impl Features {
 
         for source in [base, profile] {
             LegacyFeatureToggles {
-                include_apply_patch_tool: source.include_apply_patch_tool,
-                experimental_use_freeform_apply_patch: source.experimental_use_freeform_apply_patch,
                 experimental_use_unified_exec_tool: source.experimental_use_unified_exec_tool,
             }
             .apply(&mut features);
@@ -783,11 +793,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Removed,
         default_enabled: false,
     },
-    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::CodexGitCommit,
         key: "codex_git_commit",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -827,8 +836,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ApplyPatchStreamingEvents,
@@ -945,8 +954,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ToolSearch,
         key: "tool_search",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ToolSearchAlwaysDeferMcpTools,
@@ -963,8 +972,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UnavailableDummyTools,
         key: "unavailable_dummy_tools",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ToolSuggest,
@@ -981,7 +990,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PluginHooks,
         key: "plugin_hooks",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1015,6 +1024,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::PluginSharing,
+        key: "plugin_sharing",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::ExternalMigration,
         key: "external_migration",
         stage: Stage::Experimental {
@@ -1039,7 +1054,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SkillEnvVarDependencyPrompt,
         key: "skill_env_var_dependency_prompt",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1073,12 +1088,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Goals,
         key: "goals",
-        stage: Stage::Experimental {
-            name: "Goals",
-            menu_description: "Set a persistent goal Codex can continue over time",
-            announcement: "",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,
@@ -1125,7 +1136,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteControl,
         key: "remote_control",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1161,7 +1172,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WorkspaceOwnerUsageNudge,
         key: "workspace_owner_usage_nudge",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

@@ -12,7 +12,8 @@ import type { ThreadSource } from "./ThreadSource";
  * 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread.
  * 2. By path: load the thread from disk by path and fork it into a new thread.
  *
- * If using path, the thread_id param will be ignored.
+ * If using a non-empty path, the thread_id param will be ignored.
+ * Empty string path values are treated as absent.
  *
  * Prefer using thread_id whenever possible.
  */

@@ -17,11 +17,13 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PostToolUseCommandInput;
+use crate::schema::SubagentCommandInputFields;
 
 #[derive(Debug, Clone)]
 pub struct PostToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
+    pub subagent: Option<common::SubagentHookContext>,
     pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
@@ -148,9 +150,12 @@ pub(crate) async fn run(
 /// events across processes. Shell-like tools pass `{ "command": ... }` as
 /// `tool_input`; MCP tools pass their resolved JSON arguments.
 fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json::Error> {
+    let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
     serde_json::to_string(&PostToolUseCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
+        agent_id: subagent.agent_id,
+        agent_type: subagent.agent_type,
         transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
         cwd: request.cwd.display().to_string(),
         hook_event_name: "PostToolUse".to_string(),
@@ -298,6 +303,7 @@ fn parse_completed(
             additional_contexts_for_model,
             feedback_messages_for_model,
         },
+        completion_order: 0,
     }
 }
 
@@ -570,6 +576,7 @@ mod tests {
         super::PostToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
+            subagent: None,
             cwd: test_path_buf("/tmp").abs(),
             transcript_path: None,
             model: "gpt-test".to_string(),

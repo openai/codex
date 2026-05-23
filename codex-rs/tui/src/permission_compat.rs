@@ -44,22 +44,21 @@ pub(crate) fn legacy_compatible_permission_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_app_server_protocol::FileSystemAccessMode;
-    use codex_app_server_protocol::FileSystemPath;
-    use codex_app_server_protocol::FileSystemSandboxEntry;
-    use codex_app_server_protocol::FileSystemSpecialPath;
-    use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-    use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-    use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+    use codex_protocol::models::ManagedFileSystemPermissions;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn compatibility_profile_preserves_unbridgeable_write_roots() {
         let cwd = AbsolutePathBuf::try_from("/workspace/project").expect("absolute cwd");
         let extra_root = AbsolutePathBuf::try_from("/workspace/extra").expect("absolute root");
-        let permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-            network: PermissionProfileNetworkPermissions { enabled: false },
-            file_system: PermissionProfileFileSystemPermissions::Restricted {
+        let permission_profile: PermissionProfile = PermissionProfile::Managed {
+            network: NetworkSandboxPolicy::Restricted,
+            file_system: ManagedFileSystemPermissions::Restricted {
                 entries: vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
@@ -76,8 +75,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
-        }
-        .into();
+        };
 
         let compatibility_profile =
             legacy_compatible_permission_profile(&permission_profile, cwd.as_path());
