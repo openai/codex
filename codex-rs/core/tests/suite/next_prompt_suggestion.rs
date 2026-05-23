@@ -72,21 +72,13 @@ async fn suggest_next_prompt_samples_history_without_tools() -> Result<()> {
 
     let token_event = wait_for_event(&test.codex, |msg| {
         matches!(msg, EventMsg::TokenCount(ev)
-            if ev.info.as_ref().is_some_and(|info| info.last_token_usage.total_tokens == 33)
-                && ev.rate_limits.is_some())
+            if ev.info.is_none() && ev.rate_limits.is_some())
     })
     .await;
     let EventMsg::TokenCount(token_count) = token_event else {
         unreachable!("wait_for_event predicate only accepts TokenCount");
     };
-    assert_eq!(
-        token_count
-            .info
-            .expect("token usage should be recorded")
-            .last_token_usage
-            .total_tokens,
-        33
-    );
+    assert_eq!(token_count.info, None);
     assert_eq!(
         token_count
             .rate_limits

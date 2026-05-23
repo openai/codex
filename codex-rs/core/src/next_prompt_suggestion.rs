@@ -28,7 +28,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenCountEvent;
-use codex_protocol::protocol::TokenUsageInfo;
 use codex_rollout_trace::InferenceTraceContext;
 use futures::StreamExt;
 use std::collections::HashSet;
@@ -177,22 +176,11 @@ pub(crate) async fn suggest_next_prompt(
                 latest_rate_limits = Some(snapshot.clone());
                 sess.record_rate_limits_info(snapshot).await;
             }
-            ResponseEvent::Completed {
-                response_id,
-                token_usage,
-                ..
-            } => {
-                let token_usage_info = TokenUsageInfo::new_or_append(
-                    &sess.token_usage_info().await,
-                    &token_usage,
-                    turn_context.model_context_window(),
-                );
-                let should_emit_token_count =
-                    token_usage_info.is_some() || latest_rate_limits.is_some();
-                if should_emit_token_count {
-                    // App-server clients key usage updates by turn id. Attribute hidden
-                    // suggestion sampling to the latest real turn instead of the ephemeral
-                    // lightweight turn used to configure the request.
+            ResponseEvent::Completed { response_id, .. } => {
+                if let Some(rate_limits) = latest_rate_limits {
+                    // App-server clients key updates by turn id. Attribute hidden
+                    // suggestion rate limits to the latest real turn instead of the
+                    // ephemeral lightweight turn used to configure the request.
                     if let Some(turn_id) = sess
                         .reference_context_item()
                         .await
@@ -201,12 +189,12 @@ pub(crate) async fn suggest_next_prompt(
                         sess.deliver_event_raw(Event {
                             id: turn_id,
                             msg: EventMsg::TokenCount(TokenCountEvent {
-                                info: token_usage_info,
-                                rate_limits: latest_rate_limits,
+                                info: None,
+                                rate_limits: Some(rate_limits),
                             }),
                         })
                         .await;
-                    } else if let Some(rate_limits) = latest_rate_limits {
+                    } else {
                         sess.send_event(
                             &turn_context,
                             EventMsg::TokenCount(TokenCountEvent {
@@ -227,6 +215,7 @@ pub(crate) async fn suggest_next_prompt(
             .send_response_processed(&completed_response_id)
             .await;
     }
+    client_session.reset_websocket_session();
     if !session_history_matches_snapshot(sess, history_snapshot).await {
         tracing::debug!("next prompt suggestion skipped after history changed");
         return Ok(None);
