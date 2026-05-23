@@ -1010,13 +1010,16 @@ pub async fn run_main(
             Some(provider)
         } else {
             // No provider configured, prompt the user
-            let provider = oss_selection::select_oss_provider().await?;
+            let selection = oss_selection::select_oss_provider().await?;
+            let provider = selection.provider;
             if provider == "__CANCELLED__" {
                 return Err(std::io::Error::other(
                     "OSS provider selection was cancelled by user",
                 ));
             }
-            manually_selected_oss_provider = Some(provider.clone());
+            if selection.manually_selected {
+                manually_selected_oss_provider = Some(provider.clone());
+            }
             Some(provider)
         }
     } else {
