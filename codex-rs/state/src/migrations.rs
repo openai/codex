@@ -5,6 +5,7 @@ use sqlx::migrate::Migrator;
 pub(crate) static STATE_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 pub(crate) static LOGS_MIGRATOR: Migrator = sqlx::migrate!("./logs_migrations");
 pub(crate) static GOALS_MIGRATOR: Migrator = sqlx::migrate!("./goals_migrations");
+pub(crate) static REVIEW_STORY_MIGRATOR: Migrator = sqlx::migrate!("./review_story_migrations");
 
 /// Allow an older Codex binary to open a database that has already been
 /// migrated by a newer binary running in parallel.
@@ -31,4 +32,8 @@ pub(crate) fn runtime_logs_migrator() -> Migrator {
 
 pub(crate) fn runtime_goals_migrator() -> Migrator {
     runtime_migrator(&GOALS_MIGRATOR)
+}
+
+pub(crate) fn runtime_review_story_migrator() -> Migrator {
+    runtime_migrator(&REVIEW_STORY_MIGRATOR)
 }

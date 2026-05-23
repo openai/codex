@@ -794,6 +794,21 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ReviewStartResponse,
     },
+    ReviewStoryStart => "reviewStory/start" {
+        params: v2::ReviewStoryStartParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ReviewStoryStartResponse,
+    },
+    ReviewStoryRead => "reviewStory/read" {
+        params: v2::ReviewStoryReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ReviewStoryReadResponse,
+    },
+    ReviewStoryList => "reviewStory/list" {
+        params: v2::ReviewStoryListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ReviewStoryListResponse,
+    },
 
     ModelList => "model/list" {
         params: v2::ModelListParams,
@@ -1484,6 +1499,7 @@ server_notification_definitions! {
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    ReviewStorySnapshotUpdated => "reviewStory/snapshot/updated" (v2::ReviewStorySnapshotUpdatedNotification),
     HookCompleted => "hook/completed" (v2::HookCompletedNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),

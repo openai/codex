@@ -2162,6 +2162,78 @@
             },
             "method": {
               "enum": [
+                "reviewStory/start"
+              ],
+              "title": "ReviewStory/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ReviewStoryStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ReviewStory/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "reviewStory/read"
+              ],
+              "title": "ReviewStory/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ReviewStoryReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ReviewStory/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "reviewStory/list"
+              ],
+              "title": "ReviewStory/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ReviewStoryListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ReviewStory/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "model/list"
               ],
               "title": "Model/listRequestMethod",
@@ -10940,6 +11012,379 @@
       "title": "ReviewStartResponse",
       "type": "object"
     },
+    "ReviewStoryAnchor": {
+      "properties": {
+        "anchorId": {
+          "type": "string"
+        },
+        "changeKind": {
+          "$ref": "#/definitions/ReviewStoryAnchorKind"
+        },
+        "diff": {
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchorId",
+        "changeKind",
+        "diff",
+        "filePath",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ReviewStoryAnchorKind": {
+      "enum": [
+        "added",
+        "modified",
+        "deleted",
+        "renamed",
+        "copied",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ReviewStoryListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ReviewStoryListParams",
+      "type": "object"
+    },
+    "ReviewStoryListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/ReviewStorySnapshotSummary"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "ReviewStoryListResponse",
+      "type": "object"
+    },
+    "ReviewStoryReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "storySnapshotId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "storySnapshotId",
+        "threadId"
+      ],
+      "title": "ReviewStoryReadParams",
+      "type": "object"
+    },
+    "ReviewStoryReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewStorySnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "ReviewStoryReadResponse",
+      "type": "object"
+    },
+    "ReviewStorySnapshot": {
+      "properties": {
+        "anchors": {
+          "items": {
+            "$ref": "#/definitions/ReviewStoryAnchor"
+          },
+          "type": "array"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "overview": {
+          "type": "string"
+        },
+        "previousStorySnapshotId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceFingerprint": {
+          "type": "string"
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/definitions/ReviewStorySnapshotStatus"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/definitions/ReviewStoryStep"
+          },
+          "type": "array"
+        },
+        "storySnapshotId": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/ReviewTarget"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "anchors",
+        "createdAt",
+        "overview",
+        "sourceFingerprint",
+        "stale",
+        "status",
+        "steps",
+        "storySnapshotId",
+        "target",
+        "threadId",
+        "title",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ReviewStorySnapshotStatus": {
+      "enum": [
+        "building",
+        "ready",
+        "partial",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "ReviewStorySnapshotSummary": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "previousStorySnapshotId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceFingerprint": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ReviewStorySnapshotStatus"
+        },
+        "stepCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "storySnapshotId": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/ReviewTarget"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "sourceFingerprint",
+        "status",
+        "stepCount",
+        "storySnapshotId",
+        "target",
+        "threadId",
+        "title",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ReviewStorySnapshotUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/definitions/ReviewStorySnapshot"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshot",
+        "threadId"
+      ],
+      "title": "ReviewStorySnapshotUpdatedNotification",
+      "type": "object"
+    },
+    "ReviewStoryStartParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "target": {
+          "$ref": "#/definitions/ReviewTarget"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "threadId"
+      ],
+      "title": "ReviewStoryStartParams",
+      "type": "object"
+    },
+    "ReviewStoryStartResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/definitions/ReviewStorySnapshot"
+        },
+        "storySnapshotId": {
+          "type": "string"
+        },
+        "turn": {
+          "$ref": "#/definitions/Turn"
+        }
+      },
+      "required": [
+        "snapshot",
+        "storySnapshotId",
+        "turn"
+      ],
+      "title": "ReviewStoryStartResponse",
+      "type": "object"
+    },
+    "ReviewStoryStep": {
+      "properties": {
+        "anchorIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dependencyRationale": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "goal": {
+          "type": "string"
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "readiness": {
+          "$ref": "#/definitions/ReviewStoryStepReadiness"
+        },
+        "reviewFocus": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stepId": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchorIds",
+        "dependencyRationale",
+        "goal",
+        "index",
+        "readiness",
+        "reviewFocus",
+        "stepId",
+        "summary",
+        "title"
+      ],
+      "type": "object"
+    },
+    "ReviewStoryStepReadiness": {
+      "enum": [
+        "outline",
+        "enriching",
+        "ready",
+        "failed"
+      ],
+      "type": "string"
+    },
     "ReviewTarget": {
       "oneOf": [
         {
@@ -11491,6 +11936,26 @@
             "params"
           ],
           "title": "Turn/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "reviewStory/snapshot/updated"
+              ],
+              "title": "ReviewStory/snapshot/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ReviewStorySnapshotUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ReviewStory/snapshot/updatedNotification",
           "type": "object"
         },
         {

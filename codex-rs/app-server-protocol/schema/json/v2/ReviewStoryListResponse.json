@@ -1,0 +1,177 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ReviewStorySnapshotStatus": {
+      "enum": [
+        "building",
+        "ready",
+        "partial",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "ReviewStorySnapshotSummary": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "previousStorySnapshotId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceFingerprint": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ReviewStorySnapshotStatus"
+        },
+        "stepCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "storySnapshotId": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/ReviewTarget"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "sourceFingerprint",
+        "status",
+        "stepCount",
+        "storySnapshotId",
+        "target",
+        "threadId",
+        "title",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ReviewTarget": {
+      "oneOf": [
+        {
+          "description": "Review the working tree: staged, unstaged, and untracked files.",
+          "properties": {
+            "type": {
+              "enum": [
+                "uncommittedChanges"
+              ],
+              "title": "UncommittedChangesReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UncommittedChangesReviewTarget",
+          "type": "object"
+        },
+        {
+          "description": "Review changes between the current branch and the given base branch.",
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "baseBranch"
+              ],
+              "title": "BaseBranchReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "branch",
+            "type"
+          ],
+          "title": "BaseBranchReviewTarget",
+          "type": "object"
+        },
+        {
+          "description": "Review the changes introduced by a specific commit.",
+          "properties": {
+            "sha": {
+              "type": "string"
+            },
+            "title": {
+              "description": "Optional human-readable label (e.g., commit subject) for UIs.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "commit"
+              ],
+              "title": "CommitReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sha",
+            "type"
+          ],
+          "title": "CommitReviewTarget",
+          "type": "object"
+        },
+        {
+          "description": "Arbitrary instructions, equivalent to the old free-form prompt.",
+          "properties": {
+            "instructions": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "custom"
+              ],
+              "title": "CustomReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "instructions",
+            "type"
+          ],
+          "title": "CustomReviewTarget",
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/ReviewStorySnapshotSummary"
+      },
+      "type": "array"
+    },
+    "nextCursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "ReviewStoryListResponse",
+  "type": "object"
+}

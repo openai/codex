@@ -68,6 +68,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::TurnStarted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::HookStarted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::TurnCompleted(notification) => Some(notification.thread_id.as_str()),
+        ServerNotification::ReviewStorySnapshotUpdated(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::HookCompleted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::TurnDiffUpdated(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::TurnPlanUpdated(notification) => Some(notification.thread_id.as_str()),
