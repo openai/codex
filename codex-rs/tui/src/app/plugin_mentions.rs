@@ -1,76 +1,68 @@
 //! Plugin mention capability enrichment for the TUI.
 //!
-//! Mention inventory and capability details come from app-server RPCs so remote workspaces do not
-//! depend on the TUI host's local config.toml after plugin mutations.
+//! Mention inventory comes from app-server `plugin/list`, while mention eligibility still reuses
+//! the older local bulk capability summaries. That keeps the feature app-server-shaped without
+//! paying for a `plugin/read` per plugin.
 
-use super::background_requests::fetch_plugin_detail;
 use super::background_requests::request_plugin_list;
 use super::*;
-use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
-use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginSummary;
-use codex_plugin::AppConnectorId;
+use codex_core_plugins::PluginsManager;
 use codex_plugin::PluginCapabilitySummary;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 struct PluginMentionEntry {
     config_name: String,
     display_name: String,
     description: Option<String>,
-    read_params: PluginReadParams,
 }
 
 impl PluginMentionEntry {
-    fn capability_summary(self, detail: PluginDetail) -> Option<PluginCapabilitySummary> {
-        let mcp_server_names = detail.mcp_servers;
-        let app_connector_ids = detail
-            .apps
-            .into_iter()
-            .map(|app| AppConnectorId(app.id))
-            .collect::<Vec<_>>();
-        let has_skills = detail.skills.iter().any(|skill| skill.enabled);
-        let summary = PluginCapabilitySummary {
+    fn capability_summary(
+        self,
+        capabilities_by_config_name: &HashMap<String, PluginCapabilitySummary>,
+    ) -> Option<PluginCapabilitySummary> {
+        let capabilities = capabilities_by_config_name.get(&self.config_name)?;
+        Some(PluginCapabilitySummary {
             config_name: self.config_name,
             display_name: self.display_name,
             description: self.description,
-            has_skills,
-            mcp_server_names,
-            app_connector_ids,
-        };
-        (summary.has_skills
-            || !summary.mcp_server_names.is_empty()
-            || !summary.app_connector_ids.is_empty())
-        .then_some(summary)
+            has_skills: capabilities.has_skills,
+            mcp_server_names: capabilities.mcp_server_names.clone(),
+            app_connector_ids: capabilities.app_connector_ids.clone(),
+        })
     }
 }
 
 pub(super) async fn fetch_plugin_mentions(
     request_handle: AppServerRequestHandle,
-    cwd: PathBuf,
+    config: crate::legacy_core::config::Config,
 ) -> Result<Vec<PluginCapabilitySummary>> {
-    let response = request_plugin_list(request_handle.clone(), cwd).await?;
+    let response = request_plugin_list(request_handle, config.cwd.to_path_buf()).await?;
     let mention_entries = plugin_mention_entries_from_list_response(response);
+    let capabilities_by_config_name = load_plugin_mention_capabilities(&config).await;
 
-    let mut summaries = Vec::new();
-    for entry in mention_entries {
-        match fetch_plugin_detail(request_handle.clone(), entry.read_params.clone()).await {
-            Ok(response) => {
-                if let Some(summary) = entry.capability_summary(response.plugin) {
-                    summaries.push(summary);
-                }
-            }
-            Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    plugin = entry.config_name,
-                    "plugin/read failed while refreshing plugin mention capabilities"
-                );
-            }
-        }
-    }
-    Ok(summaries)
+    Ok(mention_entries
+        .into_iter()
+        .filter_map(|entry| entry.capability_summary(&capabilities_by_config_name))
+        .collect())
+}
+
+async fn load_plugin_mention_capabilities(
+    config: &crate::legacy_core::config::Config,
+) -> HashMap<String, PluginCapabilitySummary> {
+    let plugins_input = config.plugins_config_input();
+    PluginsManager::new(config.codex_home.to_path_buf())
+        .plugins_for_config(&plugins_input)
+        .await
+        .capability_summaries()
+        .iter()
+        .cloned()
+        .map(|summary| (summary.config_name.clone(), summary))
+        .collect()
 }
 
 fn plugin_mention_entries_from_list_response(
@@ -87,19 +79,15 @@ fn plugin_mention_entries_from_marketplace(
     marketplace: PluginMarketplaceEntry,
 ) -> Vec<PluginMentionEntry> {
     let marketplace_name = marketplace.name;
-    let marketplace_path = marketplace.path;
     marketplace
         .plugins
         .into_iter()
-        .filter_map(|plugin| {
-            plugin_mention_entry(&marketplace_name, marketplace_path.clone(), plugin)
-        })
+        .filter_map(|plugin| plugin_mention_entry(&marketplace_name, plugin))
         .collect()
 }
 
 fn plugin_mention_entry(
     marketplace_name: &str,
-    marketplace_path: Option<AbsolutePathBuf>,
     plugin: PluginSummary,
 ) -> Option<PluginMentionEntry> {
     if !plugin_is_eligible_for_mentions(&plugin) {
@@ -107,12 +95,10 @@ fn plugin_mention_entry(
     }
 
     let config_name = plugin_mention_config_name(marketplace_name, &plugin)?;
-    let read_params = plugin_mention_read_params(marketplace_name, marketplace_path, &plugin)?;
     Some(PluginMentionEntry {
         config_name,
         display_name: plugin_mention_display_name(&plugin),
         description: plugin_mention_description(&plugin),
-        read_params,
     })
 }
 
@@ -132,25 +118,6 @@ fn plugin_mention_config_name(marketplace_name: &str, plugin: &PluginSummary) ->
             );
         })
         .ok()
-}
-
-fn plugin_mention_read_params(
-    marketplace_name: &str,
-    marketplace_path: Option<AbsolutePathBuf>,
-    plugin: &PluginSummary,
-) -> Option<PluginReadParams> {
-    match marketplace_path {
-        Some(marketplace_path) => Some(PluginReadParams {
-            marketplace_path: Some(marketplace_path),
-            remote_marketplace_name: None,
-            plugin_name: plugin.name.clone(),
-        }),
-        None => Some(PluginReadParams {
-            marketplace_path: None,
-            remote_marketplace_name: Some(marketplace_name.to_string()),
-            plugin_name: plugin.remote_plugin_id.clone()?,
-        }),
-    }
 }
 
 fn plugin_mention_display_name(plugin: &PluginSummary) -> String {
