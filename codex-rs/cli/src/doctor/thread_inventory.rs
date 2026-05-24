@@ -461,22 +461,50 @@ fn is_rollout_timestamp_like(value: &str) -> bool {
             return false;
         }
     }
-    bytes
+    if !bytes
         .iter()
         .enumerate()
         .filter(|(idx, _)| !matches!(*idx, 4 | 7 | 10 | 13 | 16))
         .all(|(_, byte)| byte.is_ascii_digit())
-        && parse_two_digits(bytes, 5).is_some_and(|month| (1..=12).contains(&month))
-        && parse_two_digits(bytes, 8).is_some_and(|day| (1..=31).contains(&day))
-        && parse_two_digits(bytes, 11).is_some_and(|hour| hour <= 23)
-        && parse_two_digits(bytes, 14).is_some_and(|minute| minute <= 59)
-        && parse_two_digits(bytes, 17).is_some_and(|second| second <= 59)
+    {
+        return false;
+    }
+
+    let Ok(year) = value[0..4].parse::<u16>() else {
+        return false;
+    };
+    let Ok(month) = value[5..7].parse::<u8>() else {
+        return false;
+    };
+    let Ok(day) = value[8..10].parse::<u8>() else {
+        return false;
+    };
+    let Ok(hour) = value[11..13].parse::<u8>() else {
+        return false;
+    };
+    let Ok(minute) = value[14..16].parse::<u8>() else {
+        return false;
+    };
+    let Ok(second) = value[17..19].parse::<u8>() else {
+        return false;
+    };
+
+    is_valid_rollout_date(year, month, day) && hour <= 23 && minute <= 59 && second <= 59
 }
 
-fn parse_two_digits(bytes: &[u8], start: usize) -> Option<u8> {
-    let tens = bytes.get(start)?.checked_sub(b'0')?;
-    let ones = bytes.get(start + 1)?.checked_sub(b'0')?;
-    (tens <= 9 && ones <= 9).then_some(tens * 10 + ones)
+fn is_valid_rollout_date(year: u16, month: u8, day: u8) -> bool {
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days_in_month).contains(&day)
+}
+
+fn is_leap_year(year: u16) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 fn count_or_skipped(count: usize, complete: bool) -> String {
