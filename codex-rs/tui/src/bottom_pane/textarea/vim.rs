@@ -146,19 +146,24 @@ impl TextArea {
     fn big_word_range_at_cursor(&self) -> Option<Range<usize>> {
         self.non_ws_runs()
             .into_iter()
-            .find(|range| self.cursor_overlaps_range(range))
+            .find(|range| self.cursor_overlaps_range(range) || self.cursor_is_at_range_end(range))
     }
 
     fn small_word_range_at_cursor(&self) -> Option<Range<usize>> {
         for run in self.non_ws_runs() {
-            if !self.cursor_overlaps_range(&run) {
+            if !self.cursor_overlaps_range(&run) && !self.cursor_is_at_range_end(&run) {
                 continue;
             }
+            let mut last_piece = None;
             for (piece_start, piece) in split_word_pieces(&self.text[run.clone()]) {
                 let piece = run.start + piece_start..run.start + piece_start + piece.len();
                 if self.cursor_overlaps_range(&piece) {
                     return Some(piece);
                 }
+                last_piece = Some(piece);
+            }
+            if self.cursor_is_at_range_end(&run) {
+                return last_piece.or(Some(run));
             }
             return Some(run);
         }
@@ -185,6 +190,10 @@ impl TextArea {
 
     fn cursor_overlaps_range(&self, range: &Range<usize>) -> bool {
         range.start <= self.cursor_pos && self.cursor_pos < range.end
+    }
+
+    fn cursor_is_at_range_end(&self, range: &Range<usize>) -> bool {
+        range.start < range.end && self.cursor_pos == range.end
     }
 
     fn expand_word_around(&self, inner: Range<usize>) -> Range<usize> {
