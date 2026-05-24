@@ -46,6 +46,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -706,7 +707,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     // Handle resume subcommand through existing `thread/list` + `thread/resume`
     // APIs so exec no longer reaches into rollout storage directly.
-    let mut active_turn_id_from_resume: Option<String> = None;
+    let mut active_turn_from_resume: Option<Turn> = None;
     let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
         command.as_ref()
     {
@@ -724,13 +725,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             .await
             .map_err(anyhow::Error::msg)?;
             if matches!(initial_operation, InitialOperation::FollowActiveGoal) {
-                active_turn_id_from_resume = response
+                active_turn_from_resume = response
                     .thread
                     .turns
                     .iter()
                     .rev()
                     .find(|turn| turn.status == TurnStatus::InProgress)
-                    .map(|turn| turn.id.clone());
+                    .cloned();
             }
             let session_configured =
                 session_configured_from_thread_resume_response(&response, &config)
@@ -870,7 +871,14 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let mut active_goal_seen = false;
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
             loop {
-                if active_goal_seen && let Some(task_id) = active_turn_id_from_resume.take() {
+                if active_goal_seen && let Some(turn) = active_turn_from_resume.take() {
+                    let task_id = turn.id.clone();
+                    let _ = event_processor.process_server_notification(
+                        ServerNotification::TurnStarted(TurnStartedNotification {
+                            thread_id: primary_thread_id_for_span.clone(),
+                            turn,
+                        }),
+                    );
                     break task_id;
                 }
 
