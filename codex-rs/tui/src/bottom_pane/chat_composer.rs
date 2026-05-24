@@ -855,6 +855,10 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn record_replayed_user_message_history(&mut self, entry: HistoryEntry) {
+        self.history.record_replayed_submission(entry);
+    }
+
     /// Integrate pasted text into the composer.
     ///
     /// Acts as the only place where paste text is integrated, both for:

@@ -273,6 +273,7 @@ use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::GoalStatusIndicator;
+use crate::bottom_pane::HistoryEntry;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -1211,6 +1212,44 @@ impl ChatWidget {
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
+            let mention_bindings = items
+                .iter()
+                .filter_map(|item| match item {
+                    UserInput::Skill { name, path } => Some(MentionBinding {
+                        mention: name.clone(),
+                        path: path.to_string_lossy().into_owned(),
+                    }),
+                    UserInput::Mention { name, path } => {
+                        let mention = if let Some(plugin_id) = path.strip_prefix("plugin://") {
+                            plugin_id
+                                .split_once('@')
+                                .map(|(plugin_name, _)| plugin_name)
+                                .unwrap_or(plugin_id)
+                                .to_string()
+                        } else if path.starts_with("app://") {
+                            codex_connectors::metadata::connector_mention_slug_from_name(name)
+                        } else {
+                            name.clone()
+                        };
+                        Some(MentionBinding {
+                            mention,
+                            path: path.clone(),
+                        })
+                    }
+                    UserInput::Text { .. }
+                    | UserInput::Image { .. }
+                    | UserInput::LocalImage { .. } => None,
+                })
+                .collect();
+            self.bottom_pane
+                .record_replayed_user_message_history(HistoryEntry {
+                    text: display.message.clone(),
+                    text_elements: display.text_elements.clone(),
+                    local_image_paths: display.local_images.clone(),
+                    remote_image_urls: display.remote_image_urls.clone(),
+                    mention_bindings,
+                    pending_pastes: Vec::new(),
+                });
             if !self.review.is_review_mode {
                 self.on_user_message_display(display);
             }
