@@ -942,7 +942,7 @@ impl TextArea {
             VimMotion::Down => self.move_cursor_down(),
             VimMotion::WordForward => self.set_cursor(self.beginning_of_next_word()),
             VimMotion::WordBackward => self.set_cursor(self.beginning_of_previous_word()),
-            VimMotion::WordEnd => self.set_cursor(self.end_of_next_word()),
+            VimMotion::WordEnd => self.set_cursor(self.vim_word_end_exclusive()),
             VimMotion::LineStart => self.set_cursor(self.beginning_of_current_line()),
             VimMotion::LineEnd => self.set_cursor(self.end_of_current_line()),
         }
@@ -1762,7 +1762,11 @@ impl TextArea {
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
-        let suffix = &self.text[self.cursor_pos..];
+        self.end_of_next_word_from(self.cursor_pos)
+    }
+
+    fn end_of_next_word_from(&self, cursor_pos: usize) -> usize {
+        let suffix = &self.text[cursor_pos..];
         let Some(first_non_ws) = suffix.find(|ch: char| !ch.is_whitespace()) else {
             return self.text.len();
         };
@@ -1770,16 +1774,16 @@ impl TextArea {
         let run = &run[..run.find(char::is_whitespace).unwrap_or(run.len())];
         let mut pieces = split_word_pieces(run).into_iter().peekable();
         let Some((start, piece)) = pieces.next() else {
-            return self.cursor_pos + first_non_ws;
+            return cursor_pos + first_non_ws;
         };
-        let word_start = self.cursor_pos + first_non_ws + start;
+        let word_start = cursor_pos + first_non_ws + start;
         let mut end = word_start + piece.len();
         if piece.chars().all(is_word_separator) {
             while let Some((idx, piece)) = pieces.peek() {
                 if !piece.chars().all(is_word_separator) {
                     break;
                 }
-                end = self.cursor_pos + first_non_ws + *idx + piece.len();
+                end = cursor_pos + first_non_ws + *idx + piece.len();
                 pieces.next();
             }
         }
@@ -1787,8 +1791,22 @@ impl TextArea {
         self.adjust_pos_out_of_elements(end, /*prefer_start*/ false)
     }
 
-    fn vim_word_end_cursor(&self) -> usize {
+    fn vim_word_end_exclusive(&self) -> usize {
         let end = self.end_of_next_word();
+        let target = if end > self.cursor_pos {
+            self.prev_atomic_boundary(end)
+        } else {
+            end
+        };
+        if target == self.cursor_pos && end < self.text.len() {
+            self.end_of_next_word_from(end)
+        } else {
+            end
+        }
+    }
+
+    fn vim_word_end_cursor(&self) -> usize {
+        let end = self.vim_word_end_exclusive();
         if end > self.cursor_pos {
             self.prev_atomic_boundary(end)
         } else {
@@ -2548,6 +2566,62 @@ mod tests {
 
         assert_eq!(t.text(), "ab");
         assert_eq!(t.kill_buffer, "c");
+    }
+
+    #[test]
+    fn vim_e_advances_from_each_word_end() {
+        let mut t = ta_with("alpha beta gamma");
+        t.set_cursor("alph".len());
+        t.set_vim_enabled(/*enabled*/ true);
+        let mut states = Vec::new();
+
+        for _ in 0..3 {
+            t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+            states.push(format!("{}\n{}^", t.text(), " ".repeat(t.cursor())));
+        }
+
+        insta::assert_snapshot!("vim_e_advances_from_each_word_end", states.join("\n\n"));
+    }
+
+    #[test]
+    fn vim_delete_to_word_end_advances_from_existing_word_end() {
+        let mut t = ta_with("alpha beta gamma");
+        t.set_cursor("alph".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "alph gamma");
+        assert_eq!(t.kill_buffer, "a beta");
+    }
+
+    #[test]
+    fn vim_e_from_word_end_can_land_on_trailing_space() {
+        let mut t = ta_with("alpha   ");
+        t.set_cursor("alph".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+
+        assert_eq!(t.cursor(), "alpha  ".len());
+    }
+
+    #[test]
+    fn vim_e_advances_across_atomic_element_word_ends() {
+        let mut t = TextArea::new();
+        t.insert_str("alpha ");
+        t.insert_element("<element>");
+        t.insert_str(" gamma");
+        let element_start = t.elements[0].range.start;
+        t.set_cursor("alph".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), element_start);
+
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), "alpha <element> gamm".len());
     }
 
     #[test]
