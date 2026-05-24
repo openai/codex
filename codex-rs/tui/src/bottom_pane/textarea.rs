@@ -736,7 +736,12 @@ impl TextArea {
             return;
         }
         if self.vim_normal_keymap.delete_to_line_end.is_pressed(event) {
-            self.kill_to_end_of_line();
+            self.vim_kill_to_end_of_line();
+            return;
+        }
+        if self.vim_normal_keymap.change_to_line_end.is_pressed(event) {
+            self.vim_kill_to_end_of_line();
+            self.vim_mode = VimMode::Insert;
             return;
         }
         if self.vim_normal_keymap.yank_line.is_pressed(event) {
@@ -1032,6 +1037,13 @@ impl TextArea {
 
         if let Some(range) = range {
             self.kill_range(range);
+        }
+    }
+
+    fn vim_kill_to_end_of_line(&mut self) {
+        let eol = self.end_of_current_line();
+        if self.cursor_pos < eol {
+            self.kill_range(self.cursor_pos..eol);
         }
     }
 
@@ -2319,6 +2331,60 @@ mod tests {
 
         assert_eq!(t.vim_mode_label(), Some("Insert"));
         assert_eq!(t.cursor(), 11);
+    }
+
+    #[test]
+    fn vim_shift_c_changes_to_line_end_and_enters_insert_mode() {
+        let mut t = ta_with("hello world\nnext line");
+        t.set_cursor(/*pos*/ 6);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SHIFT));
+
+        assert_eq!(t.text(), "hello \nnext line");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+        assert_eq!(t.cursor(), 6);
+        assert_eq!(t.kill_buffer, "world");
+    }
+
+    #[test]
+    fn vim_uppercase_c_changes_to_line_end() {
+        let mut t = ta_with("hello world\nnext line");
+        t.set_cursor(/*pos*/ 6);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello \nnext line");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+        assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn vim_d_at_line_end_does_not_remove_newline() {
+        let mut t = ta_with("hello\nworld");
+        t.set_cursor(/*pos*/ "hello".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello\nworld");
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+        assert_eq!(t.kill_buffer, "");
+    }
+
+    #[test]
+    fn vim_c_at_line_end_enters_insert_without_removing_newline() {
+        let mut t = ta_with("hello\nworld");
+        t.set_cursor(/*pos*/ "hello".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello\nworld");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+        assert_eq!(t.cursor(), "hello".len());
+        assert_eq!(t.kill_buffer, "");
     }
 
     #[test]

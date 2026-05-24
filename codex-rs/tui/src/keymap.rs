@@ -157,6 +157,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_line_end: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
+    pub(crate) change_to_line_end: Vec<KeyBinding>,
     pub(crate) yank_line: Vec<KeyBinding>,
     pub(crate) paste_after: Vec<KeyBinding>,
     pub(crate) start_delete_operator: Vec<KeyBinding>,
@@ -487,6 +488,7 @@ impl RuntimeKeymap {
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
+            change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
             yank_line: resolve_local!(keymap, defaults, vim_normal, yank_line),
             paste_after: resolve_local!(keymap, defaults, vim_normal, paste_after),
             start_delete_operator: resolve_local!(
@@ -984,6 +986,10 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('d')),
                     plain(KeyCode::Char('D'))
                 ],
+                change_to_line_end: default_bindings![
+                    shift(KeyCode::Char('c')),
+                    plain(KeyCode::Char('C'))
+                ],
                 yank_line: default_bindings![shift(KeyCode::Char('y')), plain(KeyCode::Char('Y'))],
                 paste_after: default_bindings![plain(KeyCode::Char('p'))],
                 start_delete_operator: default_bindings![plain(KeyCode::Char('d'))],
@@ -1403,6 +1409,10 @@ impl RuntimeKeymap {
                 (
                     "delete_to_line_end",
                     self.vim_normal.delete_to_line_end.as_slice(),
+                ),
+                (
+                    "change_to_line_end",
+                    self.vim_normal.change_to_line_end.as_slice(),
                 ),
                 ("yank_line", self.vim_normal.yank_line.as_slice()),
                 ("paste_after", self.vim_normal.paste_after.as_slice()),
