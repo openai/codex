@@ -231,6 +231,8 @@ pub struct TuiVimNormalKeymap {
     pub start_delete_operator: Option<KeybindingsSpec>,
     /// Begin yank operator; next key selects motion (`y`).
     pub start_yank_operator: Option<KeybindingsSpec>,
+    /// Begin change operator; next keys select a text object.
+    pub start_change_operator: Option<KeybindingsSpec>,
     /// Cancel a pending operator and return to normal mode.
     pub cancel_operator: Option<KeybindingsSpec>,
 }
@@ -266,7 +268,35 @@ pub struct TuiVimOperatorKeymap {
     pub motion_line_start: Option<KeybindingsSpec>,
     /// Motion: to end of line (`$`).
     pub motion_line_end: Option<KeybindingsSpec>,
+    /// Select an inner text object after an operator.
+    pub select_inner_text_object: Option<KeybindingsSpec>,
+    /// Select an around text object after an operator.
+    pub select_around_text_object: Option<KeybindingsSpec>,
     /// Cancel the pending operator and return to normal mode.
+    pub cancel: Option<KeybindingsSpec>,
+}
+
+/// Vim text-object keybindings for modal editing inside text areas.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiVimTextObjectKeymap {
+    /// Text object: word.
+    pub word: Option<KeybindingsSpec>,
+    /// Text object: whitespace-delimited WORD.
+    pub big_word: Option<KeybindingsSpec>,
+    /// Text object: parentheses.
+    pub parentheses: Option<KeybindingsSpec>,
+    /// Text object: brackets.
+    pub brackets: Option<KeybindingsSpec>,
+    /// Text object: braces.
+    pub braces: Option<KeybindingsSpec>,
+    /// Text object: double quotes.
+    pub double_quote: Option<KeybindingsSpec>,
+    /// Text object: single quotes.
+    pub single_quote: Option<KeybindingsSpec>,
+    /// Text object: backticks.
+    pub backtick: Option<KeybindingsSpec>,
+    /// Cancel the pending text-object command.
     pub cancel: Option<KeybindingsSpec>,
 }
 
@@ -373,6 +403,8 @@ pub struct TuiKeymap {
     pub vim_normal: TuiVimNormalKeymap,
     #[serde(default)]
     pub vim_operator: TuiVimOperatorKeymap,
+    #[serde(default)]
+    pub vim_text_object: TuiVimTextObjectKeymap,
     #[serde(default)]
     pub pager: TuiPagerKeymap,
     #[serde(default)]
