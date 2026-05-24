@@ -151,8 +151,8 @@ struct PagerView {
     last_content_height: Option<usize>,
     last_rendered_height: Option<usize>,
     layout: Option<PagerLayout>,
-    /// If set, on next render ensure this chunk is visible.
-    pending_scroll_chunk: Option<usize>,
+    /// If set, on next render position this row of the chunk near the upper third.
+    pending_anchor_chunk: Option<(usize, usize)>,
 }
 
 #[derive(Debug)]
@@ -180,7 +180,7 @@ impl PagerView {
             last_content_height: None,
             last_rendered_height: None,
             layout: None,
-            pending_scroll_chunk: None,
+            pending_anchor_chunk: None,
         }
     }
 
@@ -225,15 +225,8 @@ impl PagerView {
         self.update_last_content_height(content_area.height);
         let content_height = self.content_height(content_area.width);
         self.last_rendered_height = Some(content_height);
+        self.resolve_pending_scroll(content_area, content_height);
         self.render_header(area, content_area, buf, content_height);
-        // If there is a pending request to scroll a specific chunk into view,
-        // satisfy it now that wrapping is up to date for this width.
-        if let Some(idx) = self.pending_scroll_chunk.take() {
-            self.ensure_chunk_visible(idx, content_area);
-        }
-        self.scroll_offset = self
-            .scroll_offset
-            .min(content_height.saturating_sub(content_area.height as usize));
 
         self.render_content(content_area, buf);
 
@@ -331,7 +324,7 @@ impl PagerView {
         (((self.scroll_offset.min(max_scroll)) as f32 / max_scroll as f32) * 100.0).round() as u8
     }
 
-    fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
+    fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<bool> {
         match key_event {
             e if self.keymap.scroll_up.is_pressed(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
@@ -364,12 +357,12 @@ impl PagerView {
                 self.scroll_offset = usize::MAX;
             }
             _ => {
-                return Ok(());
+                return Ok(false);
             }
         }
         tui.frame_requester()
             .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-        Ok(())
+        Ok(true)
     }
 
     /// Returns the height of one page in content rows.
@@ -415,25 +408,35 @@ impl PagerView {
         self.scroll_offset >= max_scroll
     }
 
-    /// Request that the given text chunk index be scrolled into view on next render.
-    fn scroll_chunk_into_view(&mut self, chunk_index: usize) {
-        self.pending_scroll_chunk = Some(chunk_index);
+    fn resolve_pending_scroll(&mut self, area: Rect, content_height: usize) {
+        if let Some((idx, row_offset)) = self.pending_anchor_chunk.take() {
+            self.position_chunk_at_upper_third(idx, row_offset, area);
+        }
+        self.scroll_offset = self
+            .scroll_offset
+            .min(content_height.saturating_sub(area.height as usize));
     }
 
-    fn ensure_chunk_visible(&mut self, idx: usize, area: Rect) {
+    fn clamped_scroll_offset(&mut self, area: Rect) -> usize {
+        self.scroll_offset.min(
+            self.content_height(area.width)
+                .saturating_sub(area.height as usize),
+        )
+    }
+
+    /// Request that a row inside a selected chunk be anchored on next render.
+    fn scroll_chunk_to_upper_third(&mut self, chunk_index: usize, row_offset: usize) {
+        self.pending_anchor_chunk = Some((chunk_index, row_offset));
+    }
+
+    fn position_chunk_at_upper_third(&mut self, idx: usize, row_offset: usize, area: Rect) {
         if area.height == 0 || idx >= self.renderables.len() {
             return;
         }
         let layout = self.layout(area.width);
-        let first = layout.offsets[idx];
-        let last = first.saturating_add(layout.heights[idx]);
-        let current_top = self.scroll_offset;
-        let current_bottom = current_top.saturating_add(area.height.saturating_sub(1) as usize);
-        if first < current_top {
-            self.scroll_offset = first;
-        } else if last > current_bottom {
-            self.scroll_offset = last.saturating_sub(area.height.saturating_sub(1) as usize);
-        }
+        let row = layout.offsets[idx].saturating_add(row_offset);
+        let anchor = (area.height as usize) / 3;
+        self.scroll_offset = row.saturating_sub(anchor);
     }
 }
 
@@ -526,6 +529,7 @@ pub(crate) struct TranscriptOverlay {
     copy_keymap: Vec<KeyBinding>,
     toggle_raw_output_keymap: Vec<KeyBinding>,
     copy_requested: bool,
+    scroll_selected_user_cell: Option<usize>,
     footer_status: Option<FooterStatus>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
@@ -584,6 +588,7 @@ impl TranscriptOverlay {
             copy_keymap,
             toggle_raw_output_keymap,
             copy_requested: false,
+            scroll_selected_user_cell: None,
             footer_status: None,
             live_tail_key: None,
             is_done: false,
@@ -787,10 +792,27 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
-        self.highlight_cell = cell;
-        self.rebuild_renderables();
-        if let Some(idx) = self.highlight_cell {
-            self.view.scroll_chunk_into_view(idx);
+        self.set_highlight_cell_with_placement(cell, PromptSelectionPlacement::AnchorUpperThird);
+    }
+
+    fn set_highlight_cell_preserving_viewport(&mut self, cell: Option<usize>) {
+        self.set_highlight_cell_with_placement(cell, PromptSelectionPlacement::PreserveViewport);
+    }
+
+    fn set_highlight_cell_with_placement(
+        &mut self,
+        cell: Option<usize>,
+        placement: PromptSelectionPlacement,
+    ) {
+        let prompt_row_offset = cell.map(|idx| self.prompt_first_text_row_offset(idx));
+        if self.highlight_cell != cell {
+            self.highlight_cell = cell;
+            self.rebuild_renderables();
+        }
+        if let (Some(idx), Some(row_offset), PromptSelectionPlacement::AnchorUpperThird) =
+            (cell, prompt_row_offset, placement)
+        {
+            self.view.scroll_chunk_to_upper_third(idx, row_offset);
         }
     }
 
@@ -812,6 +834,10 @@ impl TranscriptOverlay {
 
     pub(crate) fn take_copy_requested(&mut self) -> bool {
         std::mem::take(&mut self.copy_requested)
+    }
+
+    pub(crate) fn take_scroll_selected_user_cell(&mut self) -> Option<usize> {
+        self.scroll_selected_user_cell.take()
     }
 
     pub(crate) fn show_copy_status(&mut self, status: &CopyStatus, tui: &mut tui::Tui) {
@@ -866,6 +892,78 @@ impl TranscriptOverlay {
             None => last_prompt,
         };
         self.set_highlight_cell(Some(next_prompt));
+    }
+
+    fn prompt_first_text_row_offset(&self, idx: usize) -> usize {
+        let inter_cell_spacing = usize::from(
+            idx > 0
+                && self
+                    .cells
+                    .get(idx)
+                    .is_some_and(|cell| !cell.is_stream_continuation()),
+        );
+        let rich_prompt_padding = usize::from(matches!(self.render_mode, HistoryRenderMode::Rich));
+        inter_cell_spacing.saturating_add(rich_prompt_padding)
+    }
+
+    fn prompt_entering_viewport(
+        &mut self,
+        width: u16,
+        height: u16,
+        before: usize,
+        after: usize,
+    ) -> Option<usize> {
+        if before == after || height == 0 {
+            return None;
+        }
+        let offsets = self.view.layout(width).offsets.clone();
+        let prompts = self
+            .cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| cell.is_user_prompt())
+            .map(|(idx, _)| {
+                (
+                    idx,
+                    offsets[idx].saturating_add(self.prompt_first_text_row_offset(idx)),
+                )
+            });
+        if after > before {
+            let previous_bottom = before.saturating_add(height as usize);
+            let current_bottom = after.saturating_add(height as usize);
+            prompts
+                .filter(|(_, row)| previous_bottom <= *row && *row < current_bottom)
+                .map(|(idx, _)| idx)
+                .next_back()
+        } else {
+            prompts
+                .filter(|(_, row)| after <= *row && *row < before)
+                .map(|(idx, _)| idx)
+                .next()
+        }
+    }
+
+    fn handle_viewport_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
+        let top_h = tui.terminal.viewport_area.height.saturating_sub(3);
+        let top = Rect::new(
+            tui.terminal.viewport_area.x,
+            tui.terminal.viewport_area.y,
+            tui.terminal.viewport_area.width,
+            top_h,
+        );
+        let content_area = self.view.content_area(top);
+        let before = self.view.clamped_scroll_offset(content_area);
+        if !self.view.handle_key_event(tui, key_event)? {
+            return Ok(());
+        }
+        let after = self.view.clamped_scroll_offset(content_area);
+        if let Some(cell_idx) =
+            self.prompt_entering_viewport(content_area.width, content_area.height, before, after)
+        {
+            self.set_highlight_cell_preserving_viewport(Some(cell_idx));
+            self.scroll_selected_user_cell = Some(cell_idx);
+        }
+        Ok(())
     }
 
     fn header_title(&self) -> String {
@@ -1083,6 +1181,7 @@ impl TranscriptOverlay {
         self.view.title = self.header_title();
         let content_area = self.view.content_area(top);
         let total_len = self.view.content_height(content_area.width);
+        self.view.resolve_pending_scroll(content_area, total_len);
         self.view.footer_separator_label =
             self.footer_progress_label(content_area.height, total_len, top.width);
         self.view.render(top, buf);
@@ -1124,7 +1223,7 @@ impl TranscriptOverlay {
                         self.copy_requested = true;
                         Ok(())
                     }
-                    other => self.view.handle_key_event(tui, other),
+                    other => self.handle_viewport_key_event(tui, other),
                 }
             }
             TuiEvent::Draw | TuiEvent::Resize => {
@@ -1149,6 +1248,12 @@ impl TranscriptOverlay {
 enum PromptSelectionDirection {
     Previous,
     Next,
+}
+
+#[derive(Clone, Copy)]
+enum PromptSelectionPlacement {
+    AnchorUpperThird,
+    PreserveViewport,
 }
 
 pub(crate) struct StaticOverlay {
@@ -1234,7 +1339,7 @@ impl StaticOverlay {
                     self.is_done = true;
                     Ok(())
                 }
-                other => self.view.handle_key_event(tui, other),
+                other => self.view.handle_key_event(tui, other).map(|_| ()),
             },
             TuiEvent::Draw | TuiEvent::Resize => {
                 tui.draw(u16::MAX, |frame| {
@@ -1592,6 +1697,126 @@ mod tests {
                 /*content_height*/ 5, /*total_len*/ 12, /*width*/ 80
             ),
             " 1 / 2 · 100% "
+        );
+    }
+
+    #[test]
+    fn transcript_scroll_selects_prompt_when_its_first_line_enters_from_below() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first"),
+            Arc::new(TestCell {
+                lines: (0..8)
+                    .map(|idx| Line::from(format!("answer-{idx}")))
+                    .collect(),
+            }),
+            user_cell("second"),
+            Arc::new(TestCell {
+                lines: vec![Line::from("after second")],
+            }),
+        ]);
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 12,
+        );
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        let top = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(3));
+        let content_area = overlay.view.content_area(top);
+        let second_row = {
+            let layout = overlay.view.layout(content_area.width);
+            layout.offsets[2].saturating_add(overlay.prompt_first_text_row_offset(2))
+        };
+
+        let before = second_row.saturating_sub(content_area.height as usize);
+        let after = before.saturating_add(1);
+        let selected = overlay.prompt_entering_viewport(
+            content_area.width,
+            content_area.height,
+            before,
+            after,
+        );
+        overlay.view.scroll_offset = after;
+        overlay.set_highlight_cell_preserving_viewport(selected);
+        overlay.render(area, &mut buf);
+
+        assert_eq!(selected, Some(2));
+        assert_eq!(overlay.selected_user_cell(), Some(2));
+        assert_eq!(overlay.view.scroll_offset, after);
+        assert_snapshot!(
+            "transcript_scroll_selects_prompt_entering_from_below",
+            buffer_to_text(&buf, area)
+        );
+    }
+
+    #[test]
+    fn transcript_scroll_selects_prompt_when_its_first_line_enters_from_above() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first"),
+            Arc::new(TestCell {
+                lines: (0..16)
+                    .map(|idx| Line::from(format!("answer-{idx}")))
+                    .collect(),
+            }),
+        ]);
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 12,
+        );
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        let top = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(3));
+        let content_area = overlay.view.content_area(top);
+
+        let selected = overlay.prompt_entering_viewport(
+            content_area.width,
+            content_area.height,
+            /*before*/ 2,
+            /*after*/ 1,
+        );
+        overlay.view.scroll_offset = 1;
+        overlay.set_highlight_cell_preserving_viewport(selected);
+
+        assert_eq!(selected, Some(0));
+        assert_eq!(overlay.selected_user_cell(), Some(0));
+        assert_eq!(overlay.view.scroll_offset, 1);
+    }
+
+    #[test]
+    fn explicit_prompt_selection_anchors_prompt_in_upper_third() {
+        let mut overlay = transcript_overlay(vec![
+            user_cell("first"),
+            Arc::new(TestCell {
+                lines: (0..12)
+                    .map(|idx| Line::from(format!("before-{idx}")))
+                    .collect(),
+            }),
+            user_cell("second"),
+            Arc::new(TestCell {
+                lines: (0..12)
+                    .map(|idx| Line::from(format!("after-{idx}")))
+                    .collect(),
+            }),
+        ]);
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 15,
+        );
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        overlay.set_highlight_cell(Some(2));
+        overlay.render(area, &mut buf);
+
+        let top = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(3));
+        let content_area = overlay.view.content_area(top);
+        let selected_row = {
+            let layout = overlay.view.layout(content_area.width);
+            layout.offsets[2].saturating_add(overlay.prompt_first_text_row_offset(2))
+        };
+        assert_eq!(
+            selected_row.saturating_sub(overlay.view.scroll_offset),
+            (content_area.height as usize) / 3,
+        );
+        assert_snapshot!(
+            "explicit_prompt_selection_anchors_prompt_in_upper_third",
+            buffer_to_text(&buf, area)
         );
     }
 
@@ -2064,7 +2289,7 @@ mod tests {
     }
 
     #[test]
-    fn pager_view_ensure_chunk_visible_scrolls_down_when_needed() {
+    fn pager_view_positions_selected_chunk_in_upper_third() {
         let mut pv = pager_view(
             vec![
                 paragraph_block("a", /*lines*/ 1),
@@ -2076,30 +2301,14 @@ mod tests {
         );
         let area = Rect::new(0, 0, 20, 8);
 
-        pv.scroll_offset = 0;
         let content_area = pv.content_area(area);
-        pv.ensure_chunk_visible(/*idx*/ 2, content_area);
+        pv.position_chunk_at_upper_third(/*idx*/ 2, /*row_offset*/ 0, content_area);
 
-        let mut buf = Buffer::empty(area);
-        pv.render(area, &mut buf);
-        let rendered = buffer_to_text(&buf, area);
-
-        assert!(
-            rendered.contains("c0"),
-            "expected chunk top in view: {rendered:?}"
-        );
-        assert!(
-            rendered.contains("c1"),
-            "expected chunk middle in view: {rendered:?}"
-        );
-        assert!(
-            rendered.contains("c2"),
-            "expected chunk bottom in view: {rendered:?}"
-        );
+        assert_eq!(pv.scroll_offset, 2);
     }
 
     #[test]
-    fn pager_view_ensure_chunk_visible_scrolls_up_when_needed() {
+    fn pager_view_upper_third_position_clamps_at_start() {
         let mut pv = pager_view(
             vec![
                 paragraph_block("a", /*lines*/ 2),
@@ -2112,7 +2321,7 @@ mod tests {
         let area = Rect::new(0, 0, 20, 3);
 
         pv.scroll_offset = 6;
-        pv.ensure_chunk_visible(/*idx*/ 0, area);
+        pv.position_chunk_at_upper_third(/*idx*/ 0, /*row_offset*/ 0, area);
 
         assert_eq!(pv.scroll_offset, 0);
     }

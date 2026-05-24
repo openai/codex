@@ -1,0 +1,18 @@
+---
+source: tui/src/pager_overlay.rs
+expression: "buffer_to_text(&buf, area)"
+---
+ Transcript ────────────────────────────────────────────────
+before-11
+
+
+› second
+
+
+after-0
+after-1
+after-2
+after-3
+────────────────────────────────────────────── 2 / 2 · 65% ─
+ ↑/↓ scroll   ←/→ prompts   pgup/pgdn page   home/end jump
+ q   ctrl + o   ⌥ + r   esc/←   →   enter/← prev

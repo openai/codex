@@ -433,26 +433,46 @@ impl App {
             return Ok(());
         }
 
-        let (copy_selection, copy_latest, close_overlay) = if let Some(overlay) = &mut self.overlay
+        let (scroll_selection, copy_selection, copy_latest, close_overlay) = if let Some(overlay) =
+            &mut self.overlay
         {
             overlay.handle_event(tui, event)?;
-            let (copy_selection, copy_latest) = match overlay {
+            let (scroll_selection, copy_selection, copy_latest) = match overlay {
                 Overlay::Transcript(transcript) => {
+                    let scroll_selection = transcript.take_scroll_selected_user_cell();
                     if transcript.take_copy_requested() {
                         match transcript.selected_user_cell() {
-                            Some(user_cell_idx) => (Some(user_cell_idx), false),
-                            None => (None, true),
+                            Some(user_cell_idx) => (scroll_selection, Some(user_cell_idx), false),
+                            None => (scroll_selection, None, true),
                         }
                     } else {
-                        (None, false)
+                        (scroll_selection, None, false)
                     }
                 }
-                Overlay::Static(_) => (None, false),
+                Overlay::Static(_) => (None, None, false),
             };
-            (copy_selection, copy_latest, overlay.is_done())
+            (
+                scroll_selection,
+                copy_selection,
+                copy_latest,
+                overlay.is_done(),
+            )
         } else {
-            (None, false, false)
+            (None, None, false, false)
         };
+        if let Some(user_cell_idx) = scroll_selection
+            && self
+                .transcript_cells
+                .get(user_cell_idx)
+                .is_some_and(|cell| cell.is_user_prompt())
+            && let Some(nth_user_message) =
+                user_count(&self.transcript_cells[..=user_cell_idx]).checked_sub(1)
+        {
+            self.backtrack.primed = true;
+            self.backtrack.base_id = self.chat_widget.thread_id();
+            self.backtrack.overlay_preview_active = true;
+            self.backtrack.nth_user_message = nth_user_message;
+        }
         let copy_status = if let Some(user_cell_idx) = copy_selection {
             Some(self.copy_transcript_turn(user_cell_idx))
         } else if copy_latest {

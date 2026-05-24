@@ -1,0 +1,15 @@
+---
+source: tui/src/pager_overlay.rs
+expression: "buffer_to_text(&buf, area)"
+---
+ Transcript ────────────────────────────────────────────────
+answer-4
+answer-5
+answer-6
+answer-7
+
+
+› second
+────────────────────────────────────────────── 2 / 2 · 73% ─
+ ↑/↓ scroll   ←/→ prompts   pgup/pgdn page   home/end jump
+ q   ctrl + o   ⌥ + r   esc/←   →   enter/← prev
