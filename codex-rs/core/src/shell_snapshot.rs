@@ -12,7 +12,6 @@ use crate::shell::ShellType;
 use crate::shell::get_shell;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
 use anyhow::bail;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -34,6 +33,18 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3); // 3 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
+
+#[derive(Debug, thiserror::Error)]
+#[error("Snapshot command timed out for {shell_name}")]
+struct SnapshotCommandTimeout {
+    shell_name: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum ZshSnapshotMode {
+    SourceUserRc,
+    SkipUserRc,
+}
 
 impl ShellSnapshot {
     pub fn start_snapshotting(
@@ -227,11 +238,44 @@ async fn write_shell_snapshot(
 async fn capture_snapshot(shell: &Shell, cwd: &AbsolutePathBuf) -> Result<String> {
     let shell_type = shell.shell_type.clone();
     match shell_type {
-        ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script(), cwd).await,
+        ShellType::Zsh => capture_zsh_snapshot(shell, cwd, SNAPSHOT_TIMEOUT).await,
         ShellType::Bash => run_shell_script(shell, &bash_snapshot_script(), cwd).await,
         ShellType::Sh => run_shell_script(shell, &sh_snapshot_script(), cwd).await,
         ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script(), cwd).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
+    }
+}
+
+async fn capture_zsh_snapshot(
+    shell: &Shell,
+    cwd: &AbsolutePathBuf,
+    snapshot_timeout: Duration,
+) -> Result<String> {
+    let snapshot = run_script_with_timeout(
+        shell,
+        &zsh_snapshot_script(ZshSnapshotMode::SourceUserRc),
+        snapshot_timeout,
+        /*use_login_shell*/ true,
+        cwd,
+    )
+    .await;
+
+    match snapshot {
+        Ok(snapshot) => Ok(snapshot),
+        Err(err) if err.is::<SnapshotCommandTimeout>() => {
+            tracing::warn!(
+                "Zsh shell snapshot timed out while sourcing user rc; retrying without user rc"
+            );
+            run_script_with_timeout(
+                shell,
+                &zsh_snapshot_script(ZshSnapshotMode::SkipUserRc),
+                snapshot_timeout,
+                /*use_login_shell*/ true,
+                cwd,
+            )
+            .await
+        }
+        Err(err) => Err(err),
     }
 }
 
@@ -299,7 +343,7 @@ async fn run_script_with_timeout(
     handler.kill_on_drop(true);
     let output = timeout(snapshot_timeout, handler.output())
         .await
-        .map_err(|_| anyhow!("Snapshot command timed out for {shell_name}"))?
+        .map_err(|_| SnapshotCommandTimeout { shell_name })?
         .with_context(|| format!("Failed to execute {shell_name}"))?;
 
     if !output.status.success() {
@@ -315,15 +359,20 @@ fn excluded_exports_regex() -> String {
     EXCLUDED_EXPORT_VARS.join("|")
 }
 
-fn zsh_snapshot_script() -> String {
+fn zsh_snapshot_script(mode: ZshSnapshotMode) -> String {
     let excluded = excluded_exports_regex();
-    let script = r##"if [[ -n "$ZDOTDIR" ]]; then
+    let source_user_rc = match mode {
+        ZshSnapshotMode::SourceUserRc => {
+            r##"if [[ -n "$ZDOTDIR" ]]; then
   rc="$ZDOTDIR/.zshrc"
 else
   rc="$HOME/.zshrc"
 fi
-[[ -r "$rc" ]] && . "$rc"
-print '# Snapshot file'
+[[ -r "$rc" ]] && . "$rc""##
+        }
+        ZshSnapshotMode::SkipUserRc => "",
+    };
+    let script = r##"print '# Snapshot file'
 print '# Unset all aliases to avoid conflicts with functions'
 print 'unalias -a 2>/dev/null || true'
 print '# Functions'
@@ -356,7 +405,7 @@ if [[ -n "$export_lines" ]]; then
   print -r -- "$export_lines"
 fi
 "##;
-    script.replace("EXCLUDED_EXPORTS", &excluded)
+    format!("{source_user_rc}\n{script}").replace("EXCLUDED_EXPORTS", &excluded)
 }
 
 fn bash_snapshot_script() -> String {
