@@ -43,9 +43,43 @@ struct RolloutScan {
     reached_scan_cap: bool,
 }
 
+enum RolloutThreadId {
+    Id(String),
+    MalformedName,
+    Unusable(String),
+}
+
+#[derive(Default)]
+struct RolloutContentScan {
+    thread_id: Option<String>,
+    has_parseable_item: bool,
+}
+
 impl RolloutScan {
     fn candidate_count(&self) -> usize {
-        self.files.len() + self.malformed_names.len()
+        self.files.len() + self.malformed_names.len() + self.scan_errors.len()
+    }
+
+    fn reached_candidate_cap(&self) -> bool {
+        self.candidate_count() >= MAX_PARITY_SCAN_FILES
+    }
+
+    fn record_malformed_name(&mut self, path: PathBuf) {
+        if self.reached_candidate_cap() {
+            self.reached_scan_cap = true;
+            return;
+        }
+        self.malformed_names.push(path);
+        self.reached_scan_cap = self.reached_candidate_cap();
+    }
+
+    fn record_scan_error(&mut self, message: String) {
+        if self.reached_candidate_cap() {
+            self.reached_scan_cap = true;
+            return;
+        }
+        self.scan_errors.push(message);
+        self.reached_scan_cap = self.reached_candidate_cap();
     }
 
     fn active_count(&self) -> usize {
@@ -412,15 +446,18 @@ fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
             Ok(entries) => entries,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
             Err(err) => {
-                scan.scan_errors.push(format!("{} ({err})", dir.display()));
+                scan.record_scan_error(format!("{} ({err})", dir.display()));
                 continue;
             }
         };
         for entry in entries {
+            if scan.reached_scan_cap {
+                return;
+            }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    scan.scan_errors.push(format!("{} ({err})", dir.display()));
+                    scan.record_scan_error(format!("{} ({err})", dir.display()));
                     continue;
                 }
             };
@@ -428,7 +465,7 @@ fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(err) => {
-                    scan.scan_errors.push(format!("{} ({err})", path.display()));
+                    scan.record_scan_error(format!("{} ({err})", path.display()));
                     continue;
                 }
             };
@@ -443,9 +480,16 @@ fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
                 scan.reached_scan_cap = true;
                 return;
             }
-            let Some(thread_id) = thread_id_from_rollout(&path) else {
-                scan.malformed_names.push(path.clone());
-                continue;
+            let thread_id = match thread_id_from_rollout(&path) {
+                RolloutThreadId::Id(thread_id) => thread_id,
+                RolloutThreadId::MalformedName => {
+                    scan.record_malformed_name(path.clone());
+                    continue;
+                }
+                RolloutThreadId::Unusable(reason) => {
+                    scan.record_scan_error(format!("{} ({reason})", path.display()));
+                    continue;
+                }
             };
             scan.files.push(RolloutAuditFile {
                 key: path_key(&path),
@@ -457,22 +501,41 @@ fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
     }
 }
 
-fn thread_id_from_rollout(path: &Path) -> Option<String> {
-    thread_id_from_session_meta(path).or_else(|| thread_id_from_rollout_name(path))
+fn thread_id_from_rollout(path: &Path) -> RolloutThreadId {
+    let content = match scan_rollout_content(path) {
+        Ok(content) => content,
+        Err(err) => return RolloutThreadId::Unusable(err.to_string()),
+    };
+    if let Some(thread_id) = content.thread_id {
+        return RolloutThreadId::Id(thread_id);
+    }
+    if !content.has_parseable_item {
+        return RolloutThreadId::Unusable("no parseable rollout items".to_string());
+    }
+    thread_id_from_rollout_name(path)
+        .map(RolloutThreadId::Id)
+        .unwrap_or(RolloutThreadId::MalformedName)
 }
 
-fn thread_id_from_session_meta(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut first_line = String::new();
-    BufReader::new(file).read_line(&mut first_line).ok()?;
-    let rollout_line = serde_json::from_str::<RolloutLine>(first_line.trim()).ok()?;
-    match rollout_line.item {
-        RolloutItem::SessionMeta(session_meta) => Some(session_meta.meta.id.to_string()),
-        RolloutItem::ResponseItem(_)
-        | RolloutItem::Compacted(_)
-        | RolloutItem::TurnContext(_)
-        | RolloutItem::EventMsg(_) => None,
+fn scan_rollout_content(path: &Path) -> std::io::Result<RolloutContentScan> {
+    let file = std::fs::File::open(path)?;
+    let mut scan = RolloutContentScan::default();
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+            continue;
+        };
+        scan.has_parseable_item = true;
+        if let RolloutItem::SessionMeta(session_meta) = rollout_line.item {
+            scan.thread_id = Some(session_meta.meta.id.to_string());
+            break;
+        }
     }
+    Ok(scan)
 }
 
 fn thread_id_from_rollout_name(path: &Path) -> Option<String> {
@@ -833,7 +896,24 @@ mod tests {
             };
             std::fs::create_dir_all(&root).expect("rollout dir");
             let path = root.join(format!("rollout-{timestamp}-{thread_id}.jsonl"));
-            std::fs::write(&path, "{}\n").expect("rollout file");
+            let rollout_line = RolloutLine {
+                timestamp: timestamp.to_string(),
+                item: RolloutItem::SessionMeta(codex_protocol::protocol::SessionMetaLine {
+                    meta: codex_protocol::protocol::SessionMeta {
+                        id: ThreadId::from_string(thread_id).expect("thread id"),
+                        timestamp: timestamp.to_string(),
+                        cwd: self.codex_home.path().to_path_buf(),
+                        originator: "test".to_string(),
+                        cli_version: "test".to_string(),
+                        source: SessionSource::Cli,
+                        model_provider: Some("test-provider".to_string()),
+                        ..Default::default()
+                    },
+                    git: None,
+                }),
+            };
+            let contents = serde_json::to_string(&rollout_line).expect("rollout line");
+            std::fs::write(&path, format!("{contents}\n")).expect("rollout file");
             path
         }
 
