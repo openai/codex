@@ -127,6 +127,99 @@ async fn mount_exec_responses(
     responses::mount_sse_sequence(server, (0..count).map(exec_sse_response).collect()).await
 }
 
+fn goal_response_sse_response(response_id: &str, message: &str) -> String {
+    responses::sse(vec![
+        responses::ev_response_created(response_id),
+        responses::ev_assistant_message(response_id, message),
+        responses::ev_completed(response_id),
+    ])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_resume_last_without_prompt_follows_active_goal() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let test = test_codex_exec();
+    let server = MockServer::start().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-create-goal"),
+                responses::ev_function_call(
+                    "call-create-goal",
+                    "create_goal",
+                    r#"{"objective":"manual promptless resume test"}"#,
+                ),
+                responses::ev_completed("resp-create-goal"),
+            ]),
+            goal_response_sse_response("resp-seed-goal", "seed goal is active"),
+            goal_response_sse_response("resp-resume-goal", "goal resumed without prompt"),
+        ],
+    )
+    .await;
+    let repo_root = exec_repo_root()?;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg("create an active goal")
+        .assert()
+        .success();
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg("resume")
+        .arg("--last")
+        .assert()
+        .success();
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].body_contains_text("<goal_context>"));
+    assert!(requests[2].body_contains_text("Continue working toward the active thread goal."));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_resume_last_without_prompt_rejects_thread_without_active_goal() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let test = test_codex_exec();
+    let server = MockServer::start().await;
+    let response_mock = mount_exec_responses(&server, /*count*/ 1).await;
+    let repo_root = exec_repo_root()?;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg("seed a normal session")
+        .assert()
+        .success();
+
+    let output = test
+        .cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(&repo_root)
+        .arg("resume")
+        .arg("--last")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("resumed thread has no active goal"));
+    assert_eq!(response_mock.requests().len(), 1);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
