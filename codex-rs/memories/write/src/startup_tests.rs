@@ -237,7 +237,8 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
 }
 
 #[tokio::test]
-async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Result<()> {
+async fn memories_startup_phase1_uses_live_thread_service_tier_without_turn_metadata_header()
+-> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let test = build_test_codex(&server, home).await?;
@@ -277,6 +278,28 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
     assert_eq!(
         request_context.service_tier,
         Some(ServiceTier::Fast.request_value().to_string())
+    );
+
+    let stage_one = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-phase1"),
+            ev_assistant_message("msg-phase1", "phase1 complete"),
+            ev_completed("resp-phase1"),
+        ]),
+    )
+    .await;
+    context
+        .stream_stage_one_prompt(
+            &test.config,
+            &codex_core::Prompt::default(),
+            &request_context,
+        )
+        .await?;
+    let request = wait_for_single_request(&stage_one).await;
+    assert!(
+        request.header("x-codex-turn-metadata").is_none(),
+        "detached memories stage-one requests must not emit per-turn metadata"
     );
 
     shutdown_test_codex(&test).await?;
