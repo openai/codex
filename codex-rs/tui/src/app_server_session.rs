@@ -1253,10 +1253,7 @@ fn config_request_overrides_from_config(
         Some(config.web_search_mode.value().to_string()),
     );
     if config.bypass_hook_trust {
-        overrides.insert(
-            "bypass_hook_trust".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        overrides.insert("bypass_hook_trust".to_string(), true.into());
     }
     Some(overrides)
 }
@@ -2130,7 +2127,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_lifecycle_params_forward_model_reasoning_and_service_tier() {
+    async fn thread_lifecycle_params_forward_config_overrides_and_service_tier() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;
         config.model_reasoning_effort = Some(ReasoningEffort::High);
@@ -2141,6 +2138,7 @@ mod tests {
             .web_search_mode
             .set(WebSearchMode::Disabled)
             .expect("test web search mode should be allowed");
+        config.bypass_hook_trust = true;
         config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         let thread_id = ThreadId::new();
 
@@ -2174,6 +2172,7 @@ mod tests {
             ("model_verbosity".to_string(), string("low")),
             ("personality".to_string(), string("pragmatic")),
             ("web_search".to_string(), string("disabled")),
+            ("bypass_hook_trust".to_string(), true.into()),
         ]);
         assert_eq!(start.config, Some(expected_config.clone()));
         assert_eq!(resume.config, Some(expected_config.clone()));
@@ -2198,20 +2197,6 @@ mod tests {
         assert_eq!(
             explicit_overrides.get("personality"),
             Some(&serde_json::Value::String("none".to_string()))
-        );
-    }
-
-    #[tokio::test]
-    async fn config_request_overrides_forward_bypass_hook_trust() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let mut config = build_config(&temp_dir).await;
-        config.bypass_hook_trust = true;
-
-        let overrides = config_request_overrides_from_config(&config).expect("config overrides");
-
-        assert_eq!(
-            overrides.get("bypass_hook_trust"),
-            Some(&serde_json::Value::Bool(true))
         );
     }
 
