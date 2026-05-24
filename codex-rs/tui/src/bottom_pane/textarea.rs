@@ -2637,7 +2637,7 @@ mod tests {
     #[test]
     fn vim_e_advances_from_each_word_end() {
         let mut t = ta_with("alpha beta gamma");
-        t.set_cursor("alph".len());
+        t.set_cursor("alph".len()); // codespell:ignore alph
         t.set_vim_enabled(/*enabled*/ true);
         let mut states = Vec::new();
 
@@ -2652,20 +2652,20 @@ mod tests {
     #[test]
     fn vim_delete_to_word_end_advances_from_existing_word_end() {
         let mut t = ta_with("alpha beta gamma");
-        t.set_cursor("alph".len());
+        t.set_cursor("alph".len()); // codespell:ignore alph
         t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
 
-        assert_eq!(t.text(), "alph gamma");
+        assert_eq!(t.text(), "alph gamma"); // codespell:ignore alph
         assert_eq!(t.kill_buffer, "a beta");
     }
 
     #[test]
     fn vim_e_from_word_end_can_land_on_trailing_space() {
         let mut t = ta_with("alpha   ");
-        t.set_cursor("alph".len());
+        t.set_cursor("alph".len()); // codespell:ignore alph
         t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
@@ -2680,7 +2680,7 @@ mod tests {
         t.insert_element("<element>");
         t.insert_str(" gamma");
         let element_start = t.elements[0].range.start;
-        t.set_cursor("alph".len());
+        t.set_cursor("alph".len()); // codespell:ignore alph
         t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
