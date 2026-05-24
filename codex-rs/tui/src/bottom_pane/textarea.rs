@@ -2470,6 +2470,33 @@ mod tests {
     }
 
     #[test]
+    fn vim_word_text_objects_accept_cursor_at_word_end() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(/*pos*/ "hello".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.kill_buffer, "hello ");
+
+        let mut t = ta_with("foo bar");
+        t.set_cursor(t.text().len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('W'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "foo ");
+        assert_eq!(t.kill_buffer, "bar");
+        assert_eq!(t.cursor(), "foo ".len());
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
     fn vim_delimiter_text_objects_select_innermost_pair_and_aliases() {
         let mut t = ta_with("a(b(c)d)e");
         t.set_cursor(/*pos*/ "a(b(".len());
