@@ -531,10 +531,7 @@ fn resolve_local_plugin_source_path(
         });
     };
     if path.is_empty() {
-        return Err(MarketplaceError::InvalidMarketplaceFile {
-            path: marketplace_path.to_path_buf(),
-            message: "local plugin source path must not be empty".to_string(),
-        });
+        return marketplace_root_dir(marketplace_path);
     }
 
     let relative_source_path = Path::new(path);

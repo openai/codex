@@ -113,6 +113,63 @@ fn find_marketplace_plugin_supports_alternate_layout_and_string_local_source() {
 }
 
 #[test]
+fn find_marketplace_plugin_supports_marketplace_root_local_source() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    let marketplace_path = write_alternate_marketplace(
+        &repo_root,
+        r#"{
+  "name": "alternate-marketplace",
+  "plugins": [
+    {
+      "name": "root-plugin",
+      "source": "./"
+    }
+  ]
+}"#,
+    );
+    write_alternate_plugin_manifest(
+        &repo_root,
+        r#"{
+  "name": "root-plugin",
+  "version": "1.2.3",
+  "interface": {
+    "displayName": "Root Plugin"
+  }
+}"#,
+    );
+
+    let expected_path = AbsolutePathBuf::try_from(repo_root).unwrap();
+    let expected_manifest = load_plugin_manifest(expected_path.as_path());
+    let resolved = find_marketplace_plugin(&marketplace_path, "root-plugin").unwrap();
+
+    assert_eq!(
+        resolved,
+        ResolvedMarketplacePlugin {
+            plugin_id: PluginId::new(
+                "root-plugin".to_string(),
+                "alternate-marketplace".to_string()
+            )
+            .unwrap(),
+            source: MarketplacePluginSource::Local {
+                path: expected_path,
+            },
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: None,
+            },
+            interface: Some(PluginManifestInterface {
+                display_name: Some("Root Plugin".to_string()),
+                ..Default::default()
+            }),
+            manifest: expected_manifest,
+        }
+    );
+}
+
+#[test]
 fn find_marketplace_plugin_supports_git_subdir_sources() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
