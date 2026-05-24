@@ -145,8 +145,8 @@ async fn exec_resume_last_without_prompt_follows_active_goal() -> anyhow::Result
                 ),
                 responses::ev_completed("resp-create-goal"),
             ]),
-            exec_sse_response(1),
-            exec_sse_response(2),
+            exec_sse_response(/*index*/ 1),
+            exec_sse_response(/*index*/ 2),
         ],
     )
     .await;

@@ -21,6 +21,7 @@ use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
@@ -885,7 +886,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                             params: ThreadTurnsListParams {
                                 thread_id: primary_thread_id_for_span.clone(),
                                 cursor: None,
-                                limit: Some(10),
+                                limit: Some(/*limit*/ 10),
                                 sort_direction: None,
                                 items_view: Some(TurnItemsView::Full),
                             },
@@ -907,6 +908,16 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         );
                         if status == TurnStatus::InProgress {
                             break (task_id, true);
+                        }
+                        for item in turn.items.iter().cloned() {
+                            let _ = event_processor.process_server_notification(
+                                ServerNotification::ItemCompleted(ItemCompletedNotification {
+                                    item,
+                                    thread_id: primary_thread_id_for_span.clone(),
+                                    turn_id: task_id.clone(),
+                                    completed_at_ms: 0,
+                                }),
+                            );
                         }
                         let _ = event_processor.process_server_notification(
                             ServerNotification::TurnCompleted(TurnCompletedNotification {
