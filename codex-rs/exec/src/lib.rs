@@ -44,12 +44,15 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -875,24 +878,25 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 if active_goal_seen
                     && let Some(running_turn_id) = running_turn_id_from_resume.take()
                 {
-                    let response: ThreadReadResponse = send_request_with_response(
+                    let response: ThreadTurnsListResponse = send_request_with_response(
                         &client,
-                        ClientRequest::ThreadRead {
+                        ClientRequest::ThreadTurnsList {
                             request_id: request_ids.next(),
-                            params: ThreadReadParams {
+                            params: ThreadTurnsListParams {
                                 thread_id: primary_thread_id_for_span.clone(),
-                                include_turns: true,
+                                cursor: None,
+                                limit: Some(10),
+                                sort_direction: None,
+                                items_view: Some(TurnItemsView::Full),
                             },
                         },
-                        "thread/read",
+                        "thread/turns/list",
                     )
                     .await
                     .map_err(anyhow::Error::msg)?;
                     if let Some(turn) = response
-                        .thread
-                        .turns
+                        .data
                         .into_iter()
-                        .rev()
                         .find(|turn| turn.id == running_turn_id)
                     {
                         let status = turn.status.clone();
