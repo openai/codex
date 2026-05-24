@@ -326,13 +326,13 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         turns: vec![
             codex_app_server_protocol::Turn {
                 id: "turn-1".to_string(),
-                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![AppServerThreadItem::AgentMessage {
                     id: "msg-1".to_string(),
                     text: "hello".to_string(),
                     phase: None,
                     memory_citation: None,
                 }],
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
                 started_at: None,
@@ -403,6 +403,7 @@ fn should_backfill_turn_completed_items_skips_notifications_with_items() {
                     phase: None,
                     memory_citation: None,
                 }],
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
                 started_at: None,

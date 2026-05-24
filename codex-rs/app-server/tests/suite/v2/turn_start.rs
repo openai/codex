@@ -1176,8 +1176,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.id, turn.id);
     assert_eq!(completed.turn.status, TurnStatus::Completed);
-    assert_eq!(completed.turn.items_view, TurnItemsView::NotLoaded);
-    assert!(completed.turn.items.is_empty());
+    assert_eq!(completed.turn.items_view, TurnItemsView::Full);
+    assert!(!completed.turn.items.is_empty());
 
     // Send a second turn that exercises the overrides path: change the model.
     let turn_req2 = mcp
@@ -1227,8 +1227,8 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(completed2.thread_id, thread.id);
     assert_eq!(completed2.turn.id, turn2.id);
     assert_eq!(completed2.turn.status, TurnStatus::Completed);
-    assert_eq!(completed2.turn.items_view, TurnItemsView::NotLoaded);
-    assert!(completed2.turn.items.is_empty());
+    assert_eq!(completed2.turn.items_view, TurnItemsView::Full);
+    assert!(!completed2.turn.items.is_empty());
 
     Ok(())
 }

@@ -227,9 +227,7 @@ pub async fn handle(
     .map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to load agent job {job_id}: {err}"))
     })?
-    .ok_or_else(|| {
-        FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
-    })?;
+    .ok_or_else(|| FunctionCallError::RespondToModel(format!("agent job {job_id} not found")))?;
     let output_path = PathBuf::from(job.output_csv_path.clone());
     if !tokio::fs::try_exists(&output_path).await.unwrap_or(false) {
         export_job_csv_snapshot(db.clone(), &job)

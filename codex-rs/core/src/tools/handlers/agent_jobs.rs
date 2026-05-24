@@ -31,12 +31,12 @@ use tokio::time::Instant;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-mod report_agent_job_result;
-mod spawn_agents_on_csv;
 #[path = "agent_jobs_db.rs"]
 mod db_ops;
+mod report_agent_job_result;
 #[path = "agent_jobs_slots.rs"]
 mod slots;
+mod spawn_agents_on_csv;
 #[path = "agent_jobs_startup.rs"]
 mod startup;
 
@@ -183,7 +183,7 @@ fn normalize_max_runtime_seconds(requested: Option<u64>) -> Result<Option<u64>, 
 
 async fn run_agent_job_loop(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
+    _turn: Arc<TurnContext>,
     db: Arc<codex_state::StateRuntime>,
     job_id: String,
     options: JobRunnerOptions,
@@ -442,15 +442,16 @@ async fn recover_running_items(
     active_items: &mut HashMap<ThreadId, ActiveJobItem>,
     runtime_timeout: Duration,
 ) -> anyhow::Result<()> {
-    let running_items = db_ops::retry_locked("list_running_agent_job_items_for_recovery", || async {
-        db.list_agent_job_items(
-            job_id,
-            Some(codex_state::AgentJobItemStatus::Running),
-            /*limit*/ None,
-        )
-        .await
-    })
-    .await?;
+    let running_items =
+        db_ops::retry_locked("list_running_agent_job_items_for_recovery", || async {
+            db.list_agent_job_items(
+                job_id,
+                Some(codex_state::AgentJobItemStatus::Running),
+                /*limit*/ None,
+            )
+            .await
+        })
+        .await?;
     for item in running_items {
         if is_item_stale(&item, runtime_timeout) {
             let error_message = format!("worker exceeded max runtime of {runtime_timeout:?}");
@@ -614,9 +615,7 @@ async fn finalize_finished_item(
         db.get_agent_job_item(job_id, item_id).await
     })
     .await?
-    .ok_or_else(|| {
-        anyhow::anyhow!("job item not found for finalization: {job_id}/{item_id}")
-    })?;
+    .ok_or_else(|| anyhow::anyhow!("job item not found for finalization: {job_id}/{item_id}"))?;
     if matches!(item.status, codex_state::AgentJobItemStatus::Running) {
         if item.result_json.is_some() {
             let _ = db_ops::retry_locked("mark_agent_job_item_completed", || async {

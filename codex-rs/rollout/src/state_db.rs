@@ -158,17 +158,15 @@ async fn try_init_with_roots_inner(
     default_model_provider_id: String,
     backfill_lease_seconds: Option<i64>,
 ) -> anyhow::Result<StateDbHandle> {
-    let runtime = shared_state_db_runtime(
-        sqlite_home.as_path(),
-        default_model_provider_id.as_str(),
-    )
-    .await
-    .map_err(|err| {
-        anyhow::anyhow!(
-            "failed to initialize state runtime at {}: {err}",
-            sqlite_home.display()
-        )
-    })?;
+    let runtime =
+        shared_state_db_runtime(sqlite_home.as_path(), default_model_provider_id.as_str())
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "failed to initialize state runtime at {}: {err}",
+                    sqlite_home.display()
+                )
+            })?;
     let backfill_gate_started = Instant::now();
     let backfill_gate_result = wait_for_backfill_gate(
         runtime.as_ref(),
@@ -274,19 +272,18 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
         );
         return None;
     }
-    let runtime = match shared_state_db_runtime(config.sqlite_home(), config.model_provider_id())
-        .await
-    {
-        Ok(runtime) => runtime,
-        Err(_) => {
-            codex_state::record_fallback(
-                "get_state_db",
-                "db_error",
-                /*telemetry_override*/ None,
-            );
-            return None;
-        }
-    };
+    let runtime =
+        match shared_state_db_runtime(config.sqlite_home(), config.model_provider_id()).await {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                codex_state::record_fallback(
+                    "get_state_db",
+                    "db_error",
+                    /*telemetry_override*/ None,
+                );
+                return None;
+            }
+        };
     require_backfill_complete(runtime, config.sqlite_home()).await
 }
 

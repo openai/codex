@@ -8,7 +8,9 @@ import type { TurnStatus } from "./TurnStatus";
 
 export type Turn = { id: string,
 /**
- * Thread items currently included in this turn payload.
+ * Thread items currently included in this turn payload. `turn/completed`
+ * includes terminal turn items when they are still available from the live
+ * thread listener; other lightweight responses may leave this empty.
  */
 items: Array<ThreadItem>,
 /**

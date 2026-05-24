@@ -101,10 +101,7 @@ pub async fn handle(
             thread_id = %reporting_thread_id,
             "agent job accepted worker result; scheduling worker shutdown"
         );
-        request_live_agent_shutdown(
-            session.services.agent_control.clone(),
-            reporting_thread_id,
-        );
+        request_live_agent_shutdown(session.services.agent_control.clone(), reporting_thread_id);
     }
     let content =
         serde_json::to_string(&ReportAgentJobResultToolResult { accepted }).map_err(|err| {

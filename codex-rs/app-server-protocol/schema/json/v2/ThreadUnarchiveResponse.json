@@ -1712,7 +1712,7 @@
           "type": "string"
         },
         "items": {
-          "description": "Thread items currently included in this turn payload.",
+          "description": "Thread items currently included in this turn payload. `turn/completed` includes terminal turn items when they are still available from the live thread listener; other lightweight responses may leave this empty.",
           "items": {
             "$ref": "#/definitions/ThreadItem"
           },

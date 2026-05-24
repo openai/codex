@@ -21,6 +21,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DeprecationNoticeNotification;
+#[cfg(test)]
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallStatus;
@@ -40,7 +41,9 @@ use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
+#[cfg(test)]
 use codex_app_server_protocol::McpToolCallResult;
+#[cfg(test)]
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::ModelVerificationNotification;
@@ -1382,6 +1385,7 @@ fn compact_turn_completed_item(item: ThreadItem) -> ThreadItem {
             status,
             arguments,
             mcp_app_resource_uri,
+            plugin_id,
             result: _,
             error,
             duration_ms,
@@ -1392,6 +1396,7 @@ fn compact_turn_completed_item(item: ThreadItem) -> ThreadItem {
             status,
             arguments,
             mcp_app_resource_uri,
+            plugin_id,
             result: None,
             error,
             duration_ms,
@@ -3506,6 +3511,7 @@ mod tests {
                     status: McpToolCallStatus::Completed,
                     arguments: json!({"q":"hi"}),
                     mcp_app_resource_uri: None,
+                    plugin_id: None,
                     result: Some(Box::new(McpToolCallResult {
                         content: vec![json!({"text":"large tool output"})],
                         structured_content: Some(json!({"rows":[{"value":"large"}]})),
@@ -3567,6 +3573,7 @@ mod tests {
                     status: McpToolCallStatus::Completed,
                     arguments: json!({"q":"hi"}),
                     mcp_app_resource_uri: None,
+                    plugin_id: None,
                     result: None,
                     error: None,
                     duration_ms: Some(2),
