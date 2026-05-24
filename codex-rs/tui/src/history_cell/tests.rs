@@ -2319,6 +2319,30 @@ fn agent_markdown_cell_does_not_split_words_after_inline_markdown() {
 }
 
 #[test]
+fn streamed_agent_list_paragraph_preserves_item_indent_when_wrapped() {
+    let cell = AgentMessageCell::new(
+        vec![
+            Line::from("1. Correctness issue: server tool-search completions are rejected."),
+            Line::default(),
+            Line::from(
+                "   In next_prompt_suggestion.rs, ToolSearchCall records its call id, but a paired output is ignored and suppresses suggestions.",
+            ),
+        ],
+        /*is_first_line*/ true,
+    );
+
+    let lines = render_lines(&cell.display_lines(/*width*/ 64));
+    assert!(
+        lines
+            .iter()
+            .filter(|line| line.contains("paired output") || line.contains("suggestions."))
+            .all(|line| line.starts_with("     ")),
+        "expected all wrapped paragraph rows to retain the assistant gutter and list indent: {lines:?}",
+    );
+    insta::assert_snapshot!(lines.join("\n"));
+}
+
+#[test]
 fn agent_markdown_cell_narrow_width_shows_prefix_only() {
     let source = "narrow width coverage\n";
     let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
