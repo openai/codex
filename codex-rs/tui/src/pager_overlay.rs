@@ -63,8 +63,8 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
 pub(crate) enum Overlay {
-    Transcript(TranscriptOverlay),
-    Static(StaticOverlay),
+    Transcript(Box<TranscriptOverlay>),
+    Static(Box<StaticOverlay>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,13 +92,13 @@ impl Overlay {
         toggle_raw_output_keymap: Vec<KeyBinding>,
         state: TranscriptOverlayState,
     ) -> Self {
-        Self::Transcript(TranscriptOverlay::new(
+        Self::Transcript(Box::new(TranscriptOverlay::new(
             cells,
             keymap,
             copy_keymap,
             toggle_raw_output_keymap,
             state,
-        ))
+        )))
     }
 
     pub(crate) fn new_static_with_lines(
@@ -106,7 +106,7 @@ impl Overlay {
         title: String,
         keymap: PagerKeymap,
     ) -> Self {
-        Self::Static(StaticOverlay::with_title(lines, title, keymap))
+        Self::Static(Box::new(StaticOverlay::with_title(lines, title, keymap)))
     }
 
     pub(crate) fn new_static_with_renderables(
@@ -114,7 +114,11 @@ impl Overlay {
         title: String,
         keymap: PagerKeymap,
     ) -> Self {
-        Self::Static(StaticOverlay::with_renderables(renderables, title, keymap))
+        Self::Static(Box::new(StaticOverlay::with_renderables(
+            renderables,
+            title,
+            keymap,
+        )))
     }
 
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
