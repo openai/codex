@@ -466,6 +466,7 @@ mod mcp_processor;
 mod plugins;
 mod process_exec_processor;
 mod remote_control_processor;
+mod review_story_generation;
 mod review_story_processor;
 mod search;
 mod thread_processor;

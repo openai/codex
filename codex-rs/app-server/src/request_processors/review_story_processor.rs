@@ -73,15 +73,15 @@ impl ReviewStoryRequestProcessor {
         let state_db = self.require_state_db()?;
         let cwd = thread.config_snapshot().await.cwd;
         let evidence = collect_evidence(cwd.as_path(), &target).await?;
-        let model_story = generate_model_story(&thread, &target, &evidence).await;
+        let model_outline = generate_model_outline(&thread, &target, &evidence).await;
         let story_snapshot_id = Uuid::now_v7().to_string();
         let now = chrono::Utc::now().timestamp();
-        let snapshot = build_snapshot(
+        let (snapshot, outline_degraded) = build_snapshot(
             story_snapshot_id.clone(),
             thread_id.clone(),
             target,
             evidence,
-            model_story,
+            model_outline,
             now,
             /*previous_story_snapshot_id*/ None,
         );
@@ -100,6 +100,16 @@ impl ReviewStoryRequestProcessor {
                 },
             ))
             .await;
+
+        if snapshot.status == ReviewStorySnapshotStatus::Building {
+            super::review_story_generation::spawn_enrichment(
+                Arc::clone(&thread),
+                snapshot.clone(),
+                outline_degraded,
+                state_db.clone(),
+                Arc::clone(&self.outgoing),
+            );
+        }
 
         let turn = build_story_turn(
             format!("review-story-{}", snapshot.story_snapshot_id),
@@ -190,22 +200,22 @@ struct StoryEvidence {
     anchors: Vec<ReviewStoryAnchor>,
 }
 
-struct ModelStoryResult {
-    output: Option<ModelReviewStoryOutput>,
+struct ModelOutlineResult {
+    output: Option<ModelReviewStoryOutline>,
     error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ModelReviewStoryOutput {
+struct ModelReviewStoryOutline {
     title: String,
     overview: String,
-    steps: Vec<ModelReviewStoryStep>,
+    steps: Vec<ModelReviewStoryOutlineStep>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ModelReviewStoryStep {
+struct ModelReviewStoryOutlineStep {
     title: String,
     goal: String,
     summary: String,
@@ -268,56 +278,59 @@ async fn collect_evidence(
     })
 }
 
-async fn generate_model_story(
+async fn generate_model_outline(
     thread: &codex_core::CodexThread,
     target: &ReviewTarget,
     evidence: &StoryEvidence,
-) -> ModelStoryResult {
+) -> ModelOutlineResult {
     if evidence.anchors.is_empty() {
-        return ModelStoryResult {
+        return ModelOutlineResult {
             output: None,
             error: None,
         };
     }
-    let prompt = review_story_prompt(target, evidence);
-    let schema = review_story_output_schema();
+    let prompt = review_story_outline_prompt(target, evidence);
+    let schema = review_story_outline_schema();
     match thread
         .run_structured_model_task(
             prompt,
             REVIEW_STORY_MODEL_INSTRUCTIONS.to_string(),
             schema,
-            SubAgentSource::Other("review_story".to_string()),
+            SubAgentSource::Other("review_story_outline".to_string()),
         )
         .await
     {
-        Ok(Some(output_text)) => match parse_model_review_story_output(&output_text) {
-            Ok(output) => ModelStoryResult {
+        Ok(Some(output_text)) => match parse_model_review_story_outline(&output_text) {
+            Ok(output) => ModelOutlineResult {
                 output: Some(output),
                 error: None,
             },
-            Err(err) => ModelStoryResult {
+            Err(err) => ModelOutlineResult {
                 output: None,
-                error: Some(format!("model returned an invalid review story: {err}")),
+                error: Some(format!(
+                    "model returned an invalid review story outline: {err}"
+                )),
             },
         },
-        Ok(None) => ModelStoryResult {
+        Ok(None) => ModelOutlineResult {
             output: None,
-            error: Some("model did not return a review story".to_string()),
+            error: Some("model did not return a review story outline".to_string()),
         },
-        Err(err) => ModelStoryResult {
+        Err(err) => ModelOutlineResult {
             output: None,
-            error: Some(format!("failed to generate review story: {err}")),
+            error: Some(format!("failed to generate review story outline: {err}")),
         },
     }
 }
 
-const REVIEW_STORY_MODEL_INSTRUCTIONS: &str = r#"You create review stories for code changes.
+const REVIEW_STORY_MODEL_INSTRUCTIONS: &str = r#"You create review story outlines for code changes.
 
-Group the supplied change anchors into a small sequence of cohesive logic steps. Each step should help a reviewer understand why the change exists, what changed, and how that step depends on earlier steps. Use only the provided anchor ids. Do not invent files, commits, or anchor ids. Prefer semantic dependency order over file order when the evidence supports it."#;
+Group the supplied change anchors into a small sequence of cohesive logic steps. Provide concise navigational values for every requested step field; a later enrichment pass will write detailed explanations. Use only the provided anchor ids. Do not invent files, commits, or anchor ids. Prefer semantic dependency order over file order when the evidence supports it."#;
 
-fn review_story_prompt(target: &ReviewTarget, evidence: &StoryEvidence) -> String {
+fn review_story_outline_prompt(target: &ReviewTarget, evidence: &StoryEvidence) -> String {
     let mut prompt = String::new();
-    prompt.push_str("Create a dependency-aware review story for these changes.\n\n");
+    prompt
+        .push_str("Create a concise dependency-aware review story outline for these changes.\n\n");
     prompt.push_str("Target:\n");
     prompt.push_str(&target_description(target));
     prompt.push_str("\n\nSource fingerprint:\n");
@@ -380,7 +393,7 @@ fn truncate_for_prompt(text: &str, max_chars: usize) -> String {
     truncated
 }
 
-fn review_story_output_schema() -> serde_json::Value {
+fn review_story_outline_schema() -> serde_json::Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -441,19 +454,19 @@ fn review_story_output_schema() -> serde_json::Value {
     })
 }
 
-fn parse_model_review_story_output(
+fn parse_model_review_story_outline(
     text: &str,
-) -> Result<ModelReviewStoryOutput, serde_json::Error> {
-    if let Ok(output) = serde_json::from_str::<ModelReviewStoryOutput>(text) {
+) -> Result<ModelReviewStoryOutline, serde_json::Error> {
+    if let Ok(output) = serde_json::from_str::<ModelReviewStoryOutline>(text) {
         return Ok(output);
     }
     if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
         && start < end
         && let Some(slice) = text.get(start..=end)
     {
-        return serde_json::from_str::<ModelReviewStoryOutput>(slice);
+        return serde_json::from_str::<ModelReviewStoryOutline>(slice);
     }
-    serde_json::from_str::<ModelReviewStoryOutput>(text)
+    serde_json::from_str::<ModelReviewStoryOutline>(text)
 }
 
 async fn git_output(
@@ -560,33 +573,36 @@ fn build_snapshot(
     thread_id: String,
     target: ReviewTarget,
     evidence: StoryEvidence,
-    model_story: ModelStoryResult,
+    model_outline: ModelOutlineResult,
     created_at: i64,
     previous_story_snapshot_id: Option<String>,
-) -> ReviewStorySnapshot {
+) -> (ReviewStorySnapshot, bool) {
     let fallback_title = title_for_target(&target);
-    let (title, overview, steps, status) = if evidence.anchors.is_empty() {
+    let (title, overview, steps, status, outline_degraded) = if evidence.anchors.is_empty() {
         (
             fallback_title,
             "No changes were detected for this review story source.".to_string(),
             steps_from_anchors(&evidence.anchors),
             ReviewStorySnapshotStatus::Ready,
+            false,
         )
-    } else if let Some(output) = model_story.output {
+    } else if let Some(output) = model_outline.output {
         let (steps, validation_error) = steps_from_model_output(output.steps, &evidence.anchors);
-        let status = if validation_error.is_some() {
-            ReviewStorySnapshotStatus::Partial
-        } else {
-            ReviewStorySnapshotStatus::Ready
-        };
+        let outline_degraded = validation_error.is_some();
         let overview = if let Some(error) = validation_error {
             format!("{}\n\n{error}", output.overview)
         } else {
             output.overview
         };
-        (output.title, overview, steps, status)
+        (
+            output.title,
+            overview,
+            steps,
+            ReviewStorySnapshotStatus::Building,
+            outline_degraded,
+        )
     } else {
-        let overview = model_story.error.map_or_else(
+        let overview = model_outline.error.map_or_else(
             || {
                 format!(
                     "This story groups {} changed file(s) into review steps based on the local change map.",
@@ -599,10 +615,11 @@ fn build_snapshot(
             fallback_title,
             overview,
             steps_from_anchors(&evidence.anchors),
-            ReviewStorySnapshotStatus::Partial,
+            ReviewStorySnapshotStatus::Building,
+            true,
         )
     };
-    ReviewStorySnapshot {
+    let mut snapshot = ReviewStorySnapshot {
         story_snapshot_id,
         thread_id,
         title,
@@ -616,7 +633,13 @@ fn build_snapshot(
         stale: false,
         steps,
         anchors: evidence.anchors,
+    };
+    if snapshot.status == ReviewStorySnapshotStatus::Building {
+        for step in &mut snapshot.steps {
+            step.readiness = ReviewStoryStepReadiness::Outline;
+        }
     }
+    (snapshot, outline_degraded)
 }
 
 fn title_for_target(target: &ReviewTarget) -> String {
@@ -665,7 +688,7 @@ fn steps_from_anchors(anchors: &[ReviewStoryAnchor]) -> Vec<ReviewStoryStep> {
 }
 
 fn steps_from_model_output(
-    model_steps: Vec<ModelReviewStoryStep>,
+    model_steps: Vec<ModelReviewStoryOutlineStep>,
     anchors: &[ReviewStoryAnchor],
 ) -> (Vec<ReviewStoryStep>, Option<String>) {
     let anchors_by_id = anchors
@@ -798,7 +821,7 @@ fn build_story_turn(turn_id: String, display_text: &str) -> Turn {
     }
 }
 
-fn snapshot_record(
+pub(super) fn snapshot_record(
     snapshot: &ReviewStorySnapshot,
 ) -> Result<ReviewStoryRecord, codex_app_server_protocol::JSONRPCErrorError> {
     let target_json = serde_json::to_value(&snapshot.target)
@@ -839,7 +862,7 @@ fn summary_from_record(
     })
 }
 
-fn status_as_str(status: ReviewStorySnapshotStatus) -> &'static str {
+pub(super) fn status_as_str(status: ReviewStorySnapshotStatus) -> &'static str {
     match status {
         ReviewStorySnapshotStatus::Building => "building",
         ReviewStorySnapshotStatus::Ready => "ready",
@@ -914,7 +937,7 @@ new file mode 100644
     #[test]
     fn model_output_groups_anchors_into_cohesive_steps() {
         let anchors = sample_anchors();
-        let model_steps = vec![ModelReviewStoryStep {
+        let model_steps = vec![ModelReviewStoryOutlineStep {
             title: "Introduce review story state".to_string(),
             goal: "Create the storage and protocol foundation.".to_string(),
             summary: "Adds reusable state and API shapes for review stories.".to_string(),
@@ -947,7 +970,7 @@ new file mode 100644
     #[test]
     fn model_output_appends_missing_anchors_for_full_coverage() {
         let anchors = sample_anchors();
-        let model_steps = vec![ModelReviewStoryStep {
+        let model_steps = vec![ModelReviewStoryOutlineStep {
             title: "Add protocol".to_string(),
             goal: "Define the API contract.".to_string(),
             summary: "Adds the protocol file.".to_string(),
@@ -999,6 +1022,99 @@ new file mode 100644
                 },
             ]
         );
+    }
+
+    #[test]
+    fn initial_model_outline_is_a_building_snapshot() {
+        let evidence = StoryEvidence {
+            source_fingerprint: "sha256:one".to_string(),
+            anchors: sample_anchors(),
+        };
+        let model_outline = ModelOutlineResult {
+            output: Some(ModelReviewStoryOutline {
+                title: "Review story".to_string(),
+                overview: "Read this in order.".to_string(),
+                steps: vec![ModelReviewStoryOutlineStep {
+                    title: "Foundation".to_string(),
+                    goal: "Start with the API.".to_string(),
+                    summary: "Outline summary.".to_string(),
+                    dependency_rationale: "It supports later work.".to_string(),
+                    anchor_ids: vec!["anchor-1".to_string(), "anchor-2".to_string()],
+                    review_focus: vec!["Follow the API.".to_string()],
+                }],
+            }),
+            error: None,
+        };
+
+        let (snapshot, degraded) = build_snapshot(
+            "story-1".to_string(),
+            "thread-1".to_string(),
+            ReviewTarget::UncommittedChanges,
+            evidence,
+            model_outline,
+            /*created_at*/ 1,
+            /*previous_story_snapshot_id*/ None,
+        );
+
+        assert_eq!(snapshot.status, ReviewStorySnapshotStatus::Building);
+        assert_eq!(
+            snapshot.steps[0].readiness,
+            ReviewStoryStepReadiness::Outline
+        );
+        assert_eq!(degraded, false);
+    }
+
+    #[test]
+    fn fallback_outline_remains_enrichable_and_degraded() {
+        let evidence = StoryEvidence {
+            source_fingerprint: "sha256:one".to_string(),
+            anchors: sample_anchors(),
+        };
+
+        let (snapshot, degraded) = build_snapshot(
+            "story-1".to_string(),
+            "thread-1".to_string(),
+            ReviewTarget::UncommittedChanges,
+            evidence,
+            ModelOutlineResult {
+                output: None,
+                error: Some("outline failed".to_string()),
+            },
+            /*created_at*/ 1,
+            /*previous_story_snapshot_id*/ None,
+        );
+
+        assert_eq!(snapshot.status, ReviewStorySnapshotStatus::Building);
+        assert!(
+            snapshot
+                .steps
+                .iter()
+                .all(|step| step.readiness == ReviewStoryStepReadiness::Outline)
+        );
+        assert_eq!(degraded, true);
+    }
+
+    #[test]
+    fn empty_story_is_immediately_ready() {
+        let (snapshot, degraded) = build_snapshot(
+            "story-1".to_string(),
+            "thread-1".to_string(),
+            ReviewTarget::UncommittedChanges,
+            StoryEvidence {
+                source_fingerprint: "sha256:empty".to_string(),
+                anchors: Vec::new(),
+            },
+            ModelOutlineResult {
+                output: None,
+                error: None,
+            },
+            /*created_at*/ 1,
+            /*previous_story_snapshot_id*/ None,
+        );
+
+        assert_eq!(snapshot.status, ReviewStorySnapshotStatus::Ready);
+        assert_eq!(snapshot.steps[0].readiness, ReviewStoryStepReadiness::Ready);
+        assert_eq!(degraded, false);
     }
 
     fn sample_anchors() -> Vec<ReviewStoryAnchor> {
