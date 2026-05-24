@@ -47,6 +47,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -807,7 +808,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     let mut error_seen = false;
     let mut interrupt_channel_open = true;
-    let task_id = match initial_operation {
+    let (task_id, wait_for_completion) = match initial_operation {
         InitialOperation::UserTurn {
             items,
             output_schema,
@@ -842,7 +843,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)?;
             let task_id = response.turn.id;
             info!("Sent prompt with event ID: {task_id}");
-            task_id
+            (task_id, true)
         }
         InitialOperation::Review { review_request } => {
             let response: ReviewStartResponse = send_request_with_response(
@@ -865,7 +866,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 response.turn,
             );
             info!("Sent review request with event ID: {task_id}");
-            task_id
+            (task_id, true)
         }
         InitialOperation::FollowActiveGoal => {
             let mut active_goal_seen = false;
@@ -887,15 +888,32 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     )
                     .await
                     .map_err(anyhow::Error::msg)?;
-                    if let Some(turn) = response.thread.turns.into_iter().rev().find(|turn| {
-                        turn.id == running_turn_id && turn.status == TurnStatus::InProgress
-                    }) {
+                    if let Some(turn) = response
+                        .thread
+                        .turns
+                        .into_iter()
+                        .rev()
+                        .find(|turn| turn.id == running_turn_id)
+                    {
+                        let status = turn.status.clone();
                         let task_id = process_turn_started(
                             event_processor.as_mut(),
                             primary_thread_id_for_span.clone(),
-                            turn,
+                            turn.clone(),
                         );
-                        break task_id;
+                        if status == TurnStatus::InProgress {
+                            break (task_id, true);
+                        }
+                        let _ = event_processor.process_server_notification(
+                            ServerNotification::TurnCompleted(TurnCompletedNotification {
+                                thread_id: primary_thread_id_for_span.clone(),
+                                turn,
+                            }),
+                        );
+                        if matches!(status, TurnStatus::Failed | TurnStatus::Interrupted) {
+                            error_seen = true;
+                        }
+                        break (task_id, false);
                     }
                 }
 
@@ -950,7 +968,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         {
                             let task_id = payload.turn.id.clone();
                             let _ = event_processor.process_server_notification(notification);
-                            break task_id;
+                            break (task_id, true);
                         }
                         _ => {}
                     },
@@ -969,6 +987,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let primary_thread_id_for_requests = primary_thread_id.to_string();
+    if !wait_for_completion {
+        if let Err(err) = client.shutdown().await {
+            warn!("in-process app-server shutdown failed: {err}");
+        }
+        event_processor.print_final_output();
+        if error_seen {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     loop {
         let server_event = tokio::select! {
             maybe_interrupt = interrupt_rx.recv(), if interrupt_channel_open => {
