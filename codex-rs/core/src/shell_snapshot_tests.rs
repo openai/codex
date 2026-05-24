@@ -1,9 +1,12 @@
 use super::*;
+use anyhow::anyhow;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::Command;
@@ -370,6 +373,41 @@ async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         }
         sleep(TokioDuration::from_millis(50)).await;
     }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn timed_out_zsh_user_rc_uses_login_shell_fallback_snapshot() -> Result<()> {
+    let dir = tempdir()?;
+    let shell_path = dir.path().join("zsh-wrapper.sh");
+    fs::write(
+        &shell_path,
+        r#"#!/bin/sh
+marker="$0.first-call"
+if [ ! -e "$marker" ]; then
+  : > "$marker"
+  while :; do :; done
+fi
+case "$*" in
+  *".zshrc"*) exit 2 ;;
+esac
+printf '# Snapshot file\nexport PATH=/fallback/bin\n'
+"#,
+    )
+    .await?;
+    std::fs::set_permissions(&shell_path, std::fs::Permissions::from_mode(0o755))?;
+
+    let shell = Shell {
+        shell_type: ShellType::Zsh,
+        shell_path,
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    };
+
+    let snapshot = capture_zsh_snapshot(&shell, &dir.path().abs(), Duration::from_secs(1)).await?;
+
+    assert_eq!(snapshot, "# Snapshot file\nexport PATH=/fallback/bin\n");
 
     Ok(())
 }
