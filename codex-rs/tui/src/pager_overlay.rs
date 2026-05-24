@@ -2032,7 +2032,10 @@ mod tests {
             " 1 / 2 · 100% "
         );
 
-        assert_eq!(overlay.set_highlighted_user_prompt(2), None);
+        assert_eq!(
+            overlay.set_highlighted_user_prompt(/*nth_user_message*/ 2),
+            None
+        );
     }
 
     #[test]
