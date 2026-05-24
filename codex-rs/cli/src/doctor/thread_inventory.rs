@@ -39,6 +39,10 @@ struct RolloutScan {
 }
 
 impl RolloutScan {
+    fn candidate_count(&self) -> usize {
+        self.files.len() + self.malformed_names.len()
+    }
+
     fn active_count(&self) -> usize {
         self.files.iter().filter(|file| !file.archived).count()
     }
@@ -120,7 +124,11 @@ async fn thread_inventory_check_for_roots(
 }
 
 fn missing_state_db_check(scan: RolloutScan, details: Vec<String>) -> DoctorCheck {
-    if scan.files.is_empty() && scan.scan_errors.is_empty() {
+    if scan.files.is_empty()
+        && scan.scan_errors.is_empty()
+        && scan.malformed_names.is_empty()
+        && !scan.reached_scan_cap
+    {
         return DoctorCheck::new(
             CHECK_ID,
             CHECK_CATEGORY,
@@ -130,25 +138,46 @@ fn missing_state_db_check(scan: RolloutScan, details: Vec<String>) -> DoctorChec
         .details(details);
     }
 
-    DoctorCheck::new(
-        CHECK_ID,
-        CHECK_CATEGORY,
-        CheckStatus::Warning,
-        "state DB is missing while rollout files exist",
-    )
-    .details(details)
-    .issue(
-        DoctorIssue::new(
-            CheckStatus::Warning,
-            "rollout files exist but the state DB is missing",
+    let summary = if scan.files.is_empty() {
+        "rollout scan was incomplete or found bad files"
+    } else {
+        "state DB is missing while rollout files exist"
+    };
+    let mut check =
+        DoctorCheck::new(CHECK_ID, CHECK_CATEGORY, CheckStatus::Warning, summary).details(details);
+
+    if !scan.files.is_empty() {
+        check = check
+            .issue(
+                DoctorIssue::new(
+                    CheckStatus::Warning,
+                    "rollout files exist but the state DB is missing",
+                )
+                .measured(format!("{} rollout files", scan.files.len()))
+                .expected("state DB contains matching thread rows")
+                .remedy("Start Codex with no state DB present so startup backfill can create it from rollout files."),
         )
-        .measured(format!("{} rollout files", scan.files.len()))
-        .expected("state DB contains matching thread rows")
-        .remedy("Start Codex with no state DB present so startup backfill can create it from rollout files."),
-    )
-    .remediation(
-        "Start Codex with no state DB present so startup backfill can create it from rollout files.",
-    )
+            .remediation(
+                "Start Codex with no state DB present so startup backfill can create it from rollout files.",
+            );
+    }
+    if !scan.scan_errors.is_empty() || !scan.malformed_names.is_empty() || scan.reached_scan_cap {
+        check = check.issue(
+            DoctorIssue::new(
+                CheckStatus::Warning,
+                "rollout scan was incomplete or found bad files",
+            )
+            .measured(format!(
+                "{} scan errors, {} malformed names, scan cap reached: {}",
+                scan.scan_errors.len(),
+                scan.malformed_names.len(),
+                scan.reached_scan_cap
+            ))
+            .expected("rollout directories are fully scannable")
+            .remedy("Check file permissions and unexpected files under CODEX_HOME sessions."),
+        );
+    }
+    check
 }
 
 fn parity_check_from_scan_and_rows(
@@ -377,7 +406,7 @@ fn scan_rollout_files(codex_home: &Path) -> RolloutScan {
 fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        if scan.files.len() >= MAX_PARITY_SCAN_FILES {
+        if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
             scan.reached_scan_cap = true;
             return;
         }
@@ -390,7 +419,7 @@ fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
             }
         };
         for entry in entries {
-            if scan.files.len() >= MAX_PARITY_SCAN_FILES {
+            if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
                 scan.reached_scan_cap = true;
                 return;
             }
@@ -441,14 +470,15 @@ fn is_rollout_file(path: &Path) -> bool {
 fn thread_id_from_rollout_name(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?;
     let stem = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-    let start = stem.len().checked_sub(36)?;
-    let sep = start.checked_sub(1)?;
+    let (sep, uuid) = stem
+        .match_indices('-')
+        .rev()
+        .find_map(|(idx, _)| canonical_uuid(stem.get(idx + 1..)?).map(|uuid| (idx, uuid)))?;
     let timestamp = stem.get(..sep)?;
-    if stem.as_bytes().get(sep) != Some(&b'-') || !is_rollout_timestamp_like(timestamp) {
+    if !is_rollout_timestamp_like(timestamp) {
         return None;
     }
-    let uuid = stem.get(start..)?;
-    is_uuid_like(uuid).then(|| uuid.to_string())
+    Some(uuid)
 }
 
 fn is_rollout_timestamp_like(value: &str) -> bool {
@@ -515,12 +545,25 @@ fn count_or_skipped(count: usize, complete: bool) -> String {
     }
 }
 
-fn is_uuid_like(value: &str) -> bool {
-    value.len() == 36
+fn canonical_uuid(value: &str) -> Option<String> {
+    if value.len() == 36
         && value.char_indices().all(|(idx, ch)| match idx {
             8 | 13 | 18 | 23 => ch == '-',
             _ => ch.is_ascii_hexdigit(),
         })
+    {
+        return Some(value.to_ascii_lowercase());
+    }
+    if value.len() == 32 && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        let lower = value.to_ascii_lowercase();
+        let part1 = &lower[0..8];
+        let part2 = &lower[8..12];
+        let part3 = &lower[12..16];
+        let part4 = &lower[16..20];
+        let part5 = &lower[20..32];
+        return Some(format!("{part1}-{part2}-{part3}-{part4}-{part5}"));
+    }
+    None
 }
 
 fn path_key(path: &Path) -> PathBuf {
