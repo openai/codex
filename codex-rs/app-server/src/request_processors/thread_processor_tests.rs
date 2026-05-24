@@ -629,6 +629,32 @@ mod thread_processor_behavior_tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn request_overrides_forward_bypass_hook_trust() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config_manager = ConfigManager::new(
+            temp_dir.path().to_path_buf(),
+            Vec::new(),
+            LoaderOverrides::default(),
+            /*strict_config*/ false,
+            CloudRequirementsLoader::default(),
+            Arg0DispatchPaths::default(),
+            Arc::new(StaticThreadConfigLoader::new(Vec::new())),
+        );
+        let config = config_manager
+            .load_with_overrides(
+                Some(HashMap::from([(
+                    "bypass_hook_trust".to_string(),
+                    json!(true),
+                )])),
+                ConfigOverrides::default(),
+            )
+            .await?;
+
+        assert!(config.bypass_hook_trust);
+        Ok(())
+    }
+
     #[test]
     fn collect_resume_override_mismatches_includes_service_tier() {
         let cwd = test_path_buf("/tmp").abs();

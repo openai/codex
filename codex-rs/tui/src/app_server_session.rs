@@ -1252,6 +1252,12 @@ fn config_request_overrides_from_config(
         "web_search",
         Some(config.web_search_mode.value().to_string()),
     );
+    if config.bypass_hook_trust {
+        overrides.insert(
+            "bypass_hook_trust".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
     Some(overrides)
 }
 
@@ -2192,6 +2198,20 @@ mod tests {
         assert_eq!(
             explicit_overrides.get("personality"),
             Some(&serde_json::Value::String("none".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn config_request_overrides_forward_bypass_hook_trust() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.bypass_hook_trust = true;
+
+        let overrides = config_request_overrides_from_config(&config).expect("config overrides");
+
+        assert_eq!(
+            overrides.get("bypass_hook_trust"),
+            Some(&serde_json::Value::Bool(true))
         );
     }
 
