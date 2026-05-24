@@ -352,6 +352,34 @@ pub(crate) fn create_diff_summary(
     render_changes_block(rows, wrap_cols, cwd)
 }
 
+/// Render a raw git file patch using the standard TUI diff presentation.
+///
+/// Review story anchors preserve git's file headers, while `diffy` expects the
+/// unified portion beginning at `---`; callers can fall back to raw lines if
+/// this returns no styled rows for a non-empty patch.
+pub(crate) fn render_story_anchor_diff(
+    patch: &str,
+    path: &Path,
+    width: usize,
+) -> Vec<RtLine<'static>> {
+    let unified = patch
+        .lines()
+        .skip_while(|line| !line.starts_with("--- "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if unified.is_empty() {
+        return Vec::new();
+    }
+    let change = FileChange::Update {
+        unified_diff: format!("{unified}\n"),
+        move_path: None,
+    };
+    let mut lines = Vec::new();
+    let lang = detect_lang_for_path(path);
+    render_change(&change, &mut lines, width, lang.as_deref());
+    lines
+}
+
 // Shared row for per-file presentation
 #[derive(Clone)]
 struct Row {

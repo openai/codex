@@ -1835,11 +1835,27 @@ impl App {
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
             }
+            AppEvent::OpenReviewStoryPopup => {
+                self.chat_widget.open_review_story_popup();
+            }
+            AppEvent::OpenReviewStoryBranchPicker(cwd) => {
+                self.chat_widget.show_review_story_branch_picker(&cwd).await;
+            }
             AppEvent::OpenReviewCommitPicker(cwd) => {
                 self.chat_widget.show_review_commit_picker(&cwd).await;
             }
+            AppEvent::OpenReviewStoryCommitPicker(cwd) => {
+                self.chat_widget.show_review_story_commit_picker(&cwd).await;
+            }
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::ReviewStoryReady(snapshot) => {
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_review_story(
+                    snapshot,
+                    self.keymap.pager.clone(),
+                ));
             }
             AppEvent::SubmitUserMessageWithMode {
                 text,

@@ -28,6 +28,7 @@ pub enum SlashCommand {
     Skills,
     Hooks,
     Review,
+    Story,
     Rename,
     New,
     Resume,
@@ -84,6 +85,7 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Story => "explain changes as a step-by-step review story",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
@@ -148,6 +150,7 @@ impl SlashCommand {
         matches!(
             self,
             SlashCommand::Review
+                | SlashCommand::Story
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Goal
@@ -194,6 +197,7 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Memories
             | SlashCommand::Review
+            | SlashCommand::Story
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout

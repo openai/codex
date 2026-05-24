@@ -74,6 +74,12 @@ _Avoid_: TUI API, local story service
 **reviewStory**:
 The app-server v2 API namespace for **Story API** methods. It is separate from the findings-oriented `review` namespace because its artifact explains rather than judges a change.
 
+**Story Overlay**:
+The TUI presentation of a completed **Story Snapshot**. It provides an ordered steps rail, step details, changed evidence, and compact-layout contents view without mutating or regenerating the story.
+
+**/story**:
+The TUI command that starts story creation for a selected **Concrete Story Source** and opens its resulting **Story Overlay**. The review picker also exposes the same story action.
+
 ## Deferred Concepts
 
 These terms describe intended follow-up work, not behavior delivered by the current API/backend implementation.
@@ -86,9 +92,6 @@ A possible future evidence model that adds hunk anchors, commit relationships, o
 
 **Progressive Story Snapshot** and **Step Enrichment**:
 A future asynchronous generation workflow in which an ordered outline is usable before every step has complete explanatory prose. Current generation uses one blocking model grouping call and stores one completed snapshot.
-
-**Story Overlay** and **/story**:
-A future TUI surface and entry point over the shared API. They are intentionally implemented in a stacked UI change rather than in the reusable backend base layer.
 
 ## Example Dialogue
 

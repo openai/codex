@@ -18,9 +18,11 @@ The API also provides `reviewStory/read` and `reviewStory/list` for stored snaps
 
 Story snapshots live in the story store rather than in thread transcript history. The API is the product boundary: a stacked TUI feature and a later App UI can present the same stored story artifact.
 
+The stacked TUI layer provides `/story` and a Review picker action. It renders completed snapshots in a read-only cockpit with ordered steps, selected-step rationale, associated file patches, overview/help/contents subviews, and a compact terminal layout. It does not perform progressive enrichment or update snapshots in place.
+
 ## Deliberately Deferred
 
-- Interactive TUI or App UI presentation.
+- App UI presentation.
 - Progressive outline-first generation and asynchronous step enrichment.
 - Hunk-level anchors, dependency graph signals, or semantic indexing.
 - Staleness detection, refresh, and snapshot lineage behavior.

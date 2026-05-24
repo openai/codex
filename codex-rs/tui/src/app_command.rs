@@ -105,6 +105,9 @@ pub(crate) enum AppCommand {
     Review {
         target: ReviewTarget,
     },
+    ReviewStory {
+        target: ReviewTarget,
+    },
     ApproveGuardianDeniedAction {
         event: GuardianAssessmentEvent,
     },
@@ -270,6 +273,10 @@ impl AppCommand {
 
     pub(crate) fn review(target: ReviewTarget) -> Self {
         Self::Review { target }
+    }
+
+    pub(crate) fn review_story(target: ReviewTarget) -> Self {
+        Self::ReviewStory { target }
     }
 
     pub(crate) fn approve_guardian_denied_action(event: GuardianAssessmentEvent) -> Self {

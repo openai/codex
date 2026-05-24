@@ -40,6 +40,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
+use codex_app_server_protocol::ReviewStoryStartParams;
+use codex_app_server_protocol::ReviewStoryStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
@@ -976,6 +978,24 @@ impl AppServerSession {
             })
             .await
             .wrap_err("review/start failed in TUI")
+    }
+
+    pub(crate) async fn review_story_start(
+        &mut self,
+        thread_id: ThreadId,
+        target: ReviewTarget,
+    ) -> Result<ReviewStoryStartResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ReviewStoryStart {
+                request_id,
+                params: ReviewStoryStartParams {
+                    thread_id: thread_id.to_string(),
+                    target,
+                },
+            })
+            .await
+            .wrap_err("reviewStory/start failed in TUI")
     }
 
     pub(crate) async fn skills_list(

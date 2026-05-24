@@ -28,6 +28,7 @@ use crate::keymap::PagerKeymap;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
+use crate::review_story_overlay::ReviewStoryOverlay;
 use crate::style::user_message_style;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -50,6 +51,7 @@ use ratatui::widgets::Wrap;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    ReviewStory(ReviewStoryOverlay),
 }
 
 impl Overlay {
@@ -73,10 +75,18 @@ impl Overlay {
         Self::Static(StaticOverlay::with_renderables(renderables, title, keymap))
     }
 
+    pub(crate) fn new_review_story(
+        snapshot: codex_app_server_protocol::ReviewStorySnapshot,
+        keymap: PagerKeymap,
+    ) -> Self {
+        Self::ReviewStory(ReviewStoryOverlay::new(snapshot, keymap))
+    }
+
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
+            Overlay::ReviewStory(o) => o.handle_event(tui, event),
         }
     }
 
@@ -84,6 +94,7 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
+            Overlay::ReviewStory(o) => o.is_done(),
         }
     }
 }

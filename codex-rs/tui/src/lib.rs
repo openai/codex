@@ -163,6 +163,7 @@ pub(crate) mod public_widgets;
 mod render;
 mod resize_reflow_cap;
 mod resume_picker;
+mod review_story_overlay;
 mod selection_list;
 mod service_tier_resolution;
 mod session_log;
