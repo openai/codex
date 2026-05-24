@@ -377,11 +377,11 @@ async fn build_report(
                     })
                 },
                 run_async_check("state", progress.clone(), state_check(config)),
-                async {
-                    run_sync_check("app-server", progress.clone(), || {
-                        background_server_check(config)
-                    })
-                },
+                run_async_check(
+                    "app-server",
+                    progress.clone(),
+                    background_server_check(config)
+                ),
                 run_async_check(
                     "provider reachability",
                     progress.clone(),
