@@ -49,12 +49,6 @@ enum RolloutThreadId {
     Unusable(String),
 }
 
-#[derive(Default)]
-struct RolloutContentScan {
-    thread_id: Option<String>,
-    has_parseable_item: bool,
-}
-
 impl RolloutScan {
     fn candidate_count(&self) -> usize {
         self.files.len() + self.malformed_names.len() + self.scan_errors.len()
@@ -502,26 +496,17 @@ fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
 }
 
 fn thread_id_from_rollout(path: &Path) -> RolloutThreadId {
-    let content = match scan_rollout_content(path) {
-        Ok(content) => content,
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
         Err(err) => return RolloutThreadId::Unusable(err.to_string()),
     };
-    if let Some(thread_id) = content.thread_id {
-        return RolloutThreadId::Id(thread_id);
-    }
-    if !content.has_parseable_item {
-        return RolloutThreadId::Unusable("no parseable rollout items".to_string());
-    }
-    thread_id_from_rollout_name(path)
-        .map(RolloutThreadId::Id)
-        .unwrap_or(RolloutThreadId::MalformedName)
-}
 
-fn scan_rollout_content(path: &Path) -> std::io::Result<RolloutContentScan> {
-    let file = std::fs::File::open(path)?;
-    let mut scan = RolloutContentScan::default();
+    let mut has_parseable_item = false;
     for line in BufReader::new(file).lines() {
-        let line = line?;
+        let line = match line {
+            Ok(line) => line,
+            Err(err) => return RolloutThreadId::Unusable(err.to_string()),
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -529,13 +514,18 @@ fn scan_rollout_content(path: &Path) -> std::io::Result<RolloutContentScan> {
         let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
             continue;
         };
-        scan.has_parseable_item = true;
+        has_parseable_item = true;
         if let RolloutItem::SessionMeta(session_meta) = rollout_line.item {
-            scan.thread_id = Some(session_meta.meta.id.to_string());
-            break;
+            return RolloutThreadId::Id(session_meta.meta.id.to_string());
         }
     }
-    Ok(scan)
+
+    if !has_parseable_item {
+        return RolloutThreadId::Unusable("no parseable rollout items".to_string());
+    }
+    thread_id_from_rollout_name(path)
+        .map(RolloutThreadId::Id)
+        .unwrap_or(RolloutThreadId::MalformedName)
 }
 
 fn thread_id_from_rollout_name(path: &Path) -> Option<String> {
