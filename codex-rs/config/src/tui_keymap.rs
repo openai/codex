@@ -278,6 +278,7 @@ pub struct TuiVimOperatorKeymap {
 
 /// Vim text-object keybindings for modal editing inside text areas.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiVimTextObjectKeymap {
     /// Text object: word.
@@ -588,6 +589,20 @@ mod tests {
             .expect_err("expected unknown action under context");
         assert!(
             err.to_string().contains("open_transcrip"),
+            "expected error to mention misspelled field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn misspelled_vim_text_object_action_is_rejected() {
+        let toml_input = r#"
+            [vim_text_object]
+            double_quotes = "shift-quote"
+        "#;
+        let err = toml::from_str::<TuiKeymap>(toml_input)
+            .expect_err("expected unknown vim text object action");
+        assert!(
+            err.to_string().contains("double_quotes"),
             "expected error to mention misspelled field, got: {err}"
         );
     }
