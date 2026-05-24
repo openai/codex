@@ -2676,9 +2676,9 @@ mod tests {
     #[test]
     fn rejects_pager_bindings_that_collide_with_transcript_backtrack_keys() {
         let mut keymap = TuiKeymap::default();
-        keymap.pager.close = Some(one("enter"));
+        keymap.pager.close = Some(one("esc"));
 
-        expect_conflict(&keymap, "close", "fixed.transcript_confirm_edit");
+        expect_conflict(&keymap, "close", "fixed.transcript_edit_previous");
     }
 
     #[test]
