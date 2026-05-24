@@ -17,7 +17,6 @@ pub struct ThreadStateAuditRow {
     pub archived: bool,
     pub source: String,
     pub model_provider: String,
-    pub cwd: PathBuf,
 }
 
 /// Read persisted thread rows from a state DB without creating, migrating, or repairing it.
@@ -33,7 +32,7 @@ pub async fn read_thread_state_audit_rows(path: &Path) -> Result<Vec<ThreadState
         .await?;
     let rows = sqlx::query(
         r#"
-SELECT id, rollout_path, archived, source, model_provider, cwd
+SELECT id, rollout_path, archived, source, model_provider
 FROM threads
         "#,
     )
@@ -50,7 +49,6 @@ FROM threads
                 archived: archived != 0,
                 source: row.try_get("source")?,
                 model_provider: row.try_get("model_provider")?,
-                cwd: PathBuf::from(row.try_get::<String, _>("cwd")?),
             })
         })
         .collect()

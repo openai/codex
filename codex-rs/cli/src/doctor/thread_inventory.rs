@@ -27,7 +27,7 @@ struct RolloutAuditFile {
     path: PathBuf,
     key: PathBuf,
     archived: bool,
-    thread_id: Option<String>,
+    thread_id: String,
 }
 
 #[derive(Default)]
@@ -220,14 +220,8 @@ fn parity_check_from_scan_and_rows(
     };
     let duplicate_rollout_thread_ids = duplicate_rollout_thread_ids(&scan.files);
     let duplicate_db_paths = duplicate_db_paths(&rows_by_key);
-    let (active_rows, archived_rows) = rows.iter().fold((0usize, 0usize), |mut counts, row| {
-        if row.archived {
-            counts.1 += 1;
-        } else {
-            counts.0 += 1;
-        }
-        counts
-    });
+    let archived_rows = rows.iter().filter(|row| row.archived).count();
+    let active_rows = rows.len() - archived_rows;
 
     details.extend([
         format!("rollout DB rows: {}", rows.len()),
@@ -493,7 +487,7 @@ fn scan_rollout_files_in_dir(dir: &Path, archived: bool, scan: &mut RolloutScan)
             key: path_key(&path),
             path,
             archived,
-            thread_id: Some(thread_id),
+            thread_id,
         });
     }
 }
@@ -502,14 +496,11 @@ fn is_rollout_date_dir(path: &Path, depth: usize) -> bool {
     let Some(name) = path.file_name().and_then(OsStr::to_str) else {
         return false;
     };
-    let range = match depth {
-        0 => 0..=9999,
-        1 => 1..=12,
-        2 => 1..=31,
-        _ => return false,
-    };
-    name.parse::<u16>()
-        .is_ok_and(|value| name.len() == if depth == 0 { 4 } else { 2 } && range.contains(&value))
+    match depth {
+        0 => name.parse::<u16>().is_ok(),
+        1 | 2 => name.parse::<u8>().is_ok(),
+        _ => false,
+    }
 }
 
 fn is_rollout_file(path: &Path) -> bool {
@@ -642,16 +633,13 @@ fn has_matching_thread_row(
     let Some(rows) = rows_by_key.get(&file.key) else {
         return false;
     };
-    match file.thread_id.as_deref() {
-        Some(thread_id) => rows.iter().any(|row| row.id == thread_id),
-        None => true,
-    }
+    rows.iter().any(|row| row.id == file.thread_id.as_str())
 }
 
 fn duplicate_rollout_thread_ids(files: &[RolloutAuditFile]) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut duplicates = HashSet::new();
-    for thread_id in files.iter().filter_map(|file| file.thread_id.as_deref()) {
+    for thread_id in files.iter().map(|file| file.thread_id.as_str()) {
         if !seen.insert(thread_id) {
             duplicates.insert(thread_id.to_string());
         }
