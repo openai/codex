@@ -1723,7 +1723,7 @@ mod tests {
         let content_area = overlay.view.content_area(top);
         let second_row = {
             let layout = overlay.view.layout(content_area.width);
-            layout.offsets[2].saturating_add(overlay.prompt_first_text_row_offset(2))
+            layout.offsets[2].saturating_add(overlay.prompt_first_text_row_offset(/*idx*/ 2))
         };
 
         let before = second_row.saturating_sub(content_area.height as usize);
@@ -1808,7 +1808,7 @@ mod tests {
         let content_area = overlay.view.content_area(top);
         let selected_row = {
             let layout = overlay.view.layout(content_area.width);
-            layout.offsets[2].saturating_add(overlay.prompt_first_text_row_offset(2))
+            layout.offsets[2].saturating_add(overlay.prompt_first_text_row_offset(/*idx*/ 2))
         };
         assert_eq!(
             selected_row.saturating_sub(overlay.view.scroll_offset),
