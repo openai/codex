@@ -46,6 +46,7 @@ pub(crate) async fn maybe_run_startup_hooks_review(
     app_server: &mut AppServerSession,
     tui: &mut Tui,
     config: &Config,
+    bypass_hook_trust: bool,
 ) -> Result<StartupHooksReviewOutcome> {
     let cwd = config.cwd.to_path_buf();
     let response = match fetch_hooks_list(app_server.request_handle(), cwd.clone()).await {
@@ -56,7 +57,7 @@ pub(crate) async fn maybe_run_startup_hooks_review(
         }
     };
     let entry = hooks_list_entry_for_cwd(response, &cwd);
-    if !review_is_needed(config.bypass_hook_trust, &entry) {
+    if !review_is_needed(bypass_hook_trust, &entry) {
         return Ok(StartupHooksReviewOutcome::Continue);
     }
 

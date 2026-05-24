@@ -1706,11 +1706,25 @@ async fn run_ratatui_app(
         },
     };
 
-    let startup_hooks_browser =
-        match maybe_run_startup_hooks_review(&mut app_server, &mut tui, &config).await? {
-            StartupHooksReviewOutcome::Continue => None,
-            StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
-        };
+    // Persistent app-server resumes may attach to an already-running thread,
+    // where resume config overrides are ignored.
+    let is_persistent_resume = !matches!(&app_server_target, AppServerTarget::Embedded)
+        && matches!(
+            &session_selection,
+            resume_picker::SessionSelection::Resume(_)
+        );
+    let bypass_hook_trust_for_startup_review = config.bypass_hook_trust && !is_persistent_resume;
+    let startup_hooks_browser = match maybe_run_startup_hooks_review(
+        &mut app_server,
+        &mut tui,
+        &config,
+        bypass_hook_trust_for_startup_review,
+    )
+    .await?
+    {
+        StartupHooksReviewOutcome::Continue => None,
+        StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
+    };
 
     let app_result = App::run(
         &mut tui,
