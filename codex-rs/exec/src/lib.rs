@@ -31,6 +31,9 @@ use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread as AppServerThread;
+use codex_app_server_protocol::ThreadGoalGetParams;
+use codex_app_server_protocol::ThreadGoalGetResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -164,6 +167,7 @@ enum InitialOperation {
     Review {
         review_request: ReviewRequest,
     },
+    FollowActiveGoal,
 }
 
 enum StdinPromptBehavior {
@@ -173,8 +177,7 @@ enum StdinPromptBehavior {
     /// Always treat stdin as the prompt, used for the explicit `codex exec -`
     /// sentinel and similar forced-stdin call sites.
     Forced,
-    /// If stdin is piped alongside a positional prompt, treat stdin as
-    /// additional context to append rather than as the primary prompt.
+    /// Read stdin when it is piped and ignore terminal or empty stdin.
     OptionalAppend,
 }
 
@@ -627,25 +630,31 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     }
                 })
                 .or(root_prompt);
-            let prompt_text = resolve_prompt(prompt_arg);
-            let mut items: Vec<UserInput> = imgs
-                .into_iter()
-                .chain(args.images.iter().cloned())
-                .map(|path| UserInput::LocalImage { path, detail: None })
-                .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path.clone());
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
+            let prompt_text = prompt_arg
+                .map(|prompt| resolve_prompt(Some(prompt)))
+                .or_else(|| read_prompt_from_stdin(StdinPromptBehavior::OptionalAppend));
+            if let Some(prompt_text) = prompt_text {
+                let mut items: Vec<UserInput> = imgs
+                    .into_iter()
+                    .chain(args.images.iter().cloned())
+                    .map(|path| UserInput::LocalImage { path, detail: None })
+                    .collect();
+                items.push(UserInput::Text {
+                    text: prompt_text.clone(),
+                    // CLI input doesn't track UI element ranges, so none are available here.
+                    text_elements: Vec::new(),
+                });
+                let output_schema = load_output_schema(output_schema_path);
+                (
+                    InitialOperation::UserTurn {
+                        items,
+                        output_schema,
+                    },
+                    prompt_text,
+                )
+            } else {
+                (InitialOperation::FollowActiveGoal, String::new())
+            }
         }
         (None, root_prompt, imgs) => {
             let prompt_text = resolve_root_prompt(root_prompt);
@@ -709,6 +718,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     .map_err(anyhow::Error::msg)?;
             (session_configured.thread_id, session_configured)
         } else {
+            if matches!(initial_operation, InitialOperation::FollowActiveGoal) {
+                anyhow::bail!(
+                    "No prompt provided and no session was resumed. Specify a prompt or pipe one into stdin."
+                );
+            }
             let response: ThreadStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::ThreadStart {
@@ -741,6 +755,32 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     };
 
     let primary_thread_id_for_span = primary_thread_id.to_string();
+
+    if matches!(initial_operation, InitialOperation::FollowActiveGoal) {
+        let response: ThreadGoalGetResponse = send_request_with_response(
+            &client,
+            ClientRequest::ThreadGoalGet {
+                request_id: request_ids.next(),
+                params: ThreadGoalGetParams {
+                    thread_id: primary_thread_id_for_span.clone(),
+                },
+            },
+            "thread/goal/get",
+        )
+        .await
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "No prompt provided and could not verify an active goal for the resumed thread: {err}"
+            )
+        })?;
+        anyhow::ensure!(
+            response
+                .goal
+                .is_some_and(|goal| goal.status == ThreadGoalStatus::Active),
+            "No prompt provided and resumed thread has no active goal. Specify a prompt or pipe one into stdin."
+        );
+    }
+
     // Use the start/resume response as the authoritative bootstrap payload.
     // Waiting for a later streamed `SessionConfigured` event adds up to 10s of
     // avoidable startup latency on the in-process path.
@@ -768,6 +808,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         }
     });
 
+    let mut error_seen = false;
     let task_id = match initial_operation {
         InitialOperation::UserTurn {
             items,
@@ -830,13 +871,36 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             info!("Sent review request with event ID: {task_id}");
             task_id
         }
+        InitialOperation::FollowActiveGoal => loop {
+            let Some(server_event) = client.next_event().await else {
+                anyhow::bail!("resumed active goal did not start a turn");
+            };
+            match server_event {
+                InProcessServerEvent::ServerRequest(request) => {
+                    handle_server_request(&client, request, &mut error_seen).await;
+                }
+                InProcessServerEvent::ServerNotification(notification) => {
+                    if let ServerNotification::TurnStarted(payload) = &notification
+                        && payload.thread_id == primary_thread_id_for_span
+                    {
+                        let task_id = payload.turn.id.clone();
+                        let _ = event_processor.process_server_notification(notification);
+                        break task_id;
+                    }
+                }
+                InProcessServerEvent::Lagged { skipped } => {
+                    let message = lagged_event_warning_message(skipped);
+                    warn!("{message}");
+                    event_processor.process_warning(message);
+                }
+            }
+        },
     };
     exec_span.record("turn.id", task_id.as_str());
 
     // Run the loop until the task is complete.
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
-    let mut error_seen = false;
     let mut interrupt_channel_open = true;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
     loop {
