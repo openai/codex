@@ -160,10 +160,10 @@ fn tmux_should_enable_modify_other_keys_for(
     running_in_tmux_session: bool,
     extended_keys_format: Option<&str>,
 ) -> bool {
-    // If tmux cannot be queried, still request mode 2; otherwise csi-u panes
-    // can stay in VT10x. Explicit xterm format is avoided because crossterm
-    // does not parse tmux's xterm-style extended-key sequences as Enter.
-    running_in_tmux_session && matches!(extended_keys_format, Some("csi-u") | None)
+    // Only request mode 2 when tmux confirms csi-u formatting. Older tmux
+    // versions do not expose this option and may emit xterm-style sequences,
+    // which crossterm does not parse consistently for modified keys.
+    running_in_tmux_session && matches!(extended_keys_format, Some("csi-u"))
 }
 
 fn read_tmux_extended_keys_format() -> Option<String> {
@@ -371,12 +371,12 @@ mod tests {
     }
 
     #[test]
-    fn tmux_modify_other_keys_requests_csi_u_or_unknown_format() {
+    fn tmux_modify_other_keys_only_requests_confirmed_csi_u_format() {
         assert!(tmux_should_enable_modify_other_keys_for(
             /*running_in_tmux_session*/ true,
             Some("csi-u")
         ));
-        assert!(tmux_should_enable_modify_other_keys_for(
+        assert!(!tmux_should_enable_modify_other_keys_for(
             /*running_in_tmux_session*/ true, /*extended_keys_format*/ None
         ));
         assert!(!tmux_should_enable_modify_other_keys_for(
