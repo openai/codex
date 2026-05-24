@@ -4,7 +4,10 @@ use super::CheckStatus;
 use super::Config;
 use super::DoctorCheck;
 use super::DoctorIssue;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_state::ThreadStateAuditRow;
@@ -13,6 +16,8 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -398,109 +403,91 @@ fn scan_rollout_files(codex_home: &Path) -> RolloutScan {
 }
 
 fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
-    scan_rollout_files_in_dir(root, archived, scan);
-    scan_rollout_date_dirs(root, archived, scan, /*depth*/ 0);
-}
-
-fn scan_rollout_date_dirs(root: &Path, archived: bool, scan: &mut RolloutScan, depth: usize) {
-    if scan.reached_scan_cap {
-        return;
-    }
-    if depth == 3 {
-        scan_rollout_files_in_dir(root, archived, scan);
-        return;
-    }
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
-        Err(err) => {
-            scan.scan_errors.push(format!("{} ({err})", root.display()));
-            return;
-        }
-    };
-    for entry in entries {
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
         if scan.reached_scan_cap {
             return;
         }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                scan.scan_errors.push(format!("{} ({err})", root.display()));
-                continue;
-            }
-        };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(err) => {
-                scan.scan_errors.push(format!("{} ({err})", path.display()));
-                continue;
-            }
-        };
-        if file_type.is_dir() && is_rollout_date_dir(&path, depth) {
-            scan_rollout_date_dirs(&path, archived, scan, depth + 1);
-        }
-    }
-}
-
-fn scan_rollout_files_in_dir(dir: &Path, archived: bool, scan: &mut RolloutScan) {
-    if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
-        scan.reached_scan_cap = true;
-        return;
-    }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
-        Err(err) => {
-            scan.scan_errors.push(format!("{} ({err})", dir.display()));
-            return;
-        }
-    };
-    for entry in entries {
-        if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
-            scan.reached_scan_cap = true;
-            return;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
             Err(err) => {
                 scan.scan_errors.push(format!("{} ({err})", dir.display()));
                 continue;
             }
         };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(err) => {
-                scan.scan_errors.push(format!("{} ({err})", path.display()));
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    scan.scan_errors.push(format!("{} ({err})", dir.display()));
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    scan.scan_errors.push(format!("{} ({err})", path.display()));
+                    continue;
+                }
+            };
+            if file_type.is_dir() {
+                dirs.push(path);
                 continue;
             }
-        };
-        if !file_type.is_file() || !is_rollout_file(&path) {
-            continue;
+            if !file_type.is_file() || !is_rollout_file(&path) {
+                continue;
+            }
+            if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
+                scan.reached_scan_cap = true;
+                return;
+            }
+            let Some(thread_id) = thread_id_from_rollout(&path) else {
+                scan.malformed_names.push(path.clone());
+                continue;
+            };
+            scan.files.push(RolloutAuditFile {
+                key: path_key(&path),
+                path,
+                archived,
+                thread_id,
+            });
         }
-        let Some(thread_id) = thread_id_from_rollout_name(&path) else {
-            scan.malformed_names.push(path.clone());
-            continue;
-        };
-        scan.files.push(RolloutAuditFile {
-            key: path_key(&path),
-            path,
-            archived,
-            thread_id,
-        });
     }
 }
 
-fn is_rollout_date_dir(path: &Path, depth: usize) -> bool {
-    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
-        return false;
-    };
-    match depth {
-        0 => name.parse::<u16>().is_ok(),
-        1 | 2 => name.parse::<u8>().is_ok(),
-        _ => false,
+fn thread_id_from_rollout(path: &Path) -> Option<String> {
+    thread_id_from_session_meta(path).or_else(|| thread_id_from_rollout_name(path))
+}
+
+fn thread_id_from_session_meta(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut first_line = String::new();
+    BufReader::new(file).read_line(&mut first_line).ok()?;
+    let rollout_line = serde_json::from_str::<RolloutLine>(first_line.trim()).ok()?;
+    match rollout_line.item {
+        RolloutItem::SessionMeta(session_meta) => Some(session_meta.meta.id.to_string()),
+        RolloutItem::ResponseItem(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
     }
+}
+
+fn thread_id_from_rollout_name(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let (sep, uuid) = stem.match_indices('-').rev().find_map(|(idx, _)| {
+        ThreadId::from_string(stem.get(idx + 1..)?)
+            .ok()
+            .map(|id| (idx, id.to_string()))
+    })?;
+    let timestamp = stem.get(..sep)?;
+    if !is_rollout_timestamp_like(timestamp) {
+        return None;
+    }
+    Some(uuid)
 }
 
 fn is_rollout_file(path: &Path) -> bool {
@@ -509,20 +496,6 @@ fn is_rollout_file(path: &Path) -> bool {
             .file_name()
             .and_then(OsStr::to_str)
             .is_some_and(|name| name.starts_with("rollout-"))
-}
-
-fn thread_id_from_rollout_name(path: &Path) -> Option<String> {
-    let name = path.file_name()?.to_str()?;
-    let stem = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-    let (sep, uuid) = stem
-        .match_indices('-')
-        .rev()
-        .find_map(|(idx, _)| canonical_uuid(stem.get(idx + 1..)?).map(|uuid| (idx, uuid)))?;
-    let timestamp = stem.get(..sep)?;
-    if !is_rollout_timestamp_like(timestamp) {
-        return None;
-    }
-    Some(uuid)
 }
 
 fn is_rollout_timestamp_like(value: &str) -> bool {
@@ -587,27 +560,6 @@ fn count_or_skipped(count: usize, complete: bool) -> String {
     } else {
         "skipped (scan cap reached)".to_string()
     }
-}
-
-fn canonical_uuid(value: &str) -> Option<String> {
-    if value.len() == 36
-        && value.char_indices().all(|(idx, ch)| match idx {
-            8 | 13 | 18 | 23 => ch == '-',
-            _ => ch.is_ascii_hexdigit(),
-        })
-    {
-        return Some(value.to_ascii_lowercase());
-    }
-    if value.len() == 32 && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        let lower = value.to_ascii_lowercase();
-        let part1 = &lower[0..8];
-        let part2 = &lower[8..12];
-        let part3 = &lower[12..16];
-        let part4 = &lower[16..20];
-        let part5 = &lower[20..32];
-        return Some(format!("{part1}-{part2}-{part3}-{part4}-{part5}"));
-    }
-    None
 }
 
 fn path_key(path: &Path) -> PathBuf {
