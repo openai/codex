@@ -76,7 +76,8 @@ const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 
-pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
+pub(super) const COMPACT_WARNING_MESSAGE: &str =
+    "Heads up: Codex automatically compacts long conversations";
 
 fn ev_shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
     ev_function_call(
