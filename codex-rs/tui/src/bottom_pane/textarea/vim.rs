@@ -251,7 +251,7 @@ impl TextArea {
                 }
             }
         }
-        best.filter(|range| range.start < range.end)
+        best
     }
 
     fn quoted_text_object_range(
@@ -285,7 +285,7 @@ impl TextArea {
                 open = Some(idx);
             }
         }
-        best.filter(|range| range.start < range.end)
+        best
     }
 
     fn is_inside_element(&self, pos: usize) -> bool {

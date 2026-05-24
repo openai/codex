@@ -2496,6 +2496,35 @@ mod tests {
     }
 
     #[test]
+    fn vim_empty_inner_text_objects_are_valid_targets() {
+        let mut t = ta_with("call()");
+        t.set_cursor(/*pos*/ "call(".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('('), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "call()");
+        assert_eq!(t.kill_buffer, "");
+        assert_eq!(t.cursor(), "call(".len());
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+
+        let mut t = ta_with(r#"say "" now"#);
+        t.set_cursor(/*pos*/ r#"say ""#.len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), r#"say "" now"#);
+        assert_eq!(t.kill_buffer, "");
+        assert_eq!(t.cursor(), r#"say ""#.len());
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
     fn vim_quote_text_objects_are_line_local_and_handle_escapes() {
         let mut t = ta_with(r#"say "a \"b\" c" now"#);
         t.set_cursor(/*pos*/ r#"say "a \"#.len());
@@ -2503,7 +2532,7 @@ mod tests {
 
         t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
-        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::SHIFT));
 
         assert_eq!(t.text(), r#"say "" now"#);
         assert_eq!(t.kill_buffer, r#"a \"b\" c"#);
