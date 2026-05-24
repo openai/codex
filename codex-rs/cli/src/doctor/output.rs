@@ -25,7 +25,9 @@ const SEPARATOR_WIDTH: usize = 61;
 const GROUPS: &[OutputGroup] = &[
     OutputGroup {
         title: "Environment",
-        keys: &["runtime", "install", "search", "terminal", "state"],
+        keys: &[
+            "runtime", "install", "search", "terminal", "state", "threads",
+        ],
     },
     OutputGroup {
         title: "Configuration",
@@ -1262,6 +1264,28 @@ Run codex doctor without --summary for detailed diagnostics.
             "─".repeat(SEPARATOR_WIDTH)
         );
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn render_human_report_includes_threads_row_in_environment() {
+        let mut report = sample_report();
+        report.checks.push(DoctorCheck::new(
+            "state.rollout_db_parity",
+            "threads",
+            CheckStatus::Warning,
+            "rollout files and state DB thread inventory differ",
+        ));
+
+        let rendered = render_human_report(&report, summary_no_color_unicode_options());
+
+        let threads_line = rendered
+            .lines()
+            .find(|line| line.contains("threads"))
+            .expect("threads row should be rendered");
+        assert!(
+            threads_line.contains("rollout files and state DB thread inventory differ"),
+            "{threads_line}"
+        );
     }
 
     #[test]

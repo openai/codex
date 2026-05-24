@@ -69,6 +69,7 @@ mod background;
 mod output;
 mod progress;
 mod runtime;
+mod thread_inventory;
 mod updates;
 
 use background::background_server_check;
@@ -79,6 +80,7 @@ use progress::DoctorProgress;
 use progress::doctor_progress;
 use runtime::runtime_check;
 use runtime::search_check;
+use thread_inventory::thread_inventory_check;
 use updates::updates_check;
 
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
@@ -353,6 +355,7 @@ async fn build_report(
                 sandbox_check,
                 terminal_check,
                 state_check,
+                thread_inventory_check,
                 background_server_check,
                 reachability_check,
             ) = tokio::join!(
@@ -377,6 +380,11 @@ async fn build_report(
                     })
                 },
                 run_async_check("state", progress.clone(), state_check(config)),
+                run_async_check(
+                    "thread inventory",
+                    progress.clone(),
+                    thread_inventory_check(config),
+                ),
                 async {
                     run_sync_check("app-server", progress.clone(), || {
                         background_server_check(config)
@@ -398,6 +406,7 @@ async fn build_report(
                 sandbox_check,
                 terminal_check,
                 state_check,
+                thread_inventory_check,
                 background_server_check,
                 reachability_check,
             ]);
