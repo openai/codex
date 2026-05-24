@@ -170,6 +170,8 @@ enum InitialOperation {
     FollowActiveGoal,
 }
 
+const NO_ACTIVE_GOAL_PROMPTLESS_RESUME_ERROR: &str = "No prompt provided and resumed thread has no active goal. Specify a prompt or pipe one into stdin.";
+
 enum StdinPromptBehavior {
     /// Read stdin only when there is no positional prompt, which is the legacy
     /// `codex exec` behavior for `codex exec` with piped input.
@@ -707,7 +709,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     // Handle resume subcommand through existing `thread/list` + `thread/resume`
     // APIs so exec no longer reaches into rollout storage directly.
-    let mut active_turn_from_resume: Option<Turn> = None;
+    let mut running_turn_id_from_resume = None;
     let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
         command.as_ref()
     {
@@ -725,13 +727,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             .await
             .map_err(anyhow::Error::msg)?;
             if matches!(initial_operation, InitialOperation::FollowActiveGoal) {
-                active_turn_from_resume = response
+                running_turn_id_from_resume = response
                     .thread
                     .turns
                     .iter()
                     .rev()
                     .find(|turn| turn.status == TurnStatus::InProgress)
-                    .cloned();
+                    .map(|turn| turn.id.clone());
             }
             let session_configured =
                 session_configured_from_thread_resume_response(&response, &config)
@@ -857,13 +859,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             )
             .await
             .map_err(anyhow::Error::msg)?;
-            let _ = event_processor.process_server_notification(ServerNotification::TurnStarted(
-                TurnStartedNotification {
-                    thread_id: response.review_thread_id.clone(),
-                    turn: response.turn.clone(),
-                },
-            ));
-            let task_id = response.turn.id;
+            let task_id = process_turn_started(
+                event_processor.as_mut(),
+                response.review_thread_id.clone(),
+                response.turn,
+            );
             info!("Sent review request with event ID: {task_id}");
             task_id
         }
@@ -871,15 +871,32 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let mut active_goal_seen = false;
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
             loop {
-                if active_goal_seen && let Some(turn) = active_turn_from_resume.take() {
-                    let task_id = turn.id.clone();
-                    let _ = event_processor.process_server_notification(
-                        ServerNotification::TurnStarted(TurnStartedNotification {
-                            thread_id: primary_thread_id_for_span.clone(),
+                if active_goal_seen
+                    && let Some(running_turn_id) = running_turn_id_from_resume.take()
+                {
+                    let response: ThreadReadResponse = send_request_with_response(
+                        &client,
+                        ClientRequest::ThreadRead {
+                            request_id: request_ids.next(),
+                            params: ThreadReadParams {
+                                thread_id: primary_thread_id_for_span.clone(),
+                                include_turns: true,
+                            },
+                        },
+                        "thread/read",
+                    )
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                    if let Some(turn) = response.thread.turns.into_iter().rev().find(|turn| {
+                        turn.id == running_turn_id && turn.status == TurnStatus::InProgress
+                    }) {
+                        let task_id = process_turn_started(
+                            event_processor.as_mut(),
+                            primary_thread_id_for_span.clone(),
                             turn,
-                        }),
-                    );
-                    break task_id;
+                        );
+                        break task_id;
+                    }
                 }
 
                 let server_event = tokio::select! {
@@ -919,17 +936,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                             if payload.goal.status == ThreadGoalStatus::Active {
                                 active_goal_seen = true;
                             } else {
-                                anyhow::bail!(
-                                    "No prompt provided and resumed thread has no active goal. Specify a prompt or pipe one into stdin."
-                                );
+                                anyhow::bail!(NO_ACTIVE_GOAL_PROMPTLESS_RESUME_ERROR);
                             }
                         }
                         ServerNotification::ThreadGoalCleared(payload)
                             if payload.thread_id == primary_thread_id_for_span =>
                         {
-                            anyhow::bail!(
-                                "No prompt provided and resumed thread has no active goal. Specify a prompt or pipe one into stdin."
-                            );
+                            anyhow::bail!(NO_ACTIVE_GOAL_PROMPTLESS_RESUME_ERROR);
                         }
                         ServerNotification::TurnStarted(payload)
                             if active_goal_seen
@@ -1058,6 +1071,18 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn process_turn_started(
+    event_processor: &mut dyn EventProcessor,
+    thread_id: String,
+    turn: Turn,
+) -> String {
+    let task_id = turn.id.clone();
+    let _ = event_processor.process_server_notification(ServerNotification::TurnStarted(
+        TurnStartedNotification { thread_id, turn },
+    ));
+    task_id
 }
 
 fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {

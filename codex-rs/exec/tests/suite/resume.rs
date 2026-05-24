@@ -127,14 +127,6 @@ async fn mount_exec_responses(
     responses::mount_sse_sequence(server, (0..count).map(exec_sse_response).collect()).await
 }
 
-fn goal_response_sse_response(response_id: &str, message: &str) -> String {
-    responses::sse(vec![
-        responses::ev_response_created(response_id),
-        responses::ev_assistant_message(response_id, message),
-        responses::ev_completed(response_id),
-    ])
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_resume_last_without_prompt_follows_active_goal() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -153,8 +145,8 @@ async fn exec_resume_last_without_prompt_follows_active_goal() -> anyhow::Result
                 ),
                 responses::ev_completed("resp-create-goal"),
             ]),
-            goal_response_sse_response("resp-seed-goal", "seed goal is active"),
-            goal_response_sse_response("resp-resume-goal", "goal resumed without prompt"),
+            exec_sse_response(1),
+            exec_sse_response(2),
         ],
     )
     .await;
