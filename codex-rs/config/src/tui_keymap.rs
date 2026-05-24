@@ -223,6 +223,8 @@ pub struct TuiVimNormalKeymap {
     pub delete_char: Option<KeybindingsSpec>,
     /// Delete from cursor to end of line (`D`).
     pub delete_to_line_end: Option<KeybindingsSpec>,
+    /// Change from cursor to end of line and enter insert mode (`C`).
+    pub change_to_line_end: Option<KeybindingsSpec>,
     /// Yank the entire line (`Y`).
     pub yank_line: Option<KeybindingsSpec>,
     /// Paste after cursor (`p`).
