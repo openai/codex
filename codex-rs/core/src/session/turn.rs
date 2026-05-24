@@ -234,7 +234,10 @@ pub(crate) async fn run_turn(
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
 
-        let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+        let window_id = sess.services.model_client.current_window_id();
+        let turn_metadata_header = turn_context
+            .turn_metadata_state
+            .current_header_value_for_model_request(&window_id);
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),

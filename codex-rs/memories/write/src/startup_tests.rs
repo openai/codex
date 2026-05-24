@@ -307,6 +307,7 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
     assert!(metadata.get("session_id").is_none());
     assert!(metadata.get("thread_id").is_none());
     assert!(metadata.get("turn_id").is_none());
+    assert!(metadata.get("window_id").is_none());
     assert!(metadata.get("workspaces").is_some());
 
     shutdown_test_codex(&test).await?;

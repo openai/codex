@@ -209,9 +209,10 @@ async fn run_compact_task_inner_impl(
             personality: turn_context.personality,
             ..Default::default()
         };
+        let window_id = sess.services.model_client.current_window_id();
         let turn_metadata_header = turn_context
             .turn_metadata_state
-            .current_header_value_for_compaction(compaction_metadata);
+            .current_header_value_for_compaction(&window_id, compaction_metadata);
         let attempt_result = drain_to_completed(
             &sess,
             turn_context.as_ref(),

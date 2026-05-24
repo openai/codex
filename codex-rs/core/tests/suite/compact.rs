@@ -2801,6 +2801,10 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         Some("compaction")
     );
     assert_eq!(
+        compact_metadata["window_id"].as_str(),
+        requests[1].header("x-codex-window-id").as_deref()
+    );
+    assert_eq!(
         compact_metadata["compaction"],
         json!({
             "trigger": "manual",
@@ -2825,6 +2829,14 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         next_turn_metadata["request_kind"].as_str(),
         Some("turn"),
         "regular requests after compaction should remain turn requests"
+    );
+    assert_eq!(
+        next_turn_metadata["window_id"].as_str(),
+        requests[2].header("x-codex-window-id").as_deref()
+    );
+    assert_ne!(
+        compact_metadata["window_id"], next_turn_metadata["window_id"],
+        "the next request should use the new compacted context window"
     );
     assert!(
         next_turn_metadata.get("compaction").is_none(),

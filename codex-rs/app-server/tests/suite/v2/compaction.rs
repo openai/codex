@@ -200,13 +200,17 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
                 .unwrap_or_else(|| panic!("turn request should include turn metadata"))
         })
         .collect::<Vec<_>>();
-    for metadata in &turn_metadata {
+    for (request, metadata) in response_requests.iter().zip(&turn_metadata) {
         assert_eq!(metadata["request_kind"].as_str(), Some("turn"));
         assert!(
             metadata["turn_id"]
                 .as_str()
                 .is_some_and(|turn_id| !turn_id.is_empty()),
             "turn request should carry a non-empty turn id"
+        );
+        assert_eq!(
+            metadata["window_id"].as_str(),
+            request.header("x-codex-window-id").as_deref()
         );
         assert!(metadata.get("compaction").is_none());
     }
@@ -233,6 +237,10 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     assert_eq!(
         compact_metadata["turn_id"], turn_metadata[2]["turn_id"],
         "pre-turn compaction should carry the current turn id"
+    );
+    assert_eq!(
+        compact_metadata["window_id"].as_str(),
+        compact_requests[0].header("x-codex-window-id").as_deref()
     );
 
     Ok(())
