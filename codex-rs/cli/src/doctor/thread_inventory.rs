@@ -203,7 +203,7 @@ fn parity_check_from_scan_and_rows(
     let scan_complete = !scan.reached_scan_cap;
     let stale_rows = if scan_complete {
         rows.iter()
-            .filter(|row| !row.rollout_path.exists())
+            .filter(|row| !row.rollout_path.is_file())
             .collect::<Vec<_>>()
     } else {
         Vec::new()
@@ -336,10 +336,10 @@ fn parity_check_from_scan_and_rows(
         check = check.issue(
             DoctorIssue::new(
                 CheckStatus::Warning,
-                "state DB rows point at rollout files that no longer exist",
+                "state DB rows point at missing or unusable rollout files",
             )
             .measured(format!("{} stale rows", stale_rows.len()))
-            .expected("every state DB rollout path exists on disk"),
+            .expected("every state DB rollout path is a file on disk"),
         );
     }
     if !archive_mismatches.is_empty() {
@@ -404,59 +404,112 @@ fn scan_rollout_files(codex_home: &Path) -> RolloutScan {
 }
 
 fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    scan_rollout_files_in_dir(root, archived, scan);
+    scan_rollout_date_dirs(root, archived, scan, /*depth*/ 0);
+}
+
+fn scan_rollout_date_dirs(root: &Path, archived: bool, scan: &mut RolloutScan, depth: usize) {
+    if scan.reached_scan_cap {
+        return;
+    }
+    if depth == 3 {
+        scan_rollout_files_in_dir(root, archived, scan);
+        return;
+    }
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            scan.scan_errors.push(format!("{} ({err})", root.display()));
+            return;
+        }
+    };
+    for entry in entries {
+        if scan.reached_scan_cap {
+            return;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                scan.scan_errors.push(format!("{} ({err})", root.display()));
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                scan.scan_errors.push(format!("{} ({err})", path.display()));
+                continue;
+            }
+        };
+        if file_type.is_dir() && is_rollout_date_dir(&path, depth) {
+            scan_rollout_date_dirs(&path, archived, scan, depth + 1);
+        }
+    }
+}
+
+fn scan_rollout_files_in_dir(dir: &Path, archived: bool, scan: &mut RolloutScan) {
+    if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
+        scan.reached_scan_cap = true;
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            scan.scan_errors.push(format!("{} ({err})", dir.display()));
+            return;
+        }
+    };
+    for entry in entries {
         if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
             scan.reached_scan_cap = true;
             return;
         }
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+        let entry = match entry {
+            Ok(entry) => entry,
             Err(err) => {
                 scan.scan_errors.push(format!("{} ({err})", dir.display()));
                 continue;
             }
         };
-        for entry in entries {
-            if scan.candidate_count() >= MAX_PARITY_SCAN_FILES {
-                scan.reached_scan_cap = true;
-                return;
-            }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(err) => {
-                    scan.scan_errors.push(format!("{} ({err})", dir.display()));
-                    continue;
-                }
-            };
-            let path = entry.path();
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
-                Err(err) => {
-                    scan.scan_errors.push(format!("{} ({err})", path.display()));
-                    continue;
-                }
-            };
-            if file_type.is_dir() {
-                stack.push(path);
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                scan.scan_errors.push(format!("{} ({err})", path.display()));
                 continue;
             }
-            if !file_type.is_file() || !is_rollout_file(&path) {
-                continue;
-            }
-            let Some(thread_id) = thread_id_from_rollout_name(&path) else {
-                scan.malformed_names.push(path.clone());
-                continue;
-            };
-            scan.files.push(RolloutAuditFile {
-                key: path_key(&path),
-                path,
-                archived,
-                thread_id: Some(thread_id),
-            });
+        };
+        if !file_type.is_file() || !is_rollout_file(&path) {
+            continue;
         }
+        let Some(thread_id) = thread_id_from_rollout_name(&path) else {
+            scan.malformed_names.push(path.clone());
+            continue;
+        };
+        scan.files.push(RolloutAuditFile {
+            key: path_key(&path),
+            path,
+            archived,
+            thread_id: Some(thread_id),
+        });
     }
+}
+
+fn is_rollout_date_dir(path: &Path, depth: usize) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let range = match depth {
+        0 => 0..=9999,
+        1 => 1..=12,
+        2 => 1..=31,
+        _ => return false,
+    };
+    name.parse::<u16>()
+        .is_ok_and(|value| name.len() == if depth == 0 { 4 } else { 2 } && range.contains(&value))
 }
 
 fn is_rollout_file(path: &Path) -> bool {
