@@ -443,6 +443,20 @@ async fn host_context_gates_goal_and_agent_job_tools() {
 }
 
 #[tokio::test]
+async fn request_user_input_tool_can_be_disabled_by_feature() {
+    let enabled = probe(|_| {}).await;
+    enabled.assert_visible_contains(&["request_user_input"]);
+    enabled.assert_registered_contains(&["request_user_input"]);
+
+    let disabled = probe(|turn| {
+        set_feature(turn, Feature::RequestUserInputTool, /*enabled*/ false);
+    })
+    .await;
+    disabled.assert_visible_lacks(&["request_user_input"]);
+    disabled.assert_registered_lacks(&["request_user_input"]);
+}
+
+#[tokio::test]
 async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},

@@ -98,6 +98,8 @@ pub enum Feature {
     ExecPermissionApprovals,
     /// Expose the built-in request_permissions tool.
     RequestPermissionsTool,
+    /// Expose the built-in request_user_input tool.
+    RequestUserInputTool,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -860,6 +862,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "request_permissions_tool",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestUserInputTool,
+        key: "request_user_input_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
