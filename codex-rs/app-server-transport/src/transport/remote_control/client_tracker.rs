@@ -144,9 +144,6 @@ impl ClientTracker {
 
                 if let Some(connection_id) = self.clients.get_mut(&client_key).map(|client| {
                     client.last_activity_at = Instant::now();
-                    if let Some(seq_id) = seq_id {
-                        client.last_inbound_seq_id = Some(seq_id);
-                    }
                     client.connection_id
                 }) {
                     self.send_transport_event(TransportEvent::IncomingMessage {
@@ -154,6 +151,11 @@ impl ClientTracker {
                         message,
                     })
                     .await?;
+                    if let Some(seq_id) = seq_id
+                        && let Some(client) = self.clients.get_mut(&client_key)
+                    {
+                        client.last_inbound_seq_id = Some(seq_id);
+                    }
                     return Ok(());
                 }
 
@@ -183,23 +185,35 @@ impl ClientTracker {
                     disconnect_token.clone(),
                 ));
                 self.clients.insert(
-                    client_key,
+                    client_key.clone(),
                     ClientState {
                         connection_id,
                         disconnect_token,
                         last_activity_at: Instant::now(),
-                        last_inbound_seq_id: if is_legacy_stream_id { None } else { seq_id },
+                        last_inbound_seq_id: None,
                         status_tx,
                     },
                 );
                 if is_legacy_stream_id {
                     self.legacy_stream_ids.insert(client_id.clone(), stream_id);
                 }
-                self.send_transport_event(TransportEvent::IncomingMessage {
-                    connection_id,
-                    message,
-                })
-                .await
+                if let Err(err) = self
+                    .send_transport_event(TransportEvent::IncomingMessage {
+                        connection_id,
+                        message,
+                    })
+                    .await
+                {
+                    self.close_client(&client_key).await?;
+                    return Err(err);
+                }
+                if !is_legacy_stream_id
+                    && let Some(seq_id) = seq_id
+                    && let Some(client) = self.clients.get_mut(&client_key)
+                {
+                    client.last_inbound_seq_id = Some(seq_id);
+                }
+                Ok(())
             }
             ClientEvent::ClientMessageChunk { .. } | ClientEvent::Ack { .. } => Ok(()),
             ClientEvent::Ping => {
@@ -314,13 +328,14 @@ impl ClientTracker {
     }
 
     async fn send_transport_event(&self, event: TransportEvent) -> Result<(), Stopped> {
-        // Dropping a close after removing the tracked client leaves app-server state stale.
+        // Close owns app-server cleanup, so keep delivery alive if the caller is aborted.
         if matches!(&event, TransportEvent::ConnectionClosed { .. }) {
-            return self
-                .transport_event_tx
-                .send(event)
-                .await
-                .map_err(|_| Stopped);
+            return tokio::spawn({
+                let transport_event_tx = self.transport_event_tx.clone();
+                async move { transport_event_tx.send(event).await.map_err(|_| Stopped) }
+            })
+            .await
+            .map_err(|_| Stopped)?;
         }
 
         let event_name = transport_event_name(&event);
@@ -405,6 +420,13 @@ mod tests {
             seq_id: Some(0),
             cursor: None,
         }
+    }
+
+    fn initialized_notification() -> JSONRPCMessage {
+        JSONRPCMessage::Notification(codex_app_server_protocol::JSONRPCNotification {
+            method: "initialized".to_string(),
+            params: None,
+        })
     }
 
     #[tokio::test]
@@ -542,16 +564,114 @@ mod tests {
         let send_result = client_tracker
             .send_transport_event(TransportEvent::IncomingMessage {
                 connection_id: next_connection_id(),
-                message: JSONRPCMessage::Notification(
-                    codex_app_server_protocol::JSONRPCNotification {
-                        method: "initialized".to_string(),
-                        params: None,
-                    },
-                ),
+                message: initialized_notification(),
             })
             .await;
 
         assert!(send_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn incoming_message_timeout_does_not_advance_seq_id() {
+        let (server_event_tx, _server_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (transport_event_tx, mut transport_event_rx) = mpsc::channel(2);
+        let shutdown_token = CancellationToken::new();
+        let mut client_tracker =
+            ClientTracker::new(server_event_tx, transport_event_tx.clone(), &shutdown_token);
+
+        client_tracker
+            .handle_message(initialize_envelope_with_stream_id(
+                "client-1",
+                Some("stream-1"),
+            ))
+            .await
+            .expect("initialize should open client");
+        let connection_id = match transport_event_rx.recv().await.expect("open event") {
+            TransportEvent::ConnectionOpened { connection_id, .. } => connection_id,
+            other => panic!("expected connection opened, got {other:?}"),
+        };
+        let _ = transport_event_rx.recv().await.expect("initialize event");
+
+        for _ in 0..2 {
+            transport_event_tx
+                .send(TransportEvent::ConnectionClosed {
+                    connection_id: next_connection_id(),
+                })
+                .await
+                .expect("transport event queue should accept prefill");
+        }
+
+        let retry_envelope = ClientEnvelope {
+            event: ClientEvent::ClientMessage {
+                message: initialized_notification(),
+            },
+            client_id: ClientId("client-1".to_string()),
+            stream_id: Some(StreamId("stream-1".to_string())),
+            seq_id: Some(1),
+            cursor: None,
+        };
+        assert!(
+            client_tracker
+                .handle_message(retry_envelope.clone())
+                .await
+                .is_err()
+        );
+        for _ in 0..2 {
+            let _ = transport_event_rx.recv().await.expect("prefilled event");
+        }
+
+        client_tracker
+            .handle_message(retry_envelope)
+            .await
+            .expect("retry should forward after timeout");
+        match transport_event_rx.recv().await.expect("retried event") {
+            TransportEvent::IncomingMessage {
+                connection_id: queued_connection_id,
+                ..
+            } => assert_eq!(queued_connection_id, connection_id),
+            other => panic!("expected incoming message, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize_timeout_closes_open_connection() {
+        let (server_event_tx, _server_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (transport_event_tx, mut transport_event_rx) = mpsc::channel(1);
+        let shutdown_token = CancellationToken::new();
+        let client_tracker =
+            ClientTracker::new(server_event_tx, transport_event_tx, &shutdown_token);
+        let mut handle_message = tokio::spawn(async move {
+            let mut client_tracker = client_tracker;
+            client_tracker
+                .handle_message(initialize_envelope_with_stream_id(
+                    "client-1",
+                    Some("stream-1"),
+                ))
+                .await
+        });
+
+        assert!(
+            timeout(Duration::from_millis(50), &mut handle_message)
+                .await
+                .is_err()
+        );
+        let connection_id = match transport_event_rx.recv().await.expect("open event") {
+            TransportEvent::ConnectionOpened { connection_id, .. } => connection_id,
+            other => panic!("expected connection opened, got {other:?}"),
+        };
+
+        assert!(
+            handle_message
+                .await
+                .expect("handle message task should not panic")
+                .is_err()
+        );
+        match transport_event_rx.recv().await.expect("close event") {
+            TransportEvent::ConnectionClosed {
+                connection_id: closed_connection_id,
+            } => assert_eq!(closed_connection_id, connection_id),
+            other => panic!("expected connection closed, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -580,12 +700,7 @@ mod tests {
                 .transport_event_tx
                 .send(TransportEvent::IncomingMessage {
                     connection_id,
-                    message: JSONRPCMessage::Notification(
-                        codex_app_server_protocol::JSONRPCNotification {
-                            method: "initialized".to_string(),
-                            params: None,
-                        },
-                    ),
+                    message: initialized_notification(),
                 })
                 .await
                 .expect("transport event queue should accept prefill");
@@ -617,6 +732,67 @@ mod tests {
             .await
             .expect("close should forward after queue drains");
         match transport_event_rx.recv().await.expect("close event") {
+            TransportEvent::ConnectionClosed {
+                connection_id: closed_connection_id,
+            } => assert_eq!(closed_connection_id, connection_id),
+            other => panic!("expected connection closed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn close_client_keeps_forwarding_after_caller_is_aborted() {
+        let (server_event_tx, _server_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (transport_event_tx, mut transport_event_rx) = mpsc::channel(2);
+        let shutdown_token = CancellationToken::new();
+        let mut client_tracker =
+            ClientTracker::new(server_event_tx, transport_event_tx, &shutdown_token);
+
+        client_tracker
+            .handle_message(initialize_envelope_with_stream_id(
+                "client-1",
+                Some("stream-1"),
+            ))
+            .await
+            .expect("initialize should open client");
+        let connection_id = match transport_event_rx.recv().await.expect("open event") {
+            TransportEvent::ConnectionOpened { connection_id, .. } => connection_id,
+            other => panic!("expected connection opened, got {other:?}"),
+        };
+        let _ = transport_event_rx.recv().await.expect("initialize event");
+
+        for _ in 0..2 {
+            client_tracker
+                .transport_event_tx
+                .send(TransportEvent::IncomingMessage {
+                    connection_id,
+                    message: initialized_notification(),
+                })
+                .await
+                .expect("transport event queue should accept prefill");
+        }
+
+        let client_key = (
+            ClientId("client-1".to_string()),
+            StreamId("stream-1".to_string()),
+        );
+        let mut close_client =
+            tokio::spawn(async move { client_tracker.close_client(&client_key).await });
+        assert!(
+            timeout(Duration::from_millis(20), &mut close_client)
+                .await
+                .is_err()
+        );
+        close_client.abort();
+        let _ = close_client.await;
+
+        for _ in 0..2 {
+            let _ = transport_event_rx.recv().await.expect("prefilled event");
+        }
+        match timeout(Duration::from_secs(1), transport_event_rx.recv())
+            .await
+            .expect("close should be delivered")
+            .expect("close event")
+        {
             TransportEvent::ConnectionClosed {
                 connection_id: closed_connection_id,
             } => assert_eq!(closed_connection_id, connection_id),
