@@ -37,6 +37,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 mod vim;
+use self::vim::VimFind;
 use self::vim::VimMode;
 use self::vim::VimMotion;
 use self::vim::VimOperator;
@@ -110,6 +111,7 @@ pub(crate) struct TextArea {
     vim_enabled: bool,
     vim_mode: VimMode,
     vim_pending: VimPending,
+    vim_last_find: Option<VimFind>,
     editor_keymap: EditorKeymap,
     vim_normal_keymap: VimNormalKeymap,
     vim_operator_keymap: VimOperatorKeymap,
@@ -151,6 +153,7 @@ impl TextArea {
             vim_enabled: false,
             vim_mode: VimMode::Insert,
             vim_pending: VimPending::None,
+            vim_last_find: None,
             editor_keymap: defaults.editor,
             vim_normal_keymap: defaults.vim_normal,
             vim_operator_keymap: defaults.vim_operator,
@@ -653,6 +656,10 @@ impl TextArea {
                 self.handle_vim_text_object(operator, scope, event);
                 return;
             }
+            VimPending::Find { operator, kind } => {
+                self.handle_vim_find_target(operator, kind, event);
+                return;
+            }
         }
 
         if self.vim_normal_keymap.enter_insert.is_pressed(event) {
@@ -731,6 +738,21 @@ impl TextArea {
             self.set_cursor(self.vim_line_end_cursor());
             return;
         }
+        if let Some(kind) = self.vim_normal_find_kind_for_event(event) {
+            self.vim_pending = VimPending::Find {
+                operator: None,
+                kind,
+            };
+            return;
+        }
+        if self.vim_normal_keymap.repeat_find.is_pressed(event) {
+            self.repeat_vim_find(/*operator*/ None, /*reverse*/ false);
+            return;
+        }
+        if self.vim_normal_keymap.repeat_find_reverse.is_pressed(event) {
+            self.repeat_vim_find(/*operator*/ None, /*reverse*/ true);
+            return;
+        }
         if self.vim_normal_keymap.delete_char.is_pressed(event) {
             self.delete_forward_kill(/*n*/ 1);
             return;
@@ -806,6 +828,25 @@ impl TextArea {
                 operator: op,
                 scope,
             };
+            return true;
+        }
+        if let Some(kind) = self.vim_operator_find_kind_for_event(event) {
+            self.vim_pending = VimPending::Find {
+                operator: Some(op),
+                kind,
+            };
+            return true;
+        }
+        if self.vim_operator_keymap.repeat_find.is_pressed(event) {
+            self.repeat_vim_find(Some(op), /*reverse*/ false);
+            return true;
+        }
+        if self
+            .vim_operator_keymap
+            .repeat_find_reverse
+            .is_pressed(event)
+        {
+            self.repeat_vim_find(Some(op), /*reverse*/ true);
             return true;
         }
 
@@ -2555,6 +2596,114 @@ mod tests {
         assert_eq!(t.text(), " rest");
         assert_eq!(t.kill_buffer, "@file");
         assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
+    fn vim_find_till_motions_repeat_and_stay_on_current_line() {
+        let mut t = ta_with("ab,cd,ef\naz");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 2);
+
+        t.input(KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 5);
+
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 2);
+
+        let mut t = ta_with("abc\naz");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 0);
+
+        t.set_cursor(/*pos*/ "abc\n".len());
+        t.input(KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), "abc\na".len());
+
+        let mut t = ta_with("abc,def");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 2);
+        t.input(KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn vim_find_till_operators_delete_yank_and_change() {
+        let mut t = ta_with("abxcd,ef");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "cd,ef");
+        assert_eq!(t.kill_buffer, "abx");
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "cd,ef");
+
+        let mut t = ta_with("ab,cd");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        assert_eq!(t.text(), ",cd");
+        assert_eq!(t.kill_buffer, "ab");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+
+        let mut t = ta_with("ab,cd,ef");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(';'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "ef");
+        assert_eq!(t.kill_buffer, "cd,");
+
+        let mut t = ta_with("ab,cd");
+        t.set_cursor(t.text().len());
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        assert_eq!(t.text(), "ab,cd");
+        assert_eq!(t.kill_buffer, ",cd");
+    }
+
+    #[test]
+    fn vim_find_operators_preserve_unicode_and_atomic_elements() {
+        let mut t = ta_with("a👍,z");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        assert_eq!(t.text(), "z");
+        assert_eq!(t.kill_buffer, "a👍,");
+
+        let mut t = ta_with("a@file,z");
+        t.add_element_range(1.."a@file".len())
+            .expect("valid element");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        assert_eq!(t.text(), "z");
+        assert_eq!(t.kill_buffer, "a@file,");
     }
 
     #[test]

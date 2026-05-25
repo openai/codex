@@ -4,6 +4,8 @@ use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyEvent;
 use std::ops::Range;
 
+mod find;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VimMode {
     /// Normal mode routes printable keys to movement, operators, and mode transitions.
@@ -27,6 +29,10 @@ pub(super) enum VimPending {
         operator: VimOperator,
         scope: VimTextObjectScope,
     },
+    Find {
+        operator: Option<VimOperator>,
+        kind: VimFindKind,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +46,20 @@ pub(super) enum VimMotion {
     WordEnd,
     LineStart,
     LineEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VimFindKind {
+    FindForward,
+    FindBackward,
+    TillForward,
+    TillBackward,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VimFind {
+    pub(super) kind: VimFindKind,
+    pub(super) target: char,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -219,6 +219,18 @@ pub struct TuiVimNormalKeymap {
     pub move_line_start: Option<KeybindingsSpec>,
     /// Move cursor to end of line (`$`).
     pub move_line_end: Option<KeybindingsSpec>,
+    /// Find the next target character on the current line (`f{char}`).
+    pub find_forward: Option<KeybindingsSpec>,
+    /// Find the previous target character on the current line (`F{char}`).
+    pub find_backward: Option<KeybindingsSpec>,
+    /// Move until before the next target character on the current line (`t{char}`).
+    pub till_forward: Option<KeybindingsSpec>,
+    /// Move until after the previous target character on the current line (`T{char}`).
+    pub till_backward: Option<KeybindingsSpec>,
+    /// Repeat the most recent find/till motion (`;`).
+    pub repeat_find: Option<KeybindingsSpec>,
+    /// Repeat the most recent find/till motion in the opposite direction (`,`).
+    pub repeat_find_reverse: Option<KeybindingsSpec>,
     /// Delete character under cursor (`x`).
     pub delete_char: Option<KeybindingsSpec>,
     /// Delete from cursor to end of line (`D`).
@@ -276,6 +288,18 @@ pub struct TuiVimOperatorKeymap {
     pub motion_line_start: Option<KeybindingsSpec>,
     /// Motion: to end of line (`$`).
     pub motion_line_end: Option<KeybindingsSpec>,
+    /// Enter a forward find motion and await its literal target (`f{char}`).
+    pub find_forward: Option<KeybindingsSpec>,
+    /// Enter a backward find motion and await its literal target (`F{char}`).
+    pub find_backward: Option<KeybindingsSpec>,
+    /// Enter a forward till motion and await its literal target (`t{char}`).
+    pub till_forward: Option<KeybindingsSpec>,
+    /// Enter a backward till motion and await its literal target (`T{char}`).
+    pub till_backward: Option<KeybindingsSpec>,
+    /// Repeat the most recent find/till motion (`;`).
+    pub repeat_find: Option<KeybindingsSpec>,
+    /// Repeat the most recent find/till motion in the opposite direction (`,`).
+    pub repeat_find_reverse: Option<KeybindingsSpec>,
     /// Select an inner text object after an operator.
     pub select_inner_text_object: Option<KeybindingsSpec>,
     /// Select an around text object after an operator.

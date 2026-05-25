@@ -2828,6 +2828,8 @@
               "delete_char": null,
               "delete_to_line_end": null,
               "enter_insert": null,
+              "find_backward": null,
+              "find_forward": null,
               "insert_line_start": null,
               "move_down": null,
               "move_left": null,
@@ -2841,17 +2843,23 @@
               "open_line_above": null,
               "open_line_below": null,
               "paste_after": null,
+              "repeat_find": null,
+              "repeat_find_reverse": null,
               "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
               "substitute_char": null,
               "substitute_line": null,
+              "till_backward": null,
+              "till_forward": null,
               "yank_line": null
             },
             "vim_operator": {
               "cancel": null,
               "change_line": null,
               "delete_line": null,
+              "find_backward": null,
+              "find_forward": null,
               "motion_down": null,
               "motion_left": null,
               "motion_line_end": null,
@@ -2861,8 +2869,12 @@
               "motion_word_backward": null,
               "motion_word_end": null,
               "motion_word_forward": null,
+              "repeat_find": null,
+              "repeat_find_reverse": null,
               "select_around_text_object": null,
               "select_inner_text_object": null,
+              "till_backward": null,
+              "till_forward": null,
               "yank_line": null
             },
             "vim_text_object": {
@@ -3512,6 +3524,8 @@
             "delete_char": null,
             "delete_to_line_end": null,
             "enter_insert": null,
+            "find_backward": null,
+            "find_forward": null,
             "insert_line_start": null,
             "move_down": null,
             "move_left": null,
@@ -3525,11 +3539,15 @@
             "open_line_above": null,
             "open_line_below": null,
             "paste_after": null,
+            "repeat_find": null,
+            "repeat_find_reverse": null,
             "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
             "substitute_char": null,
             "substitute_line": null,
+            "till_backward": null,
+            "till_forward": null,
             "yank_line": null
           }
         },
@@ -3543,6 +3561,8 @@
             "cancel": null,
             "change_line": null,
             "delete_line": null,
+            "find_backward": null,
+            "find_forward": null,
             "motion_down": null,
             "motion_left": null,
             "motion_line_end": null,
@@ -3552,8 +3572,12 @@
             "motion_word_backward": null,
             "motion_word_end": null,
             "motion_word_forward": null,
+            "repeat_find": null,
+            "repeat_find_reverse": null,
             "select_around_text_object": null,
             "select_inner_text_object": null,
+            "till_backward": null,
+            "till_forward": null,
             "yank_line": null
           }
         },
@@ -3830,6 +3854,22 @@
           ],
           "description": "Enter insert mode at cursor (`i`)."
         },
+        "find_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Find the previous target character on the current line (`F{char}`)."
+        },
+        "find_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Find the next target character on the current line (`f{char}`)."
+        },
         "insert_line_start": {
           "allOf": [
             {
@@ -3934,6 +3974,22 @@
           ],
           "description": "Paste after cursor (`p`)."
         },
+        "repeat_find": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat the most recent find/till motion (`;`)."
+        },
+        "repeat_find_reverse": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat the most recent find/till motion in the opposite direction (`,`)."
+        },
         "start_change_operator": {
           "allOf": [
             {
@@ -3974,6 +4030,22 @@
           ],
           "description": "Substitute the current line and enter insert mode (`S`)."
         },
+        "till_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move until after the previous target character on the current line (`T{char}`)."
+        },
+        "till_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move until before the next target character on the current line (`t{char}`)."
+        },
         "yank_line": {
           "allOf": [
             {
@@ -4012,6 +4084,22 @@
             }
           ],
           "description": "Repeat delete operator to delete the whole line (`dd`)."
+        },
+        "find_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter a backward find motion and await its literal target (`F{char}`)."
+        },
+        "find_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter a forward find motion and await its literal target (`f{char}`)."
         },
         "motion_down": {
           "allOf": [
@@ -4085,6 +4173,22 @@
           ],
           "description": "Motion: to start of next word (`w`)."
         },
+        "repeat_find": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat the most recent find/till motion (`;`)."
+        },
+        "repeat_find_reverse": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat the most recent find/till motion in the opposite direction (`,`)."
+        },
         "select_around_text_object": {
           "allOf": [
             {
@@ -4100,6 +4204,22 @@
             }
           ],
           "description": "Select an inner text object after an operator."
+        },
+        "till_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter a backward till motion and await its literal target (`T{char}`)."
+        },
+        "till_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter a forward till motion and await its literal target (`t{char}`)."
         },
         "yank_line": {
           "allOf": [
