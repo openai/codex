@@ -17,6 +17,7 @@ use crate::keymap::RuntimeKeymap;
 use crate::keymap::VimNormalKeymap;
 use crate::keymap::VimOperatorKeymap;
 use crate::keymap::VimTextObjectKeymap;
+use crate::keymap::VimVisualKeymap;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement as UserTextElement;
 use crossterm::event::KeyCode;
@@ -45,6 +46,7 @@ use self::vim::VimOperator;
 use self::vim::VimPending;
 use self::vim::VimRegisterSelection;
 use self::vim::VimTextObjectScope;
+use self::vim::VimVisualKind;
 
 const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 
@@ -118,10 +120,12 @@ pub(crate) struct TextArea {
     vim_count: Option<usize>,
     vim_operator_count: Option<usize>,
     vim_last_find: Option<VimFind>,
+    vim_visual_anchor: Option<usize>,
     editor_keymap: EditorKeymap,
     vim_normal_keymap: VimNormalKeymap,
     vim_operator_keymap: VimOperatorKeymap,
     vim_text_object_keymap: VimTextObjectKeymap,
+    vim_visual_keymap: VimVisualKeymap,
 }
 
 #[derive(Debug, Clone)]
@@ -164,10 +168,12 @@ impl TextArea {
             vim_count: None,
             vim_operator_count: None,
             vim_last_find: None,
+            vim_visual_anchor: None,
             editor_keymap: defaults.editor,
             vim_normal_keymap: defaults.vim_normal,
             vim_operator_keymap: defaults.vim_operator,
             vim_text_object_keymap: defaults.vim_text_object,
+            vim_visual_keymap: defaults.vim_visual,
         }
     }
 
@@ -182,6 +188,7 @@ impl TextArea {
         self.vim_normal_keymap = keymap.vim_normal.clone();
         self.vim_operator_keymap = keymap.vim_operator.clone();
         self.vim_text_object_keymap = keymap.vim_text_object.clone();
+        self.vim_visual_keymap = keymap.vim_visual.clone();
     }
 
     /// Replace the visible textarea text and clear any existing text elements.
@@ -233,6 +240,10 @@ impl TextArea {
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
         self.wrap_cache.replace(None);
         self.preferred_col = None;
+        self.clear_vim_visual_selection();
+        if matches!(self.vim_mode, VimMode::Visual(_)) {
+            self.vim_mode = VimMode::Normal;
+        }
     }
 
     /// Enable or disable modal Vim editing for the textarea.
@@ -246,6 +257,7 @@ impl TextArea {
         self.vim_pending = VimPending::None;
         self.clear_vim_counts();
         self.clear_vim_register_selection();
+        self.clear_vim_visual_selection();
         self.vim_mode = if enabled {
             VimMode::Normal
         } else {
@@ -265,6 +277,11 @@ impl TextArea {
     /// text boundary.
     pub(crate) fn is_vim_normal_mode(&self) -> bool {
         self.vim_enabled && self.vim_mode == VimMode::Normal
+    }
+
+    /// Return whether Vim mode is enabled with an active visual selection.
+    pub(crate) fn is_vim_visual_mode(&self) -> bool {
+        self.vim_enabled && matches!(self.vim_mode, VimMode::Visual(_))
     }
 
     /// Return the cursor position that represents the last editable item in Vim normal mode.
@@ -295,6 +312,7 @@ impl TextArea {
             self.vim_pending = VimPending::None;
             self.clear_vim_counts();
             self.clear_vim_register_selection();
+            self.clear_vim_visual_selection();
         }
     }
 
@@ -310,6 +328,7 @@ impl TextArea {
             self.vim_pending = VimPending::None;
             self.clear_vim_counts();
             self.clear_vim_register_selection();
+            self.clear_vim_visual_selection();
             self.preferred_col = None;
         }
     }
@@ -353,6 +372,8 @@ impl TextArea {
         Some(match self.vim_mode {
             VimMode::Normal => "Normal",
             VimMode::Insert => "Insert",
+            VimMode::Visual(VimVisualKind::Characterwise) => "Visual",
+            VimMode::Visual(VimVisualKind::Linewise) => "Visual Line",
         })
     }
 
@@ -644,6 +665,7 @@ impl TextArea {
         match self.vim_mode {
             VimMode::Insert => self.handle_vim_insert(event),
             VimMode::Normal => self.handle_vim_normal(event),
+            VimMode::Visual(_) => self.handle_vim_visual(event),
         }
     }
 
@@ -685,10 +707,19 @@ impl TextArea {
                 self.handle_vim_find_target(operator, kind, event);
                 return;
             }
+            VimPending::VisualTextObject { .. } => return,
         }
 
         if self.vim_normal_keymap.select_register.is_pressed(event) {
             self.vim_pending = VimPending::Register;
+            return;
+        }
+        if self.vim_normal_keymap.enter_visual.is_pressed(event) {
+            self.enter_vim_visual_mode(VimVisualKind::Characterwise);
+            return;
+        }
+        if self.vim_normal_keymap.enter_visual_line.is_pressed(event) {
+            self.enter_vim_visual_mode(VimVisualKind::Linewise);
             return;
         }
         if self.vim_normal_keymap.enter_insert.is_pressed(event) {
@@ -2856,6 +2887,108 @@ mod tests {
             t.vim_named_registers.get(&'c'),
             Some(&("value".to_string(), KillBufferKind::Characterwise))
         );
+    }
+
+    #[test]
+    fn vim_visual_characterwise_delete_yank_and_change_preserve_elements() {
+        let mut t = ta_with("abcdef");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "cdef");
+        assert_eq!(t.kill_buffer, "ab");
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+
+        let mut t = ta_with("one two");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "one two");
+        assert_eq!(t.kill_buffer, "one");
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+
+        let mut t = ta_with("@file tail");
+        t.add_element_range(/*range*/ 0.."@file".len())
+            .expect("valid element");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), " tail");
+        assert_eq!(t.kill_buffer, "@file");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
+    fn vim_visual_line_yank_and_change_use_linewise_ranges() {
+        let mut t = ta_with("one\ntwo\nthree");
+        t.set_cursor(/*pos*/ "one\n".len());
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert_eq!(t.kill_buffer, "one\ntwo\n");
+        assert_eq!(t.kill_buffer_kind, KillBufferKind::Linewise);
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+
+        let mut t = ta_with("one\ntwo\nthree");
+        t.set_cursor(/*pos*/ "one\n".len());
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "one\n\nthree");
+        assert_eq!(t.kill_buffer, "two");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
+    fn vim_visual_find_text_objects_registers_and_cancel() {
+        let mut t = ta_with("one, two");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert_eq!(
+            t.vim_named_registers.get(&'a'),
+            Some(&("one,".to_string(), KillBufferKind::Characterwise))
+        );
+
+        let mut t = ta_with("(hello) rest");
+        t.set_cursor(/*pos*/ 2);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "() rest");
+        assert_eq!(t.kill_buffer, "hello");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+
+        let mut t = ta_with("keep");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        assert_eq!(t.vim_visual_selection_range(), Some(/*range*/ 0..1));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "keep");
+        assert_eq!(t.vim_visual_selection_range(), None);
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
     }
 
     #[test]

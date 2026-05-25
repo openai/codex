@@ -2828,6 +2828,8 @@
               "delete_char": null,
               "delete_to_line_end": null,
               "enter_insert": null,
+              "enter_visual": null,
+              "enter_visual_line": null,
               "find_backward": null,
               "find_forward": null,
               "insert_line_start": null,
@@ -2891,6 +2893,12 @@
               "single_quote": null,
               "tag": null,
               "word": null
+            },
+            "vim_visual": {
+              "cancel": null,
+              "change": null,
+              "delete": null,
+              "yank": null
             }
           },
           "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
@@ -3528,6 +3536,8 @@
             "delete_char": null,
             "delete_to_line_end": null,
             "enter_insert": null,
+            "enter_visual": null,
+            "enter_visual_line": null,
             "find_backward": null,
             "find_forward": null,
             "insert_line_start": null,
@@ -3605,6 +3615,19 @@
             "single_quote": null,
             "tag": null,
             "word": null
+          }
+        },
+        "vim_visual": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiVimVisualKeymap"
+            }
+          ],
+          "default": {
+            "cancel": null,
+            "change": null,
+            "delete": null,
+            "yank": null
           }
         }
       },
@@ -3861,6 +3884,22 @@
             }
           ],
           "description": "Enter insert mode at cursor (`i`)."
+        },
+        "enter_visual": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter characterwise visual mode (`v`)."
+        },
+        "enter_visual_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter linewise visual mode (`V`)."
         },
         "find_backward": {
           "allOf": [
@@ -4347,6 +4386,45 @@
             }
           ],
           "description": "Text object: word."
+        }
+      },
+      "type": "object"
+    },
+    "TuiVimVisualKeymap": {
+      "additionalProperties": false,
+      "description": "Vim visual-mode keybindings for selected-text operations.\n\nNormal-mode movement, find, and text-object bindings continue to extend selections while this context supplies actions specific to an active selection.",
+      "properties": {
+        "cancel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel visual mode and return to normal mode (`Esc`)."
+        },
+        "change": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Change the visual selection and enter insert mode (`c`)."
+        },
+        "delete": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete the visual selection (`d`)."
+        },
+        "yank": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Yank the visual selection (`y`)."
         }
       },
       "type": "object"

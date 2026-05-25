@@ -103,8 +103,13 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
     KeymapContextTab {
         id: "vim-shortcuts",
         label: "Vim",
-        description: "Vim normal-mode and operator shortcuts.",
-        contexts: &["vim_normal", "vim_operator", "vim_text_object"],
+        description: "Vim normal, operator, text-object, and visual shortcuts.",
+        contexts: &[
+            "vim_normal",
+            "vim_operator",
+            "vim_text_object",
+            "vim_visual",
+        ],
     },
     KeymapContextTab {
         id: "navigation-shortcuts",

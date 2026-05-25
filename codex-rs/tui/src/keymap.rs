@@ -47,6 +47,7 @@ pub(crate) struct RuntimeKeymap {
     pub(crate) vim_normal: VimNormalKeymap,
     pub(crate) vim_operator: VimOperatorKeymap,
     pub(crate) vim_text_object: VimTextObjectKeymap,
+    pub(crate) vim_visual: VimVisualKeymap,
     pub(crate) pager: PagerKeymap,
     pub(crate) list: ListKeymap,
     pub(crate) approval: ApprovalKeymap,
@@ -169,6 +170,8 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) yank_line: Vec<KeyBinding>,
     pub(crate) paste_after: Vec<KeyBinding>,
     pub(crate) select_register: Vec<KeyBinding>,
+    pub(crate) enter_visual: Vec<KeyBinding>,
+    pub(crate) enter_visual_line: Vec<KeyBinding>,
     pub(crate) start_delete_operator: Vec<KeyBinding>,
     pub(crate) start_yank_operator: Vec<KeyBinding>,
     pub(crate) start_change_operator: Vec<KeyBinding>,
@@ -220,6 +223,15 @@ pub(crate) struct VimTextObjectKeymap {
     pub(crate) sentence: Vec<KeyBinding>,
     pub(crate) paragraph: Vec<KeyBinding>,
     pub(crate) tag: Vec<KeyBinding>,
+    pub(crate) cancel: Vec<KeyBinding>,
+}
+
+/// Vim visual-mode operations evaluated while a selection is active.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct VimVisualKeymap {
+    pub(crate) delete: Vec<KeyBinding>,
+    pub(crate) yank: Vec<KeyBinding>,
+    pub(crate) change: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
 }
 
@@ -519,6 +531,8 @@ impl RuntimeKeymap {
             yank_line: resolve_local!(keymap, defaults, vim_normal, yank_line),
             paste_after: resolve_local!(keymap, defaults, vim_normal, paste_after),
             select_register: resolve_local!(keymap, defaults, vim_normal, select_register),
+            enter_visual: resolve_local!(keymap, defaults, vim_normal, enter_visual),
+            enter_visual_line: resolve_local!(keymap, defaults, vim_normal, enter_visual_line),
             start_delete_operator: resolve_local!(
                 keymap,
                 defaults,
@@ -710,6 +724,16 @@ impl RuntimeKeymap {
         if keymap.vim_normal.select_register.is_none() {
             vim_normal
                 .select_register
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.enter_visual.is_none() {
+            vim_normal
+                .enter_visual
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.enter_visual_line.is_none() {
+            vim_normal
+                .enter_visual_line
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
         }
 
@@ -965,6 +989,13 @@ impl RuntimeKeymap {
             });
         }
 
+        let vim_visual = VimVisualKeymap {
+            delete: resolve_local!(keymap, defaults, vim_visual, delete),
+            yank: resolve_local!(keymap, defaults, vim_visual, yank),
+            change: resolve_local!(keymap, defaults, vim_visual, change),
+            cancel: resolve_local!(keymap, defaults, vim_visual, cancel),
+        };
+
         let pager = PagerKeymap {
             scroll_up: resolve_local!(keymap, defaults, pager, scroll_up),
             scroll_down: resolve_local!(keymap, defaults, pager, scroll_down),
@@ -1102,6 +1133,7 @@ impl RuntimeKeymap {
             vim_normal,
             vim_operator,
             vim_text_object,
+            vim_visual,
             pager,
             list,
             approval,
@@ -1260,6 +1292,11 @@ impl RuntimeKeymap {
                 yank_line: default_bindings![shift(KeyCode::Char('y')), plain(KeyCode::Char('Y'))],
                 paste_after: default_bindings![plain(KeyCode::Char('p'))],
                 select_register: default_bindings![plain(KeyCode::Char('"'))],
+                enter_visual: default_bindings![plain(KeyCode::Char('v'))],
+                enter_visual_line: default_bindings![
+                    shift(KeyCode::Char('v')),
+                    plain(KeyCode::Char('V'))
+                ],
                 start_delete_operator: default_bindings![plain(KeyCode::Char('d'))],
                 start_yank_operator: default_bindings![plain(KeyCode::Char('y'))],
                 start_change_operator: default_bindings![plain(KeyCode::Char('c'))],
@@ -1325,6 +1362,12 @@ impl RuntimeKeymap {
                 sentence: default_bindings![plain(KeyCode::Char('s'))],
                 paragraph: default_bindings![plain(KeyCode::Char('p'))],
                 tag: default_bindings![plain(KeyCode::Char('t'))],
+                cancel: default_bindings![plain(KeyCode::Esc)],
+            },
+            vim_visual: VimVisualKeymap {
+                delete: default_bindings![plain(KeyCode::Char('d'))],
+                yank: default_bindings![plain(KeyCode::Char('y'))],
+                change: default_bindings![plain(KeyCode::Char('c'))],
                 cancel: default_bindings![plain(KeyCode::Esc)],
             },
             pager: PagerKeymap {
@@ -1721,6 +1764,11 @@ impl RuntimeKeymap {
                     "select_register",
                     self.vim_normal.select_register.as_slice(),
                 ),
+                ("enter_visual", self.vim_normal.enter_visual.as_slice()),
+                (
+                    "enter_visual_line",
+                    self.vim_normal.enter_visual_line.as_slice(),
+                ),
                 (
                     "start_delete_operator",
                     self.vim_normal.start_delete_operator.as_slice(),
@@ -1806,6 +1854,16 @@ impl RuntimeKeymap {
                 ("paragraph", self.vim_text_object.paragraph.as_slice()),
                 ("tag", self.vim_text_object.tag.as_slice()),
                 ("cancel", self.vim_text_object.cancel.as_slice()),
+            ],
+        )?;
+
+        validate_unique(
+            "vim_visual",
+            [
+                ("delete", self.vim_visual.delete.as_slice()),
+                ("yank", self.vim_visual.yank.as_slice()),
+                ("change", self.vim_visual.change.as_slice()),
+                ("cancel", self.vim_visual.cancel.as_slice()),
             ],
         )?;
 
@@ -2623,6 +2681,21 @@ mod tests {
         let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
 
         assert_eq!(runtime.vim_normal.select_register, Vec::new());
+    }
+
+    #[test]
+    fn configured_legacy_vim_bindings_prune_new_visual_mode_defaults() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("v"));
+        keymap.vim_normal.move_right = Some(KeybindingsSpec::Many(vec![
+            KeybindingSpec("shift-v".to_string()),
+            KeybindingSpec("V".to_string()),
+        ]));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.vim_normal.enter_visual, Vec::new());
+        assert_eq!(runtime.vim_normal.enter_visual_line, Vec::new());
     }
 
     #[test]

@@ -1074,6 +1074,8 @@ impl ChatComposer {
             .map(|label| match label {
                 "Normal" => "Vim: Normal".magenta(),
                 "Insert" => "Vim: Insert".green(),
+                "Visual" => "Vim: Visual".cyan(),
+                "Visual Line" => "Vim: Visual Line".cyan(),
                 _ => unreachable!(),
             })
     }
@@ -3179,6 +3181,9 @@ impl ChatComposer {
         if self.should_handle_vim_insert_escape(key_event) {
             return self.handle_input_basic(key_event);
         }
+        if self.draft.textarea.is_vim_visual_mode() {
+            return self.handle_input_basic(key_event);
+        }
         if self.draft.textarea.is_vim_normal_mode() && self.draft.textarea.is_vim_operator_pending()
         {
             return self.handle_input_basic(key_event);
@@ -4651,8 +4656,9 @@ impl ChatComposer {
                     .textarea
                     .render_ref_masked(textarea_rect, buf, &mut state, mask_char);
             } else {
-                let highlight_ranges = self.history_search_highlight_ranges();
-                if highlight_ranges.is_empty() {
+                let history_highlight_ranges = self.history_search_highlight_ranges();
+                let visual_highlight_range = self.draft.textarea.vim_visual_selection_range();
+                if history_highlight_ranges.is_empty() && visual_highlight_range.is_none() {
                     StatefulWidgetRef::render_ref(
                         &(&self.draft.textarea),
                         textarea_rect,
@@ -4662,10 +4668,13 @@ impl ChatComposer {
                 } else {
                     let highlight_style =
                         Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
-                    let highlights = highlight_ranges
+                    let mut highlights = history_highlight_ranges
                         .into_iter()
                         .map(|range| (range, highlight_style))
                         .collect::<Vec<_>>();
+                    if let Some(range) = visual_highlight_range {
+                        highlights.push((range, Style::default().add_modifier(Modifier::REVERSED)));
+                    }
                     self.draft.textarea.render_ref_styled_with_highlights(
                         textarea_rect,
                         buf,
@@ -5497,6 +5506,68 @@ mod tests {
         );
         assert_eq!(composer.footer.mode, FooterMode::ComposerEmpty);
         assert!(!composer.footer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn vim_visual_mode_selection_snapshots() {
+        snapshot_composer_state(
+            "vim_visual_characterwise_selection",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_text_content("alpha beta".to_string(), Vec::new(), Vec::new());
+                composer.set_vim_enabled(/*enabled*/ true);
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+            },
+        );
+        snapshot_composer_state(
+            "vim_visual_line_selection",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_text_content("alpha\nbeta\ngamma".to_string(), Vec::new(), Vec::new());
+                composer.set_vim_enabled(/*enabled*/ true);
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE));
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+            },
+        );
+    }
+
+    #[test]
+    fn vim_visual_selection_renders_reversed_cells() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("alpha beta".to_string(), Vec::new(), Vec::new());
+        composer.set_vim_enabled(/*enabled*/ true);
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+
+        let area = Rect::new(0, 0, 100, 9);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        assert!(
+            buf[(2, 1)]
+                .style()
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(
+            !buf[(8, 1)]
+                .style()
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
     }
 
     #[test]

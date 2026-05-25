@@ -9,6 +9,7 @@ mod find;
 mod prose;
 mod register;
 mod tag;
+mod visual;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VimMode {
@@ -16,6 +17,8 @@ pub(super) enum VimMode {
     Normal,
     /// Insert mode routes input through the regular editor keymap until Escape is pressed.
     Insert,
+    /// Visual mode extends a characterwise or linewise selection from an anchor.
+    Visual(VimVisualKind),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,12 +41,21 @@ pub(super) enum VimPending {
         operator: Option<VimOperator>,
         kind: VimFindKind,
     },
+    VisualTextObject {
+        scope: VimTextObjectScope,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct VimRegisterSelection {
     pub(super) name: char,
     pub(super) append: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VimVisualKind {
+    Characterwise,
+    Linewise,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -247,6 +247,10 @@ pub struct TuiVimNormalKeymap {
     pub paste_after: Option<KeybindingsSpec>,
     /// Select a named register for the next Vim command (`"{register}`).
     pub select_register: Option<KeybindingsSpec>,
+    /// Enter characterwise visual mode (`v`).
+    pub enter_visual: Option<KeybindingsSpec>,
+    /// Enter linewise visual mode (`V`).
+    pub enter_visual_line: Option<KeybindingsSpec>,
     /// Begin delete operator; next key selects motion (`d`).
     pub start_delete_operator: Option<KeybindingsSpec>,
     /// Begin yank operator; next key selects motion (`y`).
@@ -338,6 +342,24 @@ pub struct TuiVimTextObjectKeymap {
     /// Text object: enclosing paired tag.
     pub tag: Option<KeybindingsSpec>,
     /// Cancel the pending text-object command.
+    pub cancel: Option<KeybindingsSpec>,
+}
+
+/// Vim visual-mode keybindings for selected-text operations.
+///
+/// Normal-mode movement, find, and text-object bindings continue to extend
+/// selections while this context supplies actions specific to an active
+/// selection.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiVimVisualKeymap {
+    /// Delete the visual selection (`d`).
+    pub delete: Option<KeybindingsSpec>,
+    /// Yank the visual selection (`y`).
+    pub yank: Option<KeybindingsSpec>,
+    /// Change the visual selection and enter insert mode (`c`).
+    pub change: Option<KeybindingsSpec>,
+    /// Cancel visual mode and return to normal mode (`Esc`).
     pub cancel: Option<KeybindingsSpec>,
 }
 
@@ -446,6 +468,8 @@ pub struct TuiKeymap {
     pub vim_operator: TuiVimOperatorKeymap,
     #[serde(default)]
     pub vim_text_object: TuiVimTextObjectKeymap,
+    #[serde(default)]
+    pub vim_visual: TuiVimVisualKeymap,
     #[serde(default)]
     pub pager: TuiPagerKeymap,
     #[serde(default)]
