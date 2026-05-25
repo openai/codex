@@ -20,6 +20,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use tracing::warn;
 
 const REMOTE_CONTROL_CLIENT_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -336,7 +337,13 @@ impl ClientTracker {
         .await
         {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) => Err(Stopped),
+            Ok(Err(_)) => {
+                warn!(
+                    transport_event = event_name,
+                    "remote control transport event receiver dropped"
+                );
+                Err(Stopped)
+            }
             Err(_) => {
                 warn!(
                     transport_event = event_name,
@@ -363,7 +370,11 @@ impl ClientTracker {
 
     async fn send_connection_closed(&self, connection_id: ConnectionId) -> Result<(), Stopped> {
         // Worker shutdown can abort the caller; detach the cleanup event before awaiting it.
-        tokio::spawn({
+        info!(
+            connection_id = ?connection_id,
+            "forwarding remote control connection closed transport event"
+        );
+        match tokio::spawn({
             let transport_event_tx = self.transport_event_tx.clone();
             async move {
                 transport_event_tx
@@ -373,7 +384,24 @@ impl ClientTracker {
             }
         })
         .await
-        .map_err(|_| Stopped)?
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => {
+                warn!(
+                    transport_event = "connection_closed",
+                    "remote control transport event receiver dropped"
+                );
+                Err(Stopped)
+            }
+            Err(err) => {
+                warn!(
+                    transport_event = "connection_closed",
+                    ?err,
+                    "remote control transport event forwarding task failed"
+                );
+                Err(Stopped)
+            }
+        }
     }
 }
 
