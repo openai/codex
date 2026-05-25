@@ -494,8 +494,8 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
 async fn writer_state_retries_write_error_before_reporting_flush_success() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let rollout_path = home.path().join("rollout.jsonl");
-    File::create(&rollout_path)?;
-    let read_only_file = std::fs::OpenOptions::new().read(true).open(&rollout_path)?;
+    std::fs::write(&rollout_path, br#"{"timestamp":"partial"#)?;
+    let read_only_file = File::open(&rollout_path)?;
     let mut state = RolloutWriterState::new(
         Some(tokio::fs::File::from_std(read_only_file)),
         /*deferred_log_file_info*/ None,
@@ -514,9 +514,28 @@ async fn writer_state_retries_write_error_before_reporting_flush_success() -> st
     state.flush().await?;
     let text_after_retry = std::fs::read_to_string(&rollout_path)?;
     assert!(
+        !text_after_retry.contains("partial"),
+        "retry should remove an incomplete final line before appending"
+    );
+    assert!(
         text_after_retry.contains("queued-after-writer-error"),
         "flush should retry after reopening and write buffered items"
     );
+    for line in text_after_retry.lines() {
+        serde_json::from_str::<RolloutLine>(line).expect("line should parse after retry");
+    }
+    Ok(())
+}
+
+#[test]
+fn repair_final_line_preserves_valid_line_without_newline() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let line = r#"{"timestamp":"2026-05-25T00:00:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"valid-without-newline","kind":"plain"}}"#;
+    std::fs::write(&rollout_path, line)?;
+    let mut file = File::options().read(true).write(true).open(&rollout_path)?;
+    repair_final_line(&mut file, &rollout_path)?;
+    assert_eq!(std::fs::read_to_string(&rollout_path)?, format!("{line}\n"));
     Ok(())
 }
 
