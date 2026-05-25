@@ -28,14 +28,21 @@ impl TextArea {
         if self.vim_normal_keymap.cancel_operator.is_pressed(event)
             || self.vim_operator_keymap.cancel.is_pressed(event)
         {
+            self.clear_vim_counts();
             return true;
         }
         let KeyCode::Char(target) = event.code else {
+            self.clear_vim_counts();
             return true;
         };
         let find = VimFind { kind, target };
         self.vim_last_find = Some(find);
-        self.execute_vim_find(operator, find);
+        let count = if operator.is_some() {
+            self.take_vim_operator_count()
+        } else {
+            self.take_vim_count()
+        };
+        self.execute_vim_find(operator, find, count);
         true
     }
 
@@ -81,6 +88,7 @@ impl TextArea {
         &mut self,
         operator: Option<VimOperator>,
         reverse: bool,
+        count: usize,
     ) {
         let Some(mut find) = self.vim_last_find else {
             return;
@@ -88,21 +96,21 @@ impl TextArea {
         if reverse {
             find.kind = find.kind.reverse();
         }
-        self.execute_vim_find(operator, find);
+        self.execute_vim_find(operator, find, count);
     }
 
-    fn execute_vim_find(&mut self, operator: Option<VimOperator>, find: VimFind) {
+    fn execute_vim_find(&mut self, operator: Option<VimOperator>, find: VimFind, count: usize) {
         if let Some(operator) = operator {
-            if let Some(range) = self.range_for_find(find) {
+            if let Some(range) = self.range_for_find(find, count) {
                 self.apply_vim_operator_to_range(operator, range);
             }
-        } else if let Some(target) = self.target_for_find(find) {
+        } else if let Some(target) = self.target_for_find(find, count) {
             self.set_cursor(target);
         }
     }
 
-    pub(in super::super) fn target_for_find(&self, find: VimFind) -> Option<usize> {
-        let matched = self.find_match(find)?;
+    pub(in super::super) fn target_for_find(&self, find: VimFind, count: usize) -> Option<usize> {
+        let matched = self.find_match(find, count)?;
         Some(match find.kind {
             VimFindKind::FindForward | VimFindKind::FindBackward => matched,
             VimFindKind::TillForward => self.prev_atomic_boundary(matched),
@@ -110,8 +118,12 @@ impl TextArea {
         })
     }
 
-    pub(in super::super) fn range_for_find(&self, find: VimFind) -> Option<Range<usize>> {
-        let matched = self.find_match(find)?;
+    pub(in super::super) fn range_for_find(
+        &self,
+        find: VimFind,
+        count: usize,
+    ) -> Option<Range<usize>> {
+        let matched = self.find_match(find, count)?;
         let range = match find.kind {
             VimFindKind::FindForward => self.cursor_pos..self.next_atomic_boundary(matched),
             VimFindKind::TillForward => self.cursor_pos..matched,
@@ -121,7 +133,7 @@ impl TextArea {
         (range.start < range.end).then_some(range)
     }
 
-    fn find_match(&self, find: VimFind) -> Option<usize> {
+    fn find_match(&self, find: VimFind, count: usize) -> Option<usize> {
         let line_start = self.beginning_of_current_line();
         let line_end = self.end_of_current_line();
         match find.kind {
@@ -130,14 +142,16 @@ impl TextArea {
                 self.text[start..line_end]
                     .char_indices()
                     .map(|(offset, _)| start + offset)
-                    .find(|&idx| self.matches_find_target(idx, find.target))
+                    .filter(|&idx| self.matches_find_target(idx, find.target))
+                    .nth(count.saturating_sub(1))
             }
             VimFindKind::FindBackward | VimFindKind::TillBackward => self.text
                 [line_start..self.cursor_pos]
                 .char_indices()
                 .map(|(offset, _)| line_start + offset)
                 .rev()
-                .find(|&idx| self.matches_find_target(idx, find.target)),
+                .filter(|&idx| self.matches_find_target(idx, find.target))
+                .nth(count.saturating_sub(1)),
         }
     }
 

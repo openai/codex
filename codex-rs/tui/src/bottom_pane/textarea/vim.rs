@@ -4,6 +4,7 @@ use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyEvent;
 use std::ops::Range;
 
+mod count;
 mod find;
 mod prose;
 mod tag;
