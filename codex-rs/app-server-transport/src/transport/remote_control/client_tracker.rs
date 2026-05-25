@@ -151,11 +151,7 @@ impl ClientTracker {
                         message,
                     })
                     .await?;
-                    if let Some(seq_id) = seq_id
-                        && let Some(client) = self.clients.get_mut(&client_key)
-                    {
-                        client.last_inbound_seq_id = Some(seq_id);
-                    }
+                    self.record_inbound_message_delivery(&client_key, seq_id);
                     return Ok(());
                 }
 
@@ -207,11 +203,8 @@ impl ClientTracker {
                     self.close_client(&client_key).await?;
                     return Err(err);
                 }
-                if !is_legacy_stream_id
-                    && let Some(seq_id) = seq_id
-                    && let Some(client) = self.clients.get_mut(&client_key)
-                {
-                    client.last_inbound_seq_id = Some(seq_id);
+                if !is_legacy_stream_id {
+                    self.record_inbound_message_delivery(&client_key, seq_id);
                 }
                 Ok(())
             }
@@ -328,15 +321,12 @@ impl ClientTracker {
     }
 
     async fn send_transport_event(&self, event: TransportEvent) -> Result<(), Stopped> {
-        // Close owns app-server cleanup, so keep delivery alive if the caller is aborted.
-        if matches!(&event, TransportEvent::ConnectionClosed { .. }) {
-            return tokio::spawn({
-                let transport_event_tx = self.transport_event_tx.clone();
-                async move { transport_event_tx.send(event).await.map_err(|_| Stopped) }
-            })
-            .await
-            .map_err(|_| Stopped)?;
-        }
+        let event = match event {
+            TransportEvent::ConnectionClosed { connection_id } => {
+                return self.send_connection_closed(connection_id).await;
+            }
+            event => event,
+        };
 
         let event_name = transport_event_name(&event);
         match timeout(
@@ -356,6 +346,34 @@ impl ClientTracker {
                 Err(Stopped)
             }
         }
+    }
+
+    fn record_inbound_message_delivery(
+        &mut self,
+        client_key: &(ClientId, StreamId),
+        seq_id: Option<u64>,
+    ) {
+        // Timed forwarding can fail, so only dedupe retries after app-server receives it.
+        if let Some(seq_id) = seq_id
+            && let Some(client) = self.clients.get_mut(client_key)
+        {
+            client.last_inbound_seq_id = Some(seq_id);
+        }
+    }
+
+    async fn send_connection_closed(&self, connection_id: ConnectionId) -> Result<(), Stopped> {
+        // Worker shutdown can abort the caller; detach the cleanup event before awaiting it.
+        tokio::spawn({
+            let transport_event_tx = self.transport_event_tx.clone();
+            async move {
+                transport_event_tx
+                    .send(TransportEvent::ConnectionClosed { connection_id })
+                    .await
+                    .map_err(|_| Stopped)
+            }
+        })
+        .await
+        .map_err(|_| Stopped)?
     }
 }
 

@@ -184,13 +184,32 @@ impl WebsocketState {
         }
 
         let observation = self.client_segment_reassembler.observe(client_envelope);
-        if matches!(observation, ClientSegmentObservation::Forward(_))
-            && let Some((key, seq_id)) = client_message_key
-        {
+        observation
+    }
+
+    fn record_client_message_delivery(
+        &mut self,
+        client_envelope: &ClientEnvelope,
+        client_message_key: Option<((ClientId, Option<StreamId>), u64)>,
+    ) {
+        if let Some(cursor) = client_envelope.cursor.as_deref() {
+            self.subscribe_cursor = Some(cursor.to_string());
+        }
+        if let Some((key, seq_id)) = client_message_key {
             self.last_completed_client_chunk_seq_id_by_stream
                 .insert(key, seq_id);
         }
-        observation
+        if let ClientEvent::Ack { segment_id } = &client_envelope.event
+            && let Some(acked_seq_id) = client_envelope.seq_id
+            && let Some(stream_id) = client_envelope.stream_id.as_ref()
+        {
+            self.outbound_buffer.ack(
+                &client_envelope.client_id,
+                stream_id,
+                acked_seq_id,
+                *segment_id,
+            );
+        }
     }
 
     fn invalidate_client_message_stream(&mut self, client_id: &ClientId, stream_id: &StreamId) {
@@ -1036,6 +1055,7 @@ impl RemoteControlWebsocket {
                 }
             };
 
+            let client_message_key = WebsocketState::client_message_key(&client_envelope);
             let observation = {
                 let mut websocket_state = state.lock().await;
                 websocket_state.observe_client_message(client_envelope, wire_size_bytes)
@@ -1045,24 +1065,6 @@ impl RemoteControlWebsocket {
                 ClientSegmentObservation::Pending | ClientSegmentObservation::Dropped => continue,
             };
 
-            {
-                let mut websocket_state = state.lock().await;
-                if let Some(cursor) = client_envelope.cursor.as_deref() {
-                    websocket_state.subscribe_cursor = Some(cursor.to_string());
-                }
-                if let ClientEvent::Ack { segment_id } = &client_envelope.event
-                    && let Some(acked_seq_id) = client_envelope.seq_id
-                    && let Some(stream_id) = client_envelope.stream_id.as_ref()
-                {
-                    websocket_state.outbound_buffer.ack(
-                        &client_envelope.client_id,
-                        stream_id,
-                        acked_seq_id,
-                        *segment_id,
-                    );
-                }
-            }
-
             let closed_client =
                 matches!(&client_envelope.event, ClientEvent::ClientClosed).then(|| {
                     (
@@ -1070,6 +1072,7 @@ impl RemoteControlWebsocket {
                         client_envelope.stream_id.clone(),
                     )
                 });
+            let delivered_client_envelope = client_envelope.clone();
             if client_tracker
                 .handle_message(client_envelope)
                 .await
@@ -1077,6 +1080,10 @@ impl RemoteControlWebsocket {
             {
                 return Ok(());
             }
+            state
+                .lock()
+                .await
+                .record_client_message_delivery(&delivered_client_envelope, client_message_key);
             if let Some((client_id, stream_id)) = closed_client {
                 let mut websocket_state = state.lock().await;
                 if let Some(stream_id) = stream_id {
@@ -2530,13 +2537,72 @@ mod tests {
             observe_client_message(&mut state, first_chunk.clone()),
             ClientSegmentObservation::Pending
         ));
+        let completed_envelope = match observe_client_message(&mut state, second_chunk) {
+            ClientSegmentObservation::Forward(client_envelope) => *client_envelope,
+            _ => panic!("expected completed client message"),
+        };
+        state.record_client_message_delivery(
+            &completed_envelope,
+            Some((
+                (
+                    ClientId("client-1".to_string()),
+                    Some(StreamId("stream-1".to_string())),
+                ),
+                4,
+            )),
+        );
+        assert!(matches!(
+            observe_client_message(&mut state, first_chunk),
+            ClientSegmentObservation::Dropped
+        ));
+    }
+
+    #[test]
+    fn websocket_state_allows_replay_before_completed_chunk_delivery() {
+        let (outbound_buffer, _used_rx) = BoundedOutboundBuffer::new();
+        let mut state = WebsocketState {
+            outbound_buffer,
+            subscribe_cursor: None,
+            next_seq_id_by_stream: HashMap::new(),
+            last_completed_client_chunk_seq_id_by_stream: HashMap::new(),
+            client_segment_reassembler: ClientSegmentReassembler::default(),
+        };
+        let message = JSONRPCMessage::Notification(JSONRPCNotification {
+            method: "initialized".to_string(),
+            params: None,
+        });
+        let raw = serde_json::to_vec(&message).expect("message should serialize");
+        let split = raw.len() / 2;
+        let first_chunk = client_chunk_envelope(
+            "client-1",
+            "stream-1",
+            /*seq_id*/ 4,
+            /*segment_id*/ 0,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[..split],
+        );
+        let second_chunk = client_chunk_envelope(
+            "client-1",
+            "stream-1",
+            /*seq_id*/ 4,
+            /*segment_id*/ 1,
+            /*segment_count*/ 2,
+            raw.len(),
+            &raw[split..],
+        );
+
+        assert!(matches!(
+            observe_client_message(&mut state, first_chunk.clone()),
+            ClientSegmentObservation::Pending
+        ));
         assert!(matches!(
             observe_client_message(&mut state, second_chunk),
             ClientSegmentObservation::Forward(_)
         ));
         assert!(matches!(
             observe_client_message(&mut state, first_chunk),
-            ClientSegmentObservation::Dropped
+            ClientSegmentObservation::Pending
         ));
     }
 
