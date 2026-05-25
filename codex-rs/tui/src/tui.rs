@@ -56,6 +56,7 @@ mod frame_requester;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
+mod terminal_stderr;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
@@ -66,6 +67,7 @@ pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 pub(crate) struct InitializedTerminal {
     pub(crate) terminal: Terminal,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
 
 pub(crate) fn running_in_vscode_terminal() -> bool {
@@ -281,7 +283,16 @@ pub fn restore() -> Result<()> {
 /// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
 /// terminal missed the stack pop that normally pairs with [`set_modes`].
 pub fn restore_after_exit() -> Result<()> {
-    restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit)
+    let mut first_error =
+        restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit).err();
+    if let Err(err) = terminal_stderr::finish() {
+        first_error.get_or_insert(err);
+    }
+
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 /// Restore the terminal to its original state, but keep raw mode enabled.
@@ -425,9 +436,11 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
         !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
 
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
+    let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
     Ok(InitializedTerminal {
         terminal: tui,
         enhanced_keys_supported,
+        stderr_guard,
     })
 }
 
@@ -489,6 +502,8 @@ pub struct Tui {
     notification_condition: NotificationCondition,
     // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
+    // Keeps unmanaged process stderr writes out of the inline viewport.
+    _stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
 
 struct PendingHistoryLines {
@@ -509,7 +524,11 @@ where
 }
 
 impl Tui {
-    pub fn new(terminal: Terminal, enhanced_keys_supported: bool) -> Self {
+    pub(crate) fn new(
+        terminal: Terminal,
+        enhanced_keys_supported: bool,
+        stderr_guard: terminal_stderr::TerminalStderrGuard,
+    ) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
 
@@ -534,6 +553,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             alt_screen_enabled: true,
+            _stderr_guard: stderr_guard,
         }
     }
 
@@ -577,8 +597,8 @@ impl Tui {
     /// Temporarily restore terminal state to run an external interactive program `f`.
     ///
     /// This pauses crossterm's stdin polling by dropping the underlying event stream, restores
-    /// terminal modes (optionally keeping raw mode enabled), then re-applies Codex TUI modes and
-    /// flushes pending stdin input before resuming events.
+    /// terminal modes and stderr (optionally keeping raw mode enabled), then re-applies Codex TUI
+    /// modes and stderr suppression before resuming events.
     pub async fn with_restored<R, F, Fut>(&mut self, mode: RestoreMode, f: F) -> R
     where
         F: FnOnce() -> Fut,
@@ -596,9 +616,15 @@ impl Tui {
         if let Err(err) = mode.restore() {
             tracing::warn!("failed to restore terminal modes before external program: {err}");
         }
+        if let Err(err) = terminal_stderr::pause() {
+            tracing::warn!("failed to restore terminal stderr before external program: {err}");
+        }
 
         let output = f().await;
 
+        if let Err(err) = terminal_stderr::resume() {
+            tracing::warn!("failed to suppress terminal stderr after external program: {err}");
+        }
         if let Err(err) = set_modes() {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
         }
