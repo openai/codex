@@ -225,6 +225,7 @@ impl ChatWidget {
         let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
             &self.config,
             self.runtime_model_provider_base_url.as_deref(),
+            self.remote_connection.as_ref(),
             self.status_account_display.as_ref(),
             token_info,
             total_usage,
