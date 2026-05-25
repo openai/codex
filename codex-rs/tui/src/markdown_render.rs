@@ -1024,7 +1024,7 @@ where
             let mut annotated = HyperlinkLine::new(Line::default());
             annotated.push_span(span, Some(&destination));
             annotated
-        } else if self.in_code_block {
+        } else if self.link.is_some() || self.in_code_block {
             HyperlinkLine::new(Line::from(span))
         } else {
             annotate_web_urls_in_line(Line::from(span))
@@ -1888,7 +1888,7 @@ where
             let mut annotated = HyperlinkLine::new(Line::default());
             annotated.push_span(span, Some(&destination));
             annotated
-        } else if self.in_code_block {
+        } else if self.link.is_some() || self.in_code_block {
             HyperlinkLine::new(Line::from(span))
         } else {
             annotate_web_urls_in_line(Line::from(span))
@@ -2670,7 +2670,7 @@ mod tests {
 
     #[test]
     fn does_not_annotate_code_or_non_web_markdown_links() {
-        let markdown = "`https://example.com/inline`\n\n```text\nhttps://example.com/block\n```\n\n[mail](mailto:test@example.com)";
+        let markdown = "`https://example.com/inline`\n\n```text\nhttps://example.com/block\n```\n\n[mail](mailto:test@example.com)\n\n[https://example.com/label](mailto:test@example.com)\n\n| Target |\n| --- |\n| [https://example.com/table-label](mailto:test@example.com) |";
         let lines = render_markdown_lines_with_width_and_cwd(
             markdown,
             /*width*/ Some(80),

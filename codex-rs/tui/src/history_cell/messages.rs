@@ -298,10 +298,10 @@ impl HistoryCell for AgentMessageCell {
         let mut wrapped = Vec::new();
         for (index, line) in self.lines.iter().enumerate() {
             let initial_indent = if index == 0 && self.is_first_line {
-                    "• ".dim().into()
-                } else {
-                    "  ".into()
-                };
+                "• ".dim().into()
+            } else {
+                "  ".into()
+            };
             let mut subsequent_indent = Line::from("  ");
             subsequent_indent
                 .spans
