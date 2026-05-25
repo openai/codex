@@ -377,7 +377,7 @@ impl ChatWidget {
     ) -> Option<String> {
         let window = window?;
         let remaining = (100.0f64 - window.used_percent).clamp(0.0f64, 100.0f64);
-        Some(format!("{label} {remaining:.0}%"))
+        Some(format!("{label} {remaining:.0}% left"))
     }
 
     pub(super) fn status_line_reasoning_effort_label(

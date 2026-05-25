@@ -2,7 +2,7 @@
 //!
 //! The background-server check is deliberately passive. It reads the daemon
 //! state directory, PID files, settings file, and control socket path, then
-//! attempts only a local socket connection when a socket already exists. That
+//! attempts only a bounded initialize probe when a socket already exists. That
 //! keeps doctor safe to run while the user is debugging startup or update-loop
 //! issues.
 
@@ -13,6 +13,7 @@ use codex_core::config::Config;
 use super::CheckStatus;
 use super::DoctorCheck;
 
+const MAX_PROBE_ERROR_CHARS: usize = 120;
 const STATE_DIR_NAME: &str = "app-server-daemon";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const PID_FILE_NAME: &str = "app-server.pid";
@@ -23,7 +24,7 @@ const UPDATE_PID_FILE_NAME: &str = "app-server-updater.pid";
 /// Missing files are expected for the ephemeral/not-running case and should not
 /// be treated as failures. A stale socket is a warning because it can explain
 /// client connection problems without proving the daemon itself is broken.
-pub(super) fn background_server_check(config: &Config) -> DoctorCheck {
+pub(super) async fn background_server_check(config: &Config) -> DoctorCheck {
     let mut details = Vec::new();
     let state_dir = config.codex_home.join(STATE_DIR_NAME);
     details.push(format!("daemon state dir: {}", state_dir.display()));
@@ -54,8 +55,11 @@ pub(super) fn background_server_check(config: &Config) -> DoctorCheck {
     };
 
     details.push(format!("control socket: {}", socket_path.display()));
-    let status = socket_status(socket_path.as_path());
+    let status = socket_status(socket_path.as_path()).await;
     details.push(format!("status: {}", status.detail_label()));
+    if let Some(version_detail) = status.app_server_version_detail() {
+        details.push(version_detail);
+    }
     details.push(format!("mode: {}", server_mode(&state_dir)));
 
     let mut check = DoctorCheck::new(
@@ -94,57 +98,162 @@ fn server_mode(state_dir: &Path) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy)]
 enum SocketStatus {
     NotRunning,
-    Running,
-    #[cfg(unix)]
-    StaleOrUnreachable,
+    Running(String),
+    StaleOrUnreachable(String),
 }
 
 impl SocketStatus {
-    fn check_status(self) -> CheckStatus {
+    fn check_status(&self) -> CheckStatus {
         match self {
-            Self::NotRunning | Self::Running => CheckStatus::Ok,
-            #[cfg(unix)]
-            Self::StaleOrUnreachable => CheckStatus::Warning,
+            Self::NotRunning | Self::Running(_) => CheckStatus::Ok,
+            Self::StaleOrUnreachable(_) => CheckStatus::Warning,
         }
     }
 
-    fn summary(self) -> &'static str {
+    fn summary(&self) -> &'static str {
         match self {
             Self::NotRunning => "background server is not running",
-            Self::Running => "background server is running",
-            #[cfg(unix)]
-            Self::StaleOrUnreachable => "background server socket is stale or unreachable",
+            Self::Running(_) => "background server is running",
+            Self::StaleOrUnreachable(_) => "background server socket is stale or unreachable",
         }
     }
 
-    fn detail_label(self) -> &'static str {
+    fn detail_label(&self) -> &'static str {
         match self {
             Self::NotRunning => "not running",
-            Self::Running => "running",
-            #[cfg(unix)]
-            Self::StaleOrUnreachable => "stale or unreachable",
+            Self::Running(_) => "running",
+            Self::StaleOrUnreachable(_) => "stale or unreachable",
+        }
+    }
+
+    fn app_server_version_detail(&self) -> Option<String> {
+        match self {
+            Self::NotRunning => None,
+            Self::Running(app_server_version) => {
+                Some(format!("app-server version: {app_server_version}"))
+            }
+            Self::StaleOrUnreachable(error) => {
+                Some(format!("app-server version: unavailable ({error})"))
+            }
         }
     }
 }
 
-fn socket_status(socket_path: &Path) -> SocketStatus {
+async fn socket_status(socket_path: &Path) -> SocketStatus {
     if !socket_path.exists() {
         return SocketStatus::NotRunning;
     }
 
-    #[cfg(unix)]
-    {
-        match std::os::unix::net::UnixStream::connect(socket_path) {
-            Ok(_) => SocketStatus::Running,
-            Err(_) => SocketStatus::StaleOrUnreachable,
-        }
+    match codex_app_server_daemon::probe_app_server_version(socket_path).await {
+        Ok(app_server_version) => SocketStatus::Running(app_server_version),
+        Err(err) => SocketStatus::StaleOrUnreachable(concise_probe_error(&err, socket_path)),
+    }
+}
+
+fn concise_probe_error(err: &anyhow::Error, socket_path: &Path) -> String {
+    let socket_path = socket_path.display().to_string();
+    let message = err
+        .to_string()
+        .replace(&socket_path, "control socket")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if message.is_empty() {
+        return "unknown error".to_string();
+    }
+    let mut chars = message.chars();
+    let truncated = chars
+        .by_ref()
+        .take(MAX_PROBE_ERROR_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        message
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use codex_core::config::ConfigBuilder;
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    async fn test_config(codex_home: PathBuf) -> Config {
+        ConfigBuilder::default()
+            .codex_home(codex_home)
+            .build()
+            .await
+            .expect("config")
     }
 
-    #[cfg(not(unix))]
-    {
-        SocketStatus::Running
+    fn create_socket_placeholder(config: &Config) {
+        let socket_path = codex_app_server::app_server_control_socket_path(&config.codex_home)
+            .expect("socket path");
+        std::fs::create_dir_all(socket_path.parent().expect("socket parent"))
+            .expect("create socket dir");
+        std::fs::write(socket_path, "").expect("create socket placeholder");
+    }
+
+    #[tokio::test]
+    async fn not_running_background_server_stays_ok_without_version() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = test_config(temp.path().to_path_buf()).await;
+
+        let check = background_server_check(&config).await;
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert_eq!(check.summary, "background server is not running");
+        assert!(check.details.contains(&"status: not running".to_string()));
+        assert!(
+            !check
+                .details
+                .iter()
+                .any(|detail| detail.starts_with("app-server version:"))
+        );
+    }
+
+    #[test]
+    fn running_background_server_reports_app_server_version() {
+        let status = SocketStatus::Running("1.2.3".to_string());
+
+        assert_eq!(status.check_status(), CheckStatus::Ok);
+        assert_eq!(status.summary(), "background server is running");
+        assert_eq!(status.detail_label(), "running");
+        assert_eq!(
+            status.app_server_version_detail(),
+            Some("app-server version: 1.2.3".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_version_probe_reports_unavailable() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = test_config(temp.path().to_path_buf()).await;
+        create_socket_placeholder(&config);
+
+        let check = background_server_check(&config).await;
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(
+            check.summary,
+            "background server socket is stale or unreachable"
+        );
+        assert!(
+            check
+                .details
+                .contains(&"status: stale or unreachable".to_string())
+        );
+        assert!(
+            check
+                .details
+                .iter()
+                .any(|detail| detail.starts_with("app-server version: unavailable ("))
+        );
     }
 }
