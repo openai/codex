@@ -2841,6 +2841,75 @@ mod tests {
     }
 
     #[test]
+    fn vim_sentence_text_objects_cover_change_and_around_delete() {
+        let mut t = ta_with("One. Hello (world)! Next?");
+        t.set_cursor(/*pos*/ "One. Hello (".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "One.  Next?");
+        assert_eq!(t.kill_buffer, "Hello (world)!");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+
+        let mut t = ta_with("One. Is this ok?) Next.");
+        t.set_cursor(/*pos*/ "One. Is ".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "One. Next.");
+        assert_eq!(t.kill_buffer, "Is this ok?) ");
+    }
+
+    #[test]
+    fn vim_paragraph_text_objects_cover_multiline_delete_and_change() {
+        let mut t = ta_with("one\nline\n\nsecond\nline\n\nthird");
+        t.set_cursor(/*pos*/ "one\n".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "\n\nsecond\nline\n\nthird");
+        assert_eq!(t.kill_buffer, "one\nline");
+
+        let mut t = ta_with("one\nline\n\nsecond\nline\n\nthird");
+        t.set_cursor(/*pos*/ "one\nline\n\nsecond".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "one\nline\n\nthird");
+        assert_eq!(t.kill_buffer, "second\nline\n\n");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
+    fn vim_sentence_text_objects_preserve_unicode_and_atomic_elements() {
+        let mut t = ta_with("Hi 👍! Use @file now? Done.");
+        let mention_start = "Hi 👍! Use ".len();
+        t.add_element_range(mention_start..mention_start + "@file".len())
+            .expect("valid element");
+        t.set_cursor(/*pos*/ mention_start);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "Hi 👍! Done.");
+        assert_eq!(t.kill_buffer, "Use @file now? ");
+    }
+
+    #[test]
     fn vim_text_object_cancellation_does_not_edit() {
         let mut t = ta_with("hello world");
         t.set_cursor(/*pos*/ 1);

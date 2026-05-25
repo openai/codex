@@ -216,6 +216,8 @@ pub(crate) struct VimTextObjectKeymap {
     pub(crate) double_quote: Vec<KeyBinding>,
     pub(crate) single_quote: Vec<KeyBinding>,
     pub(crate) backtick: Vec<KeyBinding>,
+    pub(crate) sentence: Vec<KeyBinding>,
+    pub(crate) paragraph: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
 }
 
@@ -877,7 +879,7 @@ impl RuntimeKeymap {
                 .retain(|binding| !configured_vim_operator_bindings_to_preserve.contains(binding));
         }
 
-        let vim_text_object = VimTextObjectKeymap {
+        let mut vim_text_object = VimTextObjectKeymap {
             word: resolve_local!(keymap, defaults, vim_text_object, word),
             big_word: resolve_local!(keymap, defaults, vim_text_object, big_word),
             parentheses: resolve_local!(keymap, defaults, vim_text_object, parentheses),
@@ -886,8 +888,60 @@ impl RuntimeKeymap {
             double_quote: resolve_local!(keymap, defaults, vim_text_object, double_quote),
             single_quote: resolve_local!(keymap, defaults, vim_text_object, single_quote),
             backtick: resolve_local!(keymap, defaults, vim_text_object, backtick),
+            sentence: resolve_local!(keymap, defaults, vim_text_object, sentence),
+            paragraph: resolve_local!(keymap, defaults, vim_text_object, paragraph),
             cancel: resolve_local!(keymap, defaults, vim_text_object, cancel),
         };
+
+        let configured_vim_text_object_bindings_to_preserve = configured_bindings_to_preserve([
+            (
+                keymap.vim_text_object.word.as_ref(),
+                vim_text_object.word.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.big_word.as_ref(),
+                vim_text_object.big_word.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.parentheses.as_ref(),
+                vim_text_object.parentheses.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.brackets.as_ref(),
+                vim_text_object.brackets.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.braces.as_ref(),
+                vim_text_object.braces.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.double_quote.as_ref(),
+                vim_text_object.double_quote.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.single_quote.as_ref(),
+                vim_text_object.single_quote.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.backtick.as_ref(),
+                vim_text_object.backtick.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.cancel.as_ref(),
+                vim_text_object.cancel.as_slice(),
+            ),
+        ]);
+
+        if keymap.vim_text_object.sentence.is_none() {
+            vim_text_object.sentence.retain(|binding| {
+                !configured_vim_text_object_bindings_to_preserve.contains(binding)
+            });
+        }
+        if keymap.vim_text_object.paragraph.is_none() {
+            vim_text_object.paragraph.retain(|binding| {
+                !configured_vim_text_object_bindings_to_preserve.contains(binding)
+            });
+        }
 
         let pager = PagerKeymap {
             scroll_up: resolve_local!(keymap, defaults, pager, scroll_up),
@@ -1245,6 +1299,8 @@ impl RuntimeKeymap {
                 ],
                 single_quote: default_bindings![plain(KeyCode::Char('\''))],
                 backtick: default_bindings![plain(KeyCode::Char('`'))],
+                sentence: default_bindings![plain(KeyCode::Char('s'))],
+                paragraph: default_bindings![plain(KeyCode::Char('p'))],
                 cancel: default_bindings![plain(KeyCode::Esc)],
             },
             pager: PagerKeymap {
@@ -1718,6 +1774,8 @@ impl RuntimeKeymap {
                 ("double_quote", self.vim_text_object.double_quote.as_slice()),
                 ("single_quote", self.vim_text_object.single_quote.as_slice()),
                 ("backtick", self.vim_text_object.backtick.as_slice()),
+                ("sentence", self.vim_text_object.sentence.as_slice()),
+                ("paragraph", self.vim_text_object.paragraph.as_slice()),
                 ("cancel", self.vim_text_object.cancel.as_slice()),
             ],
         )?;
@@ -2546,6 +2604,18 @@ mod tests {
         );
         assert_eq!(runtime.vim_operator.select_inner_text_object, Vec::new());
         assert_eq!(runtime.vim_operator.select_around_text_object, Vec::new());
+    }
+
+    #[test]
+    fn configured_legacy_vim_text_objects_prune_new_prose_defaults() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_text_object.word = Some(one("s"));
+        keymap.vim_text_object.big_word = Some(one("p"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.vim_text_object.sentence, Vec::new());
+        assert_eq!(runtime.vim_text_object.paragraph, Vec::new());
     }
 
     #[test]

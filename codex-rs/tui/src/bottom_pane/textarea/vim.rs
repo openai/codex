@@ -5,6 +5,7 @@ use crossterm::event::KeyEvent;
 use std::ops::Range;
 
 mod find;
+mod prose;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VimMode {
@@ -78,6 +79,8 @@ pub(super) enum VimTextObject {
     DoubleQuote,
     SingleQuote,
     Backtick,
+    Sentence,
+    Paragraph,
 }
 
 impl TextArea {
@@ -127,6 +130,12 @@ impl TextArea {
         if self.vim_text_object_keymap.backtick.is_pressed(event) {
             return Some(VimTextObject::Backtick);
         }
+        if self.vim_text_object_keymap.sentence.is_pressed(event) {
+            return Some(VimTextObject::Sentence);
+        }
+        if self.vim_text_object_keymap.paragraph.is_pressed(event) {
+            return Some(VimTextObject::Paragraph);
+        }
         None
     }
 
@@ -144,6 +153,8 @@ impl TextArea {
             VimTextObject::DoubleQuote => self.quoted_text_object_range(scope, '"'),
             VimTextObject::SingleQuote => self.quoted_text_object_range(scope, '\''),
             VimTextObject::Backtick => self.quoted_text_object_range(scope, '`'),
+            VimTextObject::Sentence => self.sentence_text_object_range(scope),
+            VimTextObject::Paragraph => self.paragraph_text_object_range(scope),
         }
     }
 

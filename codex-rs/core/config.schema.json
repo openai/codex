@@ -2884,7 +2884,9 @@
               "brackets": null,
               "cancel": null,
               "double_quote": null,
+              "paragraph": null,
               "parentheses": null,
+              "sentence": null,
               "single_quote": null,
               "word": null
             }
@@ -3594,7 +3596,9 @@
             "brackets": null,
             "cancel": null,
             "double_quote": null,
+            "paragraph": null,
             "parentheses": null,
+            "sentence": null,
             "single_quote": null,
             "word": null
           }
@@ -4284,6 +4288,14 @@
           ],
           "description": "Text object: double quotes."
         },
+        "paragraph": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: paragraph."
+        },
         "parentheses": {
           "allOf": [
             {
@@ -4291,6 +4303,14 @@
             }
           ],
           "description": "Text object: parentheses."
+        },
+        "sentence": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: sentence."
         },
         "single_quote": {
           "allOf": [

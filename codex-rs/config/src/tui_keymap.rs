@@ -329,6 +329,10 @@ pub struct TuiVimTextObjectKeymap {
     pub single_quote: Option<KeybindingsSpec>,
     /// Text object: backticks.
     pub backtick: Option<KeybindingsSpec>,
+    /// Text object: sentence.
+    pub sentence: Option<KeybindingsSpec>,
+    /// Text object: paragraph.
+    pub paragraph: Option<KeybindingsSpec>,
     /// Cancel the pending text-object command.
     pub cancel: Option<KeybindingsSpec>,
 }
