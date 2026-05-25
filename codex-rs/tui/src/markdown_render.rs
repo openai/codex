@@ -22,8 +22,9 @@
 //!    alignment count.
 //! 3. **Compute column widths** -- allocate widths with content-aware
 //!    priority and iterative shrinking.
-//! 4. **Render box grid** -- Unicode borders (`┌───┬───┐`) or fallback to pipe
-//!    format when the minimum cannot fit.
+//! 4. **Render row-separated layout** -- theme-accented bold headers, a
+//!    heavier segmented header rule, and low-contrast segmented body
+//!    separators, or fallback to pipe format when the minimum cannot fit.
 //! 5. **Append spillover** -- extracted spillover rows rendered as plain text
 //!    after the table.
 //!
@@ -36,9 +37,11 @@
 //! preserved last.  When even 3-char-wide columns cannot fit, the table falls
 //! back to pipe-delimited format.
 
+use crate::render::highlight::foreground_style_for_scopes;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::push_owned_lines;
+use crate::style::table_separator_style;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::word_wrap_line;
@@ -65,6 +68,11 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
+
+const TABLE_COLUMN_GAP: usize = 2;
+const TABLE_CELL_PADDING: usize = 1;
+const TABLE_HEADER_SEPARATOR_CHAR: char = '━';
+const TABLE_BODY_SEPARATOR_CHAR: char = '─';
 
 struct MarkdownStyles {
     h1: Style,
@@ -207,7 +215,7 @@ impl TableState {
 
 /// Rendered table output split by wrapping behavior.
 ///
-/// `table_lines` are either prewrapped grid rows (box rendering) or pipe
+/// `table_lines` are either prewrapped aligned rows or pipe
 /// fallback rows that should still pass through normal wrapping.
 /// `spillover_lines` are prose rows extracted from parser artifacts and should
 /// be routed through normal wrapping.
@@ -260,7 +268,7 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 /// Render markdown constrained to a known terminal width.
 ///
 /// The renderer preserves table structure when possible and falls back to
-/// pipe-table output when a box table cannot fit the available width. Passing
+/// pipe-table output when an aligned table cannot fit the available width. Passing
 /// `None` keeps intrinsic line widths and disables width-driven wrapping in the
 /// markdown writer. Local file links render relative to the current process
 /// working directory.
@@ -982,13 +990,12 @@ where
         }
     }
 
-    /// Convert a completed `TableState` into styled `Line`s with Unicode
-    /// box-drawing borders.
+    /// Convert a completed `TableState` into styled, row-separated `Line`s.
     ///
     /// Pipeline: filter spillover rows -> normalize column counts -> compute
-    /// column widths -> render box grid (or fall back to pipe format if the
+    /// column widths -> render aligned rows (or fall back to pipe format if the
     /// minimum column widths exceed available terminal width). Spillover rows
-    /// are appended as plain text after the table grid.
+    /// are appended as plain text after the table.
     ///
     /// Falls back to `render_table_pipe_fallback` (raw `| A | B |` format)
     /// when `compute_column_widths` returns `None` (terminal too narrow for
@@ -1048,25 +1055,38 @@ where
             };
         };
 
-        let border_style = Style::new().dim();
-        let mut out = Vec::with_capacity(3 + rows.len() * 2);
-        out.push(self.render_border_line('┌', '┬', '┐', &column_widths, border_style));
+        let header_style =
+            foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
+                .unwrap_or(self.styles.strong)
+                .bold();
+        let separator_style = table_separator_style();
+        let mut out = Vec::with_capacity(2 + rows.len() * 2);
         out.extend(self.render_table_row(
             &header,
             &column_widths,
             &table_state.alignments,
-            border_style,
+            header_style,
         ));
-        out.push(self.render_border_line('├', '┼', '┤', &column_widths, border_style));
-        for row in &rows {
+        out.push(Self::render_table_separator(
+            &column_widths,
+            TABLE_HEADER_SEPARATOR_CHAR,
+            separator_style,
+        ));
+        for (row_idx, row) in rows.iter().enumerate() {
             out.extend(self.render_table_row(
                 row,
                 &column_widths,
                 &table_state.alignments,
-                border_style,
+                Style::default(),
             ));
+            if row_idx + 1 < rows.len() {
+                out.push(Self::render_table_separator(
+                    &column_widths,
+                    TABLE_BODY_SEPARATOR_CHAR,
+                    separator_style,
+                ));
+            }
         }
-        out.push(self.render_border_line('└', '┴', '┘', &column_widths, border_style));
         RenderedTableLines {
             table_lines: out,
             table_lines_prewrapped: true,
@@ -1079,17 +1099,19 @@ where
         row.resize(column_count, TableCell::default());
     }
 
-    /// subtracts the space eaten by border characters
+    /// Subtract horizontal gutters and per-cell padding from the content budget.
     fn available_table_width(&self, column_count: usize) -> Option<usize> {
         self.wrap_width.map(|wrap_width| {
             let prefix_width =
                 Self::spans_display_width(&self.prefix_spans(self.pending_marker_line));
-            let reserved = prefix_width + 1 + (column_count * 3);
+            let reserved = prefix_width
+                + (column_count.saturating_sub(1) * TABLE_COLUMN_GAP)
+                + (column_count * TABLE_CELL_PADDING * 2);
             wrap_width.saturating_sub(reserved)
         })
     }
 
-    /// Allocate column widths for box-drawing table rendering.
+    /// Allocate column widths for aligned, row-separated table rendering.
     ///
     /// Each column starts at its natural (max cell content) width, then columns
     /// are iteratively shrunk one character at a time until the total fits within
@@ -1277,25 +1299,19 @@ where
         }
     }
 
-    fn render_border_line(
-        &self,
-        left: char,
-        sep: char,
-        right: char,
+    fn render_table_separator(
         column_widths: &[usize],
+        separator_char: char,
         style: Style,
     ) -> Line<'static> {
-        let mut spans = Vec::with_capacity(column_widths.len() * 2 + 1);
-        spans.push(Span::styled(String::from(left), style));
-        for (idx, width) in column_widths.iter().enumerate() {
-            spans.push(Span::styled("─".repeat(*width + 2), style));
-            if idx + 1 == column_widths.len() {
-                spans.push(Span::styled(String::from(right), style));
-            } else {
-                spans.push(Span::styled(String::from(sep), style));
-            }
-        }
-        Line::from(spans)
+        let segment_char = separator_char.to_string();
+        let gap = " ".repeat(TABLE_COLUMN_GAP);
+        let text = column_widths
+            .iter()
+            .map(|width| segment_char.repeat(*width + (TABLE_CELL_PADDING * 2)))
+            .collect::<Vec<_>>()
+            .join(&gap);
+        Line::from(Span::styled(text, style))
     }
 
     fn render_table_row(
@@ -1303,7 +1319,7 @@ where
         row: &[TableCell],
         column_widths: &[usize],
         alignments: &[Alignment],
-        border_style: Style,
+        row_style: Style,
     ) -> Vec<Line<'static>> {
         let wrapped_cells: Vec<Vec<Line<'static>>> = row
             .iter()
@@ -1314,10 +1330,21 @@ where
 
         let mut out = Vec::with_capacity(row_height);
         for row_line in 0..row_height {
+            let Some(last_visible_column) = wrapped_cells.iter().rposition(|lines| {
+                lines
+                    .get(row_line)
+                    .is_some_and(|line| Self::line_display_width(line) > 0)
+            }) else {
+                out.push(Line::default().style(row_style));
+                continue;
+            };
             let mut spans = Vec::new();
-            spans.push(Span::styled("│", border_style));
-            for (column, width) in column_widths.iter().enumerate() {
-                spans.push(Span::raw(" "));
+            for (column, width) in column_widths
+                .iter()
+                .enumerate()
+                .take(last_visible_column + 1)
+            {
+                spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING)));
                 let line = wrapped_cells[column]
                     .get(row_line)
                     .cloned()
@@ -1333,13 +1360,18 @@ where
                     spans.push(Span::raw(" ".repeat(left_padding)));
                 }
                 spans.extend(line.spans);
-                if right_padding > 0 {
+                let is_last_column = column == last_visible_column;
+                if right_padding > 0 && !is_last_column {
                     spans.push(Span::raw(" ".repeat(right_padding)));
                 }
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled("│", border_style));
+                if !is_last_column {
+                    spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING)));
+                }
+                if !is_last_column {
+                    spans.push(Span::raw(" ".repeat(TABLE_COLUMN_GAP)));
+                }
             }
-            out.push(Line::from(spans));
+            out.push(Line::from(spans).style(row_style));
         }
         out
     }
@@ -1635,8 +1667,8 @@ where
     /// Push a line that has already been laid out at the correct width, skipping
     /// word wrapping.
     ///
-    /// Table lines are pre-formatted with exact column widths and box-drawing
-    /// borders. Passing them through `word_wrap_line` would break the grid at
+    /// Table lines are pre-formatted with exact column widths and separators.
+    /// Passing them through `word_wrap_line` would break the layout at
     /// arbitrary positions. This method prepends the indent/blockquote prefix
     /// and pushes directly to `self.text.lines`.
     fn is_blockquote_active(&self) -> bool {

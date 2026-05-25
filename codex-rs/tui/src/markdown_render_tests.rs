@@ -1,4 +1,5 @@
 use pretty_assertions::assert_eq;
+use ratatui::style::Modifier;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -1471,7 +1472,7 @@ fn code_block_preserves_trailing_blank_lines() {
 }
 
 #[test]
-fn table_renders_unicode_box() {
+fn table_renders_app_style_rows_with_themed_bold_header() {
     let md = "| A | B |\n|---|---|\n| 1 | 2 |\n";
     let text = render_markdown_text(md);
     let lines: Vec<String> = text
@@ -1483,12 +1484,32 @@ fn table_renders_unicode_box() {
     assert_eq!(
         lines,
         vec![
-            "┌─────┬─────┐".to_string(),
-            "│ A   │ B   │".to_string(),
-            "├─────┼─────┤".to_string(),
-            "│ 1   │ 2   │".to_string(),
-            "└─────┴─────┘".to_string(),
+            " A      B".to_string(),
+            "━━━━━  ━━━━━".to_string(),
+            " 1      2".to_string(),
         ]
+    );
+    assert!(
+        text.lines[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+    assert!(
+        text.lines[0].style.fg.is_some(),
+        "expected the syntax theme to provide a table header accent"
+    );
+    assert!(
+        text.lines[1].spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::DIM)
+    );
+    assert!(
+        !text.lines[2]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
     );
 }
 
@@ -1502,13 +1523,13 @@ fn table_alignment_respects_markers() {
         .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
         .collect();
 
-    assert_eq!(lines[1], "│ Left │ Center │ Right │");
-    assert_eq!(lines[3], "│ a    │   b    │     c │");
+    assert_eq!(lines[0], " Left    Center    Right");
+    assert_eq!(lines[2], " a         b           c");
 }
 
 #[test]
-fn table_wraps_cell_content_when_width_is_narrow() {
-    let md = "| Key | Description |\n| --- | --- |\n| -v | Enable very verbose logging output for debugging |\n";
+fn table_separates_logical_rows_after_wrapped_content() {
+    let md = "| Key | Description |\n| --- | --- |\n| -v | Enable very verbose logging output for debugging |\n| -q | Quiet output |\n";
     let text = crate::markdown_render::render_markdown_text_with_width(md, Some(30));
     let lines: Vec<String> = text
         .lines
@@ -1516,13 +1537,32 @@ fn table_wraps_cell_content_when_width_is_narrow() {
         .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
         .collect();
 
-    assert!(lines[0].starts_with('┌') && lines[0].ends_with('┐'));
     assert!(
         lines
             .iter()
             .any(|line| line.contains("Enable very verbose"))
             && lines.iter().any(|line| line.contains("logging output")),
         "expected wrapped row content: {lines:?}"
+    );
+    let separator_indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            ((line.contains('━') || line.contains('─'))
+                && line.chars().all(|ch| matches!(ch, '━' | '─' | ' ')))
+            .then_some(idx)
+        })
+        .collect();
+    let wrapped_row_end = lines
+        .iter()
+        .position(|line| line.contains("logging output"))
+        .expect("expected final wrapped line");
+    assert_eq!(separator_indices.len(), 2);
+    assert!(separator_indices[1] > wrapped_row_end);
+    assert!(
+        !lines
+            .last()
+            .is_some_and(|line| line.contains('━') || line.contains('─'))
     );
 }
 
@@ -1553,7 +1593,7 @@ fn table_inside_blockquote_has_quote_prefix() {
         .collect();
 
     assert!(lines.iter().all(|line| line.starts_with("> ")));
-    assert!(lines.iter().any(|line| line.contains("┌─────┬─────┐")));
+    assert!(lines.iter().any(|line| line.contains("━━━━━  ━━━━━")));
 }
 
 #[test]
@@ -1580,5 +1620,9 @@ fn table_falls_back_to_pipe_rendering_if_it_cannot_fit() {
         .collect();
 
     assert!(lines.first().is_some_and(|line| line.starts_with('|')));
-    assert!(!lines.iter().any(|line| line.contains('┌')));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains('━') || line.contains('─'))
+    );
 }

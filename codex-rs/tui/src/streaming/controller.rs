@@ -1362,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_renders_unicode_for_multi_table_response_shape() {
+    fn controller_renders_separators_for_multi_table_response_shape() {
         let source = "Absolutely. Here are several different Markdown table patterns you can use for rendering tests.\n\n| Name  | Role      |
   Location |\n|-------|-----------|----------|\n| Ava   | Engineer  | NYC      |\n| Malik | Designer  | Berlin   |\n| Priya | PM        | Remote
   |\n\n| Item        | Qty | Price | In Stock |\n|:------------|----:|------:|:--------:|\n| Keyboard    |   2 | 49.99 |    Yes   |\n| Mouse       |  10
@@ -1378,13 +1378,13 @@ mod tests {
         let deltas = chunked.iter().map(String::as_str).collect::<Vec<_>>();
         let streamed = collect_streamed_lines(&deltas, Some(120));
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border in streamed output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator in streamed output: {streamed:?}"
         );
     }
 
     #[test]
-    fn controller_renders_unicode_for_no_outer_pipes_table_shape() {
+    fn controller_renders_separators_for_no_outer_pipes_table_shape() {
         let source = "### 1) Basic\n\n| Name | Role | Active |\n|---|---|---|\n| Alice | Engineer | Yes |\n| Bob | Designer | No |\n\n### 2) No outer
   pipes\n\nCol A | Col B | Col C\n--- | --- | ---\nx | y | z\n10 | 20 | 30\n\n### 3) Another table\n\n| Key | Value |\n|---|---|\n| a | b |\n";
 
@@ -1406,6 +1406,10 @@ mod tests {
         assert!(
             !has_raw_no_outer_header,
             "no-outer-pipes header should not remain raw in final streamed output: {streamed:?}"
+        );
+        assert!(
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator in final streamed output: {streamed:?}"
         );
     }
 
@@ -1429,8 +1433,8 @@ mod tests {
 
         assert_eq!(streamed, expected);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border for no-outer-pipes streaming: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator for no-outer-pipes streaming: {streamed:?}"
         );
         assert!(
             !streamed
@@ -1458,8 +1462,8 @@ mod tests {
 
         assert_eq!(streamed, expected);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border for two-column no-outer table: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator for two-column no-outer table: {streamed:?}"
         );
         assert!(
             !streamed.iter().any(|line| line.trim() == "A | B"),
@@ -1490,8 +1494,8 @@ mod tests {
         assert!(
             streamed
                 .iter()
-                .any(|line| line.contains("┌───────┬───────┬───────┐")),
-            "expected converted no-outer table border in streamed output: {streamed:?}"
+                .any(|line| line.contains(" Col A    Col B    Col C")),
+            "expected converted no-outer table header in streamed output: {streamed:?}"
         );
     }
 
@@ -1513,8 +1517,8 @@ mod tests {
 
         assert_eq!(streamed, expected);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border in streamed output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator in streamed output: {streamed:?}"
         );
         assert!(
             !streamed.iter().any(|line| line.trim() == "| A | B |"),
@@ -1542,8 +1546,8 @@ mod tests {
 
         assert_eq!(streamed, expected);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border in streamed output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator in streamed output: {streamed:?}"
         );
         assert!(
             !streamed
@@ -1621,8 +1625,10 @@ mod tests {
             "expected code-fenced pipe line to remain raw: {streamed:?}"
         );
         assert!(
-            !streamed.iter().any(|line| line.contains('┌')),
-            "did not expect unicode table border for non-markdown fence: {streamed:?}"
+            !streamed
+                .iter()
+                .any(|line| line.contains('━') || line.contains('─')),
+            "did not expect a table separator for non-markdown fence: {streamed:?}"
         );
     }
 
@@ -1643,10 +1649,8 @@ mod tests {
 
         assert_eq!(streamed, baseline);
         assert!(
-            streamed
-                .iter()
-                .any(|line| line.contains('│') || line.contains('└') || line.contains('┌')),
-            "expected unicode table box drawing chars in plan streamed output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separators in plan streamed output: {streamed:?}"
         );
         assert!(
             !streamed
@@ -1675,10 +1679,8 @@ mod tests {
 
         assert_eq!(streamed, baseline);
         assert!(
-            streamed
-                .iter()
-                .any(|line| line.contains('│') || line.contains('└') || line.contains('┌')),
-            "expected unicode table box drawing chars in fenced plan output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separators in fenced plan output: {streamed:?}"
         );
         assert!(
             !streamed

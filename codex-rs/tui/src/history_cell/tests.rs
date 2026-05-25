@@ -278,10 +278,8 @@ fn proposed_plan_cell_renders_markdown_table() {
     let rendered = render_lines(&plan.display_lines(/*width*/ 80));
 
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains('│') || line.contains('┌')),
-        "expected boxed table in proposed plan output: {rendered:?}"
+        rendered.iter().any(|line| line.contains('━')),
+        "expected separated table in proposed plan output: {rendered:?}"
     );
     assert!(
         !rendered
@@ -308,10 +306,8 @@ fn proposed_plan_cell_unwraps_markdown_fenced_table() {
     let rendered = render_lines(&plan.display_lines(/*width*/ 80));
 
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains('│') || line.contains('┌')),
-        "expected boxed table for markdown-fenced proposed plan output: {rendered:?}"
+        rendered.iter().any(|line| line.contains('━')),
+        "expected separated table for markdown-fenced proposed plan output: {rendered:?}"
     );
     assert!(
         !rendered.iter().any(|line| line.trim() == "```markdown"),
