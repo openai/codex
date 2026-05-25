@@ -183,8 +183,7 @@ impl WebsocketState {
             return ClientSegmentObservation::Dropped;
         }
 
-        let observation = self.client_segment_reassembler.observe(client_envelope);
-        observation
+        self.client_segment_reassembler.observe(client_envelope)
     }
 
     fn record_client_message_delivery(
