@@ -2845,6 +2845,7 @@
               "open_line_above": null,
               "open_line_below": null,
               "paste_after": null,
+              "repeat_change": null,
               "repeat_find": null,
               "repeat_find_reverse": null,
               "select_register": null,
@@ -3553,6 +3554,7 @@
             "open_line_above": null,
             "open_line_below": null,
             "paste_after": null,
+            "repeat_change": null,
             "repeat_find": null,
             "repeat_find_reverse": null,
             "select_register": null,
@@ -4020,6 +4022,14 @@
             }
           ],
           "description": "Paste after cursor (`p`)."
+        },
+        "repeat_change": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat the most recent text-changing Vim command (`.`)."
         },
         "repeat_find": {
           "allOf": [

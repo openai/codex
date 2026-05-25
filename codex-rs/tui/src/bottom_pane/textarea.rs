@@ -40,11 +40,14 @@ use unicode_width::UnicodeWidthStr;
 
 mod vim;
 use self::vim::VimFind;
+use self::vim::VimInsertRecording;
 use self::vim::VimMode;
 use self::vim::VimMotion;
 use self::vim::VimOperator;
 use self::vim::VimPending;
 use self::vim::VimRegisterSelection;
+use self::vim::VimRepeatChange;
+use self::vim::VimRepeatTarget;
 use self::vim::VimTextObjectScope;
 use self::vim::VimVisualKind;
 
@@ -121,6 +124,9 @@ pub(crate) struct TextArea {
     vim_operator_count: Option<usize>,
     vim_last_find: Option<VimFind>,
     vim_visual_anchor: Option<usize>,
+    vim_last_change: Option<VimRepeatChange>,
+    vim_insert_recording: Option<VimInsertRecording>,
+    vim_replaying_change: bool,
     editor_keymap: EditorKeymap,
     vim_normal_keymap: VimNormalKeymap,
     vim_operator_keymap: VimOperatorKeymap,
@@ -169,6 +175,9 @@ impl TextArea {
             vim_operator_count: None,
             vim_last_find: None,
             vim_visual_anchor: None,
+            vim_last_change: None,
+            vim_insert_recording: None,
+            vim_replaying_change: false,
             editor_keymap: defaults.editor,
             vim_normal_keymap: defaults.vim_normal,
             vim_operator_keymap: defaults.vim_operator,
@@ -211,6 +220,7 @@ impl TextArea {
     }
 
     fn set_text_inner(&mut self, text: &str, elements: Option<&[UserTextElement]>) {
+        self.invalidate_vim_repeat_change();
         // Stage 1: replace the raw text and keep the cursor in a safe byte range.
         self.text = text.to_string();
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
@@ -255,6 +265,7 @@ impl TextArea {
     pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
         self.vim_enabled = enabled;
         self.vim_pending = VimPending::None;
+        self.vim_insert_recording = None;
         self.clear_vim_counts();
         self.clear_vim_register_selection();
         self.clear_vim_visual_selection();
@@ -671,15 +682,14 @@ impl TextArea {
 
     fn handle_vim_insert(&mut self, event: KeyEvent) {
         if matches!(event.code, KeyCode::Esc) {
-            let bol = self.beginning_of_current_line();
-            if self.cursor_pos > bol {
-                self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos).max(bol);
-            }
-            self.enter_vim_normal_mode();
+            self.exit_vim_insert_after_change();
+            self.complete_vim_change_recording();
             return;
         }
+        let edit = self.vim_insert_edit_for_event(event);
         let keymap = self.editor_keymap.clone();
         self.input_with_keymap(event, &keymap);
+        self.record_vim_insert_edit(edit);
     }
 
     fn handle_vim_normal(&mut self, event: KeyEvent) {
@@ -836,9 +846,15 @@ impl TextArea {
             self.repeat_vim_find(/*operator*/ None, /*reverse*/ true, count);
             return;
         }
+        if self.vim_normal_keymap.repeat_change.is_pressed(event) {
+            self.repeat_vim_change();
+            return;
+        }
         if self.vim_normal_keymap.delete_char.is_pressed(event) {
             let count = self.take_vim_count();
+            let previous_len = self.text.len();
             self.delete_forward_kill(count);
+            self.record_vim_delete_if_changed(VimRepeatTarget::Characters(count), previous_len);
             self.clear_vim_register_selection();
             return;
         }
@@ -857,12 +873,14 @@ impl TextArea {
             self.delete_forward_kill(count);
             self.clear_vim_register_selection();
             self.vim_mode = VimMode::Insert;
+            self.begin_vim_change_recording(VimRepeatTarget::Characters(count));
             return;
         }
         if self.vim_normal_keymap.substitute_line.is_pressed(event) {
             let count = self.take_vim_count();
             self.vim_change_current_lines(count);
             self.clear_vim_register_selection();
+            self.begin_vim_change_recording(VimRepeatTarget::Lines(count));
             return;
         }
         if self.vim_normal_keymap.yank_line.is_pressed(event) {
@@ -909,7 +927,9 @@ impl TextArea {
     fn handle_vim_operator(&mut self, op: VimOperator, event: KeyEvent) -> bool {
         if op == VimOperator::Delete && self.vim_operator_keymap.delete_line.is_pressed(event) {
             let count = self.take_vim_operator_count();
+            let previous_len = self.text.len();
             self.vim_kill_current_lines(count);
+            self.record_vim_delete_if_changed(VimRepeatTarget::Lines(count), previous_len);
             self.clear_vim_register_selection();
             return true;
         }
@@ -922,6 +942,7 @@ impl TextArea {
         if op == VimOperator::Change && self.vim_operator_keymap.change_line.is_pressed(event) {
             let count = self.take_vim_operator_count();
             self.vim_change_current_lines(count);
+            self.begin_vim_change_recording(VimRepeatTarget::Lines(count));
             self.clear_vim_register_selection();
             return true;
         }
@@ -987,7 +1008,12 @@ impl TextArea {
         };
         let count = self.take_vim_operator_count();
         if let Some(range) = self.counted_text_object_range(object, scope, count) {
-            self.apply_vim_operator_to_range(op, range);
+            let target = VimRepeatTarget::TextObject {
+                object,
+                scope,
+                count,
+            };
+            self.apply_vim_operator_to_range(op, range, Some(target));
         }
         self.clear_vim_register_selection();
         true
@@ -1033,6 +1059,7 @@ impl TextArea {
     }
 
     fn apply_vim_operator(&mut self, op: VimOperator, motion: VimMotion, count: usize) {
+        let previous_len = self.text.len();
         match op {
             VimOperator::Delete => {
                 if let Some(range) = self.range_for_motion(motion, count) {
@@ -1053,6 +1080,14 @@ impl TextArea {
                 }
             }
         }
+        let target = VimRepeatTarget::Motion { motion, count };
+        match op {
+            VimOperator::Delete => self.record_vim_delete_if_changed(target, previous_len),
+            VimOperator::Change if self.vim_mode == VimMode::Insert => {
+                self.begin_vim_change_recording(target);
+            }
+            VimOperator::Yank | VimOperator::Change => {}
+        }
         self.clear_vim_register_selection();
     }
 
@@ -1070,13 +1105,28 @@ impl TextArea {
         self.range_for_motion(motion, count)
     }
 
-    fn apply_vim_operator_to_range(&mut self, op: VimOperator, range: Range<usize>) {
+    fn apply_vim_operator_to_range(
+        &mut self,
+        op: VimOperator,
+        range: Range<usize>,
+        repeat_target: Option<VimRepeatTarget>,
+    ) {
+        let previous_len = self.text.len();
         match op {
             VimOperator::Delete => self.kill_range(range),
             VimOperator::Yank => self.yank_range(range),
             VimOperator::Change => {
                 self.kill_range(range);
                 self.vim_mode = VimMode::Insert;
+            }
+        }
+        if let Some(target) = repeat_target {
+            match op {
+                VimOperator::Delete => self.record_vim_delete_if_changed(target, previous_len),
+                VimOperator::Change if self.vim_mode == VimMode::Insert => {
+                    self.begin_vim_change_recording(target);
+                }
+                VimOperator::Yank | VimOperator::Change => {}
             }
         }
         self.clear_vim_register_selection();
@@ -1604,6 +1654,7 @@ impl TextArea {
         if start > end || end > self.text.len() {
             return false;
         }
+        self.invalidate_vim_repeat_change();
 
         let removed_len = end - start;
         let inserted_len = new.len();
@@ -1655,6 +1706,7 @@ impl TextArea {
     }
 
     pub fn insert_element(&mut self, text: &str) -> u64 {
+        self.invalidate_vim_repeat_change();
         let start = self.clamp_pos_for_insertion(self.cursor_pos);
         self.insert_str_at(start, text);
         let end = start + text.len();
@@ -1666,6 +1718,7 @@ impl TextArea {
 
     #[cfg(not(target_os = "linux"))]
     pub fn insert_named_element(&mut self, text: &str, id: String) {
+        self.invalidate_vim_repeat_change();
         let start = self.clamp_pos_for_insertion(self.cursor_pos);
         self.insert_str_at(start, text);
         let end = start + text.len();
@@ -1681,6 +1734,7 @@ impl TextArea {
             .iter()
             .position(|e| e.name.as_deref() == Some(id))
         {
+            self.invalidate_vim_repeat_change();
             let range = self.elements[idx].range.clone();
             self.replace_range_raw(range, text);
             self.elements.retain(|e| e.name.as_deref() != Some(id));
@@ -1699,6 +1753,7 @@ impl TextArea {
             .iter()
             .position(|e| e.name.as_deref() == Some(id))
         {
+            self.invalidate_vim_repeat_change();
             let old_range = self.elements[elem_idx].range.clone();
             let start = old_range.start;
             self.replace_range_raw(old_range, text);
@@ -1757,6 +1812,7 @@ impl TextArea {
             return None;
         }
         let id = self.add_element(start..end);
+        self.invalidate_vim_repeat_change();
         Some(id)
     }
 
@@ -1769,7 +1825,11 @@ impl TextArea {
         let len_before = self.elements.len();
         self.elements
             .retain(|elem| elem.range.start != start || elem.range.end != end);
-        len_before != self.elements.len()
+        let removed = len_before != self.elements.len();
+        if removed {
+            self.invalidate_vim_repeat_change();
+        }
+        removed
     }
 
     fn next_element_id(&mut self) -> u64 {
@@ -2989,6 +3049,119 @@ mod tests {
         assert_eq!(t.text(), "keep");
         assert_eq!(t.vim_visual_selection_range(), None);
         assert_eq!(t.vim_mode_label(), Some("Normal"));
+    }
+
+    #[test]
+    fn vim_dot_repeats_deletes_and_change_insert_edits() {
+        let mut t = ta_with("one two three");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "three");
+
+        let mut t = ta_with("one two");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        t.set_cursor(/*pos*/ "bar ".len());
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "bar bar");
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+    }
+
+    #[test]
+    fn vim_dot_repeats_paste_and_visual_changes() {
+        let mut t = ta_with("a");
+        t.kill_buffer = "!".to_string();
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "a!!");
+
+        let mut t = ta_with("one two");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        t.set_cursor(/*pos*/ "x ".len());
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "x x");
+
+        let mut t = ta_with("one\ntwo");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        t.set_cursor(/*pos*/ "x\n".len());
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "x\nx");
+    }
+
+    #[test]
+    fn vim_dot_repeats_substitutions_and_find_deletes() {
+        let mut t = ta_with("ab cd");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        t.set_cursor(/*pos*/ "Xb ".len());
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "Xb Xd");
+
+        let mut t = ta_with("one\ntwo");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        t.set_cursor(/*pos*/ "x\n".len());
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "x\nx");
+
+        let mut t = ta_with("a,b,c");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "c");
+    }
+
+    #[test]
+    fn vim_atomic_element_updates_invalidate_dot_repeat() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "bc");
+
+        t.add_element_range(/*range*/ 0..1).expect("valid element");
+        t.set_cursor(/*pos*/ 1);
+        t.input(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "bc");
     }
 
     #[test]

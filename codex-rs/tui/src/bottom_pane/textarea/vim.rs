@@ -8,6 +8,7 @@ mod count;
 mod find;
 mod prose;
 mod register;
+mod repeat;
 mod tag;
 mod visual;
 
@@ -83,6 +84,69 @@ pub(super) enum VimFindKind {
 pub(super) struct VimFind {
     pub(super) kind: VimFindKind,
     pub(super) target: char,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum VimRepeatTarget {
+    Characters(usize),
+    Lines(usize),
+    Motion {
+        motion: VimMotion,
+        count: usize,
+    },
+    TextObject {
+        object: VimTextObject,
+        scope: VimTextObjectScope,
+        count: usize,
+    },
+    Find {
+        find: VimFind,
+        count: usize,
+    },
+    Visual {
+        kind: VimVisualKind,
+        atomic_units: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum VimInsertEdit {
+    Insert(String),
+    DeleteBackward,
+    DeleteForward,
+    DeleteBackwardWord,
+    DeleteForwardWord,
+    KillLineStart,
+    KillWholeLine,
+    KillLineEnd,
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
+    MoveWordLeft,
+    MoveWordRight,
+    MoveLineStart { move_up_at_bol: bool },
+    MoveLineEnd { move_down_at_eol: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct VimInsertRecording {
+    pub(super) target: VimRepeatTarget,
+    pub(super) edits: Vec<VimInsertEdit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum VimRepeatChange {
+    Delete(VimRepeatTarget),
+    Change {
+        target: VimRepeatTarget,
+        edits: Vec<VimInsertEdit>,
+    },
+    Paste {
+        text: String,
+        kind: super::KillBufferKind,
+        count: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

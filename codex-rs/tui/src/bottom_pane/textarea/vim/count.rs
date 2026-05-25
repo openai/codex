@@ -133,7 +133,7 @@ impl TextArea {
         self.vim_mode = super::VimMode::Insert;
     }
 
-    fn current_line_range_with_count(&self, count: usize) -> Range<usize> {
+    pub(in super::super) fn current_line_range_with_count(&self, count: usize) -> Range<usize> {
         let start = self.beginning_of_current_line();
         let mut end = self.current_line_range_with_newline().end;
         for _ in 1..count {

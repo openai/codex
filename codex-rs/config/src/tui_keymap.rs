@@ -231,6 +231,8 @@ pub struct TuiVimNormalKeymap {
     pub repeat_find: Option<KeybindingsSpec>,
     /// Repeat the most recent find/till motion in the opposite direction (`,`).
     pub repeat_find_reverse: Option<KeybindingsSpec>,
+    /// Repeat the most recent text-changing Vim command (`.`).
+    pub repeat_change: Option<KeybindingsSpec>,
     /// Delete character under cursor (`x`).
     pub delete_char: Option<KeybindingsSpec>,
     /// Delete from cursor to end of line (`D`).

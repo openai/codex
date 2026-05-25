@@ -225,6 +225,15 @@ impl TextArea {
         } else {
             KillBufferKind::Characterwise
         };
+        let repeat_target = self.visual_repeat_target(
+            if linewise {
+                VimVisualKind::Linewise
+            } else {
+                VimVisualKind::Characterwise
+            },
+            range.clone(),
+        );
+        let previous_len = self.text.len();
         let start = range.start;
         match operator {
             VimOperator::Delete => self.kill_range_with_kind(range, kind),
@@ -236,9 +245,13 @@ impl TextArea {
         self.clear_vim_register_selection();
         if operator == VimOperator::Change {
             self.vim_mode = VimMode::Insert;
+            self.begin_vim_change_recording(repeat_target);
         } else {
             self.vim_mode = VimMode::Normal;
             self.set_cursor(start.min(self.vim_normal_end_cursor()));
+            if operator == VimOperator::Delete {
+                self.record_vim_delete_if_changed(repeat_target, previous_len);
+            }
         }
     }
 

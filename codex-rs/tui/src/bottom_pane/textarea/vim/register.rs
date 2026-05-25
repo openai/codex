@@ -66,8 +66,10 @@ impl TextArea {
         if source.0.is_empty() {
             return;
         }
+        let previous_len = self.text.len();
         for _ in 0..count {
             self.paste_text_after_cursor(&source.0, source.1);
         }
+        self.record_vim_paste_if_changed(source.0, source.1, count, previous_len);
     }
 }

@@ -2,6 +2,7 @@ use super::super::TextArea;
 use super::VimFind;
 use super::VimFindKind;
 use super::VimOperator;
+use super::VimRepeatTarget;
 use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -102,7 +103,11 @@ impl TextArea {
     fn execute_vim_find(&mut self, operator: Option<VimOperator>, find: VimFind, count: usize) {
         if let Some(operator) = operator {
             if let Some(range) = self.range_for_find(find, count) {
-                self.apply_vim_operator_to_range(operator, range);
+                self.apply_vim_operator_to_range(
+                    operator,
+                    range,
+                    Some(VimRepeatTarget::Find { find, count }),
+                );
             }
         } else if let Some(target) = self.target_for_find(find, count) {
             self.set_cursor(target);

@@ -162,6 +162,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) till_backward: Vec<KeyBinding>,
     pub(crate) repeat_find: Vec<KeyBinding>,
     pub(crate) repeat_find_reverse: Vec<KeyBinding>,
+    pub(crate) repeat_change: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
     pub(crate) change_to_line_end: Vec<KeyBinding>,
@@ -523,6 +524,7 @@ impl RuntimeKeymap {
             till_backward: resolve_local!(keymap, defaults, vim_normal, till_backward),
             repeat_find: resolve_local!(keymap, defaults, vim_normal, repeat_find),
             repeat_find_reverse: resolve_local!(keymap, defaults, vim_normal, repeat_find_reverse),
+            repeat_change: resolve_local!(keymap, defaults, vim_normal, repeat_change),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
             change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
@@ -635,6 +637,10 @@ impl RuntimeKeymap {
                 vim_normal.repeat_find_reverse.as_slice(),
             ),
             (
+                keymap.vim_normal.repeat_change.as_ref(),
+                vim_normal.repeat_change.as_slice(),
+            ),
+            (
                 keymap.vim_normal.delete_char.as_ref(),
                 vim_normal.delete_char.as_slice(),
             ),
@@ -719,6 +725,11 @@ impl RuntimeKeymap {
         if keymap.vim_normal.repeat_find_reverse.is_none() {
             vim_normal
                 .repeat_find_reverse
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.repeat_change.is_none() {
+            vim_normal
+                .repeat_change
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
         }
         if keymap.vim_normal.select_register.is_none() {
@@ -1275,6 +1286,7 @@ impl RuntimeKeymap {
                 ],
                 repeat_find: default_bindings![plain(KeyCode::Char(';'))],
                 repeat_find_reverse: default_bindings![plain(KeyCode::Char(','))],
+                repeat_change: default_bindings![plain(KeyCode::Char('.'))],
                 delete_char: default_bindings![plain(KeyCode::Char('x'))],
                 delete_to_line_end: default_bindings![
                     shift(KeyCode::Char('d')),
@@ -1741,6 +1753,7 @@ impl RuntimeKeymap {
                     "repeat_find_reverse",
                     self.vim_normal.repeat_find_reverse.as_slice(),
                 ),
+                ("repeat_change", self.vim_normal.repeat_change.as_slice()),
                 ("delete_char", self.vim_normal.delete_char.as_slice()),
                 (
                     "delete_to_line_end",
@@ -2696,6 +2709,16 @@ mod tests {
 
         assert_eq!(runtime.vim_normal.enter_visual, Vec::new());
         assert_eq!(runtime.vim_normal.enter_visual_line, Vec::new());
+    }
+
+    #[test]
+    fn configured_legacy_vim_binding_prunes_repeat_change_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("."));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.vim_normal.repeat_change, Vec::new());
     }
 
     #[test]
