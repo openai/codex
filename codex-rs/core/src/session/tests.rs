@@ -1487,6 +1487,9 @@ async fn refresh_runtime_config_updates_runtime_refreshable_fields_and_keeps_ses
 enabled = false
 destructive_enabled = false
 
+[shell_environment_policy.set]
+CODEX_REFRESH_RUNTIME_CONFIG_TEST = "updated"
+
 [tool_suggest]
 disabled_tools = [
   { type = "connector", id = " calendar " },
@@ -1522,6 +1525,14 @@ disabled_tools = [
     assert_eq!(app.destructive_enabled, Some(false));
     assert_eq!(config.model, original.model);
     assert_eq!(config.notify, original.notify);
+    assert_eq!(
+        config
+            .permissions
+            .shell_environment_policy
+            .r#set
+            .get("CODEX_REFRESH_RUNTIME_CONFIG_TEST"),
+        Some(&"updated".to_string())
+    );
     assert_eq!(
         config.tool_suggest.disabled_tools,
         vec![
@@ -4631,6 +4642,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
+        mcp_startup_config_reload_checked: AtomicBool::new(false),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -6460,6 +6472,7 @@ where
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
+        mcp_startup_config_reload_checked: AtomicBool::new(false),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),

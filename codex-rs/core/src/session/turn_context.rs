@@ -375,6 +375,39 @@ fn local_time_context() -> (String, String) {
 }
 
 impl Session {
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "initial MCP discovery reads through the session-owned manager guard"
+    )]
+    async fn reload_config_after_mcp_startup_once(&self) {
+        if self
+            .mcp_startup_config_reload_checked
+            .load(Ordering::SeqCst)
+        {
+            return;
+        }
+
+        {
+            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            if !mcp_connection_manager.has_servers() {
+                return;
+            }
+        }
+
+        if self
+            .mcp_startup_config_reload_checked
+            .swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+
+        {
+            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            let _ = mcp_connection_manager.list_all_tools().await;
+        }
+        self.reload_user_config_layer().await;
+    }
+
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(
         session_configuration: &SessionConfiguration,
@@ -544,6 +577,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
+        self.reload_config_after_mcp_startup_once().await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
@@ -751,6 +785,7 @@ impl Session {
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
+        self.reload_config_after_mcp_startup_once().await;
         let session_configuration = {
             let state = self.state.lock().await;
             state.session_configuration.clone()

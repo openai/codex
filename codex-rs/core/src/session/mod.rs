@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -1461,6 +1462,25 @@ impl Session {
             config.config_layer_stack = config
                 .config_layer_stack
                 .with_user_layer_from(&next_config.config_layer_stack);
+            match config
+                .config_layer_stack
+                .effective_config()
+                .as_table()
+                .and_then(|table| table.get("shell_environment_policy"))
+                .cloned()
+            {
+                Some(value) => {
+                    match value.try_into::<codex_config::types::ShellEnvironmentPolicyToml>() {
+                        Ok(policy) => config.permissions.shell_environment_policy = policy.into(),
+                        Err(err) => warn!(
+                            "failed to parse shell_environment_policy while refreshing runtime config: {err}"
+                        ),
+                    }
+                }
+                None => {
+                    config.permissions.shell_environment_policy = ShellEnvironmentPolicy::default();
+                }
+            }
             config.tool_suggest =
                 resolve_tool_suggest_config_from_layer_stack(&config.config_layer_stack);
             let config = Arc::new(config);
