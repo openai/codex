@@ -10,6 +10,10 @@ use std::io;
 #[cfg(target_os = "macos")]
 use std::fs::OpenOptions;
 #[cfg(target_os = "macos")]
+use std::io::IsTerminal;
+#[cfg(target_os = "macos")]
+use std::mem::MaybeUninit;
+#[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "macos")]
 use std::os::fd::FromRawFd;
@@ -41,17 +45,25 @@ impl TerminalStderrGuard {
     pub(super) fn install() -> io::Result<Self> {
         #[cfg(target_os = "macos")]
         {
-            let mut state = lock_state()?;
-            if state.owner_active {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "terminal stderr suppression is already active",
-                ));
+            if stderr_targets_stdout_terminal() {
+                return Self::install_suppression();
             }
-            suppress_locked(&mut state)?;
-            state.owner_active = true;
         }
 
+        Ok(Self { active: false })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn install_suppression() -> io::Result<Self> {
+        let mut state = lock_state()?;
+        if state.owner_active {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "terminal stderr suppression is already active",
+            ));
+        }
+        suppress_locked(&mut state)?;
+        state.owner_active = true;
         Ok(Self { active: true })
     }
 }
@@ -110,6 +122,27 @@ fn lock_state() -> io::Result<MutexGuard<'static, StderrState>> {
     STDERR_STATE
         .lock()
         .map_err(|_| io::Error::other("terminal stderr suppression lock poisoned"))
+}
+
+#[cfg(target_os = "macos")]
+fn stderr_targets_stdout_terminal() -> bool {
+    if !io::stdout().is_terminal() || !io::stderr().is_terminal() {
+        return false;
+    }
+
+    let mut stdout_stat = MaybeUninit::<libc::stat>::uninit();
+    let mut stderr_stat = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: both output pointers reference valid storage for libc to initialize.
+    if unsafe {
+        libc::fstat(libc::STDOUT_FILENO, stdout_stat.as_mut_ptr()) != 0
+            || libc::fstat(libc::STDERR_FILENO, stderr_stat.as_mut_ptr()) != 0
+    } {
+        return false;
+    }
+    // SAFETY: both fstat calls above returned successfully.
+    let (stdout_stat, stderr_stat) =
+        unsafe { (stdout_stat.assume_init(), stderr_stat.assume_init()) };
+    stdout_stat.st_dev == stderr_stat.st_dev && stdout_stat.st_ino == stderr_stat.st_ino
 }
 
 #[cfg(target_os = "macos")]
@@ -206,7 +239,7 @@ mod tests {
         let mut output = tempfile::tempfile()?;
         let capture = CapturedStderr::start(&output)?;
 
-        let _guard = TerminalStderrGuard::install()?;
+        let _guard = TerminalStderrGuard::install_suppression()?;
         write_stderr("hidden while active\n")?;
         pause()?;
         write_stderr("visible while paused\n")?;
@@ -220,6 +253,23 @@ mod tests {
         let mut captured = String::new();
         output.read_to_string(&mut captured)?;
         assert_eq!(captured, "visible while paused\nvisible after finish\n");
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn preserves_stderr_when_already_redirected() -> std::io::Result<()> {
+        let mut output = tempfile::tempfile()?;
+        let capture = CapturedStderr::start(&output)?;
+
+        let _guard = TerminalStderrGuard::install()?;
+        write_stderr("visible while redirected\n")?;
+
+        drop(capture);
+        output.rewind()?;
+        let mut captured = String::new();
+        output.read_to_string(&mut captured)?;
+        assert_eq!(captured, "visible while redirected\n");
         Ok(())
     }
 }
