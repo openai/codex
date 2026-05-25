@@ -245,7 +245,10 @@ impl App {
         let was_backtrack = self.backtrack.overlay_preview_active;
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);
-            tui.insert_history_lines_with_wrap_policy(lines, self.history_line_wrap_policy());
+            tui.insert_history_hyperlink_lines_with_wrap_policy(
+                lines,
+                self.history_line_wrap_policy(),
+            );
         }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;
@@ -263,8 +266,11 @@ impl App {
                 .chat_widget
                 .history_wrap_width(tui.terminal.last_known_screen_size.width);
             for cell in &self.transcript_cells {
-                tui.insert_history_lines_with_wrap_policy(
-                    cell.display_lines_for_mode(width, self.chat_widget.history_render_mode()),
+                tui.insert_history_hyperlink_lines_with_wrap_policy(
+                    cell.display_hyperlink_lines_for_mode(
+                        width,
+                        self.chat_widget.history_render_mode(),
+                    ),
                     self.history_line_wrap_policy(),
                 );
             }

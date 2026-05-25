@@ -296,6 +296,47 @@ fn proposed_plan_cell_renders_markdown_table() {
 }
 
 #[test]
+fn proposed_plan_cell_preserves_wrapped_table_web_links() {
+    let destination = "https://example.com/a/very/long/path/to/a/table/artifact";
+    let plan = new_proposed_plan(
+        format!("| Step | URL |\n| --- | --- |\n| Verify | {destination} |\n"),
+        &test_cwd(),
+    );
+
+    let lines = plan.display_hyperlink_lines(/*width*/ 32);
+    let linked_rows = lines
+        .iter()
+        .filter(|line| !line.hyperlinks.is_empty())
+        .collect::<Vec<_>>();
+
+    assert!(linked_rows.len() > 1);
+    assert!(linked_rows.iter().all(|line| {
+        line.hyperlinks
+            .iter()
+            .all(|link| link.destination == destination)
+    }));
+}
+
+#[test]
+fn composite_cell_preserves_child_web_links() {
+    let destination = "https://chatgpt.com/codex/settings/usage";
+    let cell = CompositeHistoryCell::new(vec![
+        Box::new(PlainHistoryCell::new(vec![Line::from("/status")])),
+        Box::new(WebHyperlinkHistoryCell::new(vec![Line::from(destination)])),
+    ]);
+
+    let lines = cell.display_hyperlink_lines(/*width*/ 80);
+
+    assert_eq!(
+        lines[2].hyperlinks,
+        vec![crate::terminal_hyperlinks::TerminalHyperlink {
+            columns: 0..destination.len(),
+            destination: destination.to_string(),
+        }]
+    );
+}
+
+#[test]
 fn proposed_plan_cell_unwraps_markdown_fenced_table() {
     let plan = new_proposed_plan(
         "## Plan\n\n```markdown\n| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n```\n"

@@ -313,7 +313,7 @@ pub(crate) fn feedback_success_cell(
     include_logs: bool,
     thread_id: &str,
     feedback_audience: FeedbackAudience,
-) -> history_cell::PlainHistoryCell {
+) -> history_cell::WebHyperlinkHistoryCell {
     let prefix = if include_logs {
         "• Feedback uploaded."
     } else {
@@ -359,7 +359,7 @@ pub(crate) fn feedback_success_cell(
             ]);
         }
     }
-    history_cell::PlainHistoryCell::new(lines)
+    history_cell::WebHyperlinkHistoryCell::new(lines)
 }
 
 fn issue_url_for_category(

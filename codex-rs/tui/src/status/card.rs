@@ -861,6 +861,13 @@ impl HistoryCell for StatusHistoryCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.display_lines(u16::MAX))
     }
+
+    fn display_hyperlink_lines(
+        &self,
+        width: u16,
+    ) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
+        crate::terminal_hyperlinks::annotate_web_urls(self.display_lines(width))
+    }
 }
 
 fn format_model_provider(config: &Config, runtime_base_url: Option<&str>) -> Option<String> {

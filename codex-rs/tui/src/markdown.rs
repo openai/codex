@@ -25,6 +25,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use crate::table_detect;
+use crate::terminal_hyperlinks::HyperlinkLine;
 
 /// Render markdown source to styled ratatui lines and append them to `lines`.
 ///
@@ -56,20 +57,22 @@ pub(crate) fn append_markdown_agent(
     width: Option<usize>,
     lines: &mut Vec<Line<'static>>,
 ) {
-    append_markdown_agent_with_cwd(markdown_source, width, /*cwd*/ None, lines);
+    let normalized = unwrap_markdown_fences(markdown_source);
+    let rendered = crate::markdown_render::render_markdown_text_with_width_and_cwd(
+        &normalized,
+        width,
+        /*cwd*/ None,
+    );
+    crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
 }
 
-/// Render an agent message while resolving local file links relative to `cwd`.
-pub(crate) fn append_markdown_agent_with_cwd(
+pub(crate) fn render_markdown_agent_with_links_and_cwd(
     markdown_source: &str,
     width: Option<usize>,
     cwd: Option<&Path>,
-    lines: &mut Vec<Line<'static>>,
-) {
+) -> Vec<HyperlinkLine> {
     let normalized = unwrap_markdown_fences(markdown_source);
-    let rendered =
-        crate::markdown_render::render_markdown_text_with_width_and_cwd(&normalized, width, cwd);
-    crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
+    crate::markdown_render::render_markdown_lines_with_width_and_cwd(&normalized, width, cwd)
 }
 
 /// Strip `` ```md ``/`` ```markdown `` fences that contain tables, emitting their content as bare
