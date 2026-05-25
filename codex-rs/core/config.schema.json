@@ -2844,10 +2844,13 @@
               "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
+              "substitute_char": null,
+              "substitute_line": null,
               "yank_line": null
             },
             "vim_operator": {
               "cancel": null,
+              "change_line": null,
               "delete_line": null,
               "motion_down": null,
               "motion_left": null,
@@ -3525,6 +3528,8 @@
             "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
+            "substitute_char": null,
+            "substitute_line": null,
             "yank_line": null
           }
         },
@@ -3536,6 +3541,7 @@
           ],
           "default": {
             "cancel": null,
+            "change_line": null,
             "delete_line": null,
             "motion_down": null,
             "motion_left": null,
@@ -3934,7 +3940,7 @@
               "$ref": "#/definitions/KeybindingsSpec"
             }
           ],
-          "description": "Begin change operator; next keys select a text object."
+          "description": "Begin change operator; next keys select a motion or text object."
         },
         "start_delete_operator": {
           "allOf": [
@@ -3952,6 +3958,22 @@
           ],
           "description": "Begin yank operator; next key selects motion (`y`)."
         },
+        "substitute_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Substitute the character under the cursor and enter insert mode (`s`)."
+        },
+        "substitute_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Substitute the current line and enter insert mode (`S`)."
+        },
         "yank_line": {
           "allOf": [
             {
@@ -3965,7 +3987,7 @@
     },
     "TuiVimOperatorKeymap": {
       "additionalProperties": false,
-      "description": "Vim operator-pending keybindings for modal editing inside text areas.\n\nThis context is active only while waiting for a motion after `d` or `y`. Repeating the operator key (`dd`, `yy`) targets the entire line. Pressing `Esc` cancels the pending operator and returns to normal mode without modifying text.",
+      "description": "Vim operator-pending keybindings for modal editing inside text areas.\n\nThis context is active only while waiting for a motion after `d`, `y`, or `c`. Repeating the operator key (`dd`, `yy`, `cc`) targets the entire line. Pressing `Esc` cancels the pending operator and returns to normal mode without modifying text.",
       "properties": {
         "cancel": {
           "allOf": [
@@ -3974,6 +3996,14 @@
             }
           ],
           "description": "Cancel the pending operator and return to normal mode."
+        },
+        "change_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat change operator to change the whole line (`cc`)."
         },
         "delete_line": {
           "allOf": [

@@ -134,7 +134,7 @@ pub(crate) struct EditorKeymap {
 ///
 /// Normal mode is the resting state when Vim is enabled. Pressing a movement
 /// or editing key here either moves the cursor, triggers an operator-pending
-/// state (via `start_delete_operator` / `start_yank_operator`), or transitions
+/// state (via an operator-start action), or transitions
 /// to insert mode. Default bindings include both `shift(letter)` and
 /// `plain(UPPERCASE)` variants for uppercase commands like `A`, `I`, `O` to
 /// handle cross-terminal shift-reporting inconsistencies.
@@ -158,6 +158,8 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) delete_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
     pub(crate) change_to_line_end: Vec<KeyBinding>,
+    pub(crate) substitute_char: Vec<KeyBinding>,
+    pub(crate) substitute_line: Vec<KeyBinding>,
     pub(crate) yank_line: Vec<KeyBinding>,
     pub(crate) paste_after: Vec<KeyBinding>,
     pub(crate) start_delete_operator: Vec<KeyBinding>,
@@ -166,7 +168,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) cancel_operator: Vec<KeyBinding>,
 }
 
-/// Vim operator-pending keybindings active after `d` or `y` in normal mode.
+/// Vim operator-pending keybindings active after `d`, `y`, or `c` in normal mode.
 ///
 /// When an operator (`start_delete_operator` or `start_yank_operator`) is
 /// pressed, the next keypress is matched against this context to determine the
@@ -176,6 +178,7 @@ pub(crate) struct VimNormalKeymap {
 pub(crate) struct VimOperatorKeymap {
     pub(crate) delete_line: Vec<KeyBinding>,
     pub(crate) yank_line: Vec<KeyBinding>,
+    pub(crate) change_line: Vec<KeyBinding>,
     pub(crate) motion_left: Vec<KeyBinding>,
     pub(crate) motion_right: Vec<KeyBinding>,
     pub(crate) motion_up: Vec<KeyBinding>,
@@ -489,6 +492,8 @@ impl RuntimeKeymap {
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
             change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
+            substitute_char: resolve_local!(keymap, defaults, vim_normal, substitute_char),
+            substitute_line: resolve_local!(keymap, defaults, vim_normal, substitute_line),
             yank_line: resolve_local!(keymap, defaults, vim_normal, yank_line),
             paste_after: resolve_local!(keymap, defaults, vim_normal, paste_after),
             start_delete_operator: resolve_local!(
@@ -577,6 +582,18 @@ impl RuntimeKeymap {
                 vim_normal.delete_to_line_end.as_slice(),
             ),
             (
+                keymap.vim_normal.change_to_line_end.as_ref(),
+                vim_normal.change_to_line_end.as_slice(),
+            ),
+            (
+                keymap.vim_normal.substitute_char.as_ref(),
+                vim_normal.substitute_char.as_slice(),
+            ),
+            (
+                keymap.vim_normal.substitute_line.as_ref(),
+                vim_normal.substitute_line.as_slice(),
+            ),
+            (
                 keymap.vim_normal.yank_line.as_ref(),
                 vim_normal.yank_line.as_slice(),
             ),
@@ -603,10 +620,21 @@ impl RuntimeKeymap {
                 .start_change_operator
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
         }
+        if keymap.vim_normal.substitute_char.is_none() {
+            vim_normal
+                .substitute_char
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.substitute_line.is_none() {
+            vim_normal
+                .substitute_line
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
 
         let mut vim_operator = VimOperatorKeymap {
             delete_line: resolve_local!(keymap, defaults, vim_operator, delete_line),
             yank_line: resolve_local!(keymap, defaults, vim_operator, yank_line),
+            change_line: resolve_local!(keymap, defaults, vim_operator, change_line),
             motion_left: resolve_local!(keymap, defaults, vim_operator, motion_left),
             motion_right: resolve_local!(keymap, defaults, vim_operator, motion_right),
             motion_up: resolve_local!(keymap, defaults, vim_operator, motion_up),
@@ -649,6 +677,10 @@ impl RuntimeKeymap {
             (
                 keymap.vim_operator.yank_line.as_ref(),
                 vim_operator.yank_line.as_slice(),
+            ),
+            (
+                keymap.vim_operator.change_line.as_ref(),
+                vim_operator.change_line.as_slice(),
             ),
             (
                 keymap.vim_operator.motion_left.as_ref(),
@@ -700,6 +732,11 @@ impl RuntimeKeymap {
         if keymap.vim_operator.select_around_text_object.is_none() {
             vim_operator
                 .select_around_text_object
+                .retain(|binding| !configured_vim_operator_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_operator.change_line.is_none() {
+            vim_operator
+                .change_line
                 .retain(|binding| !configured_vim_operator_bindings_to_preserve.contains(binding));
         }
 
@@ -990,6 +1027,11 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('c')),
                     plain(KeyCode::Char('C'))
                 ],
+                substitute_char: default_bindings![plain(KeyCode::Char('s'))],
+                substitute_line: default_bindings![
+                    shift(KeyCode::Char('s')),
+                    plain(KeyCode::Char('S'))
+                ],
                 yank_line: default_bindings![shift(KeyCode::Char('y')), plain(KeyCode::Char('Y'))],
                 paste_after: default_bindings![plain(KeyCode::Char('p'))],
                 start_delete_operator: default_bindings![plain(KeyCode::Char('d'))],
@@ -1000,6 +1042,7 @@ impl RuntimeKeymap {
             vim_operator: VimOperatorKeymap {
                 delete_line: default_bindings![plain(KeyCode::Char('d'))],
                 yank_line: default_bindings![plain(KeyCode::Char('y'))],
+                change_line: default_bindings![plain(KeyCode::Char('c'))],
                 motion_left: default_bindings![plain(KeyCode::Char('h'))],
                 motion_right: default_bindings![plain(KeyCode::Char('l'))],
                 motion_up: default_bindings![plain(KeyCode::Char('k'))],
@@ -1414,6 +1457,14 @@ impl RuntimeKeymap {
                     "change_to_line_end",
                     self.vim_normal.change_to_line_end.as_slice(),
                 ),
+                (
+                    "substitute_char",
+                    self.vim_normal.substitute_char.as_slice(),
+                ),
+                (
+                    "substitute_line",
+                    self.vim_normal.substitute_line.as_slice(),
+                ),
                 ("yank_line", self.vim_normal.yank_line.as_slice()),
                 ("paste_after", self.vim_normal.paste_after.as_slice()),
                 (
@@ -1440,6 +1491,7 @@ impl RuntimeKeymap {
             [
                 ("delete_line", self.vim_operator.delete_line.as_slice()),
                 ("yank_line", self.vim_operator.yank_line.as_slice()),
+                ("change_line", self.vim_operator.change_line.as_slice()),
                 ("motion_left", self.vim_operator.motion_left.as_slice()),
                 ("motion_right", self.vim_operator.motion_right.as_slice()),
                 ("motion_up", self.vim_operator.motion_up.as_slice()),
@@ -2266,6 +2318,23 @@ mod tests {
         keymap.vim_normal.start_change_operator = Some(one("c"));
 
         expect_conflict(&keymap, "move_left", "start_change_operator");
+    }
+
+    #[test]
+    fn configured_legacy_vim_bindings_prune_new_substitute_and_change_line_defaults() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("s"));
+        keymap.vim_normal.move_right = Some(one("shift-s"));
+        keymap.vim_operator.motion_left = Some(one("c"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.vim_normal.substitute_char, Vec::new());
+        assert_eq!(
+            runtime.vim_normal.substitute_line,
+            vec![key_hint::plain(KeyCode::Char('S'))]
+        );
+        assert_eq!(runtime.vim_operator.change_line, Vec::new());
     }
 
     #[test]
