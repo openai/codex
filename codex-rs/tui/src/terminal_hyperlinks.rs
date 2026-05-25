@@ -11,6 +11,10 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::text::Text;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
@@ -429,26 +433,53 @@ pub(crate) fn mark_buffer_hyperlinks(
     if area.width == 0 {
         return;
     }
-    let width = usize::from(area.width);
     let mut logical_row = 0usize;
     for line in lines {
-        for link in &line.hyperlinks {
-            for column in link.columns.clone() {
-                let row = logical_row + column / width;
-                if row < scroll_rows || row - scroll_rows >= usize::from(area.height) {
-                    continue;
+        let paragraph = Paragraph::new(Text::from(line.line.clone())).wrap(Wrap { trim: false });
+        let rendered_height = paragraph.line_count(area.width).max(/*other*/ 1);
+        if line.hyperlinks.is_empty() {
+            logical_row += rendered_height;
+            continue;
+        }
+
+        let layout_area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            area.width,
+            u16::try_from(rendered_height).unwrap_or(u16::MAX),
+        );
+        let mut layout = Buffer::empty(layout_area);
+        paragraph.render(layout_area, &mut layout);
+        let rendered_lines = (0..layout_area.height)
+            .map(|row| {
+                let text = (0..layout_area.width)
+                    .filter_map(|column| {
+                        let cell = &layout[(column, row)];
+                        (!cell.skip).then(|| cell.symbol())
+                    })
+                    .collect::<String>();
+                Line::from(text.trim_end().to_string())
+            })
+            .collect();
+        for (row, rendered) in remap_wrapped_line(line, rendered_lines).iter().enumerate() {
+            for link in &rendered.hyperlinks {
+                for column in link.columns.clone() {
+                    let row = logical_row + row;
+                    if row < scroll_rows || row - scroll_rows >= usize::from(area.height) {
+                        continue;
+                    }
+                    let x = area.x + column as u16;
+                    let y = area.y + (row - scroll_rows) as u16;
+                    let cell = &mut buf[(x, y)];
+                    if cell.skip || cell.symbol().trim().is_empty() {
+                        continue;
+                    }
+                    let symbol = osc8_hyperlink(&link.destination, cell.symbol());
+                    cell.set_symbol(&symbol);
                 }
-                let x = area.x + (column % width) as u16;
-                let y = area.y + (row - scroll_rows) as u16;
-                let cell = &mut buf[(x, y)];
-                if cell.skip || cell.symbol().trim().is_empty() {
-                    continue;
-                }
-                let symbol = osc8_hyperlink(&link.destination, cell.symbol());
-                cell.set_symbol(&symbol);
             }
         }
-        logical_row += line.width().max(/*other*/ 1).div_ceil(width);
+        logical_row += rendered_height;
     }
 }
 
@@ -562,5 +593,35 @@ mod tests {
                 destination: "https://example.com".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn buffer_hyperlinks_follow_word_wrapping() {
+        let destination = "https://example.com/path";
+        let mut line = HyperlinkLine::new(Line::from(format!("See {destination} now")));
+        line.hyperlinks.push(TerminalHyperlink {
+            columns: 4..4 + destination.width(),
+            destination: destination.to_string(),
+        });
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 18, /*height*/ 4,
+        );
+        let mut buf = Buffer::empty(area);
+
+        Paragraph::new(Text::from(line.line.clone()))
+            .wrap(Wrap { trim: false })
+            .render(area, &mut buf);
+        mark_buffer_hyperlinks(&mut buf, area, &[line], /*scroll_rows*/ 0);
+
+        let linked_text = area
+            .positions()
+            .filter_map(|position| {
+                let symbol = buf[position].symbol();
+                symbol
+                    .contains(&format!("\x1b]8;;{destination}\x07"))
+                    .then(|| strip_osc8(symbol))
+            })
+            .collect::<String>();
+        assert_eq!(linked_text, destination);
     }
 }
