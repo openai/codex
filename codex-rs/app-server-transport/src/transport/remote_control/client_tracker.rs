@@ -314,6 +314,15 @@ impl ClientTracker {
     }
 
     async fn send_transport_event(&self, event: TransportEvent) -> Result<(), Stopped> {
+        // Dropping a close after removing the tracked client leaves app-server state stale.
+        if matches!(&event, TransportEvent::ConnectionClosed { .. }) {
+            return self
+                .transport_event_tx
+                .send(event)
+                .await
+                .map_err(|_| Stopped);
+        }
+
         let event_name = transport_event_name(&event);
         match timeout(
             REMOTE_CONTROL_TRANSPORT_EVENT_SEND_TIMEOUT,
@@ -516,7 +525,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transport_event_send_times_out_when_queue_stays_full() {
+    async fn non_close_transport_event_send_times_out_when_queue_stays_full() {
         let (server_event_tx, _server_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (transport_event_tx, _transport_event_rx) = mpsc::channel(1);
         let shutdown_token = CancellationToken::new();
@@ -531,12 +540,88 @@ mod tests {
             .expect("transport event queue should accept prefill");
 
         let send_result = client_tracker
-            .send_transport_event(TransportEvent::ConnectionClosed {
+            .send_transport_event(TransportEvent::IncomingMessage {
                 connection_id: next_connection_id(),
+                message: JSONRPCMessage::Notification(
+                    codex_app_server_protocol::JSONRPCNotification {
+                        method: "initialized".to_string(),
+                        params: None,
+                    },
+                ),
             })
             .await;
 
         assert!(send_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn close_client_waits_for_transport_event_queue_capacity() {
+        let (server_event_tx, _server_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (transport_event_tx, mut transport_event_rx) = mpsc::channel(2);
+        let shutdown_token = CancellationToken::new();
+        let mut client_tracker =
+            ClientTracker::new(server_event_tx, transport_event_tx, &shutdown_token);
+
+        client_tracker
+            .handle_message(initialize_envelope_with_stream_id(
+                "client-1",
+                Some("stream-1"),
+            ))
+            .await
+            .expect("initialize should open client");
+        let connection_id = match transport_event_rx.recv().await.expect("open event") {
+            TransportEvent::ConnectionOpened { connection_id, .. } => connection_id,
+            other => panic!("expected connection opened, got {other:?}"),
+        };
+        let _ = transport_event_rx.recv().await.expect("initialize event");
+
+        for _ in 0..2 {
+            client_tracker
+                .transport_event_tx
+                .send(TransportEvent::IncomingMessage {
+                    connection_id,
+                    message: JSONRPCMessage::Notification(
+                        codex_app_server_protocol::JSONRPCNotification {
+                            method: "initialized".to_string(),
+                            params: None,
+                        },
+                    ),
+                })
+                .await
+                .expect("transport event queue should accept prefill");
+        }
+
+        let client_key = (
+            ClientId("client-1".to_string()),
+            StreamId("stream-1".to_string()),
+        );
+        let close_client = client_tracker.close_client(&client_key);
+        tokio::pin!(close_client);
+        assert!(
+            timeout(Duration::from_millis(20), &mut close_client)
+                .await
+                .is_err()
+        );
+
+        for _ in 0..2 {
+            match transport_event_rx.recv().await.expect("prefilled event") {
+                TransportEvent::IncomingMessage {
+                    connection_id: queued_connection_id,
+                    ..
+                } => assert_eq!(queued_connection_id, connection_id),
+                other => panic!("expected incoming message, got {other:?}"),
+            }
+        }
+
+        close_client
+            .await
+            .expect("close should forward after queue drains");
+        match transport_event_rx.recv().await.expect("close event") {
+            TransportEvent::ConnectionClosed {
+                connection_id: closed_connection_id,
+            } => assert_eq!(closed_connection_id, connection_id),
+            other => panic!("expected connection closed, got {other:?}"),
+        }
     }
 
     #[tokio::test]
