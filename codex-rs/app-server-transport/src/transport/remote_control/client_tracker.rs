@@ -18,10 +18,16 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
 use tokio::time::Instant;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 const REMOTE_CONTROL_CLIENT_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 pub(crate) const REMOTE_CONTROL_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+#[cfg(not(test))]
+const REMOTE_CONTROL_TRANSPORT_EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const REMOTE_CONTROL_TRANSPORT_EVENT_SEND_TIMEOUT: Duration = Duration::from_millis(10);
 
 #[derive(Debug)]
 pub(crate) struct Stopped;
@@ -308,10 +314,32 @@ impl ClientTracker {
     }
 
     async fn send_transport_event(&self, event: TransportEvent) -> Result<(), Stopped> {
-        self.transport_event_tx
-            .send(event)
-            .await
-            .map_err(|_| Stopped)
+        let event_name = transport_event_name(&event);
+        match timeout(
+            REMOTE_CONTROL_TRANSPORT_EVENT_SEND_TIMEOUT,
+            self.transport_event_tx.send(event),
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(Stopped),
+            Err(_) => {
+                warn!(
+                    transport_event = event_name,
+                    timeout = ?REMOTE_CONTROL_TRANSPORT_EVENT_SEND_TIMEOUT,
+                    "timed out forwarding remote control transport event"
+                );
+                Err(Stopped)
+            }
+        }
+    }
+}
+
+fn transport_event_name(event: &TransportEvent) -> &'static str {
+    match event {
+        TransportEvent::ConnectionOpened { .. } => "connection_opened",
+        TransportEvent::ConnectionClosed { .. } => "connection_closed",
+        TransportEvent::IncomingMessage { .. } => "incoming_message",
     }
 }
 
@@ -485,6 +513,30 @@ mod tests {
         timeout(Duration::from_secs(1), client_tracker.shutdown())
             .await
             .expect("shutdown should not hang on blocked server forwarding");
+    }
+
+    #[tokio::test]
+    async fn transport_event_send_times_out_when_queue_stays_full() {
+        let (server_event_tx, _server_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (transport_event_tx, _transport_event_rx) = mpsc::channel(1);
+        let shutdown_token = CancellationToken::new();
+        let client_tracker =
+            ClientTracker::new(server_event_tx, transport_event_tx.clone(), &shutdown_token);
+
+        transport_event_tx
+            .send(TransportEvent::ConnectionClosed {
+                connection_id: next_connection_id(),
+            })
+            .await
+            .expect("transport event queue should accept prefill");
+
+        let send_result = client_tracker
+            .send_transport_event(TransportEvent::ConnectionClosed {
+                connection_id: next_connection_id(),
+            })
+            .await;
+
+        assert!(send_result.is_err());
     }
 
     #[tokio::test]
