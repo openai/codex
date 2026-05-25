@@ -4,20 +4,16 @@ use super::CheckStatus;
 use super::Config;
 use super::DoctorCheck;
 use super::DoctorIssue;
-use codex_protocol::ThreadId;
 use codex_protocol::protocol::InternalSessionSource;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_rollout::RolloutRecorder;
 use codex_state::ThreadStateAuditRow;
 use codex_utils_path::normalize_for_path_comparison;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::io::BufRead;
-use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -99,7 +95,7 @@ async fn thread_inventory_check_for_roots(
     sqlite_home: &Path,
     default_provider: &str,
 ) -> DoctorCheck {
-    let scan = scan_rollout_files(codex_home);
+    let scan = scan_rollout_files(codex_home).await;
     let state_db_path = codex_state::state_db_path(sqlite_home);
 
     let mut details = vec![
@@ -153,7 +149,7 @@ async fn thread_inventory_check_for_roots(
         }
     };
 
-    parity_check_from_scan_and_rows(scan, rows, details)
+    parity_check_from_scan_and_rows(codex_home, scan, rows, details)
 }
 
 fn missing_state_db_check(scan: RolloutScan, details: Vec<String>) -> DoctorCheck {
@@ -214,6 +210,7 @@ fn missing_state_db_check(scan: RolloutScan, details: Vec<String>) -> DoctorChec
 }
 
 fn parity_check_from_scan_and_rows(
+    codex_home: &Path,
     scan: RolloutScan,
     rows: Vec<ThreadStateAuditRow>,
     mut details: Vec<String>,
@@ -244,8 +241,16 @@ fn parity_check_from_scan_and_rows(
     let archive_mismatches = if scan_complete {
         rows.iter()
             .filter_map(|row| {
-                let file = rollout_by_key.get(&path_key(&row.rollout_path))?;
-                (file.archived != row.archived).then_some(row)
+                let expected_archived = rollout_by_key
+                    .get(&path_key(&row.rollout_path))
+                    .map(|file| file.archived)
+                    .or_else(|| {
+                        row.rollout_path
+                            .is_file()
+                            .then(|| archived_from_rollout_path(codex_home, &row.rollout_path))
+                            .flatten()
+                    })?;
+                (expected_archived != row.archived).then_some(row)
             })
             .collect::<Vec<_>>()
     } else {
@@ -415,22 +420,24 @@ fn parity_check_from_scan_and_rows(
     check
 }
 
-fn scan_rollout_files(codex_home: &Path) -> RolloutScan {
+async fn scan_rollout_files(codex_home: &Path) -> RolloutScan {
     let mut scan = RolloutScan::default();
     scan_rollout_root(
         &codex_home.join("sessions"),
         /*archived*/ false,
         &mut scan,
-    );
+    )
+    .await;
     scan_rollout_root(
         &codex_home.join("archived_sessions"),
         /*archived*/ true,
         &mut scan,
-    );
+    )
+    .await;
     scan
 }
 
-fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
+async fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
     let mut dirs = vec![root.to_path_buf()];
     while let Some(dir) = dirs.pop() {
         if scan.reached_scan_cap {
@@ -474,7 +481,7 @@ fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
                 scan.reached_scan_cap = true;
                 return;
             }
-            let thread_id = match thread_id_from_rollout(&path) {
+            let thread_id = match thread_id_from_rollout(&path).await {
                 RolloutThreadId::Id(thread_id) => thread_id,
                 RolloutThreadId::MalformedName => {
                     scan.record_malformed_name(path.clone());
@@ -495,52 +502,17 @@ fn scan_rollout_root(root: &Path, archived: bool, scan: &mut RolloutScan) {
     }
 }
 
-fn thread_id_from_rollout(path: &Path) -> RolloutThreadId {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
+async fn thread_id_from_rollout(path: &Path) -> RolloutThreadId {
+    let items = match RolloutRecorder::load_rollout_items(path).await {
+        Ok((items, _, _)) => items,
         Err(err) => return RolloutThreadId::Unusable(err.to_string()),
     };
-
-    let mut has_parseable_item = false;
-    for line in BufReader::new(file).lines() {
-        let line = match line {
-            Ok(line) => line,
-            Err(err) => return RolloutThreadId::Unusable(err.to_string()),
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
-            continue;
-        };
-        has_parseable_item = true;
-        if let RolloutItem::SessionMeta(session_meta) = rollout_line.item {
-            return RolloutThreadId::Id(session_meta.meta.id.to_string());
-        }
-    }
-
-    if !has_parseable_item {
+    if items.is_empty() {
         return RolloutThreadId::Unusable("no parseable rollout items".to_string());
     }
-    thread_id_from_rollout_name(path)
-        .map(RolloutThreadId::Id)
+    codex_rollout::builder_from_items(items.as_slice(), path)
+        .map(|builder| RolloutThreadId::Id(builder.id.to_string()))
         .unwrap_or(RolloutThreadId::MalformedName)
-}
-
-fn thread_id_from_rollout_name(path: &Path) -> Option<String> {
-    let name = path.file_name()?.to_str()?;
-    let stem = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-    let (sep, uuid) = stem.match_indices('-').rev().find_map(|(idx, _)| {
-        ThreadId::from_string(stem.get(idx + 1..)?)
-            .ok()
-            .map(|id| (idx, id.to_string()))
-    })?;
-    let timestamp = stem.get(..sep)?;
-    if !is_rollout_timestamp_like(timestamp) {
-        return None;
-    }
-    Some(uuid)
 }
 
 fn is_rollout_file(path: &Path) -> bool {
@@ -549,62 +521,6 @@ fn is_rollout_file(path: &Path) -> bool {
             .file_name()
             .and_then(OsStr::to_str)
             .is_some_and(|name| name.starts_with("rollout-"))
-}
-
-fn is_rollout_timestamp_like(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.len() != 19 {
-        return false;
-    }
-    for (idx, expected) in [(4, b'-'), (7, b'-'), (10, b'T'), (13, b'-'), (16, b'-')] {
-        if bytes[idx] != expected {
-            return false;
-        }
-    }
-    if !bytes
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| !matches!(*idx, 4 | 7 | 10 | 13 | 16))
-        .all(|(_, byte)| byte.is_ascii_digit())
-    {
-        return false;
-    }
-
-    let Ok(year) = value[0..4].parse::<u16>() else {
-        return false;
-    };
-    let Ok(month) = value[5..7].parse::<u8>() else {
-        return false;
-    };
-    let Ok(day) = value[8..10].parse::<u8>() else {
-        return false;
-    };
-    let Ok(hour) = value[11..13].parse::<u8>() else {
-        return false;
-    };
-    let Ok(minute) = value[14..16].parse::<u8>() else {
-        return false;
-    };
-    let Ok(second) = value[17..19].parse::<u8>() else {
-        return false;
-    };
-
-    is_valid_rollout_date(year, month, day) && hour <= 23 && minute <= 59 && second <= 59
-}
-
-fn is_valid_rollout_date(year: u16, month: u8, day: u8) -> bool {
-    let days_in_month = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => return false,
-    };
-    (1..=days_in_month).contains(&day)
-}
-
-fn is_leap_year(year: u16) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 fn count_or_skipped(count: usize, complete: bool) -> String {
@@ -617,6 +533,17 @@ fn count_or_skipped(count: usize, complete: bool) -> String {
 
 fn path_key(path: &Path) -> PathBuf {
     normalize_for_path_comparison(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn archived_from_rollout_path(codex_home: &Path, path: &Path) -> Option<bool> {
+    let key = path_key(path);
+    if key.starts_with(path_key(&codex_home.join("archived_sessions"))) {
+        return Some(true);
+    }
+    if key.starts_with(path_key(&codex_home.join("sessions"))) {
+        return Some(false);
+    }
+    None
 }
 
 fn missing_rollout_paths<'a>(
@@ -750,6 +677,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
     use pretty_assertions::assert_eq;
     use sqlx::sqlite::SqliteConnectOptions;
     use sqlx::sqlite::SqlitePoolOptions;
