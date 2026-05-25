@@ -75,7 +75,7 @@ mod tests {
             },
         };
         assert_eq!(
-            remote_connection_status_value(&daemon_target, None),
+            remote_connection_status_value(&daemon_target, /*server_version*/ None),
             Some(RemoteConnectionStatus {
                 address: format!("unix://{}", socket_path.display()),
                 version: "unknown".to_string(),
