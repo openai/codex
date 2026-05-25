@@ -405,7 +405,7 @@ impl App {
             tui.draw(u16::MAX, |frame| {
                 let width = frame.area().width.max(1);
                 t.sync_live_tail(width, active_key, |w| {
-                    chat_widget.active_cell_transcript_lines(w)
+                    chat_widget.active_cell_transcript_hyperlink_lines(w)
                 });
                 t.render(frame.area(), frame.buffer);
             })?;

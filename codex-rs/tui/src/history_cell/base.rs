@@ -43,6 +43,10 @@ impl HistoryCell for WebHyperlinkHistoryCell {
         crate::terminal_hyperlinks::annotate_web_urls(self.lines.clone())
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.lines.clone())
     }
@@ -116,6 +120,22 @@ impl HistoryCell for CompositeHistoryCell {
         let mut first = true;
         for part in &self.parts {
             let mut lines = part.display_hyperlink_lines(width);
+            if !lines.is_empty() {
+                if !first {
+                    out.push(HyperlinkLine::from(""));
+                }
+                out.append(&mut lines);
+                first = false;
+            }
+        }
+        out
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut out = Vec::new();
+        let mut first = true;
+        for part in &self.parts {
+            let mut lines = part.transcript_hyperlink_lines(width);
             if !lines.is_empty() {
                 if !first {
                     out.push(HyperlinkLine::from(""));

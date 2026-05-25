@@ -700,7 +700,7 @@ impl PlanStreamController {
         lines: Vec<HyperlinkLine>,
         include_bottom_padding: bool,
     ) -> Vec<HyperlinkLine> {
-        let mut out_lines: Vec<HyperlinkLine> = Vec::with_capacity(4);
+        let mut out_lines: Vec<HyperlinkLine> = Vec::with_capacity(/*capacity*/ 4);
         if !self.header_emitted {
             out_lines.push(HyperlinkLine::new(
                 vec!["• ".dim(), "Proposed Plan".bold()].into(),
@@ -708,7 +708,7 @@ impl PlanStreamController {
             out_lines.push(HyperlinkLine::new(Line::from(" ")));
         }
 
-        let mut plan_lines: Vec<HyperlinkLine> = Vec::with_capacity(4);
+        let mut plan_lines: Vec<HyperlinkLine> = Vec::with_capacity(/*capacity*/ 4);
         if !self.top_padding_emitted {
             plan_lines.push(HyperlinkLine::new(Line::from(" ")));
         }

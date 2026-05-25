@@ -244,13 +244,22 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         self.display_lines(width)
     }
 
+    /// Returns transcript-overlay lines plus terminal hyperlink metadata.
+    ///
+    /// Defaults to the plain transcript representation because some cells render different
+    /// display and transcript content. Rich cells whose transcript mirrors their display should
+    /// delegate to `display_hyperlink_lines`.
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        plain_hyperlink_lines(self.transcript_lines(width))
+    }
+
     /// Returns the number of viewport rows for the transcript overlay.
     ///
     /// Uses the same `Paragraph::line_count` measurement as
     /// `desired_height`. Contains a workaround for a ratatui bug where
     /// a single whitespace-only line reports 2 rows instead of 1.
     fn desired_transcript_height(&self, width: u16) -> u16 {
-        let lines = self.transcript_lines(width);
+        let lines = visible_lines(self.transcript_hyperlink_lines(width));
         // Workaround: ratatui's line_count returns 2 for a single
         // whitespace-only line. Clamp to 1 in that case.
         if let [line] = &lines[..]

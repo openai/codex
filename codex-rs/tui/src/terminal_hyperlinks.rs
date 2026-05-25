@@ -184,7 +184,7 @@ pub(crate) fn remap_wrapped_line(
         let mapped = &rendered[rendered_start..];
         let mut output_column = rendered[..rendered_start].width();
         for ch in mapped.chars() {
-            let width = ch.width().unwrap_or(0);
+            let width = ch.width().unwrap_or(/*default*/ 0);
             if let Some(link) = source
                 .hyperlinks
                 .iter()
@@ -367,7 +367,7 @@ pub(crate) fn decorate_spans(line: &HyperlinkLine) -> Vec<Span<'static>> {
     let mut active_destination: Option<String> = None;
     for span in &line.line.spans {
         for ch in span.content.chars() {
-            let width = ch.width().unwrap_or(0);
+            let width = ch.width().unwrap_or(/*default*/ 0);
             while line
                 .hyperlinks
                 .get(link_index)
@@ -448,7 +448,7 @@ pub(crate) fn mark_buffer_hyperlinks(
                 cell.set_symbol(&symbol);
             }
         }
-        logical_row += line.width().max(1).div_ceil(width);
+        logical_row += line.width().max(/*other*/ 1).div_ceil(width);
     }
 }
 

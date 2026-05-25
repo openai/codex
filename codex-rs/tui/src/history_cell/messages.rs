@@ -316,6 +316,10 @@ impl HistoryCell for AgentMessageCell {
         wrapped
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(visible_lines(self.lines.clone()))
     }
@@ -382,6 +386,10 @@ impl HistoryCell for AgentMarkdownCell {
         prefix_hyperlink_lines(lines, "• ".dim(), "  ".into())
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
         raw_lines_from_source(&self.markdown_source)
     }
@@ -424,6 +432,10 @@ impl HistoryCell for StreamingAgentTailCell {
             },
             "  ".into(),
         )
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {

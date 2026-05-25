@@ -75,6 +75,10 @@ impl HistoryCell for UpdateAvailableHistoryCell {
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         crate::terminal_hyperlinks::annotate_web_urls(self.display_lines(width))
     }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
 }
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
@@ -136,6 +140,10 @@ impl HistoryCell for CyberPolicyNoticeCell {
 
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         crate::terminal_hyperlinks::annotate_web_urls(self.display_lines(width))
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 }
 

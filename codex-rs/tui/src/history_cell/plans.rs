@@ -31,6 +31,10 @@ impl HistoryCell for StreamingPlanTailCell {
         self.lines.clone()
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(visible_lines(self.lines.clone()))
     }
@@ -122,6 +126,10 @@ impl HistoryCell for ProposedPlanCell {
         lines
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
         raw_lines_from_source(&self.plan_markdown)
     }
@@ -134,6 +142,10 @@ impl HistoryCell for ProposedPlanStreamCell {
 
     fn display_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
         self.lines.clone()
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {

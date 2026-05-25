@@ -1544,10 +1544,11 @@ where
         }
         let mut wrapped = Vec::new();
         for source_line in &cell.lines {
-            let rendered = word_wrap_line(&source_line.line, RtOptions::new(width.max(1)))
-                .into_iter()
-                .map(|line| line_to_static(&line))
-                .collect::<Vec<_>>();
+            let rendered =
+                word_wrap_line(&source_line.line, RtOptions::new(width.max(/*other*/ 1)))
+                    .into_iter()
+                    .map(|line| line_to_static(&line))
+                    .collect::<Vec<_>>();
             if rendered.is_empty() {
                 wrapped.push(HyperlinkLine::new(Line::default()));
             } else {
