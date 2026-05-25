@@ -2910,6 +2910,66 @@ mod tests {
     }
 
     #[test]
+    fn vim_tag_text_objects_cover_nested_tags_attributes_and_change() {
+        let mut t = ta_with(r#"<div><span data-x=">">hello</span></div>"#);
+        t.set_cursor(/*pos*/ r#"<div><span data-x=">">he"#.len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "<div></div>");
+        assert_eq!(t.kill_buffer, r#"<span data-x=">">hello</span>"#);
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+
+        let mut t = ta_with("<div><span>hello</span></div>");
+        t.set_cursor(/*pos*/ "<div><span>he".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "<div><span></span></div>");
+        assert_eq!(t.kill_buffer, "hello");
+    }
+
+    #[test]
+    fn vim_tag_text_objects_ignore_nonpaired_forms_and_preserve_elements() {
+        let text = "<!doctype html><root><!-- <fake>bad</fake> --><img/><leaf>@file</leaf></root>";
+        let mut t = ta_with(text);
+        let mention_start = text.find("@file").expect("test mention exists");
+        t.add_element_range(mention_start..mention_start + "@file".len())
+            .expect("valid element");
+        t.set_cursor(/*pos*/ mention_start);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+
+        assert_eq!(
+            t.text(),
+            "<!doctype html><root><!-- <fake>bad</fake> --><img/></root>"
+        );
+        assert_eq!(t.kill_buffer, "<leaf>@file</leaf>");
+
+        let mut t = ta_with(text);
+        t.set_cursor(/*pos*/ text.find("bad").expect("test comment exists"));
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "<!doctype html><root></root>");
+        assert_eq!(
+            t.kill_buffer,
+            "<!-- <fake>bad</fake> --><img/><leaf>@file</leaf>"
+        );
+    }
+
+    #[test]
     fn vim_text_object_cancellation_does_not_edit() {
         let mut t = ta_with("hello world");
         t.set_cursor(/*pos*/ 1);

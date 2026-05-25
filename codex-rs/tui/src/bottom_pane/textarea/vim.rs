@@ -6,6 +6,7 @@ use std::ops::Range;
 
 mod find;
 mod prose;
+mod tag;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VimMode {
@@ -81,6 +82,7 @@ pub(super) enum VimTextObject {
     Backtick,
     Sentence,
     Paragraph,
+    Tag,
 }
 
 impl TextArea {
@@ -136,6 +138,9 @@ impl TextArea {
         if self.vim_text_object_keymap.paragraph.is_pressed(event) {
             return Some(VimTextObject::Paragraph);
         }
+        if self.vim_text_object_keymap.tag.is_pressed(event) {
+            return Some(VimTextObject::Tag);
+        }
         None
     }
 
@@ -155,6 +160,7 @@ impl TextArea {
             VimTextObject::Backtick => self.quoted_text_object_range(scope, '`'),
             VimTextObject::Sentence => self.sentence_text_object_range(scope),
             VimTextObject::Paragraph => self.paragraph_text_object_range(scope),
+            VimTextObject::Tag => self.tag_text_object_range(scope),
         }
     }
 

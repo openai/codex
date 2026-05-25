@@ -2888,6 +2888,7 @@
               "parentheses": null,
               "sentence": null,
               "single_quote": null,
+              "tag": null,
               "word": null
             }
           },
@@ -3600,6 +3601,7 @@
             "parentheses": null,
             "sentence": null,
             "single_quote": null,
+            "tag": null,
             "word": null
           }
         }
@@ -4319,6 +4321,14 @@
             }
           ],
           "description": "Text object: single quotes."
+        },
+        "tag": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: enclosing paired tag."
         },
         "word": {
           "allOf": [

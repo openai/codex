@@ -333,6 +333,8 @@ pub struct TuiVimTextObjectKeymap {
     pub sentence: Option<KeybindingsSpec>,
     /// Text object: paragraph.
     pub paragraph: Option<KeybindingsSpec>,
+    /// Text object: enclosing paired tag.
+    pub tag: Option<KeybindingsSpec>,
     /// Cancel the pending text-object command.
     pub cancel: Option<KeybindingsSpec>,
 }

@@ -218,6 +218,7 @@ pub(crate) struct VimTextObjectKeymap {
     pub(crate) backtick: Vec<KeyBinding>,
     pub(crate) sentence: Vec<KeyBinding>,
     pub(crate) paragraph: Vec<KeyBinding>,
+    pub(crate) tag: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
 }
 
@@ -890,6 +891,7 @@ impl RuntimeKeymap {
             backtick: resolve_local!(keymap, defaults, vim_text_object, backtick),
             sentence: resolve_local!(keymap, defaults, vim_text_object, sentence),
             paragraph: resolve_local!(keymap, defaults, vim_text_object, paragraph),
+            tag: resolve_local!(keymap, defaults, vim_text_object, tag),
             cancel: resolve_local!(keymap, defaults, vim_text_object, cancel),
         };
 
@@ -927,6 +929,14 @@ impl RuntimeKeymap {
                 vim_text_object.backtick.as_slice(),
             ),
             (
+                keymap.vim_text_object.sentence.as_ref(),
+                vim_text_object.sentence.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.paragraph.as_ref(),
+                vim_text_object.paragraph.as_slice(),
+            ),
+            (
                 keymap.vim_text_object.cancel.as_ref(),
                 vim_text_object.cancel.as_slice(),
             ),
@@ -939,6 +949,11 @@ impl RuntimeKeymap {
         }
         if keymap.vim_text_object.paragraph.is_none() {
             vim_text_object.paragraph.retain(|binding| {
+                !configured_vim_text_object_bindings_to_preserve.contains(binding)
+            });
+        }
+        if keymap.vim_text_object.tag.is_none() {
+            vim_text_object.tag.retain(|binding| {
                 !configured_vim_text_object_bindings_to_preserve.contains(binding)
             });
         }
@@ -1301,6 +1316,7 @@ impl RuntimeKeymap {
                 backtick: default_bindings![plain(KeyCode::Char('`'))],
                 sentence: default_bindings![plain(KeyCode::Char('s'))],
                 paragraph: default_bindings![plain(KeyCode::Char('p'))],
+                tag: default_bindings![plain(KeyCode::Char('t'))],
                 cancel: default_bindings![plain(KeyCode::Esc)],
             },
             pager: PagerKeymap {
@@ -1776,6 +1792,7 @@ impl RuntimeKeymap {
                 ("backtick", self.vim_text_object.backtick.as_slice()),
                 ("sentence", self.vim_text_object.sentence.as_slice()),
                 ("paragraph", self.vim_text_object.paragraph.as_slice()),
+                ("tag", self.vim_text_object.tag.as_slice()),
                 ("cancel", self.vim_text_object.cancel.as_slice()),
             ],
         )?;
@@ -2616,6 +2633,16 @@ mod tests {
 
         assert_eq!(runtime.vim_text_object.sentence, Vec::new());
         assert_eq!(runtime.vim_text_object.paragraph, Vec::new());
+    }
+
+    #[test]
+    fn configured_existing_vim_text_objects_prune_new_tag_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_text_object.paragraph = Some(one("t"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.vim_text_object.tag, Vec::new());
     }
 
     #[test]
