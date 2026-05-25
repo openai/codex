@@ -31,6 +31,9 @@ use tempfile::tempdir;
 use super::ClaudeHooksEngine;
 use super::CommandShell;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::session_start::SessionStartRequest;
+use crate::events::session_start::SessionStartSource;
+use crate::events::session_start::StartHookTarget;
 
 fn cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::current_dir().expect("current dir")
@@ -204,6 +207,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -218,6 +222,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        env_file_path: None,
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -307,6 +312,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     let outcome = engine
@@ -386,6 +392,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -468,6 +475,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -531,6 +539,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -692,6 +701,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -748,6 +758,7 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -802,6 +813,7 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -872,6 +884,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert!(engine.handlers.is_empty());
@@ -911,6 +924,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert!(engine.handlers.is_empty());
@@ -983,6 +997,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert!(engine.warnings().is_empty());
@@ -1093,6 +1108,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert!(engine.warnings().iter().any(|warning| {
@@ -1186,6 +1202,7 @@ print(json.dumps({
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
@@ -1213,6 +1230,7 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        env_file_path: None,
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
@@ -1251,6 +1269,184 @@ print(json.dumps({
         serde_json::json!({
             "plugin": plugin_root.display().to_string(),
             "claude": plugin_root.display().to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn hook_commands_receive_codex_env_file_and_claude_alias() {
+    let temp = tempdir().expect("create temp dir");
+    let script_path = temp.path().join("write_env_file_vars.py");
+    fs::write(
+        &script_path,
+        r#"import json
+import os
+
+print(json.dumps({
+    "systemMessage": json.dumps({
+        "codex": os.environ.get("CODEX_ENV_FILE"),
+        "claude": os.environ.get("CLAUDE_ENV_FILE"),
+    })
+}))
+"#,
+    )
+    .expect("write hook script");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let env_file_path =
+        AbsolutePathBuf::try_from(temp.path().join("codex-env.sh")).expect("absolute env path");
+    let config = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "matcher": "startup",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                }],
+            }],
+        },
+    }))
+    .expect("config TOML should deserialize");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
+            config,
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+        Some(env_file_path.clone()),
+    );
+
+    let outcome = engine
+        .run_session_start(
+            SessionStartRequest {
+                session_id: ThreadId::new(),
+                cwd: cwd(),
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                target: StartHookTarget::SessionStart {
+                    source: SessionStartSource::Startup,
+                },
+            },
+            Some("turn-1".to_string()),
+        )
+        .await;
+
+    assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
+    let logged: serde_json::Value =
+        serde_json::from_str(&outcome.hook_events[0].run.entries[0].text)
+            .expect("parse env payload");
+    assert_eq!(
+        logged,
+        serde_json::json!({
+            "codex": env_file_path.display().to_string(),
+            "claude": env_file_path.display().to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn non_session_start_hooks_do_not_receive_env_file_vars() {
+    let temp = tempdir().expect("create temp dir");
+    let script_path = temp.path().join("write_env_file_vars.py");
+    fs::write(
+        &script_path,
+        r#"import json
+import os
+
+print(json.dumps({
+    "systemMessage": json.dumps({
+        "codex": os.environ.get("CODEX_ENV_FILE"),
+        "claude": os.environ.get("CLAUDE_ENV_FILE"),
+    })
+}))
+"#,
+    )
+    .expect("write hook script");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let env_file_path =
+        AbsolutePathBuf::try_from(temp.path().join("codex-env.sh")).expect("absolute env path");
+    let config = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                }],
+            }],
+        },
+    }))
+    .expect("config TOML should deserialize");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
+            config,
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+        Some(env_file_path),
+    );
+
+    let outcome = engine
+        .run_pre_tool_use(PreToolUseRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            subagent: None,
+            cwd: cwd(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            tool_name: "Bash".to_string(),
+            matcher_aliases: Vec::new(),
+            tool_use_id: "tool-1".to_string(),
+            tool_input: serde_json::json!({ "command": "echo hello" }),
+        })
+        .await;
+
+    assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
+    let logged: serde_json::Value =
+        serde_json::from_str(&outcome.hook_events[0].run.entries[0].text)
+            .expect("parse env payload");
+    assert_eq!(
+        logged,
+        serde_json::json!({
+            "codex": serde_json::Value::Null,
+            "claude": serde_json::Value::Null,
         })
     );
 }
@@ -1300,6 +1496,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert_eq!(
@@ -1344,6 +1541,7 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
             program: String::new(),
             args: Vec::new(),
         },
+        /*env_file_path*/ None,
     );
 
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);

@@ -1476,6 +1476,7 @@ impl Session {
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
             self.services.user_shell.as_ref(),
+            &self.services.hook_env_file,
         )
         .await;
 
@@ -3243,6 +3244,10 @@ impl Session {
         self.services.hooks.load_full()
     }
 
+    pub(crate) fn apply_hook_env_file(&self, env: &mut HashMap<String, String>) {
+        self.services.hook_env_file.apply_to_env(env);
+    }
+
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
         Arc::clone(&self.services.user_shell)
     }
@@ -3315,6 +3320,7 @@ async fn build_hooks_for_config(
     config: &Config,
     plugins_manager: &PluginsManager,
     user_shell: &crate::shell::Shell,
+    hook_env_file: &crate::hook_env::HookEnvFile,
 ) -> Hooks {
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
@@ -3332,6 +3338,7 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
+        env_file_path: Some(hook_env_file.path().clone()),
     })
 }
 

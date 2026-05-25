@@ -112,6 +112,7 @@ impl ClaudeHooksEngine {
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
         shell: CommandShell,
+        env_file_path: Option<AbsolutePathBuf>,
     ) -> Self {
         if !enabled {
             return Self {
@@ -129,8 +130,25 @@ impl ClaudeHooksEngine {
             plugin_hook_load_warnings,
             bypass_hook_trust,
         );
+        let mut handlers = discovered.handlers;
+        if let Some(env_file_path) = env_file_path {
+            let env_file_path = env_file_path.display().to_string();
+            for handler in handlers
+                .iter_mut()
+                .filter(|handler| handler.event_name == HookEventName::SessionStart)
+            {
+                handler.env.insert(
+                    crate::CODEX_ENV_FILE_ENV_VAR.to_string(),
+                    env_file_path.clone(),
+                );
+                handler.env.insert(
+                    crate::CLAUDE_ENV_FILE_ENV_VAR.to_string(),
+                    env_file_path.clone(),
+                );
+            }
+        }
         Self {
-            handlers: discovered.handlers,
+            handlers,
             warnings: discovered.warnings,
             shell,
             output_spiller: HookOutputSpiller::new(),

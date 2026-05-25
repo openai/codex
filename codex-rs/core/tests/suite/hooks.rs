@@ -104,6 +104,79 @@ fn trust_plugin_hooks(config: &mut Config, plugin_hook_sources: Vec<PluginHookSo
     trust_hooks(config, listed.hooks);
 }
 
+fn write_path_persisting_plugin(
+    home: &Path,
+) -> Result<(Vec<PluginHookSource>, std::path::PathBuf)> {
+    let plugin_root = home.join("plugins/cache/test/sample/local");
+    let hooks_dir = plugin_root.join("hooks");
+    let plugin_data = home.join("plugins/data/sample-test");
+    fs::create_dir_all(plugin_root.join(".codex-plugin"))
+        .context("create plugin manifest directory")?;
+    fs::create_dir_all(&hooks_dir).context("create plugin hooks directory")?;
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .context("write plugin manifest")?;
+    fs::write(
+        home.join("config.toml"),
+        r#"[plugins."sample@test"]
+enabled = true
+"#,
+    )
+    .context("write plugin config")?;
+
+    let script_path = hooks_dir.join("session_start_hook.py");
+    fs::write(
+        &script_path,
+        r##"import os
+from pathlib import Path
+
+env_file = os.environ.get("CODEX_ENV_FILE")
+if not env_file or env_file != os.environ.get("CLAUDE_ENV_FILE"):
+    raise SystemExit("missing CODEX_ENV_FILE/CLAUDE_ENV_FILE")
+
+bin_dir = Path(os.environ["PLUGIN_DATA"]) / "bin"
+bin_dir.mkdir(parents=True, exist_ok=True)
+shim = bin_dir / "adam-shim"
+shim.write_text("#!/bin/sh\nprintf shim-ok\n", encoding="utf-8")
+shim.chmod(0o755)
+
+with open(env_file, "a", encoding="utf-8") as handle:
+    handle.write(f'export PATH="{bin_dir}:$PATH"\n')
+"##,
+    )
+    .context("write plugin session start hook script")?;
+    let plugin_hooks_json = r#"{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "startup",
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ${PLUGIN_ROOT}/hooks/session_start_hook.py"
+      }]
+    }]
+  }
+}"#;
+    let plugin_hooks_path = hooks_dir.join("hooks.json");
+    fs::write(&plugin_hooks_path, plugin_hooks_json).context("write plugin hooks config")?;
+
+    let plugin_hook_sources = vec![PluginHookSource {
+        plugin_id: PluginId::parse("sample@test").context("plugin id")?,
+        plugin_root: AbsolutePathBuf::try_from(plugin_root).context("absolute plugin root")?,
+        plugin_data_root: AbsolutePathBuf::try_from(plugin_data.clone())
+            .context("absolute plugin data root")?,
+        source_path: AbsolutePathBuf::try_from(plugin_hooks_path)
+            .context("absolute plugin hooks path")?,
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks: serde_json::from_str::<codex_config::HooksFile>(plugin_hooks_json)
+            .context("parse plugin hooks")?
+            .hooks,
+    }];
+
+    Ok((plugin_hook_sources, plugin_data))
+}
+
 fn write_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
     let script_path = home.join("stop_hook.py");
     let log_path = home.join("stop_hook_log.jsonl");
@@ -2969,6 +3042,99 @@ print(json.dumps({{
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_session_start_env_file_path_persists_for_shell_and_exec_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let shell_call_id = "plugin-env-file-shell-command";
+    let exec_call_id = "plugin-env-file-exec-command";
+    let shell_args = serde_json::json!({ "command": "adam-shim" });
+    let exec_args = serde_json::json!({ "cmd": "adam-shim" });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    shell_call_id,
+                    "shell_command",
+                    &serde_json::to_string(&shell_args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call(
+                    exec_call_id,
+                    "exec_command",
+                    &serde_json::to_string(&exec_args)?,
+                ),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "both shim calls worked"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let home = Arc::new(TempDir::new()?);
+    let (plugin_hook_sources, plugin_data) = write_path_persisting_plugin(home.path())?;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(move |config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::Plugins)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+            trust_plugin_hooks(config, plugin_hook_sources);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_permission_profile(
+        "run the plugin shim by name with shell and exec",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    assert!(
+        plugin_data.join("bin/adam-shim").exists(),
+        "session start hook should create the shim under plugin data"
+    );
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+
+    let shell_output_item = requests[1].function_call_output(shell_call_id);
+    let shell_output = shell_output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        shell_output.contains("shim-ok"),
+        "shell command should find the shim through CODEX_ENV_FILE PATH"
+    );
+
+    let exec_output_item = requests[2].function_call_output(exec_call_id);
+    let exec_output = exec_output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("exec command output string");
+    assert!(
+        exec_output.contains("shim-ok"),
+        "exec command should find the shim through CODEX_ENV_FILE PATH"
+    );
 
     Ok(())
 }

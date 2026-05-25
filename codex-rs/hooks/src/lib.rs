@@ -80,6 +80,9 @@ pub use types::HookPayload;
 pub use types::HookResponse;
 pub use types::HookResult;
 
+pub const CODEX_ENV_FILE_ENV_VAR: &str = "CODEX_ENV_FILE";
+pub const CLAUDE_ENV_FILE_ENV_VAR: &str = "CLAUDE_ENV_FILE";
+
 /// Returns the hook event label used in persisted hook-state keys.
 pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
     match event_name {

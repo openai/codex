@@ -1,5 +1,6 @@
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
@@ -36,6 +37,7 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub env_file_path: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -64,16 +66,18 @@ impl Hooks {
             .map(crate::notify_hook)
             .into_iter()
             .collect();
+        let shell = CommandShell {
+            program: config.shell_program.unwrap_or_default(),
+            args: config.shell_args,
+        };
         let engine = ClaudeHooksEngine::new(
             config.feature_enabled,
             config.bypass_hook_trust,
             config.config_layer_stack.as_ref(),
             config.plugin_hook_sources,
             config.plugin_hook_load_warnings,
-            CommandShell {
-                program: config.shell_program.unwrap_or_default(),
-                args: config.shell_args,
-            },
+            shell,
+            config.env_file_path,
         );
         Self {
             after_agent,
