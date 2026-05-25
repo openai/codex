@@ -15,6 +15,7 @@ use codex_app_server_protocol::JSONRPCMessage;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -201,7 +202,12 @@ impl ClientTracker {
                     })
                     .await
                 {
-                    self.close_client(&client_key).await?;
+                    if let Some(client) = self.remove_client(&client_key) {
+                        client.disconnect_token.cancel();
+                        // The initialize send already timed out on this queue; preserve close
+                        // delivery without blocking reconnect on the same backpressure.
+                        drop(self.spawn_connection_closed(client.connection_id));
+                    }
                     return Err(err);
                 }
                 if !is_legacy_stream_id {
@@ -304,9 +310,18 @@ impl ClientTracker {
         &mut self,
         client_key: &(ClientId, StreamId),
     ) -> Result<(), Stopped> {
-        let Some(client) = self.clients.remove(client_key) else {
+        let Some(client) = self.remove_client(client_key) else {
             return Ok(());
         };
+        client.disconnect_token.cancel();
+        self.send_transport_event(TransportEvent::ConnectionClosed {
+            connection_id: client.connection_id,
+        })
+        .await
+    }
+
+    fn remove_client(&mut self, client_key: &(ClientId, StreamId)) -> Option<ClientState> {
+        let client = self.clients.remove(client_key)?;
         if self
             .legacy_stream_ids
             .get(&client_key.0)
@@ -314,11 +329,7 @@ impl ClientTracker {
         {
             self.legacy_stream_ids.remove(&client_key.0);
         }
-        client.disconnect_token.cancel();
-        self.send_transport_event(TransportEvent::ConnectionClosed {
-            connection_id: client.connection_id,
-        })
-        .await
+        Some(client)
     }
 
     async fn send_transport_event(&self, event: TransportEvent) -> Result<(), Stopped> {
@@ -370,29 +381,8 @@ impl ClientTracker {
 
     async fn send_connection_closed(&self, connection_id: ConnectionId) -> Result<(), Stopped> {
         // Worker shutdown can abort the caller; detach the cleanup event before awaiting it.
-        info!(
-            connection_id = ?connection_id,
-            "forwarding remote control connection closed transport event"
-        );
-        match tokio::spawn({
-            let transport_event_tx = self.transport_event_tx.clone();
-            async move {
-                transport_event_tx
-                    .send(TransportEvent::ConnectionClosed { connection_id })
-                    .await
-                    .map_err(|_| Stopped)
-            }
-        })
-        .await
-        {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) => {
-                warn!(
-                    transport_event = "connection_closed",
-                    "remote control transport event receiver dropped"
-                );
-                Err(Stopped)
-            }
+        match self.spawn_connection_closed(connection_id).await {
+            Ok(result) => result,
             Err(err) => {
                 warn!(
                     transport_event = "connection_closed",
@@ -402,6 +392,29 @@ impl ClientTracker {
                 Err(Stopped)
             }
         }
+    }
+
+    fn spawn_connection_closed(
+        &self,
+        connection_id: ConnectionId,
+    ) -> JoinHandle<Result<(), Stopped>> {
+        info!(
+            connection_id = ?connection_id,
+            "forwarding remote control connection closed transport event"
+        );
+        let transport_event_tx = self.transport_event_tx.clone();
+        tokio::spawn(async move {
+            transport_event_tx
+                .send(TransportEvent::ConnectionClosed { connection_id })
+                .await
+                .map_err(|_| {
+                    warn!(
+                        transport_event = "connection_closed",
+                        "remote control transport event receiver dropped"
+                    );
+                    Stopped
+                })
+        })
     }
 }
 
@@ -699,6 +712,8 @@ mod tests {
         assert!(
             timeout(Duration::from_millis(50), &mut handle_message)
                 .await
+                .expect("initialize timeout rollback should not wait for close delivery")
+                .expect("handle message task should not panic")
                 .is_err()
         );
         let connection_id = match transport_event_rx.recv().await.expect("open event") {
@@ -706,12 +721,6 @@ mod tests {
             other => panic!("expected connection opened, got {other:?}"),
         };
 
-        assert!(
-            handle_message
-                .await
-                .expect("handle message task should not panic")
-                .is_err()
-        );
         match transport_event_rx.recv().await.expect("close event") {
             TransportEvent::ConnectionClosed {
                 connection_id: closed_connection_id,
