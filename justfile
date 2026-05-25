@@ -30,6 +30,11 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
+# Benchmark app-server process startup through its initialize response.
+bench-app-server-start *args:
+    cargo build --release -p codex-cli --bin codex
+    CODEX_BIN="$PWD/target/release/codex" cargo bench -p codex-app-server-start-bench --bench startup -- --ignored "$@"
+
 # Format Rust and Python SDK code.
 fmt:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
@@ -58,6 +63,7 @@ test *args:
 # Run explicit workspace benchmark targets.
 bench *args:
     cargo bench --workspace --bench '*' "$@"
+    just bench-app-server-start "$@"
 
 # Run benchmark targets once to ensure they start successfully.
 bench-smoke:
