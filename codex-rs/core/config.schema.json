@@ -2845,6 +2845,7 @@
               "paste_after": null,
               "repeat_find": null,
               "repeat_find_reverse": null,
+              "select_register": null,
               "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
@@ -3544,6 +3545,7 @@
             "paste_after": null,
             "repeat_find": null,
             "repeat_find_reverse": null,
+            "select_register": null,
             "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
@@ -3995,6 +3997,14 @@
             }
           ],
           "description": "Repeat the most recent find/till motion in the opposite direction (`,`)."
+        },
+        "select_register": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Select a named register for the next Vim command (`\"{register}`)."
         },
         "start_change_operator": {
           "allOf": [

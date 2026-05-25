@@ -107,6 +107,7 @@ impl TextArea {
         } else if let Some(target) = self.target_for_find(find, count) {
             self.set_cursor(target);
         }
+        self.clear_vim_register_selection();
     }
 
     pub(in super::super) fn target_for_find(&self, find: VimFind, count: usize) -> Option<usize> {

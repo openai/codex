@@ -7,6 +7,7 @@ use std::ops::Range;
 mod count;
 mod find;
 mod prose;
+mod register;
 mod tag;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +28,7 @@ pub(super) enum VimOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VimPending {
     None,
+    Register,
     Operator(VimOperator),
     TextObject {
         operator: VimOperator,
@@ -36,6 +38,12 @@ pub(super) enum VimPending {
         operator: Option<VimOperator>,
         kind: VimFindKind,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VimRegisterSelection {
+    pub(super) name: char,
+    pub(super) append: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

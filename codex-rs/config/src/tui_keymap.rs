@@ -245,6 +245,8 @@ pub struct TuiVimNormalKeymap {
     pub yank_line: Option<KeybindingsSpec>,
     /// Paste after cursor (`p`).
     pub paste_after: Option<KeybindingsSpec>,
+    /// Select a named register for the next Vim command (`"{register}`).
+    pub select_register: Option<KeybindingsSpec>,
     /// Begin delete operator; next key selects motion (`d`).
     pub start_delete_operator: Option<KeybindingsSpec>,
     /// Begin yank operator; next key selects motion (`y`).

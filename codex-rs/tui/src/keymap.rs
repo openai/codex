@@ -168,6 +168,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) substitute_line: Vec<KeyBinding>,
     pub(crate) yank_line: Vec<KeyBinding>,
     pub(crate) paste_after: Vec<KeyBinding>,
+    pub(crate) select_register: Vec<KeyBinding>,
     pub(crate) start_delete_operator: Vec<KeyBinding>,
     pub(crate) start_yank_operator: Vec<KeyBinding>,
     pub(crate) start_change_operator: Vec<KeyBinding>,
@@ -517,6 +518,7 @@ impl RuntimeKeymap {
             substitute_line: resolve_local!(keymap, defaults, vim_normal, substitute_line),
             yank_line: resolve_local!(keymap, defaults, vim_normal, yank_line),
             paste_after: resolve_local!(keymap, defaults, vim_normal, paste_after),
+            select_register: resolve_local!(keymap, defaults, vim_normal, select_register),
             start_delete_operator: resolve_local!(
                 keymap,
                 defaults,
@@ -703,6 +705,11 @@ impl RuntimeKeymap {
         if keymap.vim_normal.repeat_find_reverse.is_none() {
             vim_normal
                 .repeat_find_reverse
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.select_register.is_none() {
+            vim_normal
+                .select_register
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
         }
 
@@ -1252,6 +1259,7 @@ impl RuntimeKeymap {
                 ],
                 yank_line: default_bindings![shift(KeyCode::Char('y')), plain(KeyCode::Char('Y'))],
                 paste_after: default_bindings![plain(KeyCode::Char('p'))],
+                select_register: default_bindings![plain(KeyCode::Char('"'))],
                 start_delete_operator: default_bindings![plain(KeyCode::Char('d'))],
                 start_yank_operator: default_bindings![plain(KeyCode::Char('y'))],
                 start_change_operator: default_bindings![plain(KeyCode::Char('c'))],
@@ -1709,6 +1717,10 @@ impl RuntimeKeymap {
                 ),
                 ("yank_line", self.vim_normal.yank_line.as_slice()),
                 ("paste_after", self.vim_normal.paste_after.as_slice()),
+                (
+                    "select_register",
+                    self.vim_normal.select_register.as_slice(),
+                ),
                 (
                     "start_delete_operator",
                     self.vim_normal.start_delete_operator.as_slice(),
@@ -2601,6 +2613,16 @@ mod tests {
 
         assert_eq!(runtime.vim_normal.find_forward, Vec::new());
         assert_eq!(runtime.vim_operator.till_forward, Vec::new());
+    }
+
+    #[test]
+    fn configured_legacy_vim_bindings_prune_new_register_prefix_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("\""));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.vim_normal.select_register, Vec::new());
     }
 
     #[test]

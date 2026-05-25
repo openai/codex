@@ -31,6 +31,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 use std::cell::Ref;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::ops::Range;
 use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
@@ -42,6 +43,7 @@ use self::vim::VimMode;
 use self::vim::VimMotion;
 use self::vim::VimOperator;
 use self::vim::VimPending;
+use self::vim::VimRegisterSelection;
 use self::vim::VimTextObjectScope;
 
 const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
@@ -108,6 +110,8 @@ pub(crate) struct TextArea {
     next_element_id: u64,
     kill_buffer: String,
     kill_buffer_kind: KillBufferKind,
+    vim_named_registers: BTreeMap<char, (String, KillBufferKind)>,
+    vim_selected_register: Option<VimRegisterSelection>,
     vim_enabled: bool,
     vim_mode: VimMode,
     vim_pending: VimPending,
@@ -152,6 +156,8 @@ impl TextArea {
             next_element_id: 1,
             kill_buffer: String::new(),
             kill_buffer_kind: KillBufferKind::Characterwise,
+            vim_named_registers: BTreeMap::new(),
+            vim_selected_register: None,
             vim_enabled: false,
             vim_mode: VimMode::Insert,
             vim_pending: VimPending::None,
@@ -239,6 +245,7 @@ impl TextArea {
         self.vim_enabled = enabled;
         self.vim_pending = VimPending::None;
         self.clear_vim_counts();
+        self.clear_vim_register_selection();
         self.vim_mode = if enabled {
             VimMode::Normal
         } else {
@@ -287,6 +294,7 @@ impl TextArea {
             self.vim_mode = VimMode::Insert;
             self.vim_pending = VimPending::None;
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
         }
     }
 
@@ -301,6 +309,7 @@ impl TextArea {
             self.vim_mode = VimMode::Normal;
             self.vim_pending = VimPending::None;
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             self.preferred_col = None;
         }
     }
@@ -660,6 +669,10 @@ impl TextArea {
         let pending = std::mem::replace(&mut self.vim_pending, VimPending::None);
         match pending {
             VimPending::None => {}
+            VimPending::Register => {
+                self.handle_vim_register_name(event);
+                return;
+            }
             VimPending::Operator(op) => {
                 self.handle_vim_operator(op, event);
                 return;
@@ -674,13 +687,19 @@ impl TextArea {
             }
         }
 
+        if self.vim_normal_keymap.select_register.is_pressed(event) {
+            self.vim_pending = VimPending::Register;
+            return;
+        }
         if self.vim_normal_keymap.enter_insert.is_pressed(event) {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             self.vim_mode = VimMode::Insert;
             return;
         }
         if self.vim_normal_keymap.append_after_cursor.is_pressed(event) {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             let next = self.next_atomic_boundary(self.cursor_pos);
             self.set_cursor(next);
             self.vim_mode = VimMode::Insert;
@@ -688,18 +707,21 @@ impl TextArea {
         }
         if self.vim_normal_keymap.append_line_end.is_pressed(event) {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             self.set_cursor(self.end_of_current_line());
             self.vim_mode = VimMode::Insert;
             return;
         }
         if self.vim_normal_keymap.insert_line_start.is_pressed(event) {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             self.set_cursor(self.first_non_blank_of_current_line());
             self.vim_mode = VimMode::Insert;
             return;
         }
         if self.vim_normal_keymap.open_line_below.is_pressed(event) {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             let eol = self.end_of_current_line();
             let insert_at = if eol < self.text.len() { eol + 1 } else { eol };
             self.insert_str_at(insert_at, "\n");
@@ -714,6 +736,7 @@ impl TextArea {
         }
         if self.vim_normal_keymap.open_line_above.is_pressed(event) {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             let bol = self.beginning_of_current_line();
             self.insert_str_at(bol, "\n");
             self.set_cursor(bol);
@@ -785,6 +808,7 @@ impl TextArea {
         if self.vim_normal_keymap.delete_char.is_pressed(event) {
             let count = self.take_vim_count();
             self.delete_forward_kill(count);
+            self.clear_vim_register_selection();
             return;
         }
         if self.vim_normal_keymap.delete_to_line_end.is_pressed(event) {
@@ -800,22 +824,25 @@ impl TextArea {
         if self.vim_normal_keymap.substitute_char.is_pressed(event) {
             let count = self.take_vim_count();
             self.delete_forward_kill(count);
+            self.clear_vim_register_selection();
             self.vim_mode = VimMode::Insert;
             return;
         }
         if self.vim_normal_keymap.substitute_line.is_pressed(event) {
             let count = self.take_vim_count();
             self.vim_change_current_lines(count);
+            self.clear_vim_register_selection();
             return;
         }
         if self.vim_normal_keymap.yank_line.is_pressed(event) {
             let count = self.take_vim_count();
             self.vim_yank_current_lines(count);
+            self.clear_vim_register_selection();
             return;
         }
         if self.vim_normal_keymap.paste_after.is_pressed(event) {
             let count = self.take_vim_count();
-            self.paste_after_cursor_counted(count);
+            self.vim_paste_after_cursor_counted(count);
             return;
         }
         if self
@@ -841,29 +868,35 @@ impl TextArea {
         if self.vim_normal_keymap.cancel_operator.is_pressed(event) {
             self.vim_pending = VimPending::None;
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             return;
         }
         self.clear_vim_counts();
+        self.clear_vim_register_selection();
     }
 
     fn handle_vim_operator(&mut self, op: VimOperator, event: KeyEvent) -> bool {
         if op == VimOperator::Delete && self.vim_operator_keymap.delete_line.is_pressed(event) {
             let count = self.take_vim_operator_count();
             self.vim_kill_current_lines(count);
+            self.clear_vim_register_selection();
             return true;
         }
         if op == VimOperator::Yank && self.vim_operator_keymap.yank_line.is_pressed(event) {
             let count = self.take_vim_operator_count();
             self.vim_yank_current_lines(count);
+            self.clear_vim_register_selection();
             return true;
         }
         if op == VimOperator::Change && self.vim_operator_keymap.change_line.is_pressed(event) {
             let count = self.take_vim_operator_count();
             self.vim_change_current_lines(count);
+            self.clear_vim_register_selection();
             return true;
         }
         if self.vim_operator_keymap.cancel.is_pressed(event) {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             return true;
         }
         if let Some(scope) = self.vim_text_object_scope_for_event(event) {
@@ -901,6 +934,7 @@ impl TextArea {
             return true;
         }
         self.clear_vim_counts();
+        self.clear_vim_register_selection();
         false
     }
 
@@ -912,16 +946,19 @@ impl TextArea {
     ) -> bool {
         if self.vim_text_object_keymap.cancel.is_pressed(event) {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             return true;
         }
         let Some(object) = self.vim_text_object_for_event(event) else {
             self.clear_vim_counts();
+            self.clear_vim_register_selection();
             return false;
         };
         let count = self.take_vim_operator_count();
         if let Some(range) = self.counted_text_object_range(object, scope, count) {
             self.apply_vim_operator_to_range(op, range);
         }
+        self.clear_vim_register_selection();
         true
     }
 
@@ -985,6 +1022,7 @@ impl TextArea {
                 }
             }
         }
+        self.clear_vim_register_selection();
     }
 
     fn range_for_change_motion(&mut self, motion: VimMotion, count: usize) -> Option<Range<usize>> {
@@ -1010,6 +1048,7 @@ impl TextArea {
                 self.vim_mode = VimMode::Insert;
             }
         }
+        self.clear_vim_register_selection();
     }
 
     fn range_for_motion(&mut self, motion: VimMotion, count: usize) -> Option<Range<usize>> {
@@ -1254,25 +1293,25 @@ impl TextArea {
     }
 
     fn store_kill_buffer(&mut self, text: String, kind: KillBufferKind) {
+        self.write_selected_vim_register(&text, kind);
         self.kill_buffer = text;
         self.kill_buffer_kind = kind;
     }
 
-    fn paste_after_cursor(&mut self) {
-        if self.kill_buffer.is_empty() {
+    fn paste_text_after_cursor(&mut self, text: &str, kind: KillBufferKind) {
+        if text.is_empty() {
             return;
         }
-        if self.kill_buffer_kind == KillBufferKind::Linewise {
-            self.paste_line_after_current_line();
+        if kind == KillBufferKind::Linewise {
+            self.paste_line_after_current_line(text);
             return;
         }
         let insert_at = self.next_atomic_boundary(self.cursor_pos);
         self.set_cursor(insert_at);
-        let text = self.kill_buffer.clone();
-        self.insert_str(&text);
+        self.insert_str(text);
     }
 
-    fn paste_line_after_current_line(&mut self) {
+    fn paste_line_after_current_line(&mut self, buffer: &str) {
         let eol = self.end_of_current_line();
         let insert_at = if eol < self.text.len() { eol + 1 } else { eol };
         let cursor = if eol < self.text.len() {
@@ -1281,13 +1320,13 @@ impl TextArea {
             insert_at + 1
         };
         let text = if eol < self.text.len() {
-            if self.kill_buffer.ends_with('\n') {
-                self.kill_buffer.clone()
+            if buffer.ends_with('\n') {
+                buffer.to_string()
             } else {
-                format!("{}\n", self.kill_buffer)
+                format!("{buffer}\n")
             }
         } else {
-            format!("\n{}", self.kill_buffer.trim_end_matches('\n'))
+            format!("\n{}", buffer.trim_end_matches('\n'))
         };
         self.insert_str_at(insert_at, &text);
         self.set_cursor(cursor.min(self.text.len()));
@@ -2746,6 +2785,77 @@ mod tests {
         assert_eq!(t.text(), "\nthree");
         assert_eq!(t.kill_buffer, "one\ntwo");
         assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
+    fn vim_named_registers_write_and_paste_independently_of_unnamed() {
+        let mut t = ta_with("one two three");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(
+            t.vim_named_registers.get(&'a'),
+            Some(&("one ".to_string(), KillBufferKind::Characterwise))
+        );
+
+        t.set_cursor(/*pos*/ "one ".len());
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "one three");
+        assert_eq!(t.kill_buffer, "two ");
+
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "one threeone ");
+        assert_eq!(t.kill_buffer, "two ");
+
+        let before_empty_paste = t.text().to_string();
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert_eq!(t.text(), before_empty_paste);
+    }
+
+    #[test]
+    fn vim_uppercase_register_writes_append_and_change_captures_named_text() {
+        let mut t = ta_with("one two three");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        t.set_cursor(/*pos*/ "one ".len());
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(
+            t.vim_named_registers.get(&'a'),
+            Some(&("one two ".to_string(), KillBufferKind::Characterwise))
+        );
+
+        t.set_text_clearing_elements("value");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+        t.input(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "");
+        assert_eq!(t.kill_buffer, "value");
+        assert_eq!(
+            t.vim_named_registers.get(&'c'),
+            Some(&("value".to_string(), KillBufferKind::Characterwise))
+        );
     }
 
     #[test]

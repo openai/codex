@@ -55,6 +55,7 @@ impl TextArea {
         motion: VimMotion,
         count: usize,
     ) {
+        self.clear_vim_register_selection();
         if motion == VimMotion::LineEnd {
             for _ in 1..count {
                 self.move_cursor_down();
@@ -130,12 +131,6 @@ impl TextArea {
         let range = self.current_lines_change_range(count);
         self.kill_line_range(range);
         self.vim_mode = super::VimMode::Insert;
-    }
-
-    pub(in super::super) fn paste_after_cursor_counted(&mut self, count: usize) {
-        for _ in 0..count {
-            self.paste_after_cursor();
-        }
     }
 
     fn current_line_range_with_count(&self, count: usize) -> Range<usize> {
