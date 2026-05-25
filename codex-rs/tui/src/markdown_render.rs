@@ -70,6 +70,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
 
@@ -1458,29 +1459,59 @@ where
         alignments: &[Alignment],
     ) -> Vec<HyperlinkLine> {
         let mut out = Vec::new();
-        out.push(annotate_web_urls_in_line(Line::from(
-            Self::row_to_pipe_string(header),
-        )));
+        out.push(Self::row_to_pipe_line(header));
         out.push(HyperlinkLine::new(Line::from(
             Self::alignments_to_pipe_delimiter(alignments),
         )));
-        out.extend(
-            rows.iter()
-                .map(|row| annotate_web_urls_in_line(Line::from(Self::row_to_pipe_string(row)))),
-        );
+        out.extend(rows.iter().map(|row| Self::row_to_pipe_line(row)));
         out
     }
 
-    fn row_to_pipe_string(row: &[TableCell]) -> String {
-        let mut out = String::new();
-        out.push('|');
+    fn row_to_pipe_line(row: &[TableCell]) -> HyperlinkLine {
+        let mut out = HyperlinkLine::new(Line::default());
+        out.push_span("|".into(), /*destination*/ None);
         for cell in row {
-            out.push(' ');
-            // Preserve literal `|` inside cell text in markdown fallback mode so
-            // downstream markdown parsers keep the cell content intact.
-            out.push_str(&cell.plain_text().replace('|', "\\|"));
-            out.push(' ');
-            out.push('|');
+            out.push_span(" ".into(), /*destination*/ None);
+            for (index, line) in cell.lines.iter().enumerate() {
+                if index > 0 {
+                    out.push_span(" ".into(), /*destination*/ None);
+                }
+                let text = line
+                    .line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>();
+                let mut column = 0usize;
+                let mut current_destination = None;
+                let mut current_text = String::new();
+                let flush = |out: &mut HyperlinkLine,
+                             current_text: &mut String,
+                             destination: Option<&str>| {
+                    if !current_text.is_empty() {
+                        out.push_span(Span::raw(std::mem::take(current_text)), destination);
+                    }
+                };
+                for ch in text.chars() {
+                    let destination = line
+                        .hyperlinks
+                        .iter()
+                        .find(|link| link.columns.contains(&column))
+                        .map(|link| link.destination.as_str());
+                    if destination != current_destination {
+                        flush(&mut out, &mut current_text, current_destination);
+                        current_destination = destination;
+                    }
+                    if ch == '|' {
+                        current_text.push_str("\\|");
+                    } else {
+                        current_text.push(ch);
+                    }
+                    column += UnicodeWidthChar::width(ch).unwrap_or(/*default*/ 0);
+                }
+                flush(&mut out, &mut current_text, current_destination);
+            }
+            out.push_span(" |".into(), /*destination*/ None);
         }
         out
     }
@@ -2651,17 +2682,24 @@ mod tests {
     #[test]
     fn pipe_table_fallback_keeps_web_annotations() {
         let destination = "https://example.com/a/long/path";
-        let markdown = format!("| URL | Value |\n| --- | --- |\n| {destination} | ok |\n");
+        let target = "https://target.example/path";
+        let code_url = "https://code.example/not-a-link";
+        let markdown = format!(
+            "| URL | Code | Label |\n| --- | --- | --- |\n| {destination} | `{code_url}` | [https://shown.example]({target}) |\n"
+        );
         let lines = render_markdown_lines_with_width_and_cwd(
             &markdown,
             /*width*/ Some(5),
             /*cwd*/ None,
         );
+        let destinations = lines
+            .iter()
+            .flat_map(|line| line.hyperlinks.iter().map(|link| link.destination.as_str()))
+            .collect::<Vec<_>>();
 
-        assert!(lines.iter().any(|line| {
-            line.hyperlinks
-                .iter()
-                .any(|link| link.destination == destination)
-        }));
+        assert!(destinations.contains(&destination));
+        assert!(destinations.contains(&target));
+        assert!(!destinations.contains(&code_url));
+        assert!(!destinations.contains(&"https://shown.example"));
     }
 }
