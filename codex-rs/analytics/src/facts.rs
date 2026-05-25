@@ -109,6 +109,12 @@ pub enum TurnStatus {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum TurnStartRejectionReason {
+    InputTooLarge,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TurnSteerResult {
     Accepted,
     Rejected,
@@ -132,6 +138,13 @@ pub struct CodexTurnSteerEvent {
     pub num_input_images: usize,
     pub result: TurnSteerResult,
     pub rejection_reason: Option<TurnSteerRejectionReason>,
+    pub created_at: u64,
+}
+
+#[derive(Clone)]
+pub struct CodexTurnStartRejectedEvent {
+    pub num_input_images: usize,
+    pub rejection_reason: Option<TurnStartRejectionReason>,
     pub created_at: u64,
 }
 

@@ -15,7 +15,10 @@ use crate::events::CodexReviewEventParams;
 use crate::events::CodexReviewEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexToolItemEventBase;
+use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CodexTurnStartRejectedEventParams;
+use crate::events::CodexTurnStartRejectedEventRequest;
 use crate::events::FinalApprovalOutcome;
 use crate::events::GuardianApprovalRequestSource;
 use crate::events::GuardianReviewDecision;
@@ -63,6 +66,7 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnStartRejectionReason;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
 use crate::facts::TurnTokenUsageFact;
@@ -529,6 +533,52 @@ async fn ingest_rejected_turn_steer(
 
     assert_eq!(out.len(), 1);
     serde_json::to_value(&out[0]).expect("serialize turn steer event")
+}
+
+async fn ingest_rejected_turn_start(
+    reducer: &mut AnalyticsReducer,
+    out: &mut Vec<TrackEventRequest>,
+    error: JSONRPCErrorError,
+    error_type: Option<AnalyticsJsonRpcError>,
+) -> serde_json::Value {
+    ingest_initialize(reducer, out).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(1),
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            out,
+        )
+        .await;
+    out.clear();
+    reducer
+        .ingest(
+            AnalyticsFact::ClientRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
+            },
+            out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ErrorResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                error,
+                error_type,
+            },
+            out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    serde_json::to_value(&out[0]).expect("serialize rejected turn start event")
 }
 
 async fn ingest_initialize(reducer: &mut AnalyticsReducer, out: &mut Vec<TrackEventRequest>) {
@@ -3188,7 +3238,7 @@ async fn reducer_ingests_plugin_state_changed_fact() {
 fn turn_event_serializes_expected_shape() {
     let event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
         event_type: "codex_turn_event",
-        event_params: crate::events::CodexTurnEventParams {
+        event_params: CodexTurnEventParams {
             thread_id: "thread-2".to_string(),
             turn_id: "turn-2".to_string(),
             app_server_client: sample_app_server_client_metadata(),
@@ -3296,6 +3346,56 @@ fn turn_event_serializes_expected_shape() {
         }"#,
     )
     .expect("parse expected turn event");
+
+    assert_eq!(payload, expected);
+}
+
+#[test]
+fn rejected_turn_start_event_serializes_expected_shape() {
+    let event = TrackEventRequest::TurnStartRejected(CodexTurnStartRejectedEventRequest {
+        event_type: "codex_turn_start_rejected_event",
+        event_params: CodexTurnStartRejectedEventParams {
+            thread_id: "thread-2".to_string(),
+            app_server_client: sample_app_server_client_metadata(),
+            runtime: sample_runtime_metadata(),
+            thread_source: Some(ThreadSource::User),
+            subagent_source: None,
+            parent_thread_id: None,
+            num_input_images: 2,
+            rejection_reason: Some(TurnStartRejectionReason::InputTooLarge),
+            created_at: 456,
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize rejected turn start event");
+    let expected = serde_json::from_str::<serde_json::Value>(
+        r#"{
+            "event_type": "codex_turn_start_rejected_event",
+            "event_params": {
+                "thread_id": "thread-2",
+                "app_server_client": {
+                    "product_client_id": "codex_cli_rs",
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "stdio",
+                    "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "thread_source": "user",
+                "subagent_source": null,
+                "parent_thread_id": null,
+                "num_input_images": 2,
+                "rejection_reason": "input_too_large",
+                "created_at": 456
+            }
+        }"#,
+    )
+    .expect("parse expected rejected turn start event");
 
     assert_eq!(payload, expected);
 }
@@ -3464,11 +3564,65 @@ async fn turn_steer_does_not_emit_without_pending_request() {
 }
 
 #[tokio::test]
+async fn rejected_turn_start_uses_request_connection_metadata() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+    let payload = ingest_rejected_turn_start(
+        &mut reducer,
+        &mut out,
+        input_too_large_steer_error(),
+        Some(input_too_large_error_type()),
+    )
+    .await;
+
+    assert_eq!(
+        payload["event_type"],
+        json!("codex_turn_start_rejected_event")
+    );
+    assert_eq!(payload["event_params"]["thread_id"], json!("thread-2"));
+    assert_eq!(payload["event_params"]["num_input_images"], json!(1));
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["product_client_id"],
+        json!("codex-tui")
+    );
+    assert_eq!(
+        payload["event_params"]["runtime"]["codex_rs_version"],
+        json!("0.1.0")
+    );
+    assert_eq!(payload["event_params"]["thread_source"], json!("user"));
+    assert_eq!(payload["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+    assert_eq!(
+        payload["event_params"]["rejection_reason"],
+        json!("input_too_large")
+    );
+    assert!(
+        payload["event_params"]["created_at"]
+            .as_u64()
+            .expect("created_at")
+            > 0
+    );
+}
+
+#[tokio::test]
 async fn turn_start_error_response_discards_pending_start_request() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
 
     ingest_initialize(&mut reducer, &mut out).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(1),
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut out,
+        )
+        .await;
+    out.clear();
     reducer
         .ingest(
             AnalyticsFact::ClientRequest {
@@ -3484,12 +3638,24 @@ async fn turn_start_error_response_discards_pending_start_request() {
             AnalyticsFact::ErrorResponse {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
-                error: no_active_turn_steer_error(),
+                error: JSONRPCErrorError {
+                    code: -32600,
+                    message: "turn start failed".to_string(),
+                    data: None,
+                },
                 error_type: None,
             },
             &mut out,
         )
         .await;
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize rejected turn start event");
+    assert_eq!(
+        payload["event_type"],
+        json!("codex_turn_start_rejected_event")
+    );
+    assert_eq!(payload["event_params"]["rejection_reason"], json!(null));
+    out.clear();
 
     // A late/synthetic response for the same request id must not resurrect the
     // failed turn/start request and attach request-scoped connection metadata.

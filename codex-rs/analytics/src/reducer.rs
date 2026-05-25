@@ -28,6 +28,8 @@ use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexToolItemEventBase;
 use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CodexTurnStartRejectedEventParams;
+use crate::events::CodexTurnStartRejectedEventRequest;
 use crate::events::CodexTurnSteerEventParams;
 use crate::events::CodexTurnSteerEventRequest;
 use crate::events::CodexWebSearchEventParams;
@@ -65,6 +67,7 @@ use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunInput;
+use crate::facts::InputError;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -72,6 +75,7 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnStartRejectionReason;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
@@ -212,6 +216,16 @@ impl<'a> AnalyticsDropSite<'a> {
         }
     }
 
+    fn turn_start(thread_id: &'a str) -> Self {
+        Self {
+            event_name: "turn start rejected",
+            thread_id,
+            turn_id: None,
+            review_id: None,
+            item_id: None,
+        }
+    }
+
     fn turn(thread_id: &'a str, turn_id: &'a str) -> Self {
         Self {
             event_name: "turn",
@@ -297,6 +311,7 @@ enum RequestState {
 struct PendingTurnStartState {
     thread_id: String,
     num_input_images: usize,
+    created_at: u64,
 }
 
 struct PendingTurnSteerState {
@@ -573,6 +588,7 @@ impl AnalyticsReducer {
                     RequestState::TurnStart(PendingTurnStartState {
                         thread_id: params.thread_id,
                         num_input_images: num_input_images(&params.input),
+                        created_at: now_unix_seconds(),
                     }),
                 );
             }
@@ -1037,7 +1053,14 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         match request {
-            RequestState::TurnStart(_) => {}
+            RequestState::TurnStart(pending_request) => {
+                self.ingest_turn_start_error_response(
+                    connection_id,
+                    pending_request,
+                    error_type,
+                    out,
+                );
+            }
             RequestState::TurnSteer(pending_request) => {
                 self.ingest_turn_steer_error_response(
                     connection_id,
@@ -1047,6 +1070,21 @@ impl AnalyticsReducer {
                 );
             }
         }
+    }
+
+    fn ingest_turn_start_error_response(
+        &mut self,
+        connection_id: u64,
+        pending_request: PendingTurnStartState,
+        error_type: Option<AnalyticsJsonRpcError>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.emit_turn_start_rejected_event(
+            connection_id,
+            pending_request,
+            turn_start_rejection_reason_from_error_type(error_type),
+            out,
+        );
     }
 
     fn ingest_turn_steer_error_response(
@@ -1061,7 +1099,7 @@ impl AnalyticsReducer {
             pending_request,
             /*accepted_turn_id*/ None,
             TurnSteerResult::Rejected,
-            rejection_reason_from_error_type(error_type),
+            turn_steer_rejection_reason_from_error_type(error_type),
             out,
         );
     }
@@ -1352,6 +1390,43 @@ impl AnalyticsReducer {
             /*rejection_reason*/ None,
             out,
         );
+    }
+
+    fn emit_turn_start_rejected_event(
+        &mut self,
+        connection_id: u64,
+        pending_request: PendingTurnStartState,
+        rejection_reason: Option<TurnStartRejectionReason>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(connection_state) = self.connections.get(&connection_id) else {
+            return;
+        };
+        let drop_site = AnalyticsDropSite::turn_start(&pending_request.thread_id);
+        let Some(thread_metadata) = self
+            .threads
+            .get(drop_site.thread_id)
+            .and_then(|thread| thread.metadata.as_ref())
+        else {
+            warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadMetadata);
+            return;
+        };
+        out.push(TrackEventRequest::TurnStartRejected(
+            CodexTurnStartRejectedEventRequest {
+                event_type: "codex_turn_start_rejected_event",
+                event_params: CodexTurnStartRejectedEventParams {
+                    thread_id: pending_request.thread_id,
+                    app_server_client: connection_state.app_server_client.clone(),
+                    runtime: connection_state.runtime.clone(),
+                    thread_source: thread_metadata.thread_source,
+                    subagent_source: thread_metadata.subagent_source.clone(),
+                    parent_thread_id: thread_metadata.parent_thread_id.clone(),
+                    num_input_images: pending_request.num_input_images,
+                    rejection_reason,
+                    created_at: pending_request.created_at,
+                },
+            },
+        ));
     }
 
     fn emit_turn_steer_event(
@@ -2567,7 +2642,19 @@ fn num_input_images(input: &[UserInput]) -> usize {
         .count()
 }
 
-fn rejection_reason_from_error_type(
+fn turn_start_rejection_reason_from_error_type(
+    error_type: Option<AnalyticsJsonRpcError>,
+) -> Option<TurnStartRejectionReason> {
+    match error_type? {
+        AnalyticsJsonRpcError::TurnSteer(_) => None,
+        AnalyticsJsonRpcError::Input(InputError::Empty) => None,
+        AnalyticsJsonRpcError::Input(InputError::TooLarge) => {
+            Some(TurnStartRejectionReason::InputTooLarge)
+        }
+    }
+}
+
+fn turn_steer_rejection_reason_from_error_type(
     error_type: Option<AnalyticsJsonRpcError>,
 ) -> Option<TurnSteerRejectionReason> {
     match error_type? {

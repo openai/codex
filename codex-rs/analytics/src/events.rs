@@ -15,6 +15,7 @@ use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnStartRejectionReason;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
@@ -63,6 +64,7 @@ pub(crate) enum TrackEventRequest {
     HookRun(CodexHookRunEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
+    TurnStartRejected(CodexTurnStartRejectedEventRequest),
     TurnSteer(CodexTurnSteerEventRequest),
     CommandExecution(CodexCommandExecutionEventRequest),
     FileChange(CodexFileChangeEventRequest),
@@ -816,6 +818,25 @@ pub(crate) struct CodexTurnEventParams {
 pub(crate) struct CodexTurnEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexTurnEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexTurnStartRejectedEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) num_input_images: usize,
+    pub(crate) rejection_reason: Option<TurnStartRejectionReason>,
+    pub(crate) created_at: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexTurnStartRejectedEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexTurnStartRejectedEventParams,
 }
 
 #[derive(Serialize)]
