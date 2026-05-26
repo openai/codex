@@ -54,9 +54,17 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 ];
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
+// Common Linux trust bundle paths for clients that read system roots instead of
+// honoring one of the CA bundle environment variables we export.
+const LINUX_CA_BUNDLE_PATHS: [&str; 4] = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+];
 
 /// Options that control how bubblewrap is invoked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BwrapOptions {
     /// Whether to mount a fresh `/proc` inside the sandbox.
     ///
@@ -70,6 +78,8 @@ pub(crate) struct BwrapOptions {
     /// Keep this uncapped by default so existing nested deny-read matches are
     /// masked before the sandboxed command starts.
     pub glob_scan_max_depth: Option<usize>,
+    /// Managed MITM CA bundle to materialize at common Linux trust-store paths.
+    pub mitm_ca_trust_bundle_path: Option<PathBuf>,
 }
 
 impl Default for BwrapOptions {
@@ -78,6 +88,7 @@ impl Default for BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
             glob_scan_max_depth: None,
+            mitm_ca_trust_bundle_path: None,
         }
     }
 }
@@ -243,7 +254,9 @@ pub(crate) fn create_bwrap_command_args(
     // Full disk write normally skips bwrap, but unreadable glob patterns still
     // need concrete bwrap masks for the matches expanded below.
     if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
-        return if options.network_mode == BwrapNetworkMode::FullAccess {
+        return if options.network_mode == BwrapNetworkMode::FullAccess
+            && options.mitm_ca_trust_bundle_path.is_none()
+        {
             Ok(BwrapArgs {
                 args: command,
                 preserved_files: Vec::new(),
@@ -251,7 +264,7 @@ pub(crate) fn create_bwrap_command_args(
                 protected_create_targets: Vec::new(),
             })
         } else {
-            Ok(create_bwrap_flags_full_filesystem(command, options))
+            create_bwrap_flags_full_filesystem(command, options)
         };
     }
 
@@ -264,8 +277,11 @@ pub(crate) fn create_bwrap_command_args(
     )
 }
 
-fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> BwrapArgs {
-    let mut args = vec![
+fn create_bwrap_flags_full_filesystem(
+    command: Vec<String>,
+    options: BwrapOptions,
+) -> Result<BwrapArgs> {
+    let args = vec![
         "--new-session".to_string(),
         "--die-with-parent".to_string(),
         "--bind".to_string(),
@@ -276,21 +292,26 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
     ];
-    if options.network_mode.should_unshare_network() {
-        args.push("--unshare-net".to_string());
-    }
-    if options.mount_proc {
-        args.push("--proc".to_string());
-        args.push("/proc".to_string());
-    }
-    args.push("--".to_string());
-    args.extend(command);
-    BwrapArgs {
+    let mut bwrap_args = BwrapArgs {
         args,
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
         protected_create_targets: Vec::new(),
+    };
+    append_mitm_ca_trust_bundle_args(
+        &mut bwrap_args,
+        options.mitm_ca_trust_bundle_path.as_deref(),
+    )?;
+    if options.network_mode.should_unshare_network() {
+        bwrap_args.args.push("--unshare-net".to_string());
     }
+    if options.mount_proc {
+        bwrap_args.args.push("--proc".to_string());
+        bwrap_args.args.push("/proc".to_string());
+    }
+    bwrap_args.args.push("--".to_string());
+    bwrap_args.args.extend(command);
+    Ok(bwrap_args)
 }
 
 /// Build the bubblewrap flags (everything after `argv[0]`).
@@ -318,34 +339,68 @@ fn create_bwrap_flags(
     args.push("--new-session".to_string());
     args.push("--die-with-parent".to_string());
     args.extend(filesystem_args);
+    let mut bwrap_args = BwrapArgs {
+        args,
+        preserved_files,
+        synthetic_mount_targets,
+        protected_create_targets,
+    };
+    append_mitm_ca_trust_bundle_args(
+        &mut bwrap_args,
+        options.mitm_ca_trust_bundle_path.as_deref(),
+    )?;
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
-    args.push("--unshare-user".to_string());
-    args.push("--unshare-pid".to_string());
+    bwrap_args.args.push("--unshare-user".to_string());
+    bwrap_args.args.push("--unshare-pid".to_string());
     if options.network_mode.should_unshare_network() {
-        args.push("--unshare-net".to_string());
+        bwrap_args.args.push("--unshare-net".to_string());
     }
     // Mount a fresh /proc unless the caller explicitly disables it.
     if options.mount_proc {
-        args.push("--proc".to_string());
-        args.push("/proc".to_string());
+        bwrap_args.args.push("--proc".to_string());
+        bwrap_args.args.push("/proc".to_string());
     }
     if normalized_command_cwd.as_path() != command_cwd {
         // Bubblewrap otherwise inherits the helper's logical cwd, which can be
         // a symlink alias that disappears once the sandbox only mounts
         // canonical roots. Enter the canonical command cwd explicitly so
         // relative paths stay aligned with the mounted filesystem view.
-        args.push("--chdir".to_string());
-        args.push(path_to_string(normalized_command_cwd.as_path()));
+        bwrap_args.args.push("--chdir".to_string());
+        bwrap_args
+            .args
+            .push(path_to_string(normalized_command_cwd.as_path()));
     }
-    args.push("--".to_string());
-    args.extend(command);
-    Ok(BwrapArgs {
-        args,
-        preserved_files,
-        synthetic_mount_targets,
-        protected_create_targets,
-    })
+    bwrap_args.args.push("--".to_string());
+    bwrap_args.args.extend(command);
+    Ok(bwrap_args)
+}
+
+fn append_mitm_ca_trust_bundle_args(
+    bwrap_args: &mut BwrapArgs,
+    mitm_ca_trust_bundle_path: Option<&Path>,
+) -> Result<()> {
+    let Some(mitm_ca_trust_bundle_path) = mitm_ca_trust_bundle_path else {
+        return Ok(());
+    };
+
+    for bundle_path in LINUX_CA_BUNDLE_PATHS {
+        let bundle_file = File::open(mitm_ca_trust_bundle_path).map_err(|err| {
+            CodexErr::Fatal(format!(
+                "failed to open managed MITM CA trust bundle {}: {err}",
+                mitm_ca_trust_bundle_path.display()
+            ))
+        })?;
+        let bundle_fd = bundle_file.as_raw_fd().to_string();
+        bwrap_args.preserved_files.push(bundle_file);
+        bwrap_args.args.push("--perms".to_string());
+        bwrap_args.args.push("444".to_string());
+        bwrap_args.args.push("--ro-bind-data".to_string());
+        bwrap_args.args.push(bundle_fd);
+        bwrap_args.args.push(bundle_path.to_string());
+    }
+
+    Ok(())
 }
 
 /// Build the bubblewrap filesystem mounts for a given filesystem policy.
@@ -1344,6 +1399,11 @@ mod tests {
         assert_eq!(BwrapOptions::default().glob_scan_max_depth, None);
     }
 
+    #[test]
+    fn default_mitm_ca_trust_bundle_path_is_unset() {
+        assert_eq!(BwrapOptions::default().mitm_ca_trust_bundle_path, None);
+    }
+
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern { pattern },
@@ -1409,6 +1469,35 @@ mod tests {
                 "/bin/true".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn mitm_ca_trust_bundle_overlays_common_linux_bundle_paths() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let mitm_ca_trust_bundle_path = temp_dir.path().join("ca-bundle.pem");
+        fs::write(&mitm_ca_trust_bundle_path, "managed bundle").expect("write bundle");
+
+        let args = create_bwrap_command_args(
+            vec!["/bin/true".to_string()],
+            &FileSystemSandboxPolicy::unrestricted(),
+            Path::new("/"),
+            Path::new("/"),
+            BwrapOptions {
+                mitm_ca_trust_bundle_path: Some(mitm_ca_trust_bundle_path),
+                ..Default::default()
+            },
+        )
+        .expect("create bwrap args");
+
+        assert_eq!(args.preserved_files.len(), LINUX_CA_BUNDLE_PATHS.len());
+        for bundle_path in LINUX_CA_BUNDLE_PATHS {
+            assert!(args.args.windows(5).any(|window| {
+                window[0] == "--perms"
+                    && window[1] == "444"
+                    && window[2] == "--ro-bind-data"
+                    && window[4] == bundle_path
+            }));
+        }
     }
 
     #[test]
