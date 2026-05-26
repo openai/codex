@@ -218,8 +218,7 @@ impl SandboxManager {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
-                let mitm_ca_trust_bundle_path =
-                    network.and_then(NetworkProxy::mitm_ca_trust_bundle_path);
+                let mitm_ca_cert_path = network.and_then(NetworkProxy::mitm_ca_cert_path);
                 #[cfg(target_os = "linux")]
                 ensure_linux_bubblewrap_is_supported(
                     &effective_file_system_policy,
@@ -234,7 +233,7 @@ impl SandboxManager {
                     sandbox_policy_cwd,
                     use_legacy_landlock,
                     allow_proxy_network,
-                    mitm_ca_trust_bundle_path.as_deref(),
+                    mitm_ca_cert_path.as_deref(),
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(os_string_to_command_component(exe.as_os_str().to_owned()));
