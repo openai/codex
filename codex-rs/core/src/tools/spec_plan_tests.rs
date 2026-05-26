@@ -339,6 +339,22 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
 }
 
 #[tokio::test]
+async fn request_user_input_tool_respects_experimental_config_gate() {
+    let enabled = probe(|_| {}).await;
+    enabled.assert_visible_contains(&["request_user_input"]);
+    enabled.assert_registered_contains(&["request_user_input"]);
+
+    let disabled = probe(|turn| {
+        update_config(turn, |config| {
+            config.experimental_request_user_input_enabled = false;
+        });
+    })
+    .await;
+    disabled.assert_visible_lacks(&["request_user_input"]);
+    disabled.assert_registered_lacks(&["request_user_input"]);
+}
+
+#[tokio::test]
 async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
     let plan = probe(|turn| {
         set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);

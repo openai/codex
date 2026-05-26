@@ -12,6 +12,7 @@ use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ExperimentalRequestUserInput;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
@@ -386,7 +387,13 @@ web_search = true
     )
     .expect("TOML deserialization should succeed");
 
-    assert_eq!(cfg.tools, Some(ToolsToml { web_search: None }));
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            experimental_request_user_input: None,
+        })
+    );
 }
 
 #[test]
@@ -399,7 +406,72 @@ web_search = false
     )
     .expect("TOML deserialization should succeed");
 
-    assert_eq!(cfg.tools, Some(ToolsToml { web_search: None }));
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            experimental_request_user_input: None,
+        })
+    );
+}
+
+#[test]
+fn tools_experimental_request_user_input_defaults_to_enabled() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools.experimental_request_user_input]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: true }),
+        })
+    );
+}
+
+#[test]
+fn tools_experimental_request_user_input_can_be_disabled() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools.experimental_request_user_input]
+enabled = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: false }),
+        })
+    );
+}
+
+#[tokio::test]
+async fn load_config_resolves_experimental_request_user_input_enabled() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tools: Some(ToolsToml {
+                web_search: None,
+                experimental_request_user_input: Some(ExperimentalRequestUserInput {
+                    enabled: false,
+                }),
+            }),
+            ..ConfigToml::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.experimental_request_user_input_enabled);
+    Ok(())
 }
 
 #[test]
