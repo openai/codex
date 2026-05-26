@@ -8,6 +8,7 @@ use anyhow::bail;
 use clap::ArgGroup;
 use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerOAuthConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::McpManager;
 use codex_core::config::Config;
@@ -134,6 +135,14 @@ pub struct AddMcpStreamableHttpArgs {
         requires = "url"
     )]
     pub bearer_token_env_var: Option<String>,
+
+    /// Optional OAuth client identifier to use for this MCP server.
+    #[arg(long = "oauth-client-id", value_name = "CLIENT_ID", requires = "url")]
+    pub oauth_client_id: Option<String>,
+
+    /// Optional OAuth resource parameter to include during MCP login.
+    #[arg(long = "oauth-resource", value_name = "RESOURCE", requires = "url")]
+    pub oauth_resource: Option<String>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -282,7 +291,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
-    let transport = match transport_args {
+    let (transport, oauth_client_id, oauth_resource) = match transport_args {
         AddMcpTransportArgs {
             stdio: Some(stdio), ..
         } => {
@@ -297,27 +306,37 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             } else {
                 Some(stdio.env.into_iter().collect::<HashMap<_, _>>())
             };
-            McpServerTransportConfig::Stdio {
-                command: command_bin,
-                args: command_args,
-                env: env_map,
-                env_vars: Vec::new(),
-                cwd: None,
-            }
+            (
+                McpServerTransportConfig::Stdio {
+                    command: command_bin,
+                    args: command_args,
+                    env: env_map,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                None,
+                None,
+            )
         }
         AddMcpTransportArgs {
             streamable_http:
                 Some(AddMcpStreamableHttpArgs {
                     url,
                     bearer_token_env_var,
+                    oauth_client_id,
+                    oauth_resource,
                 }),
             ..
-        } => McpServerTransportConfig::StreamableHttp {
-            url,
-            bearer_token_env_var,
-            http_headers: None,
-            env_http_headers: None,
-        },
+        } => (
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                http_headers: None,
+                env_http_headers: None,
+            },
+            oauth_client_id,
+            oauth_resource,
+        ),
         AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
     };
 
@@ -334,8 +353,12 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
-        oauth: None,
-        oauth_resource: None,
+        oauth: oauth_client_id
+            .clone()
+            .map(|client_id| McpServerOAuthConfig {
+                client_id: Some(client_id),
+            }),
+        oauth_resource: oauth_resource.clone(),
         tools: HashMap::new(),
     };
 
@@ -364,8 +387,8 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 oauth_config.http_headers,
                 oauth_config.env_http_headers,
                 &resolved_scopes,
-                /*oauth_client_id*/ None,
-                /*oauth_resource*/ None,
+                oauth_client_id.as_deref(),
+                oauth_resource.as_deref(),
                 config.mcp_oauth_callback_port,
                 config.mcp_oauth_callback_url.as_deref(),
             )

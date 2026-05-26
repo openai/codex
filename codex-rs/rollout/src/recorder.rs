@@ -734,8 +734,10 @@ impl RolloutRecorder {
                 // This is the terminal background-task failure path. Normal I/O failures stay inside
                 // `rollout_writer`, are reported through command acks, and leave items buffered for retry.
                 error!(
-                    "rollout writer task failed for {}: {err}",
-                    rollout_path_for_spawn.display()
+                    "rollout writer task failed for {}: {err}; error_kind={:?}; raw_os_error={:?}",
+                    rollout_path_for_spawn.display(),
+                    err.kind(),
+                    err.raw_os_error()
                 );
                 writer_task_for_spawn.mark_failed(&err);
             }
@@ -1468,8 +1470,11 @@ impl RolloutWriterState {
         let message = err.to_string();
         if self.last_logged_error.as_ref() != Some(&message) {
             error!(
-                "rollout writer failed for {}; buffered rollout items will be retried: {err}",
-                self.rollout_path.display()
+                "rollout writer failed for {}; buffered rollout items will be retried: {err}; \
+                 error_kind={:?}; raw_os_error={:?}",
+                self.rollout_path.display(),
+                err.kind(),
+                err.raw_os_error()
             );
         }
         self.last_logged_error = Some(message);

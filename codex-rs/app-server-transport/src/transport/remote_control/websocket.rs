@@ -64,6 +64,8 @@ const REMOTE_CONTROL_WEBSOCKET_PONG_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(60);
 const REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(1);
+const REMOTE_CONTROL_RECONNECT_BACKOFF_CAP: std::time::Duration =
+    std::time::Duration::from_secs(30);
 
 struct BoundedOutboundBuffer {
     buffer_by_stream: HashMap<(ClientId, StreamId), VecDeque<ServerEnvelope>>,
@@ -514,12 +516,23 @@ impl RemoteControlWebsocket {
                     } else {
                         self.status_publisher
                             .publish_status(RemoteControlConnectionStatus::Errored);
+                        let reconnect_attempt = self.reconnect_attempt.saturating_add(1);
+                        let (reconnect_delay, reconnect_backoff_reset) =
+                            next_reconnect_delay(&mut self.reconnect_attempt);
                         warn!(
-                            "failed to connect to app-server remote control websocket: {}, err: {}",
-                            remote_control_target.websocket_url, err
+                            websocket_url = %remote_control_target.websocket_url,
+                            error = %err,
+                            reconnect_attempt,
+                            reconnect_delay = ?reconnect_delay,
+                            reconnect_backoff_reset,
+                            "failed to connect to app-server remote control websocket"
                         );
-                        let reconnect_delay = backoff(self.reconnect_attempt);
-                        self.reconnect_attempt += 1;
+                        if reconnect_backoff_reset {
+                            info!(
+                                reconnect_backoff_cap = ?REMOTE_CONTROL_RECONNECT_BACKOFF_CAP,
+                                "reset app-server remote control websocket reconnect backoff after cap"
+                            );
+                        }
                         reconnect_delay
                     };
                     tokio::select! {
@@ -1036,6 +1049,17 @@ pub(crate) async fn load_remote_control_auth(
     })
 }
 
+fn next_reconnect_delay(reconnect_attempt: &mut u64) -> (std::time::Duration, bool) {
+    let reconnect_delay = backoff(*reconnect_attempt).min(REMOTE_CONTROL_RECONNECT_BACKOFF_CAP);
+    let reconnect_backoff_reset = reconnect_delay == REMOTE_CONTROL_RECONNECT_BACKOFF_CAP;
+    *reconnect_attempt = if reconnect_backoff_reset {
+        0
+    } else {
+        (*reconnect_attempt).saturating_add(1)
+    };
+    (reconnect_delay, reconnect_backoff_reset)
+}
+
 pub(super) async fn connect_remote_control_websocket(
     remote_control_target: &RemoteControlTarget,
     state_db: Option<&StateRuntime>,
@@ -1325,6 +1349,26 @@ mod tests {
     #[cfg(not(windows))]
     const TEST_HTTP_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
     const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+    #[test]
+    fn next_reconnect_delay_resets_after_cap() {
+        let mut reconnect_attempt = 9;
+
+        let (reconnect_delay, reconnect_backoff_reset) =
+            next_reconnect_delay(&mut reconnect_attempt);
+
+        assert_eq!(reconnect_delay, REMOTE_CONTROL_RECONNECT_BACKOFF_CAP);
+        assert!(reconnect_backoff_reset);
+        assert_eq!(reconnect_attempt, 0);
+
+        let (reconnect_delay, reconnect_backoff_reset) =
+            next_reconnect_delay(&mut reconnect_attempt);
+
+        assert!(reconnect_delay >= Duration::from_millis(180));
+        assert!(reconnect_delay <= Duration::from_millis(220));
+        assert!(!reconnect_backoff_reset);
+        assert_eq!(reconnect_attempt, 1);
+    }
 
     fn remote_control_status_channel() -> (
         RemoteControlStatusPublisher,

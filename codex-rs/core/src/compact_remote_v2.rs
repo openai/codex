@@ -77,6 +77,7 @@ pub(crate) async fn run_remote_compact_task(
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
+        trace_id: turn_context.trace_id.clone(),
         started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
@@ -109,7 +110,7 @@ async fn run_remote_compact_task_inner(
         turn_context.as_ref(),
         trigger,
         reason,
-        CompactionImplementation::Responses,
+        CompactionImplementation::ResponsesCompactionV2,
         phase,
     )
     .await;

@@ -227,6 +227,13 @@ impl AppServerSession {
         matches!(self.thread_params_mode, ThreadParamsMode::Remote)
     }
 
+    pub(crate) fn server_version(&self) -> Option<&str> {
+        let AppServerClient::Remote(client) = &self.client else {
+            return None;
+        };
+        client.server_version()
+    }
+
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
         let account = self.read_account().await?;
         let model_request_id = self.next_request_id();
@@ -1252,6 +1259,9 @@ fn config_request_overrides_from_config(
         "web_search",
         Some(config.web_search_mode.value().to_string()),
     );
+    if config.bypass_hook_trust {
+        overrides.insert("bypass_hook_trust".to_string(), true.into());
+    }
     Some(overrides)
 }
 
@@ -2124,7 +2134,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_lifecycle_params_forward_model_reasoning_and_service_tier() {
+    async fn thread_lifecycle_params_forward_config_overrides_and_service_tier() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;
         config.model_reasoning_effort = Some(ReasoningEffort::High);
@@ -2135,6 +2145,7 @@ mod tests {
             .web_search_mode
             .set(WebSearchMode::Disabled)
             .expect("test web search mode should be allowed");
+        config.bypass_hook_trust = true;
         config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         let thread_id = ThreadId::new();
 
@@ -2168,6 +2179,7 @@ mod tests {
             ("model_verbosity".to_string(), string("low")),
             ("personality".to_string(), string("pragmatic")),
             ("web_search".to_string(), string("disabled")),
+            ("bypass_hook_trust".to_string(), true.into()),
         ]);
         assert_eq!(start.config, Some(expected_config.clone()));
         assert_eq!(resume.config, Some(expected_config.clone()));

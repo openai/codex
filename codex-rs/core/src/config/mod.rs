@@ -67,6 +67,7 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
 use codex_memories_read::memory_root;
@@ -1392,11 +1393,18 @@ impl Config {
             .effective_config()
             .try_into()
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        let default_zsh_path = refreshed_config
+            .zsh_path
+            .clone()
+            .map(AbsolutePathBuf::try_from)
+            .transpose()?;
+
         Self::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             cfg,
             ConfigOverrides {
                 cwd: Some(self.cwd.to_path_buf()),
+                default_zsh_path,
                 ..Default::default()
             },
             refreshed_config.codex_home.clone(),
@@ -2128,7 +2136,7 @@ pub struct ConfigOverrides {
     pub codex_self_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
-    pub zsh_path: Option<PathBuf>,
+    pub default_zsh_path: Option<AbsolutePathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
@@ -2480,7 +2488,7 @@ impl Config {
             codex_self_exe,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
-            zsh_path: zsh_path_override,
+            default_zsh_path,
             base_instructions,
             developer_instructions,
             personality,
@@ -3199,7 +3207,9 @@ impl Config {
         )
         .await?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
-        let zsh_path = zsh_path_override.or(cfg.zsh_path.map(Into::into));
+        let zsh_path = default_zsh_path
+            .or_else(|| InstallContext::current().bundled_zsh_path())
+            .map(AbsolutePathBuf::into_path_buf);
 
         let review_model = override_review_model.or(cfg.review_model);
 

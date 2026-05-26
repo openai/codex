@@ -610,6 +610,7 @@ mod thread_processor_behavior_tests {
                 Some(HashMap::from([
                     ("model_provider".to_string(), json!("request")),
                     ("features.plugins".to_string(), json!(true)),
+                    ("bypass_hook_trust".to_string(), json!(true)),
                     (
                         "model_providers.session".to_string(),
                         json!({
@@ -626,6 +627,7 @@ mod thread_processor_behavior_tests {
         assert_eq!(config.model_provider_id, "session");
         assert_eq!(config.model_provider, session_provider);
         assert!(!config.features.enabled(Feature::Plugins));
+        assert!(config.bypass_hook_trust);
         Ok(())
     }
 
@@ -1155,6 +1157,7 @@ mod thread_processor_behavior_tests {
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    trace_id: None,
                     started_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),

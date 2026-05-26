@@ -56,6 +56,7 @@ mod frame_requester;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
+mod terminal_stderr;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
@@ -66,6 +67,7 @@ pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 pub(crate) struct InitializedTerminal {
     pub(crate) terminal: Terminal,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
 
 pub(crate) fn running_in_vscode_terminal() -> bool {
@@ -166,6 +168,8 @@ mod tests {
 }
 
 pub fn set_modes() -> Result<()> {
+    ensure_virtual_terminal_processing()?;
+
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
@@ -239,12 +243,16 @@ fn restore_common(
     raw_mode_restore: RawModeRestore,
     keyboard_restore: KeyboardRestore,
 ) -> Result<()> {
+    let mut first_error = ensure_virtual_terminal_processing().err();
+
     match keyboard_restore {
         KeyboardRestore::PopStack => keyboard_modes::restore_keyboard_enhancement_stack(),
         KeyboardRestore::ResetAfterExit => keyboard_modes::reset_keyboard_reporting_after_exit(),
     }
 
-    let mut first_error = execute!(stdout(), DisableBracketedPaste).err();
+    if let Err(err) = execute!(stdout(), DisableBracketedPaste) {
+        first_error.get_or_insert(err);
+    }
     let _ = execute!(stdout(), DisableFocusChange);
     if matches!(raw_mode_restore, RawModeRestore::Disable)
         && let Err(err) = disable_raw_mode()
@@ -275,7 +283,16 @@ pub fn restore() -> Result<()> {
 /// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
 /// terminal missed the stack pop that normally pairs with [`set_modes`].
 pub fn restore_after_exit() -> Result<()> {
-    restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit)
+    let mut first_error =
+        restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit).err();
+    if let Err(err) = terminal_stderr::finish() {
+        first_error.get_or_insert(err);
+    }
+
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 /// Restore the terminal to its original state, but keep raw mode enabled.
@@ -419,9 +436,11 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
         !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
 
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
+    let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
     Ok(InitializedTerminal {
         terminal: tui,
         enhanced_keys_supported,
+        stderr_guard,
     })
 }
 
@@ -483,6 +502,8 @@ pub struct Tui {
     notification_condition: NotificationCondition,
     // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
+    // Keeps unmanaged process stderr writes out of the inline viewport.
+    _stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
 
 struct PendingHistoryLines {
@@ -503,7 +524,11 @@ where
 }
 
 impl Tui {
-    pub fn new(terminal: Terminal, enhanced_keys_supported: bool) -> Self {
+    pub(crate) fn new(
+        terminal: Terminal,
+        enhanced_keys_supported: bool,
+        stderr_guard: terminal_stderr::TerminalStderrGuard,
+    ) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
 
@@ -528,6 +553,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             alt_screen_enabled: true,
+            _stderr_guard: stderr_guard,
         }
     }
 
@@ -571,8 +597,8 @@ impl Tui {
     /// Temporarily restore terminal state to run an external interactive program `f`.
     ///
     /// This pauses crossterm's stdin polling by dropping the underlying event stream, restores
-    /// terminal modes (optionally keeping raw mode enabled), then re-applies Codex TUI modes and
-    /// flushes pending stdin input before resuming events.
+    /// terminal modes and stderr (optionally keeping raw mode enabled), then re-applies Codex TUI
+    /// modes and stderr suppression before resuming events.
     pub async fn with_restored<R, F, Fut>(&mut self, mode: RestoreMode, f: F) -> R
     where
         F: FnOnce() -> Fut,
@@ -590,9 +616,15 @@ impl Tui {
         if let Err(err) = mode.restore() {
             tracing::warn!("failed to restore terminal modes before external program: {err}");
         }
+        if let Err(err) = terminal_stderr::pause() {
+            tracing::warn!("failed to restore terminal stderr before external program: {err}");
+        }
 
         let output = f().await;
 
+        if let Err(err) = terminal_stderr::resume() {
+            tracing::warn!("failed to suppress terminal stderr after external program: {err}");
+        }
         if let Err(err) = set_modes() {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
         }
@@ -797,6 +829,8 @@ impl Tui {
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
 
+        ensure_virtual_terminal_processing()?;
+
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
@@ -854,6 +888,10 @@ impl Tui {
         &mut self,
         request: Option<crate::pets::AmbientPetDraw>,
     ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        if let Err(err) = ensure_virtual_terminal_processing() {
+            return Err(crate::pets::PetImageRenderError::Terminal(err));
+        }
+
         let terminal = &mut self.terminal;
         let state = &mut self.ambient_pet_image_state;
         stdout().sync_update(|_| {
@@ -869,6 +907,10 @@ impl Tui {
         &mut self,
         request: Option<crate::pets::AmbientPetDraw>,
     ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        if let Err(err) = ensure_virtual_terminal_processing() {
+            return Err(crate::pets::PetImageRenderError::Terminal(err));
+        }
+
         let terminal = &mut self.terminal;
         let state = &mut self.pet_picker_preview_image_state;
         stdout().sync_update(|_| {
@@ -887,6 +929,10 @@ impl Tui {
     pub fn clear_ambient_pet_image(
         &mut self,
     ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        if let Err(err) = ensure_virtual_terminal_processing() {
+            return Err(crate::pets::PetImageRenderError::Terminal(err));
+        }
+
         crate::pets::render_ambient_pet_image(
             self.terminal.backend_mut(),
             &mut self.ambient_pet_image_state,
@@ -910,6 +956,8 @@ impl Tui {
         let mut prepared_resume = self
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
+
+        ensure_virtual_terminal_processing()?;
 
         stdout().sync_update(|_| {
             #[cfg(unix)]
@@ -967,4 +1015,52 @@ impl Tui {
         }
         Ok(None)
     }
+}
+
+#[cfg(windows)]
+fn ensure_virtual_terminal_processing() -> Result<()> {
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::ENABLE_PROCESSED_OUTPUT;
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
+    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+    use windows_sys::Win32::System::Console::SetConsoleMode;
+
+    fn enable_for_handle(handle: HANDLE) -> Result<()> {
+        if handle == INVALID_HANDLE_VALUE || handle == 0 {
+            return Ok(());
+        }
+
+        let mut mode = 0;
+        if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+            return Ok(());
+        }
+
+        let requested = ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        if mode & requested == requested {
+            return Ok(());
+        }
+
+        if unsafe { SetConsoleMode(handle, mode | requested) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        Ok(())
+    }
+
+    let stdout_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    enable_for_handle(stdout_handle)?;
+
+    let stderr_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    enable_for_handle(stderr_handle)?;
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn ensure_virtual_terminal_processing() -> Result<()> {
+    Ok(())
 }
