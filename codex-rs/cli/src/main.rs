@@ -1757,7 +1757,7 @@ async fn run_debug_clear_memories_command(
         let state_db =
             StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
                 .await?;
-        state_db.clear_memory_data().await?;
+        state_db.memories().clear_memory_data().await?;
         cleared_state_db = true;
     }
 
