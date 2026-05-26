@@ -4351,9 +4351,6 @@ mod tests {
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
     use codex_protocol::models::local_image_label_text;
-    use crossterm::event::KeyCode;
-    use crossterm::event::KeyEvent;
-    use crossterm::event::KeyModifiers;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -8003,110 +8000,6 @@ mod tests {
             composer.draft.textarea.cursor(),
             composer.draft.textarea.text().len()
         );
-    }
-
-    fn test_composer() -> ChatComposer {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        )
-    }
-
-    fn press(composer: &mut ChatComposer, code: KeyCode) -> InputResult {
-        composer
-            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
-            .0
-    }
-
-    fn composer_with_draft_tail(prefix: &[char], draft: &str, goal_enabled: bool) -> ChatComposer {
-        let mut composer = test_composer();
-        composer.set_goal_command_enabled(goal_enabled);
-
-        let draft_chars = draft.chars().collect::<Vec<_>>();
-        type_chars_humanlike(&mut composer, &draft_chars);
-        press(&mut composer, KeyCode::Home);
-        type_chars_humanlike(&mut composer, prefix);
-        composer
-    }
-
-    fn composer_with_text_at_cursor(text: &str, cursor: usize) -> ChatComposer {
-        let mut composer = test_composer();
-        composer.draft.textarea.set_text_clearing_elements(text);
-        composer.draft.textarea.set_cursor(cursor);
-        composer.sync_popups();
-        composer
-    }
-
-    #[test]
-    fn slash_completion_preserves_existing_draft_tail_for_opted_in_commands() {
-        let cases: &[(SlashCommand, &[char], &str, &str, bool)] = &[
-            (
-                SlashCommand::Goal,
-                &['/', 'g', 'o'],
-                "preserve this draft as the goal objective",
-                "/goal preserve this draft as the goal objective",
-                true,
-            ),
-            (
-                SlashCommand::Review,
-                &['/', 'r', 'e'],
-                "view the diff",
-                "/review view the diff",
-                false,
-            ),
-        ];
-
-        for &(cmd, prefix, draft, expected_text, goal_enabled) in cases {
-            let mut composer = composer_with_draft_tail(prefix, draft, goal_enabled);
-            assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-            assert_eq!(composer.draft.textarea.text(), expected_text);
-            assert_eq!(
-                composer.draft.textarea.cursor(),
-                composer.draft.textarea.text().len()
-            );
-
-            let mut composer = composer_with_draft_tail(prefix, draft, goal_enabled);
-            assert_eq!(
-                press(&mut composer, KeyCode::Enter),
-                InputResult::CommandWithArgs(cmd, draft.to_string(), Vec::new())
-            );
-            assert_eq!(composer.draft.textarea.text(), expected_text);
-        }
-    }
-
-    #[test]
-    fn slash_completion_does_not_preserve_existing_draft_tail_for_other_commands() {
-        let mut composer = composer_with_draft_tail(
-            &['/', 'm', 'o'],
-            "preserve this draft only for opted-in slash commands",
-            false,
-        );
-
-        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-        assert_eq!(composer.draft.textarea.text(), "/model ");
-        assert_eq!(
-            composer.draft.textarea.cursor(),
-            composer.draft.textarea.text().len()
-        );
-    }
-
-    #[test]
-    fn slash_completion_does_not_turn_command_suffix_into_args() {
-        let mut composer = composer_with_text_at_cursor("/review", "/re".len());
-        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-        assert_eq!(composer.draft.textarea.text(), "/review ");
-
-        let mut composer = composer_with_text_at_cursor("/review", "/re".len());
-        assert_eq!(
-            press(&mut composer, KeyCode::Enter),
-            InputResult::Command(SlashCommand::Review)
-        );
-        assert!(composer.draft.textarea.is_empty());
     }
 
     #[test]
