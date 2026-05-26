@@ -178,6 +178,8 @@ pub enum Feature {
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
+    /// Enable the unified mention popup prototype.
+    MentionsV2,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
@@ -238,9 +240,6 @@ pub enum Feature {
     CollaborationModes,
     /// Removed compatibility flag for the deleted remote control feature.
     RemoteControl,
-    /// Removed compatibility flag retained as a no-op now that unified
-    /// `@mentions` are always enabled.
-    MentionsV2,
     /// Removed compatibility flag retained as a no-op so old wrappers can
     /// still pass `--enable image_detail_original`.
     ImageDetailOriginal,
@@ -428,9 +427,6 @@ impl Features {
                     continue;
                 }
                 "remote_control" => {
-                    continue;
-                }
-                "mentions_v2" => {
                     continue;
                 }
                 "apply_patch_freeform" => {
@@ -1070,6 +1066,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::MentionsV2,
+        key: "mentions_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Steer,
         key: "steer",
         stage: Stage::Removed,
@@ -1140,12 +1142,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_control",
         stage: Stage::Removed,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::MentionsV2,
-        key: "mentions_v2",
-        stage: Stage::Removed,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ImageDetailOriginal,

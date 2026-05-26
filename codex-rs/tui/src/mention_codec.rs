@@ -60,7 +60,7 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
                     }
 
                     let name = &text[name_start..name_end];
-                    if ends_plaintext_mention(bytes, name_end)
+                    if (sigil == TOOL_MENTION_SIGIL || ends_plaintext_mention(bytes, name_end))
                         && let Some(path) = mentions_by_token
                             .get_mut(&(sigil, name))
                             .and_then(VecDeque::pop_front)
@@ -89,6 +89,13 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
 }
 
 pub(crate) fn decode_history_mentions(text: &str) -> DecodedHistoryText {
+    decode_history_mentions_with_at_mentions(text, /*at_mentions_enabled*/ true)
+}
+
+pub(crate) fn decode_history_mentions_with_at_mentions(
+    text: &str,
+    at_mentions_enabled: bool,
+) -> DecodedHistoryText {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut mentions = Vec::new();
@@ -97,7 +104,7 @@ pub(crate) fn decode_history_mentions(text: &str) -> DecodedHistoryText {
     while index < bytes.len() {
         if bytes[index] == b'['
             && let Some((sigil, name, path, end_index)) =
-                parse_history_linked_mention(text, bytes, index)
+                parse_history_linked_mention(text, bytes, index, at_mentions_enabled)
         {
             out.push(sigil);
             out.push_str(name);
@@ -127,6 +134,7 @@ fn parse_history_linked_mention<'a>(
     text: &'a str,
     text_bytes: &[u8],
     start: usize,
+    at_mentions_enabled: bool,
 ) -> Option<(char, &'a str, &'a str, usize)> {
     // TUI historically wrote `$name`, but selected unified `@` mentions should preserve `@` on
     // history round-trip for any canonical tool path.
@@ -138,12 +146,20 @@ fn parse_history_linked_mention<'a>(
         return Some((TOOL_MENTION_SIGIL, name, path, end_index));
     }
 
-    if let Some((name, path, end_index)) =
+    if at_mentions_enabled {
+        if let Some((name, path, end_index)) =
+            parse_linked_tool_mention(text, text_bytes, start, PLUGIN_TEXT_MENTION_SIGIL)
+            && !is_common_env_var(name)
+            && is_tool_path(path)
+        {
+            return Some((PLUGIN_TEXT_MENTION_SIGIL, name, path, end_index));
+        }
+    } else if let Some((name, path, end_index)) =
         parse_linked_tool_mention(text, text_bytes, start, PLUGIN_TEXT_MENTION_SIGIL)
         && !is_common_env_var(name)
-        && is_tool_path(path)
+        && path.starts_with("plugin://")
     {
-        return Some((PLUGIN_TEXT_MENTION_SIGIL, name, path, end_index));
+        return Some((TOOL_MENTION_SIGIL, name, path, end_index));
     }
 
     None
@@ -215,11 +231,9 @@ fn starts_plaintext_mention(text: &str, index: usize) -> bool {
         return true;
     }
 
-    // Fix for restored `@` mentions: keep history encoding on the same Unicode whitespace
-    // boundary that composer rebinding uses when deciding which visible token owns a link.
     text.get(..index)
         .and_then(|prefix| prefix.chars().next_back())
-        .is_some_and(char::is_whitespace)
+        .is_some_and(|ch| ch.is_whitespace() || !is_mention_name_char_char(ch))
 }
 
 fn ends_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
@@ -235,6 +249,10 @@ fn ends_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
                 && *byte != b'_'
                 && *byte != b'-'
     })
+}
+
+fn is_mention_name_char_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')
 }
 
 fn is_common_env_var(name: &str) -> bool {
@@ -323,6 +341,41 @@ mod tests {
     }
 
     #[test]
+    fn decode_history_mentions_without_at_mentions_uses_legacy_plugin_fallback() {
+        let decoded = decode_history_mentions_with_at_mentions(
+            "Use [@sample](plugin://sample@test) and [$figma](app://figma-1).",
+            /*at_mentions_enabled*/ false,
+        );
+        assert_eq!(decoded.text, "Use $sample and $figma.");
+        assert_eq!(
+            decoded.mentions,
+            vec![
+                LinkedMention {
+                    sigil: '$',
+                    mention: "sample".to_string(),
+                    path: "plugin://sample@test".to_string(),
+                },
+                LinkedMention {
+                    sigil: '$',
+                    mention: "figma".to_string(),
+                    path: "app://figma-1".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_history_mentions_without_at_mentions_ignores_at_non_plugin_paths() {
+        let decoded = decode_history_mentions_with_at_mentions(
+            "Use [@figma](app://figma-1).",
+            /*at_mentions_enabled*/ false,
+        );
+
+        assert_eq!(decoded.text, "Use [@figma](app://figma-1).");
+        assert_eq!(decoded.mentions, Vec::<LinkedMention>::new());
+    }
+
+    #[test]
     fn decode_history_mentions_restores_at_sigil_for_tool_paths() {
         let decoded = decode_history_mentions("Use [@figma](app://figma-1).");
 
@@ -377,6 +430,28 @@ mod tests {
             }],
         );
         assert_eq!(encoded, "([$figma](app://figma))");
+    }
+
+    #[test]
+    fn encode_history_mentions_links_dollar_mentions_with_path_like_suffixes() {
+        let mention = LinkedMention {
+            sigil: '$',
+            mention: "figma".to_string(),
+            path: "app://figma".to_string(),
+        };
+
+        assert_eq!(
+            encode_history_mentions("$figma/docs", &[mention.clone()]),
+            "[$figma](app://figma)/docs"
+        );
+        assert_eq!(
+            encode_history_mentions("$figma.suffix", &[mention.clone()]),
+            "[$figma](app://figma).suffix"
+        );
+        assert_eq!(
+            encode_history_mentions("$figma\\docs", &[mention]),
+            "[$figma](app://figma)\\docs"
+        );
     }
 
     #[test]
@@ -468,6 +543,20 @@ mod tests {
             }],
         );
         assert_eq!(encoded, "Please ask [@figma](/tmp/figma/SKILL.md).");
+    }
+
+    #[test]
+    fn encode_history_mentions_links_parenthesized_at_mentions() {
+        let text = "Please ask (@figma)";
+        let encoded = encode_history_mentions(
+            text,
+            &[LinkedMention {
+                sigil: '@',
+                mention: "figma".to_string(),
+                path: "plugin://figma@test".to_string(),
+            }],
+        );
+        assert_eq!(encoded, "Please ask ([@figma](plugin://figma@test))");
     }
 
     #[test]
