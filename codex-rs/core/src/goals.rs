@@ -836,7 +836,7 @@ impl Session {
         let active = self.active_turn.lock().await;
         active
             .as_ref()
-            .and_then(|active_turn| active_turn.tasks.values().next())
+            .and_then(|active_turn| active_turn.task.as_ref())
             .map(|task| Arc::clone(&task.turn_context))
     }
 
@@ -916,7 +916,7 @@ impl Session {
     async fn clear_reserved_goal_continuation_turn(&self, turn_state: &Arc<Mutex<TurnState>>) {
         let mut active_turn_guard = self.active_turn.lock().await;
         if let Some(active_turn) = active_turn_guard.as_ref()
-            && active_turn.tasks.is_empty()
+            && active_turn.task.is_none()
             && Arc::ptr_eq(&active_turn.turn_state, turn_state)
         {
             *active_turn_guard = None;
@@ -1364,7 +1364,7 @@ impl Session {
         let still_reserved = {
             let active_turn = self.active_turn.lock().await;
             active_turn.as_ref().is_some_and(|active_turn| {
-                active_turn.tasks.is_empty() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
+                active_turn.task.is_none() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
             })
         };
         if !still_reserved {

@@ -2236,6 +2236,7 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
+ "codex-git-utils",
  "codex-install-context",
  "codex-login",
  "codex-mcp",
@@ -2247,6 +2248,7 @@ dependencies = [
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-rollout",
  "codex-rollout-trace",
  "codex-sandboxing",
  "codex-state",
@@ -2260,7 +2262,9 @@ dependencies = [
  "codex-windows-sandbox",
  "crossterm",
  "http 1.4.0",
+ "insta",
  "libc",
+ "os_info",
  "owo-colors",
  "predicates",
  "pretty_assertions",
@@ -2269,12 +2273,16 @@ dependencies = [
  "serde_json",
  "sqlx",
  "supports-color 3.0.2",
+ "sys-locale",
  "tempfile",
  "tokio",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "unicode-segmentation",
+ "which 8.0.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3174,28 +3182,12 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-features",
- "codex-memories-read",
+ "codex-otel",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
+ "codex-utils-template",
  "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "codex-memories-mcp"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-utils-absolute-path",
- "codex-utils-output-truncation",
- "pretty_assertions",
- "rmcp",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -3211,11 +3203,7 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",
- "codex-utils-output-truncation",
- "codex-utils-template",
  "pretty_assertions",
- "tempfile",
- "tokio",
 ]
 
 [[package]]

@@ -5305,6 +5305,27 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
 }
 
 #[tokio::test]
+async fn to_mcp_config_flows_mcp_tool_prefix_from_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert!(mcp_config.prefix_mcp_tool_names);
+
+    let _ = config.features.enable(Feature::NonPrefixedMcpToolNames);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert!(!mcp_config.prefix_mcp_tool_names);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(

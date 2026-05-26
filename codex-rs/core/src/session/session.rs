@@ -978,6 +978,7 @@ impl Session {
                     McpConnectionManager::new_uninitialized_with_permission_profile(
                         &config.permissions.approval_policy,
                         config.permissions.permission_profile(),
+                        config.prefix_mcp_tool_names(),
                     ),
                 )),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -1156,6 +1157,7 @@ impl Session {
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
                 host_owned_codex_apps_enabled,
+                config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
                 tool_plugin_provenance,
                 auth,

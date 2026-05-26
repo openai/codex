@@ -403,7 +403,7 @@ url = "{mcp_server_url}/mcp"
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_tool_call_completion_notification_contains_truncated_large_result() -> Result<()> {
     let call_id = "call-large-mcp";
-    let namespace = format!("mcp__{TEST_SERVER_NAME}__");
+    let namespace = format!("mcp__{TEST_SERVER_NAME}");
     let responses = vec![
         responses::sse(vec![
             responses::ev_response_created("resp-1"),

@@ -4521,6 +4521,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
+                config.prefix_mcp_tool_names(),
             ),
         )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -6352,6 +6353,7 @@ where
             McpConnectionManager::new_uninitialized_with_permission_profile(
                 &config.permissions.approval_policy,
                 config.permissions.permission_profile(),
+                config.prefix_mcp_tool_names(),
             ),
         )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),

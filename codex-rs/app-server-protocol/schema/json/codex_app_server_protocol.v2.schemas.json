@@ -6894,6 +6894,12 @@
             "integer",
             "null"
           ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "title": "ListMcpServerStatusParams",

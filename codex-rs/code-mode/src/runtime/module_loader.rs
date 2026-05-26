@@ -104,14 +104,14 @@ pub(super) fn completion_state(
     scope: &mut v8::PinScope<'_, '_>,
     pending_promise: Option<&v8::Global<v8::Promise>>,
 ) -> CompletionState {
-    let stored_values = scope
+    let stored_value_writes = scope
         .get_slot::<RuntimeState>()
-        .map(|state| state.stored_values.clone())
+        .map(|state| state.stored_value_writes.clone())
         .unwrap_or_default();
 
     let Some(pending_promise) = pending_promise else {
         return CompletionState::Completed {
-            stored_values,
+            stored_value_writes,
             error_text: None,
         };
     };
@@ -120,7 +120,7 @@ pub(super) fn completion_state(
     match promise.state() {
         v8::PromiseState::Pending => CompletionState::Pending,
         v8::PromiseState::Fulfilled => CompletionState::Completed {
-            stored_values,
+            stored_value_writes,
             error_text: None,
         },
         v8::PromiseState::Rejected => {
@@ -131,7 +131,7 @@ pub(super) fn completion_state(
                 Some(value_to_error_text(scope, result))
             };
             CompletionState::Completed {
-                stored_values,
+                stored_value_writes,
                 error_text,
             }
         }
