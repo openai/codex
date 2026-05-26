@@ -10,6 +10,7 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
 use codex_features::Feature;
+use codex_otel::MetricsClient;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::local::LocalMemoriesBackend;
@@ -17,8 +18,18 @@ use crate::prompts::build_memory_tool_developer_instructions;
 use crate::tools;
 
 /// Contributes Codex memory read-path prompt context and memory read tools.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct MemoriesExtension;
+#[derive(Clone, Default)]
+pub(crate) struct MemoriesExtension {
+    _metrics_client: Option<MetricsClient>,
+}
+
+impl MemoriesExtension {
+    fn new(metrics_client: Option<MetricsClient>) -> Self {
+        Self {
+            _metrics_client: metrics_client,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct MemoriesExtensionConfig {
@@ -97,8 +108,11 @@ impl ToolContributor for MemoriesExtension {
 }
 
 /// Installs the memories extension contributors into the extension registry.
-pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
-    let extension = Arc::new(MemoriesExtension);
+pub fn install(
+    registry: &mut ExtensionRegistryBuilder<Config>,
+    metrics_client: Option<MetricsClient>,
+) {
+    let extension = Arc::new(MemoriesExtension::new(metrics_client));
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.prompt_contributor(extension);

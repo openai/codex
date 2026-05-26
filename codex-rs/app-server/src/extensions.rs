@@ -18,7 +18,7 @@ where
 {
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     codex_guardian::install(&mut builder, guardian_agent_spawner);
-    codex_memories_extension::install(&mut builder);
+    codex_memories_extension::install(&mut builder, codex_otel::global());
     Arc::new(builder.build())
 }
 
