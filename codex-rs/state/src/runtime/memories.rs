@@ -429,7 +429,7 @@ WHERE thread_id IN (
         }
         let cutoff = (Utc::now() - Duration::days(max_unused_days.max(0))).timestamp();
 
-        let page_size = n.max(1).min(PHASE2_INPUT_SELECTION_PAGE_SIZE);
+        let page_size = n.clamp(1, PHASE2_INPUT_SELECTION_PAGE_SIZE);
         let page_size_i64 = i64::try_from(page_size).unwrap_or(i64::MAX);
         let mut offset = 0_i64;
         let mut selected_keys = Vec::with_capacity(n);
