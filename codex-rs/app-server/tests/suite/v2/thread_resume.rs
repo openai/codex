@@ -1988,7 +1988,7 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: "not-a-valid-thread-id".to_string(),
-            path: Some(rollout.rollout_file_path.canonicalize()?),
+            path: Some(normalized_existing_path(&rollout.rollout_file_path)?),
             cwd: Some(codex_home.path().to_string_lossy().to_string()),
             ..Default::default()
         })
