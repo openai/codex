@@ -614,6 +614,11 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
+    /// Returns the managed CA bundle child sandboxes should trust while MITM is active.
+    pub fn mitm_ca_trust_bundle_path(&self) -> Option<PathBuf> {
+        self.runtime_settings().mitm_ca_trust_bundle_path
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         let runtime_settings = self.runtime_settings();
         // Enforce proxying for child processes. We intentionally override existing values so
