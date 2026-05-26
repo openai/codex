@@ -129,6 +129,10 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
         })
     );
     assert_eq!(
+        search_body["settings"]["allowed_callers"],
+        json!(["direct"])
+    );
+    assert_eq!(
         search_body["input"]
             .as_array()
             .context("search input should be an array")?
