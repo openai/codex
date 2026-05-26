@@ -25,6 +25,8 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
+use codex_git_utils::get_git_repo_root_with_fs;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
 use std::io;
@@ -293,6 +295,15 @@ impl<'a> AgentsMdManager<'a> {
             }
         }
 
+        let linked_checkout_roots = match (
+            get_git_repo_root_with_fs(fs, &dir).await,
+            resolve_root_git_project_for_trust(fs, &dir).await,
+        ) {
+            (Some(checkout_root), Some(repo_root)) if checkout_root != repo_root => {
+                Some((checkout_root, repo_root))
+            }
+            _ => None,
+        };
         let search_dirs: Vec<AbsolutePathBuf> = if let Some(root) = project_root {
             let mut dirs = Vec::new();
             let mut cursor = dir.clone();
@@ -315,8 +326,14 @@ impl<'a> AgentsMdManager<'a> {
         let mut found: Vec<AbsolutePathBuf> = Vec::new();
         let candidate_filenames = self.candidate_filenames();
         for d in search_dirs {
-            for name in &candidate_filenames {
-                let candidate = d.join(name);
+            let mut candidates = vec![d.join(LOCAL_AGENTS_MD_FILENAME)];
+            if let Some((checkout_root, repo_root)) = linked_checkout_roots.as_ref()
+                && let Ok(relative) = d.as_path().strip_prefix(checkout_root.as_path())
+            {
+                candidates.push(repo_root.join(relative).join(LOCAL_AGENTS_MD_FILENAME));
+            }
+            candidates.extend(candidate_filenames.iter().skip(1).map(|name| d.join(name)));
+            for candidate in candidates {
                 match fs.get_metadata(&candidate, /*sandbox*/ None).await {
                     Ok(md) if md.is_file => {
                         found.push(candidate);

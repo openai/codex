@@ -394,6 +394,31 @@ async fn agents_local_md_preferred() {
     );
 }
 
+#[tokio::test]
+async fn linked_worktrees_inherit_agents_local_md_from_primary_checkout() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    let worktree = tmp.path().join("worktree");
+    let worktree_git_dir = repo.join(".git/worktrees/feature");
+    fs::create_dir_all(&worktree_git_dir).unwrap();
+    fs::create_dir_all(&worktree).unwrap();
+    fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )
+    .unwrap();
+    fs::write(repo.join(LOCAL_AGENTS_MD_FILENAME), "primary local").unwrap();
+    fs::write(worktree.join(DEFAULT_AGENTS_MD_FILENAME), "versioned").unwrap();
+
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    cfg.cwd = worktree.abs();
+
+    assert_eq!(
+        get_user_instructions(&cfg).await.as_deref(),
+        Some("primary local")
+    );
+}
+
 /// When AGENTS.md is absent but a configured fallback exists, the fallback is used.
 #[tokio::test]
 async fn uses_configured_fallback_when_agents_missing() {
