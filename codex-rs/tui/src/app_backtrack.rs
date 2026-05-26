@@ -37,6 +37,7 @@ use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint::KeyBindingListExt;
 use crate::pager_overlay::Overlay;
+use crate::pager_overlay::TranscriptOverlayState;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
@@ -149,19 +150,27 @@ impl App {
                 }
             }
         } else if let TuiEvent::Key(key_event) = event
-            && (matches!(
+            && matches!(
                 key_event,
                 KeyEvent {
                     code: KeyCode::Esc,
                     kind: KeyEventKind::Press | KeyEventKind::Repeat,
                     ..
                 }
-            ) || self.keymap.pager.previous_user_prompt.is_pressed(key_event)
-                || self.keymap.pager.next_user_prompt.is_pressed(key_event))
+            )
         {
-            // First Esc / prompt-selection key in transcript overlay: begin backtrack preview at
-            // latest user message.
-            self.begin_overlay_backtrack_preview(tui);
+            // First Esc in transcript overlay: begin backtrack preview at latest user message.
+            self.begin_overlay_backtrack_preview(tui, OverlayBacktrackStart::Latest);
+            Ok(true)
+        } else if let TuiEvent::Key(key_event) = event
+            && self.keymap.pager.previous_user_prompt.is_pressed(key_event)
+        {
+            self.begin_overlay_backtrack_preview(tui, OverlayBacktrackStart::Previous);
+            Ok(true)
+        } else if let TuiEvent::Key(key_event) = event
+            && self.keymap.pager.next_user_prompt.is_pressed(key_event)
+        {
+            self.begin_overlay_backtrack_preview(tui, OverlayBacktrackStart::Next);
             Ok(true)
         } else {
             // Not in backtrack mode: forward events to the overlay widget.
@@ -235,13 +244,21 @@ impl App {
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
-        self.overlay = Some(Overlay::new_transcript(
+        let transcript_overlay_state = transcript_overlay_state_for_open(
+            self.transcript_overlay_state,
+            &self.transcript_cells,
+        );
+        let mut overlay = Overlay::new_transcript(
             self.transcript_cells.clone(),
             self.keymap.pager.clone(),
             self.keymap.app.copy.clone(),
             self.keymap.app.toggle_raw_output.clone(),
-            self.transcript_overlay_state,
-        ));
+            transcript_overlay_state,
+        );
+        if let Overlay::Transcript(transcript) = &mut overlay {
+            transcript.set_highlight_cell(transcript_overlay_state.highlight_cell);
+        }
+        self.overlay = Some(overlay);
         tui.frame_requester().schedule_frame();
     }
 
@@ -313,8 +330,12 @@ impl App {
         self.step_backtrack_and_highlight(tui);
     }
 
-    /// When overlay is already open, begin preview mode and select latest user message.
-    fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
+    /// When overlay is already open, begin preview mode and select the requested user message.
+    fn begin_overlay_backtrack_preview(
+        &mut self,
+        tui: &mut tui::Tui,
+        start: OverlayBacktrackStart,
+    ) {
         if !has_backtrack_target(&self.transcript_cells) {
             self.close_transcript_overlay(tui);
             self.chat_widget
@@ -326,9 +347,10 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
-        let count = user_count(&self.transcript_cells);
-        if let Some(last) = count.checked_sub(1) {
-            self.apply_backtrack_selection_internal(last);
+        if let Some(nth_user_message) =
+            initial_overlay_backtrack_selection(user_count(&self.transcript_cells), start)
+        {
+            self.apply_backtrack_selection_internal(nth_user_message);
         }
         tui.frame_requester().schedule_frame();
     }
@@ -722,6 +744,32 @@ fn has_backtrack_target(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> 
     user_count(cells) > 0
 }
 
+#[derive(Clone, Copy)]
+enum OverlayBacktrackStart {
+    Latest,
+    Previous,
+    Next,
+}
+
+fn initial_overlay_backtrack_selection(
+    user_count: usize,
+    start: OverlayBacktrackStart,
+) -> Option<usize> {
+    let last = user_count.checked_sub(1)?;
+    Some(match start {
+        OverlayBacktrackStart::Latest | OverlayBacktrackStart::Next => last,
+        OverlayBacktrackStart::Previous => last.saturating_sub(1),
+    })
+}
+
+fn transcript_overlay_state_for_open(
+    mut state: TranscriptOverlayState,
+    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
+) -> TranscriptOverlayState {
+    state.highlight_cell = user_positions_iter(cells).last();
+    state
+}
+
 fn nth_user_position(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
     nth: usize,
@@ -782,6 +830,7 @@ mod tests {
     use super::*;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use crate::history_cell::HistoryRenderMode;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::sync::Arc;
@@ -1030,6 +1079,104 @@ mod tests {
         }) as Arc<dyn HistoryCell>);
 
         assert!(has_backtrack_target(&cells));
+    }
+
+    #[test]
+    fn transcript_overlay_open_selects_latest_user_prompt() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant")],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+        ];
+        let stale_state = TranscriptOverlayState {
+            scroll_offset: 4,
+            highlight_cell: Some(0),
+            render_mode: HistoryRenderMode::Raw,
+        };
+
+        let state = transcript_overlay_state_for_open(stale_state, &cells);
+
+        assert_eq!(
+            state,
+            TranscriptOverlayState {
+                scroll_offset: 4,
+                highlight_cell: Some(2),
+                render_mode: HistoryRenderMode::Raw,
+            }
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_open_clears_stale_selection_without_user_prompt() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>];
+        let stale_state = TranscriptOverlayState {
+            scroll_offset: 4,
+            highlight_cell: Some(0),
+            render_mode: HistoryRenderMode::Raw,
+        };
+
+        let state = transcript_overlay_state_for_open(stale_state, &cells);
+
+        assert_eq!(
+            state,
+            TranscriptOverlayState {
+                scroll_offset: 4,
+                highlight_cell: None,
+                render_mode: HistoryRenderMode::Raw,
+            }
+        );
+    }
+
+    #[test]
+    fn first_previous_prompt_key_starts_on_previous_prompt() {
+        assert_eq!(
+            initial_overlay_backtrack_selection(
+                /*user_count*/ 3,
+                OverlayBacktrackStart::Previous,
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            initial_overlay_backtrack_selection(
+                /*user_count*/ 3,
+                OverlayBacktrackStart::Latest
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            initial_overlay_backtrack_selection(/*user_count*/ 3, OverlayBacktrackStart::Next),
+            Some(2)
+        );
+        assert_eq!(
+            initial_overlay_backtrack_selection(
+                /*user_count*/ 1,
+                OverlayBacktrackStart::Previous,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            initial_overlay_backtrack_selection(
+                /*user_count*/ 0,
+                OverlayBacktrackStart::Previous,
+            ),
+            None
+        );
     }
 
     #[test]

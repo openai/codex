@@ -171,6 +171,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
