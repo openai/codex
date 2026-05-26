@@ -41,6 +41,10 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::PagerKeymap;
+use crate::pager_overlay_search::SearchCorpus;
+use crate::pager_overlay_search::SearchCorpusKey;
+use crate::pager_overlay_search::SearchMatch;
+use crate::pager_overlay_search::transcript_search_lines;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
@@ -608,16 +612,7 @@ impl Renderable for TailLinesRenderable {
             .line_count(width)
             .try_into()
             .unwrap_or(/*default*/ 0)
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SearchMatch {
-    renderable_index: usize,
-    line_index: usize,
-    scroll_line_index: usize,
-    start_col: u16,
-    end_col: u16,
-    owning_user_prompt_cell: Option<usize>,
+    }
 }
 
 #[derive(Default)]
@@ -628,6 +623,7 @@ struct TranscriptSearchState {
     matches: Vec<SearchMatch>,
     active_match: Option<usize>,
     dirty: bool,
+    recompute_at: Option<Instant>,
 }
 
 impl TranscriptSearchState {
@@ -637,7 +633,8 @@ impl TranscriptSearchState {
         self.query.clear();
         self.matches.clear();
         self.active_match = None;
-        self.dirty = true;
+        self.dirty = false;
+        self.recompute_at = None;
     }
 
     fn deactivate(&mut self) {
@@ -647,6 +644,7 @@ impl TranscriptSearchState {
         self.matches.clear();
         self.active_match = None;
         self.dirty = false;
+        self.recompute_at = None;
     }
 }
 
@@ -667,6 +665,8 @@ pub(crate) struct TranscriptOverlay {
     scroll_selected_user_cell: Option<usize>,
     footer_status: Option<FooterStatus>,
     search: TranscriptSearchState,
+    search_corpus: Option<SearchCorpus>,
+    search_corpus_revision: u64,
     active_search_match: Rc<RefCell<Option<RenderableMatch>>>,
     last_content_width: Option<u16>,
     live_tail_lines: Option<Vec<HyperlinkLine>>,
@@ -678,6 +678,7 @@ pub(crate) struct TranscriptOverlay {
 
 const FOOTER_STATUS_TTL: Duration = Duration::from_secs(2);
 const ASYNC_TRANSCRIPT_LAYOUT_CELL_THRESHOLD: usize = 2_000;
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
 
 #[derive(Clone)]
 struct FooterStatus {
@@ -766,6 +767,8 @@ impl TranscriptOverlay {
             scroll_selected_user_cell: None,
             footer_status: None,
             search: TranscriptSearchState::default(),
+            search_corpus: None,
+            search_corpus_revision: 0,
             active_search_match,
             last_content_width: None,
             live_tail_lines: None,
@@ -875,7 +878,7 @@ impl TranscriptOverlay {
             };
             self.view.renderables.push(tail);
         }
-        self.search.dirty = true;
+        self.invalidate_search_corpus();
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -899,7 +902,7 @@ impl TranscriptOverlay {
             self.highlight_cell.set(None);
         }
         self.rebuild_renderables();
-        self.search.dirty = true;
+        self.invalidate_search_corpus();
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -946,7 +949,7 @@ impl TranscriptOverlay {
                 self.highlight_cell.set(None);
             }
             self.rebuild_renderables();
-            self.search.dirty = true;
+            self.invalidate_search_corpus();
         }
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
@@ -1002,7 +1005,7 @@ impl TranscriptOverlay {
                 self.view.invalidate_layout();
             }
         }
-        self.search.dirty = true;
+        self.invalidate_search_corpus();
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
@@ -1174,25 +1177,46 @@ impl TranscriptOverlay {
         };
         self.invalidate_async_layout();
         self.rebuild_renderables();
-        self.search.dirty = true;
+        self.invalidate_search_corpus();
     }
 
     fn append_search_text(&mut self, text: &str) {
         self.search.editing = true;
         self.search.query.push_str(text);
-        self.search.dirty = true;
+        self.mark_search_dirty();
     }
 
     fn search_backspace(&mut self) {
         self.search.editing = true;
         if self.search.query.pop().is_some() {
-            self.search.dirty = true;
+            self.mark_search_dirty();
         }
     }
 
     fn activate_search(&mut self) {
         self.search.activate();
         self.active_search_match.borrow_mut().take();
+    }
+
+    fn mark_search_dirty(&mut self) {
+        self.search.dirty = true;
+        self.search.active_match = None;
+        self.active_search_match.borrow_mut().take();
+        let debounce = if self.search.query.is_empty() {
+            Duration::ZERO
+        } else {
+            SEARCH_DEBOUNCE
+        };
+        self.search.recompute_at = Some(Instant::now() + debounce);
+    }
+
+    fn invalidate_search_corpus(&mut self) {
+        self.search_corpus = None;
+        self.search_corpus_revision = self.search_corpus_revision.wrapping_add(1);
+        if self.search.active && !self.search.query.is_empty() {
+            self.search.dirty = true;
+            self.search.recompute_at = Some(Instant::now());
+        }
     }
 
     fn update_active_search_match(&mut self) {
@@ -1212,6 +1236,7 @@ impl TranscriptOverlay {
     fn recompute_search_matches(&mut self, width: u16) {
         self.last_content_width = Some(width);
         self.search.dirty = false;
+        self.search.recompute_at = None;
         self.search.matches.clear();
         self.search.active_match = None;
         self.active_search_match.borrow_mut().take();
@@ -1220,51 +1245,11 @@ impl TranscriptOverlay {
         }
 
         let query = self.search.query.to_lowercase();
-        let mut owner_user_prompt = None;
-        for (idx, cell) in self.cells.iter().enumerate() {
-            if cell.is_user_prompt() {
-                owner_user_prompt = Some(idx);
-            }
-            let top_padding = usize::from(!cell.is_stream_continuation() && idx > 0);
-            let lines = cell.transcript_lines_for_mode(width, self.render_mode);
-            let mut scroll_line_index = top_padding;
-            for (line_index, line) in lines.iter().enumerate() {
-                self.search.matches.extend(find_matches_in_line(
-                    idx,
-                    line_index,
-                    scroll_line_index,
-                    line,
-                    &query,
-                    owner_user_prompt,
-                    width,
-                ));
-                scroll_line_index =
-                    scroll_line_index.saturating_add(rendered_line_height(line, width));
-            }
-        }
-
-        if let Some(lines) = &self.live_tail_lines {
-            let top_padding = usize::from(
-                self.live_tail_key
-                    .is_some_and(|key| !key.is_stream_continuation && !self.cells.is_empty()),
-            );
-            let renderable_index = self.cells.len();
-            let lines = visible_lines(lines.clone());
-            let mut scroll_line_index = top_padding;
-            for (line_index, line) in lines.iter().enumerate() {
-                self.search.matches.extend(find_matches_in_line(
-                    renderable_index,
-                    line_index,
-                    scroll_line_index,
-                    line,
-                    &query,
-                    owner_user_prompt,
-                    width,
-                ));
-                scroll_line_index =
-                    scroll_line_index.saturating_add(rendered_line_height(line, width));
-            }
-        }
+        self.ensure_search_corpus(width);
+        self.search.matches = self
+            .search_corpus
+            .as_ref()
+            .map_or_else(Vec::new, |corpus| corpus.find_matches(&query));
 
         if !self.search.matches.is_empty() {
             self.search.active_match = Some(0);
@@ -1320,6 +1305,60 @@ impl TranscriptOverlay {
         self.search.active_match = Some(prev);
         self.update_active_search_match();
         self.scroll_to_active_match();
+    }
+
+    fn ensure_search_corpus(&mut self, width: u16) {
+        let key = SearchCorpusKey {
+            width,
+            render_mode: self.render_mode,
+            revision: self.search_corpus_revision,
+        };
+        if self
+            .search_corpus
+            .as_ref()
+            .is_some_and(|corpus| corpus.matches_key(key))
+        {
+            return;
+        }
+        let live_tail_has_top_padding = self
+            .live_tail_key
+            .is_some_and(|key| !key.is_stream_continuation && !self.cells.is_empty());
+        let live_tail_lines = self.live_tail_lines.clone().map(visible_lines);
+        self.search_corpus = Some(SearchCorpus::new(
+            key,
+            transcript_search_lines(
+                &self.cells,
+                live_tail_lines.as_deref(),
+                self.render_mode,
+                width,
+                rendered_line_height,
+                live_tail_has_top_padding,
+            ),
+        ));
+    }
+
+    fn flush_pending_search(&mut self) {
+        if self.search.dirty
+            && let Some(width) = self.last_content_width
+        {
+            self.recompute_search_matches(width);
+        }
+    }
+
+    fn next_search_recompute_delay(&self) -> Duration {
+        self.search
+            .recompute_at
+            .and_then(|recompute_at| recompute_at.checked_duration_since(Instant::now()))
+            .unwrap_or(crate::tui::TARGET_FRAME_INTERVAL)
+    }
+
+    fn schedule_search_frames(&self, tui: &tui::Tui) {
+        tui.frame_requester()
+            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+        if self.search.dirty {
+            tui.frame_requester()
+                .schedule_frame_in(self.next_search_recompute_delay());
+        }
     }
 
     fn navigate_search_prompt(&mut self, direction: PromptSelectionDirection) {
@@ -1561,6 +1600,9 @@ impl TranscriptOverlay {
     }
 
     fn search_status_text(&self) -> String {
+        if self.search.dirty {
+            return "searching…".to_string();
+        }
         let current = self.search.active_match.map(|idx| idx + 1).unwrap_or(0);
         format!("{current}/{}", self.search.matches.len())
     }
@@ -1746,7 +1788,17 @@ impl TranscriptOverlay {
         self.view.update_last_content_height(content_area.height);
         let width_changed = self.last_content_width != Some(content_area.width);
         self.last_content_width = Some(content_area.width);
-        if self.search.dirty || width_changed {
+        let now = Instant::now();
+        let search_recompute_due = self
+            .search
+            .recompute_at
+            .is_some_and(|recompute_at| recompute_at <= now);
+        if width_changed {
+            self.search_corpus = None;
+            if self.search.active && !self.search.query.is_empty() {
+                self.recompute_search_matches(content_area.width);
+            }
+        } else if self.search.dirty && search_recompute_due {
             self.recompute_search_matches(content_area.width);
         }
         if self.search.active {
@@ -1823,8 +1875,10 @@ impl TranscriptOverlay {
                     } else if next_match_pressed
                         && (!self.search.editing || matches!(key_event.code, KeyCode::Enter))
                     {
+                        self.flush_pending_search();
                         self.select_next_match();
                     } else if previous_match_pressed && !self.search.editing {
+                        self.flush_pending_search();
                         self.select_previous_match();
                     } else if is_plain_text_key_event(key_event)
                         && (self.search.editing || (!next_match_pressed && !previous_match_pressed))
@@ -1837,13 +1891,7 @@ impl TranscriptOverlay {
                     } else {
                         return self.handle_viewport_key_event(tui, key_event);
                     }
-                    if self.search.dirty
-                        && let Some(width) = self.last_content_width
-                    {
-                        self.recompute_search_matches(width);
-                    }
-                    tui.frame_requester()
-                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    self.schedule_search_frames(tui);
                     Ok(())
                 } else {
                     match key_event {
@@ -1887,11 +1935,7 @@ impl TranscriptOverlay {
                 let normalized = normalize_search_paste(&pasted);
                 if !normalized.is_empty() {
                     self.append_search_text(&normalized);
-                    if let Some(width) = self.last_content_width {
-                        self.recompute_search_matches(width);
-                    }
-                    tui.frame_requester()
-                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    self.schedule_search_frames(tui);
                 }
                 Ok(())
             }
@@ -2055,13 +2099,6 @@ fn normalize_search_paste(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn line_plain_text(line: &Line<'_>) -> String {
-    line.spans
-        .iter()
-        .flat_map(|span| span.content.chars())
-        .collect()
-}
-
 fn highlight_match_in_lines(lines: &mut [Line<'static>], active_match: RenderableMatch) {
     if active_match.end_col <= active_match.start_col {
         return;
@@ -2098,51 +2135,6 @@ fn rendered_line_height(line: &Line<'_>, width: u16) -> usize {
         .line_count(width)
 }
 
-fn find_matches_in_line(
-    renderable_index: usize,
-    line_index: usize,
-    scroll_line_index: usize,
-    line: &Line<'_>,
-    query: &str,
-    owning_user_prompt_cell: Option<usize>,
-    width: u16,
-) -> Vec<SearchMatch> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let plain_text = line_plain_text(line);
-    let lower = plain_text.to_lowercase();
-    let mut matches = Vec::new();
-    let mut start = 0usize;
-
-    while let Some(found) = lower[start..].find(query) {
-        let match_start = start + found;
-        let match_end = match_start + query.len();
-        let mut start_col = 0u16;
-        let mut end_col = 0u16;
-        for (idx, ch) in plain_text.char_indices() {
-            let width = u16::try_from(ch.width().unwrap_or(0)).unwrap_or(0);
-            if idx < match_start {
-                start_col = start_col.saturating_add(width);
-            }
-            if idx < match_end {
-                end_col = end_col.saturating_add(width);
-            }
-        }
-        matches.push(SearchMatch {
-            renderable_index,
-            line_index,
-            scroll_line_index: scroll_line_index.saturating_add(usize::from(start_col / width)),
-            start_col,
-            end_col,
-            owning_user_prompt_cell,
-        });
-        start = match_start.saturating_add(1);
-    }
-
-    matches
-}
-
 fn session_start_index(cells: &[Arc<dyn HistoryCell>]) -> usize {
     let session_start_type = TypeId::of::<SessionInfoCell>();
     let type_of = |cell: &Arc<dyn HistoryCell>| cell.as_any().type_id();
@@ -2171,6 +2163,8 @@ mod tests {
     use std::io::Write;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
     use std::time::Instant;
     use tempfile::TempDir;
@@ -2195,6 +2189,12 @@ mod tests {
         lines: Vec<Line<'static>>,
     }
 
+    #[derive(Debug)]
+    struct CountingTestCell {
+        lines: Vec<Line<'static>>,
+        transcript_render_count: Arc<AtomicUsize>,
+    }
+
     impl crate::history_cell::HistoryCell for TestCell {
         fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
             self.lines.clone()
@@ -2205,6 +2205,21 @@ mod tests {
         }
 
         fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            self.lines.clone()
+        }
+    }
+
+    impl crate::history_cell::HistoryCell for CountingTestCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            self.lines.clone()
+        }
+
+        fn raw_lines(&self) -> Vec<Line<'static>> {
+            self.lines.clone()
+        }
+
+        fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            self.transcript_render_count.fetch_add(1, Ordering::SeqCst);
             self.lines.clone()
         }
     }
@@ -2280,6 +2295,23 @@ mod tests {
             heights: vec![height; cell_count],
             total_height: cell_count.saturating_mul(height),
         }
+    }
+
+    fn synthetic_search_transcript(prompt_count: usize) -> Vec<Arc<dyn HistoryCell>> {
+        let mut cells = Vec::with_capacity(prompt_count.saturating_mul(2));
+        for i in 0..prompt_count {
+            cells.push(user_cell(&format!("prompt {i} main branch")));
+            cells.push(Arc::new(AgentMessageCell::new(
+                vec![
+                    Line::from(format!("assistant response {i} main branch")),
+                    Line::from(
+                        "additional main detail to make wrapping and height measurement realistic",
+                    ),
+                ],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>);
+        }
+        cells
     }
 
     fn session_info_cell(cwd: &str) -> Arc<dyn HistoryCell> {
@@ -2468,6 +2500,55 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "local performance probe for transcript search"]
+    fn transcript_search_perf() {
+        const PROMPTS: usize = 1_500;
+        const WIDTH: u16 = 120;
+        let mut output = std::io::stdout();
+        let mut overlay = transcript_overlay(synthetic_search_transcript(PROMPTS));
+        overlay.activate_search();
+        overlay.last_content_width = Some(WIDTH);
+
+        let corpus_start = Instant::now();
+        overlay.ensure_search_corpus(WIDTH);
+        let corpus_elapsed = corpus_start.elapsed();
+
+        overlay.append_search_text("m");
+        let first_query_start = Instant::now();
+        overlay.flush_pending_search();
+        let first_query_elapsed = first_query_start.elapsed();
+
+        overlay.append_search_text("ain");
+        let refine_start = Instant::now();
+        overlay.flush_pending_search();
+        let refine_elapsed = refine_start.elapsed();
+
+        overlay.search_backspace();
+        let backspace_start = Instant::now();
+        overlay.flush_pending_search();
+        let backspace_elapsed = backspace_start.elapsed();
+
+        let navigation_start = Instant::now();
+        for _ in 0..300 {
+            overlay.select_next_match();
+        }
+        let navigation_elapsed = navigation_start.elapsed();
+
+        writeln!(
+            output,
+            "transcript_search_perf prompts={PROMPTS} corpus_ms={:.3} first_query_ms={:.3} refine_ms={:.3} backspace_ms={:.3} navigation_ms={:.3} navigation_avg_us={:.3} matches={}",
+            corpus_elapsed.as_secs_f64() * 1_000.0,
+            first_query_elapsed.as_secs_f64() * 1_000.0,
+            refine_elapsed.as_secs_f64() * 1_000.0,
+            backspace_elapsed.as_secs_f64() * 1_000.0,
+            navigation_elapsed.as_secs_f64() * 1_000.0,
+            navigation_elapsed.as_secs_f64() * 1_000_000.0 / 300.0,
+            overlay.search.matches.len(),
+        )
+        .expect("write perf output");
+    }
+
+    #[test]
     fn transcript_overlay_renders_live_tail() {
         let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
             lines: vec![Line::from("alpha")],
@@ -2538,6 +2619,60 @@ mod tests {
     }
 
     #[test]
+    fn transcript_overlay_search_reuses_corpus_for_query_edits() {
+        let transcript_render_count = Arc::new(AtomicUsize::new(0));
+        let mut overlay = transcript_overlay(vec![Arc::new(CountingTestCell {
+            lines: vec![Line::from("main branch")],
+            transcript_render_count: Arc::clone(&transcript_render_count),
+        })]);
+
+        overlay.activate_search();
+        overlay.append_search_text("m");
+        overlay.recompute_search_matches(/*width*/ 80);
+        overlay.append_search_text("ain");
+        overlay.recompute_search_matches(/*width*/ 80);
+
+        assert_eq!(transcript_render_count.load(Ordering::SeqCst), 1);
+        assert_eq!(overlay.search.matches.len(), 1);
+    }
+
+    #[test]
+    fn transcript_overlay_search_rebuilds_corpus_after_width_change() {
+        let transcript_render_count = Arc::new(AtomicUsize::new(0));
+        let mut overlay = transcript_overlay(vec![Arc::new(CountingTestCell {
+            lines: vec![Line::from("main branch")],
+            transcript_render_count: Arc::clone(&transcript_render_count),
+        })]);
+
+        overlay.activate_search();
+        overlay.append_search_text("main");
+        overlay.recompute_search_matches(/*width*/ 80);
+        overlay.recompute_search_matches(/*width*/ 40);
+
+        assert_eq!(transcript_render_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn transcript_overlay_search_debounces_query_recompute() {
+        let mut overlay = transcript_overlay(vec![user_cell("main branch")]);
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        overlay.activate_search();
+        overlay.append_search_text("main");
+
+        overlay.render(area, &mut buf);
+        assert!(buffer_to_text(&buf, area).contains("searching…"));
+        assert!(overlay.search.matches.is_empty());
+
+        overlay.search.recompute_at = Some(Instant::now());
+        overlay.render(area, &mut buf);
+
+        assert_eq!(overlay.search.matches.len(), 1);
+        assert!(!buffer_to_text(&buf, area).contains("searching…"));
+    }
+
+    #[test]
     fn transcript_overlay_search_prompt_navigation_uses_match_owner() {
         let mut overlay = transcript_overlay(vec![
             user_cell("first prompt"),
@@ -2571,6 +2706,7 @@ mod tests {
         ]);
         overlay.activate_search();
         overlay.append_search_text("needle");
+        overlay.recompute_search_matches(/*width*/ 60);
 
         let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
@@ -2663,6 +2799,7 @@ mod tests {
         ]);
         overlay.activate_search();
         overlay.append_search_text("main");
+        overlay.recompute_search_matches(/*width*/ 40);
 
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
@@ -2693,6 +2830,7 @@ mod tests {
         ]);
         overlay.activate_search();
         overlay.append_search_text("needle");
+        overlay.recompute_search_matches(/*width*/ 50);
 
         let mut term = RatatuiTerminal::new(TestBackend::new(50, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
