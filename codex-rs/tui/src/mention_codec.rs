@@ -88,10 +88,6 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
     out
 }
 
-pub(crate) fn decode_history_mentions(text: &str) -> DecodedHistoryText {
-    decode_history_mentions_with_at_mentions(text, /*at_mentions_enabled*/ true)
-}
-
 pub(crate) fn decode_history_mentions_with_at_mentions(
     text: &str,
     at_mentions_enabled: bool,
@@ -291,8 +287,9 @@ mod tests {
 
     #[test]
     fn decode_history_mentions_restores_visible_tokens() {
-        let decoded = decode_history_mentions(
+        let decoded = decode_history_mentions_with_at_mentions(
             "Use [$figma](app://figma-1), [$sample](plugin://sample@test), and [$figma](/tmp/figma/SKILL.md).",
+            /*at_mentions_enabled*/ true,
         );
         assert_eq!(decoded.text, "Use $figma, $sample, and $figma.");
         assert_eq!(
@@ -319,8 +316,9 @@ mod tests {
 
     #[test]
     fn decode_history_mentions_restores_plugin_links_with_at_sigil() {
-        let decoded = decode_history_mentions(
+        let decoded = decode_history_mentions_with_at_mentions(
             "Use [@sample](plugin://sample@test) and [$figma](app://figma-1).",
+            /*at_mentions_enabled*/ true,
         );
         assert_eq!(decoded.text, "Use @sample and $figma.");
         assert_eq!(
@@ -377,7 +375,10 @@ mod tests {
 
     #[test]
     fn decode_history_mentions_restores_at_sigil_for_tool_paths() {
-        let decoded = decode_history_mentions("Use [@figma](app://figma-1).");
+        let decoded = decode_history_mentions_with_at_mentions(
+            "Use [@figma](app://figma-1).",
+            /*at_mentions_enabled*/ true,
+        );
 
         assert_eq!(decoded.text, "Use @figma.");
         assert_eq!(
@@ -441,11 +442,11 @@ mod tests {
         };
 
         assert_eq!(
-            encode_history_mentions("$figma/docs", &[mention.clone()]),
+            encode_history_mentions("$figma/docs", std::slice::from_ref(&mention)),
             "[$figma](app://figma)/docs"
         );
         assert_eq!(
-            encode_history_mentions("$figma.suffix", &[mention.clone()]),
+            encode_history_mentions("$figma.suffix", std::slice::from_ref(&mention)),
             "[$figma](app://figma).suffix"
         );
         assert_eq!(
