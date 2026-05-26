@@ -16,6 +16,10 @@ pub(crate) struct GeneratedHookSchemas {
     pub pre_compact_command_output: Value,
     pub session_start_command_input: Value,
     pub session_start_command_output: Value,
+    pub subagent_start_command_input: Value,
+    pub subagent_start_command_output: Value,
+    pub subagent_stop_command_input: Value,
+    pub subagent_stop_command_output: Value,
     pub user_prompt_submit_command_input: Value,
     pub user_prompt_submit_command_output: Value,
     pub stop_command_input: Value,
@@ -73,6 +77,22 @@ pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
             "session-start.command.output",
             include_str!("../../schema/generated/session-start.command.output.schema.json"),
         ),
+        subagent_start_command_input: parse_json_schema(
+            "subagent-start.command.input",
+            include_str!("../../schema/generated/subagent-start.command.input.schema.json"),
+        ),
+        subagent_start_command_output: parse_json_schema(
+            "subagent-start.command.output",
+            include_str!("../../schema/generated/subagent-start.command.output.schema.json"),
+        ),
+        subagent_stop_command_input: parse_json_schema(
+            "subagent-stop.command.input",
+            include_str!("../../schema/generated/subagent-stop.command.input.schema.json"),
+        ),
+        subagent_stop_command_output: parse_json_schema(
+            "subagent-stop.command.output",
+            include_str!("../../schema/generated/subagent-stop.command.output.schema.json"),
+        ),
         user_prompt_submit_command_input: parse_json_schema(
             "user-prompt-submit.command.input",
             include_str!("../../schema/generated/user-prompt-submit.command.input.schema.json"),
@@ -118,6 +138,10 @@ mod tests {
         assert_eq!(schemas.pre_compact_command_output["type"], "object");
         assert_eq!(schemas.session_start_command_input["type"], "object");
         assert_eq!(schemas.session_start_command_output["type"], "object");
+        assert_eq!(schemas.subagent_start_command_input["type"], "object");
+        assert_eq!(schemas.subagent_start_command_output["type"], "object");
+        assert_eq!(schemas.subagent_stop_command_input["type"], "object");
+        assert_eq!(schemas.subagent_stop_command_output["type"], "object");
         assert_eq!(schemas.user_prompt_submit_command_input["type"], "object");
         assert_eq!(schemas.user_prompt_submit_command_output["type"], "object");
         assert_eq!(schemas.stop_command_input["type"], "object");

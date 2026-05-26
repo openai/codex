@@ -493,8 +493,12 @@ pub async fn mark_thread_memory_mode_polluted(
     let Some(ctx) = context else {
         return;
     };
-    if let Err(err) = ctx.mark_thread_memory_mode_polluted(thread_id).await {
-        warn!("state db mark_thread_memory_mode_polluted failed during {stage}: {err}");
+    if let Err(err) = ctx
+        .memories()
+        .mark_thread_memory_mode_polluted(thread_id)
+        .await
+    {
+        warn!("memories db mark_thread_memory_mode_polluted failed during {stage}: {err}");
     }
 }
 

@@ -380,7 +380,7 @@ async fn shell_command_enforces_glob_deny_read_policy() -> Result<()> {
                     path: FileSystemPath::GlobPattern {
                         pattern: format!("{}/**/*.env", config.cwd.as_path().display()),
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 });
             config
                 .permissions

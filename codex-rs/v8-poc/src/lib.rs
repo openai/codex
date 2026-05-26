@@ -78,4 +78,15 @@ mod tests {
     fn evaluates_string_concatenation() {
         assert_eq!(evaluate_expression("'hello ' + 'world'"), "hello world");
     }
+
+    #[test]
+    fn parses_crdtp_dispatchable_messages() {
+        let cbor = v8::crdtp::json_to_cbor(br#"{"id":7,"method":"Runtime.evaluate","params":{}}"#)
+            .expect("JSON should convert to CBOR");
+        let dispatchable = v8::crdtp::Dispatchable::new(&cbor);
+
+        assert!(dispatchable.ok());
+        assert_eq!(dispatchable.call_id(), 7);
+        assert_eq!(dispatchable.method(), b"Runtime.evaluate");
+    }
 }

@@ -248,6 +248,31 @@ where
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
 }
 
+pub async fn submit_thread_settings(
+    codex: &CodexThread,
+    thread_settings: codex_protocol::protocol::ThreadSettingsOverrides,
+) -> anyhow::Result<()> {
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::Op;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    let submission_id = codex.submit(Op::ThreadSettings { thread_settings }).await?;
+    loop {
+        let ev = timeout(Duration::from_secs(10), codex.next_event())
+            .await
+            .expect("timeout waiting for thread settings update")
+            .expect("stream ended unexpectedly");
+        if ev.id == submission_id {
+            match ev.msg {
+                EventMsg::ThreadSettingsApplied(_) => return Ok(()),
+                EventMsg::Error(err) => panic!("thread settings update failed: {}", err.message),
+                other => panic!("unexpected thread settings update event: {other:?}"),
+            }
+        }
+    }
+}
+
 pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
 where
     F: Fn(&codex_protocol::protocol::EventMsg) -> Option<T>,

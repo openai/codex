@@ -1,4 +1,6 @@
 use crate::config::find_codex_home;
+use crate::config::is_builtin_permission_profile_name;
+use crate::config::reject_unknown_builtin_permission_profile;
 use crate::config::resolve_permission_profile;
 use crate::exec_policy::ExecPolicyError;
 use crate::exec_policy::format_exec_policy_error_with_source;
@@ -13,6 +15,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
 use codex_config::loader::load_config_layers_state;
+use codex_config::merge_toml_values;
 use codex_config::permissions_toml::NetworkMitmActionToml;
 use codex_config::permissions_toml::NetworkMitmHookToml;
 use codex_config::permissions_toml::NetworkMitmToml;
@@ -122,6 +125,7 @@ fn network_constraints_from_trusted_layers(
     layers: &ConfigLayerStack,
 ) -> Result<NetworkProxyConstraints> {
     let mut constraints = NetworkProxyConstraints::default();
+    let mut merged = toml::Value::Table(toml::map::Map::new());
     for layer in layers.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
@@ -130,10 +134,12 @@ fn network_constraints_from_trusted_layers(
             continue;
         }
 
-        let parsed = network_tables_from_toml(&layer.config)?;
-        if let Some(network) = selected_network_from_tables(parsed)? {
-            apply_network_constraints(network, &mut constraints);
-        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+
+    let parsed = network_tables_from_toml(&merged)?;
+    if let Some(network) = selected_network_from_tables(parsed)? {
+        apply_network_constraints(network, &mut constraints);
     }
     Ok(constraints)
 }
@@ -194,13 +200,17 @@ fn selected_network_from_tables(parsed: NetworkTablesToml) -> Result<Option<Netw
     let Some(default_permissions) = parsed.default_permissions else {
         return Ok(None);
     };
+    if is_builtin_permission_profile_name(&default_permissions) {
+        return Ok(None);
+    }
+    reject_unknown_builtin_permission_profile(&default_permissions)?;
 
     let permissions = parsed
         .permissions
         .context("default_permissions requires a `[permissions]` table for network settings")?;
     let profile = resolve_permission_profile(&permissions, &default_permissions)
         .map_err(anyhow::Error::from)?;
-    Ok(profile.network.clone())
+    Ok(profile.profile.network)
 }
 
 #[cfg(test)]
@@ -262,14 +272,16 @@ fn config_from_layers(
     layers: &ConfigLayerStack,
     exec_policy: &codex_execpolicy::Policy,
 ) -> Result<NetworkProxyConfig> {
-    let mut accumulator = NetworkConfigAccumulator::default();
+    let mut merged = toml::Value::Table(toml::map::Map::new());
     for layer in layers.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
     ) {
-        let parsed = network_tables_from_toml(&layer.config)?;
-        accumulator.apply_network_tables(parsed)?;
+        merge_toml_values(&mut merged, &layer.config);
     }
+    let parsed = network_tables_from_toml(&merged)?;
+    let mut accumulator = NetworkConfigAccumulator::default();
+    accumulator.apply_network_tables(parsed)?;
     let mut config = accumulator.finish()?;
     apply_exec_policy_network_rules(&mut config, exec_policy);
     Ok(config)

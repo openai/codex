@@ -928,6 +928,27 @@ impl ThreadManagerState {
             .collect()
     }
 
+    /// List parent-child edges for currently loaded thread-spawn agents.
+    pub(crate) async fn list_live_thread_spawn_edges(&self) -> Vec<(ThreadId, ThreadId)> {
+        self.threads
+            .read()
+            .await
+            .iter()
+            .filter_map(|(thread_id, thread)| {
+                if thread.session_source.is_internal() {
+                    return None;
+                }
+                match &thread.session_source {
+                    SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        ..
+                    }) => Some((*parent_thread_id, *thread_id)),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     /// Fetch a thread by ID or return ThreadNotFound.
     pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         let threads = self.threads.read().await;
@@ -1228,7 +1249,7 @@ impl ThreadManagerState {
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
         if is_resumed_thread {
-            new_thread.thread.emit_thread_resume_lifecycle();
+            new_thread.thread.emit_thread_resume_lifecycle().await;
             if let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await {
                 warn!("failed to apply goal resume runtime effects: {err}");
             }

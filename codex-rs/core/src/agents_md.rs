@@ -23,6 +23,7 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
@@ -58,20 +59,34 @@ impl<'a> AgentsMdManager<'a> {
         Self { config }
     }
 
-    pub(crate) fn load_global_instructions(
+    pub(crate) async fn load_global_instructions(
+        fs: &dyn ExecutorFileSystem,
         codex_dir: Option<&AbsolutePathBuf>,
+        startup_warnings: &mut Vec<String>,
     ) -> Option<LoadedAgentsMd> {
         let base = codex_dir?;
         for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
             let path = base.join(candidate);
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                let trimmed = contents.trim();
-                if !trimmed.is_empty() {
-                    return Some(LoadedAgentsMd {
-                        contents: trimmed.to_string(),
-                        path,
-                    });
+            let data = match fs.read_file(&path, /*sandbox*/ None).await {
+                Ok(data) => data,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == io::ErrorKind::IsADirectory => continue,
+                Err(err) => {
+                    startup_warnings.push(format!(
+                        "Failed to read global AGENTS.md instructions from `{}`: {err}",
+                        path.display()
+                    ));
+                    continue;
                 }
+            };
+            warn_invalid_utf8(&path, &data, "Global", startup_warnings);
+            let contents = String::from_utf8_lossy(&data);
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                return Some(LoadedAgentsMd {
+                    contents: trimmed.to_string(),
+                    path,
+                });
             }
         }
         None
@@ -82,16 +97,19 @@ impl<'a> AgentsMdManager<'a> {
     pub(crate) async fn user_instructions(
         &self,
         environment: Option<&Environment>,
+        startup_warnings: &mut Vec<String>,
     ) -> Option<String> {
         let fs = environment?.get_filesystem();
-        self.user_instructions_with_fs(fs.as_ref()).await
+        self.user_instructions_with_fs(fs.as_ref(), startup_warnings)
+            .await
     }
 
-    pub(crate) async fn user_instructions_with_fs(
+    async fn user_instructions_with_fs(
         &self,
         fs: &dyn ExecutorFileSystem,
+        startup_warnings: &mut Vec<String>,
     ) -> Option<String> {
-        let agents_md_docs = self.read_agents_md(fs).await;
+        let agents_md_docs = self.read_agents_md(fs, startup_warnings).await;
 
         let mut output = String::new();
 
@@ -128,9 +146,15 @@ impl<'a> AgentsMdManager<'a> {
 
     /// Returns all instruction source files included in the current config.
     pub async fn instruction_sources(&self, fs: &dyn ExecutorFileSystem) -> Vec<AbsolutePathBuf> {
-        let mut paths = Self::load_global_instructions(Some(&self.config.codex_home))
-            .map(|loaded| vec![loaded.path])
-            .unwrap_or_default();
+        let mut global_instruction_warnings = Vec::new();
+        let mut paths = Self::load_global_instructions(
+            LOCAL_FS.as_ref(),
+            Some(&self.config.codex_home),
+            &mut global_instruction_warnings,
+        )
+        .await
+        .map(|loaded| vec![loaded.path])
+        .unwrap_or_default();
         match self.agents_md_paths(fs).await {
             Ok(agents_md_paths) => paths.extend(agents_md_paths),
             Err(err) => {
@@ -146,7 +170,11 @@ impl<'a> AgentsMdManager<'a> {
     /// concatenation of all discovered docs. If no documentation file is found
     /// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
     /// `Err` so callers can decide how to handle them.
-    async fn read_agents_md(&self, fs: &dyn ExecutorFileSystem) -> io::Result<Option<String>> {
+    async fn read_agents_md(
+        &self,
+        fs: &dyn ExecutorFileSystem,
+        startup_warnings: &mut Vec<String>,
+    ) -> io::Result<Option<String>> {
         let max_total = self.config.project_doc_max_bytes;
 
         if max_total == 0 {
@@ -178,6 +206,8 @@ impl<'a> AgentsMdManager<'a> {
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err),
             };
+            warn_invalid_utf8(&p, &data, "Project", startup_warnings);
+
             let size = data.len() as u64;
             if size > remaining {
                 data.truncate(remaining as usize);
@@ -317,6 +347,20 @@ impl<'a> AgentsMdManager<'a> {
             }
         }
         names
+    }
+}
+
+fn warn_invalid_utf8(
+    path: &AbsolutePathBuf,
+    data: &[u8],
+    source: &str,
+    startup_warnings: &mut Vec<String>,
+) {
+    if let Err(err) = std::str::from_utf8(data) {
+        startup_warnings.push(format!(
+            "{source} AGENTS.md instructions from `{}` contain invalid UTF-8: {err}. Invalid byte sequences were replaced.",
+            path.display()
+        ));
     }
 }
 

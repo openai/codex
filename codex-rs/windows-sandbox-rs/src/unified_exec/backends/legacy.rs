@@ -1,6 +1,5 @@
 use super::windows_common::finish_driver_spawn;
 use super::windows_common::normalize_windows_tty_input;
-use crate::acl::revoke_ace;
 use crate::conpty::ConptyInstance;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
@@ -11,12 +10,12 @@ use crate::process::StdinMode;
 use crate::process::read_handle_loop;
 use crate::process::spawn_process_with_pipes;
 use crate::spawn_prep::LegacyAclSids;
+use crate::spawn_prep::SpawnPrepOptions;
 use crate::spawn_prep::allow_null_device_for_workspace_write;
 use crate::spawn_prep::apply_legacy_session_acl_rules;
 use crate::spawn_prep::legacy_session_capability_roots;
 use crate::spawn_prep::prepare_legacy_session_security;
 use crate::spawn_prep::prepare_legacy_spawn_context;
-use crate::token::LocalSid;
 use anyhow::Result;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
@@ -24,7 +23,6 @@ use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -206,7 +204,6 @@ fn finalize_exit(
     process_handle: Arc<StdMutex<Option<HANDLE>>>,
     thread_handle: HANDLE,
     output_join: std::thread::JoinHandle<()>,
-    guards: Vec<(PathBuf, String)>,
     logs_base_dir: Option<&Path>,
     command: Vec<String>,
 ) {
@@ -241,14 +238,6 @@ fn finalize_exit(
         log_success(&command, logs_base_dir);
     } else {
         log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
-    }
-
-    unsafe {
-        for (path, cap_sid) in guards {
-            if let Ok(sid) = LocalSid::from_string(&cap_sid) {
-                revoke_ace(&path, sid.as_ptr());
-            }
-        }
     }
 }
 
@@ -295,12 +284,15 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
 ) -> Result<SpawnedProcess> {
     let common = prepare_legacy_spawn_context(
         policy_json_or_preset,
+        sandbox_policy_cwd,
         codex_home,
         cwd,
         &mut env_map,
         &command,
-        /*inherit_path*/ false,
-        /*add_git_safe_directory*/ false,
+        SpawnPrepOptions {
+            inherit_path: false,
+            add_git_safe_directory: false,
+        },
     )?;
     if !common.policy.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
@@ -323,12 +315,10 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     );
     let security =
         prepare_legacy_session_security(&common.policy, codex_home, cwd, capability_roots)?;
-    allow_null_device_for_workspace_write(common.is_workspace_write);
+    allow_null_device_for_workspace_write(common.uses_write_capabilities);
 
-    let persist_aces = common.is_workspace_write;
-    let guards = apply_legacy_session_acl_rules(
-        &common.policy,
-        sandbox_policy_cwd,
+    apply_legacy_session_acl_rules(
+        &common.permissions,
         codex_home,
         &common.current_dir,
         &env_map,
@@ -339,7 +329,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             readonly_sid_str: security.readonly_sid_str.as_deref(),
             write_root_sids: &security.write_root_sids,
         },
-        persist_aces,
     )?;
 
     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);
@@ -375,13 +364,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         Ok(handles) => handles,
         Err(err) => {
             unsafe {
-                if !persist_aces {
-                    for (path, cap_sid) in &guards {
-                        if let Ok(sid) = LocalSid::from_string(cap_sid) {
-                            revoke_ace(path, sid.as_ptr());
-                        }
-                    }
-                }
                 CloseHandle(security.h_token);
             }
             return Err(err);
@@ -392,7 +374,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
     let wait_handle = Arc::clone(&process_handle);
     let command_for_wait = command.clone();
-    let guards_for_wait = if persist_aces { Vec::new() } else { guards };
     let hpc_for_wait = hpc_handle.clone();
     std::thread::spawn(move || {
         let _desktop = desktop;
@@ -423,7 +404,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             wait_handle,
             pi.hThread,
             output_join,
-            guards_for_wait,
             common.logs_base_dir.as_deref(),
             command_for_wait,
         );

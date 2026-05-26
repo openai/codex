@@ -1,31 +1,38 @@
 use std::sync::Arc;
 
+use codex_protocol::protocol::ReviewDecision;
+
 use crate::ApprovalReviewContributor;
-use crate::ApprovalReviewFuture;
 use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
+use crate::ExtensionEventSink;
+use crate::NoopExtensionEventSink;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
 use crate::ToolContributor;
+use crate::ToolLifecycleContributor;
 use crate::TurnItemContributor;
 use crate::TurnLifecycleContributor;
 
 /// Mutable registry used while hosts register typed runtime contributions.
-pub struct ExtensionRegistryBuilder<C> {
+pub struct ExtensionRegistryBuilder<C: Sync> {
+    event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
+    tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
-impl<C> Default for ExtensionRegistryBuilder<C> {
+impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
     fn default() -> Self {
         Self {
+            event_sink: Arc::new(NoopExtensionEventSink),
             thread_lifecycle_contributors: Vec::new(),
             turn_lifecycle_contributors: Vec::new(),
             config_contributors: Vec::new(),
@@ -33,15 +40,29 @@ impl<C> Default for ExtensionRegistryBuilder<C> {
             approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
             tool_contributors: Vec::new(),
+            tool_lifecycle_contributors: Vec::new(),
             turn_item_contributors: Vec::new(),
         }
     }
 }
 
-impl<C> ExtensionRegistryBuilder<C> {
+impl<C: Sync> ExtensionRegistryBuilder<C> {
     /// Creates an empty registry builder.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates an empty registry builder with a host-provided event sink.
+    pub fn with_event_sink(event_sink: Arc<dyn ExtensionEventSink>) -> Self {
+        Self {
+            event_sink,
+            ..Self::default()
+        }
+    }
+
+    /// Returns the host event sink to pass into extension constructors.
+    pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
+        Arc::clone(&self.event_sink)
     }
 
     /// Registers one approval-review contributor.
@@ -82,6 +103,11 @@ impl<C> ExtensionRegistryBuilder<C> {
         self.tool_contributors.push(contributor);
     }
 
+    /// Registers one tool-lifecycle contributor.
+    pub fn tool_lifecycle_contributor(&mut self, contributor: Arc<dyn ToolLifecycleContributor>) {
+        self.tool_lifecycle_contributors.push(contributor);
+    }
+
     /// Registers one ordered turn-item contributor.
     pub fn turn_item_contributor(&mut self, contributor: Arc<dyn TurnItemContributor>) {
         self.turn_item_contributors.push(contributor);
@@ -90,6 +116,7 @@ impl<C> ExtensionRegistryBuilder<C> {
     /// Finishes construction and returns the immutable registry.
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
+            event_sink: self.event_sink,
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             config_contributors: self.config_contributors,
@@ -97,24 +124,32 @@ impl<C> ExtensionRegistryBuilder<C> {
             approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
             tool_contributors: self.tool_contributors,
+            tool_lifecycle_contributors: self.tool_lifecycle_contributors,
             turn_item_contributors: self.turn_item_contributors,
         }
     }
 }
 
 /// Immutable typed registry produced after extensions are installed.
-pub struct ExtensionRegistry<C> {
+pub struct ExtensionRegistry<C: Sync> {
+    event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
+    tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
-impl<C> ExtensionRegistry<C> {
+impl<C: Sync> ExtensionRegistry<C> {
+    /// Returns the host event sink retained by this registry.
+    pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
+        Arc::clone(&self.event_sink)
+    }
+
     /// Returns the registered thread-lifecycle contributors.
     pub fn thread_lifecycle_contributors(&self) -> &[Arc<dyn ThreadLifecycleContributor<C>>] {
         &self.thread_lifecycle_contributors
@@ -137,15 +172,22 @@ impl<C> ExtensionRegistry<C> {
 
     /// Claims the first rendered approval-review prompt accepted by an
     /// installed contributor.
-    pub fn approval_review<'a>(
-        &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
-        prompt: &'a str,
-    ) -> Option<ApprovalReviewFuture<'a>> {
-        self.approval_review_contributors
-            .iter()
-            .find_map(|contributor| contributor.contribute(session_store, thread_store, prompt))
+    pub async fn approval_review(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        prompt: &str,
+    ) -> Option<ReviewDecision> {
+        for contributor in &self.approval_review_contributors {
+            if let Some(decision) = contributor
+                .contribute(session_store, thread_store, prompt)
+                .await
+            {
+                return Some(decision);
+            }
+        }
+
+        None
     }
 
     /// Returns the registered prompt contributors.
@@ -158,6 +200,11 @@ impl<C> ExtensionRegistry<C> {
         &self.tool_contributors
     }
 
+    /// Returns the registered tool-lifecycle contributors.
+    pub fn tool_lifecycle_contributors(&self) -> &[Arc<dyn ToolLifecycleContributor>] {
+        &self.tool_lifecycle_contributors
+    }
+
     /// Returns the registered ordered turn-item contributors.
     pub fn turn_item_contributors(&self) -> &[Arc<dyn TurnItemContributor>] {
         &self.turn_item_contributors
@@ -165,6 +212,6 @@ impl<C> ExtensionRegistry<C> {
 }
 
 /// Creates an empty shared registry for hosts that do not register contributions.
-pub fn empty_extension_registry<C>() -> Arc<ExtensionRegistry<C>> {
+pub fn empty_extension_registry<C: Sync>() -> Arc<ExtensionRegistry<C>> {
     Arc::new(ExtensionRegistryBuilder::new().build())
 }

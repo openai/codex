@@ -188,6 +188,25 @@
         }
       ]
     },
+    "AutoCompactTokenLimitScope": {
+      "description": "Selects which part of the active context is charged against `model_auto_compact_token_limit`.",
+      "oneOf": [
+        {
+          "description": "Count the full active context against the limit.",
+          "enum": [
+            "total"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Count sampled output and later growth after the carried window prefix.",
+          "enum": [
+            "body_after_prefix"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "Config": {
       "additionalProperties": true,
       "properties": {
@@ -280,6 +299,16 @@
             "null"
           ]
         },
+        "model_auto_compact_token_limit_scope": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AutoCompactTokenLimitScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "model_context_window": {
           "format": "int64",
           "type": [
@@ -322,19 +351,6 @@
               "type": "null"
             }
           ]
-        },
-        "profile": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "profiles": {
-          "additionalProperties": {
-            "$ref": "#/definitions/ProfileV2"
-          },
-          "default": {},
-          "type": "object"
         },
         "review_model": {
           "type": [
@@ -612,107 +628,6 @@
         "api"
       ],
       "type": "string"
-    },
-    "ProfileV2": {
-      "additionalProperties": true,
-      "properties": {
-        "approval_policy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AskForApproval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "approvals_reviewer": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ApprovalsReviewer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "[UNSTABLE] Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used."
-        },
-        "chatgpt_base_url": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_reasoning_effort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model_reasoning_summary": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningSummary"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model_verbosity": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Verbosity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "service_tier": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tools": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolsV2"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "web_search": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WebSearchMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",

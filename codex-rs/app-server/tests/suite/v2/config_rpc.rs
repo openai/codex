@@ -894,6 +894,68 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_batch_write_rejects_legacy_profile_tables() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let codex_home = tmp_dir.path().canonicalize()?;
+    write_config(
+        &tmp_dir,
+        r#"
+[profiles."team.prod"]
+model = "gpt-5.3-spark"
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let batch_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: Some(codex_home.join("config.toml").display().to_string()),
+            edits: vec![
+                ConfigEdit {
+                    key_path: "profiles.\"team.prod\".model".to_string(),
+                    value: json!("gpt-5.5"),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "items.sample@catalog.enabled".to_string(),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(batch_id)),
+    )
+    .await??;
+    let code = err
+        .error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("config_write_error_code"))
+        .and_then(|value| value.as_str());
+    assert_eq!(code, Some("configValidationError"));
+    assert!(
+        err.error.message.contains("`profiles`"),
+        "unexpected error: {err:?}"
+    );
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
+    assert_eq!(
+        config["profiles"]["team.prod"]["model"].as_str(),
+        Some("gpt-5.3-spark")
+    );
+    assert_eq!(config.get("items"), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_batch_write_updates_multiple_desktop_settings() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let codex_home = tmp_dir.path().canonicalize()?;

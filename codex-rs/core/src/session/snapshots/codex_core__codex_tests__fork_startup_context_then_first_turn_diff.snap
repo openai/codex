@@ -1,6 +1,5 @@
 ---
 source: core/src/session/tests.rs
-assertion_line: 1619
 expression: snapshot
 ---
 Scenario: First request after fork when startup preserves the parent baseline, the fork changes approval policy, and the first forked turn enters plan mode.

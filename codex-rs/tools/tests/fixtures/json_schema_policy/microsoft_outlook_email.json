@@ -1,0 +1,90 @@
+{
+  "source": "golden/microsoft_outlook_email/tools",
+  "tools": [
+    {
+      "name": "microsoft_outlook_email_send",
+      "description": "Send an Outlook email.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "$ref": "#/$defs/Message/properties/id"
+          },
+          "attachment": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Attachment"
+            }
+          }
+        },
+        "$defs": {
+          "Message": {
+            "type": "object",
+            "description": "Outlook message.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Message identifier."
+              },
+              "sender": {
+                "$ref": "#/$defs/EmailAddress"
+              },
+              "importance": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high"
+                ],
+                "description": "Message importance."
+              }
+            }
+          },
+          "Attachment": {
+            "type": "object",
+            "description": "Email attachment.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Attachment file name."
+              }
+            }
+          },
+          "EmailAddress": {
+            "type": "object",
+            "description": "Email address object.",
+            "properties": {
+              "address": {
+                "type": "string",
+                "description": "SMTP address."
+              }
+            }
+          },
+          "GiantUnusedPayload": {
+            "type": "object",
+            "description": "Representative unreachable Outlook payload.",
+            "properties": {
+              "opaque": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "expected_preserved": [
+        {
+          "pointer": "/properties/message_id/$ref",
+          "value": "#/$defs/Message/properties/id"
+        },
+        {
+          "pointer": "/$defs/Message/properties/importance/enum/2",
+          "value": "high"
+        }
+      ],
+      "expected_pruned": [
+        "/$defs/GiantUnusedPayload"
+      ],
+      "expected_dropped_fields": []
+    }
+  ]
+}
