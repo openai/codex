@@ -403,11 +403,14 @@ impl ChatComposer {
             .find(char::is_whitespace)
             .map(|idx| 1 + idx)
             .unwrap_or(first_line_end);
-        let replace_end = if cursor <= 1 {
-            command_token_end
-        } else {
-            cursor
-        };
+        let typed_command_name = &text[1..command_token_end];
+        let rest_after_token_is_empty = text[command_token_end..].trim().is_empty();
+        let replace_end =
+            if cursor <= 1 || (typed_command_name == cmd.command() && rest_after_token_is_empty) {
+                command_token_end
+            } else {
+                cursor
+            };
         let tail = &text[replace_end..];
         let tail_starts_with_whitespace = tail.chars().next().is_some_and(char::is_whitespace);
         let selected_command_text = format!("/{}", cmd.command());

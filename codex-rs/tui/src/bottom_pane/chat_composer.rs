@@ -8195,6 +8195,88 @@ mod tests {
     }
 
     #[test]
+    fn slash_completion_does_not_turn_command_suffix_into_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let make_review_composer = || {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer
+                .draft
+                .textarea
+                .set_text_clearing_elements("/review");
+            composer.draft.textarea.set_cursor("/re".len());
+            composer.sync_popups();
+            composer
+        };
+
+        let mut composer = make_review_composer();
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/review ");
+
+        let mut composer = make_review_composer();
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::Command(SlashCommand::Review));
+        assert!(composer.draft.textarea.is_empty());
+    }
+
+    #[test]
+    fn slash_completion_preserves_draft_tail_that_completes_command_name() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let draft = "view the diff";
+        let make_review_composer = || {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            type_chars_humanlike(&mut composer, &draft.chars().collect::<Vec<_>>());
+            let (_result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+            type_chars_humanlike(&mut composer, &['/', 'r', 'e']);
+            composer
+        };
+
+        let mut composer = make_review_composer();
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/review view the diff");
+
+        let mut composer = make_review_composer();
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            result,
+            InputResult::CommandWithArgs(SlashCommand::Review, draft.to_string(), Vec::new())
+        );
+        assert_eq!(composer.draft.textarea.text(), "/review view the diff");
+    }
+
+    #[test]
     fn slash_tab_completion_wins_over_queueing_while_task_running() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
