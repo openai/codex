@@ -27,7 +27,7 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,
     allow_network_for_proxy: bool,
-    mitm_ca_trust_bundle_path: Option<&Path>,
+    mitm_ca_cert_path: Option<&Path>,
 ) -> Vec<String> {
     let permission_profile_json = serde_json::to_string(permission_profile)
         .unwrap_or_else(|err| panic!("failed to serialize permission profile: {err}"));
@@ -54,12 +54,12 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
     }
-    if let Some(mitm_ca_trust_bundle_path) = mitm_ca_trust_bundle_path {
-        linux_cmd.push("--mitm-ca-trust-bundle".to_string());
+    if let Some(mitm_ca_cert_path) = mitm_ca_cert_path {
+        linux_cmd.push("--mitm-ca-cert".to_string());
         linux_cmd.push(
-            mitm_ca_trust_bundle_path
+            mitm_ca_cert_path
                 .to_str()
-                .unwrap_or_else(|| panic!("MITM CA trust bundle path must be valid UTF-8"))
+                .unwrap_or_else(|| panic!("MITM CA cert path must be valid UTF-8"))
                 .to_string(),
         );
     }
@@ -77,7 +77,7 @@ fn create_linux_sandbox_command_args(
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,
     allow_network_for_proxy: bool,
-    mitm_ca_trust_bundle_path: Option<&Path>,
+    mitm_ca_cert_path: Option<&Path>,
 ) -> Vec<String> {
     let command_cwd = command_cwd
         .to_str()
@@ -100,12 +100,12 @@ fn create_linux_sandbox_command_args(
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
     }
-    if let Some(mitm_ca_trust_bundle_path) = mitm_ca_trust_bundle_path {
-        linux_cmd.push("--mitm-ca-trust-bundle".to_string());
+    if let Some(mitm_ca_cert_path) = mitm_ca_cert_path {
+        linux_cmd.push("--mitm-ca-cert".to_string());
         linux_cmd.push(
-            mitm_ca_trust_bundle_path
+            mitm_ca_cert_path
                 .to_str()
-                .unwrap_or_else(|| panic!("MITM CA trust bundle path must be valid UTF-8"))
+                .unwrap_or_else(|| panic!("MITM CA cert path must be valid UTF-8"))
                 .to_string(),
         );
     }

@@ -13,7 +13,7 @@ fn legacy_landlock_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ false,
         /*allow_network_for_proxy*/ false,
-        /*mitm_ca_trust_bundle_path*/ None,
+        /*mitm_ca_cert_path*/ None,
     );
     assert_eq!(
         default_bwrap.contains(&"--use-legacy-landlock".to_string()),
@@ -26,7 +26,7 @@ fn legacy_landlock_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
-        /*mitm_ca_trust_bundle_path*/ None,
+        /*mitm_ca_cert_path*/ None,
     );
     assert_eq!(
         legacy_landlock.contains(&"--use-legacy-landlock".to_string()),
@@ -46,7 +46,7 @@ fn proxy_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ true,
-        /*mitm_ca_trust_bundle_path*/ None,
+        /*mitm_ca_cert_path*/ None,
     );
     assert_eq!(
         args.contains(&"--allow-network-for-proxy".to_string()),
@@ -68,7 +68,7 @@ fn permission_profile_flag_is_included() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
-        /*mitm_ca_trust_bundle_path*/ None,
+        /*mitm_ca_cert_path*/ None,
     );
 
     assert_eq!(
@@ -84,11 +84,11 @@ fn permission_profile_flag_is_included() {
 }
 
 #[test]
-fn mitm_ca_trust_bundle_flag_is_included_when_requested() {
+fn mitm_ca_cert_flag_is_included_when_requested() {
     let command = vec!["/bin/true".to_string()];
     let command_cwd = Path::new("/tmp/link");
     let cwd = Path::new("/tmp");
-    let trust_bundle_path = Path::new("/tmp/ca-bundle.pem");
+    let cert_path = Path::new("/tmp/ca.pem");
 
     let args = create_linux_sandbox_command_args(
         command,
@@ -96,12 +96,13 @@ fn mitm_ca_trust_bundle_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ false,
         /*allow_network_for_proxy*/ true,
-        Some(trust_bundle_path),
+        Some(cert_path),
     );
 
-    assert!(args.windows(2).any(|window| {
-        window[0] == "--mitm-ca-trust-bundle" && window[1] == "/tmp/ca-bundle.pem"
-    }));
+    assert!(
+        args.windows(2)
+            .any(|window| { window[0] == "--mitm-ca-cert" && window[1] == "/tmp/ca.pem" })
+    );
 }
 
 #[test]
