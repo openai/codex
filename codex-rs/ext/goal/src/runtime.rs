@@ -192,6 +192,30 @@ impl GoalRuntimeHandle {
         Ok(())
     }
 
+    pub async fn restore_after_resume(&self) -> Result<(), String> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let goal = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?;
+        match goal {
+            Some(goal) if goal.status == codex_state::ThreadGoalStatus::Active => {
+                self.inner
+                    .accounting_state
+                    .mark_idle_goal_active(goal.goal_id);
+                self.inner.metrics.record_resumed();
+            }
+            Some(_) | None => self.inner.accounting_state.clear_active_goal(),
+        }
+        Ok(())
+    }
+
     pub(crate) async fn inject_active_turn_steering(&self, item: ResponseInputItem) {
         let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
             tracing::debug!("skipping goal steering because thread manager is unavailable");

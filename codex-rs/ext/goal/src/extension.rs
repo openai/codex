@@ -112,33 +112,12 @@ where
         let Some(runtime) = goal_runtime_handle(input.thread_store) else {
             return;
         };
-        if !runtime.is_enabled() {
-            return;
-        }
 
-        let goal = match self
-            .state_dbs
-            .thread_goals()
-            .get_thread_goal(runtime.thread_id())
-            .await
-        {
-            Ok(goal) => goal,
-            Err(err) => {
-                tracing::warn!(
-                    "failed to restore goal runtime after thread resume for {}: {err}",
-                    runtime.thread_id()
-                );
-                return;
-            }
-        };
-        match goal {
-            Some(goal) if goal.status == codex_state::ThreadGoalStatus::Active => {
-                runtime
-                    .accounting_state()
-                    .mark_idle_goal_active(goal.goal_id);
-                self.metrics.record_resumed();
-            }
-            Some(_) | None => runtime.accounting_state().clear_active_goal(),
+        if let Err(err) = runtime.restore_after_resume().await {
+            tracing::warn!(
+                "failed to restore goal runtime after thread resume for {}: {err}",
+                runtime.thread_id()
+            );
         }
     }
 }

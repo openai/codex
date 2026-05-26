@@ -2,11 +2,13 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::Weak;
+use std::time::Duration;
 
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
+use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
@@ -589,6 +591,52 @@ async fn external_goal_set_active_resets_baseline_without_live_thread() -> anyho
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_resume_rehydrates_active_goal_idle_accounting() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    runtime
+        .thread_goals()
+        .replace_thread_goal(
+            thread_id,
+            "ship goal extension backend",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+        )
+        .await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+
+    harness.resume_thread().await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    harness
+        .runtime_handle()
+        .prepare_external_goal_mutation()
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(ThreadGoalStatus::Active, protocol_status(goal.status));
+    assert!(
+        goal.time_used_seconds >= 1,
+        "resumed idle accounting should add elapsed wall-clock time"
+    );
+    assert_eq!(
+        vec![CapturedGoalEvent {
+            event_id: format!("{thread_id}:external-goal-mutation"),
+            turn_id: None,
+            status: ThreadGoalStatus::Active,
+            tokens_used: 0,
+        }],
+        harness.sink.goal_events()
+    );
+    Ok(())
+}
+
 async fn installed_tools(
     runtime: Arc<codex_state::StateRuntime>,
     thread_id: ThreadId,
@@ -715,6 +763,17 @@ impl GoalExtensionHarness {
                     &turn_store,
                     &token_usage,
                 )
+                .await;
+        }
+    }
+
+    async fn resume_thread(&self) {
+        for contributor in self.registry.thread_lifecycle_contributors() {
+            contributor
+                .on_thread_resume(ThreadResumeInput {
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                })
                 .await;
         }
     }
