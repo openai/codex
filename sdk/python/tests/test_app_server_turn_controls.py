@@ -3,7 +3,7 @@ from __future__ import annotations
 from app_server_harness import AppServerHarness
 from app_server_helpers import agent_message_texts, streaming_response
 
-from openai_codex import Codex, TextInput
+from openai_codex import Codex
 from openai_codex.generated.v2_all import TurnStatus
 
 
@@ -21,9 +21,9 @@ def test_turn_steer_adds_follow_up_input(tmp_path) -> None:
 
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
-            turn = thread.turn(TextInput("Start a steerable turn."))
+            turn = thread.turn("Start a steerable turn.")
             harness.responses.wait_for_requests(1)
-            steer = turn.steer(TextInput("Use this steering input."))
+            steer = turn.steer("Use this steering input.")
             events = list(turn.stream())
             requests = harness.responses.wait_for_requests(2)
 
@@ -61,7 +61,7 @@ def test_turn_interrupt_stops_active_turn_and_follow_up_runs(tmp_path) -> None:
 
         with Codex(config=harness.app_server_config()) as codex:
             thread = codex.thread_start()
-            interrupted_turn = thread.turn(TextInput("Start a long turn."))
+            interrupted_turn = thread.turn("Start a long turn.")
             harness.responses.wait_for_requests(1)
             interrupt_response = interrupted_turn.interrupt()
             completed = interrupted_turn.run()

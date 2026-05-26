@@ -153,6 +153,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -166,6 +167,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -177,14 +179,13 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     };
     expected_tools_names.extend([
         "update_plan",
+        "get_goal",
+        "create_goal",
+        "update_goal",
         "request_user_input",
         "apply_patch",
         "view_image",
-        "spawn_agent",
-        "send_input",
-        "resume_agent",
-        "wait_agent",
-        "close_agent",
+        "tool_search",
         "web_search",
     ]);
     let body0 = req1.single_request().body_json();
@@ -249,6 +250,7 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -262,6 +264,7 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -326,6 +329,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -339,6 +343,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -421,6 +426,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -435,22 +441,18 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     let sandbox_policy = permission_profile
         .to_legacy_sandbox_policy(config.cwd.as_path())
         .expect("workspace profile should have legacy projection");
-    codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
             sandbox_policy: Some(sandbox_policy),
             permission_profile: Some(permission_profile),
-            windows_sandbox_level: None,
-            model: None,
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     // Second turn after overrides
     codex
@@ -462,6 +464,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -485,7 +488,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     });
     let expected_permissions_msg = body1["input"][0].clone();
     let body1_input = body1["input"].as_array().expect("input array");
-    // After overriding the turn context, emit one updated permissions message.
+    // After overriding the thread settings, emit one updated permissions message.
     let expected_permissions_msg_2 = body2["input"][body1_input.len()].clone();
     assert_ne!(
         expected_permissions_msg_2, expected_permissions_msg,
@@ -521,22 +524,17 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         },
     };
 
-    codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
+    core_test_support::submit_thread_settings(
+        &codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
             model: Some("gpt-5.4".to_string()),
             effort: Some(Some(ReasoningEffort::Low)),
-            summary: None,
-            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     codex
         .submit(Op::UserInput {
@@ -547,6 +545,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -700,11 +699,12 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    // Second turn using per-turn overrides via UserTurn
+    // Second turn using per-turn thread-settings overrides.
     let new_cwd = TempDir::new().unwrap();
     let writable = TempDir::new().unwrap();
     let permission_profile = PermissionProfile::workspace_write_with(
@@ -716,24 +716,24 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(permission_profile, new_cwd.path());
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: new_cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: "o3".to_string(),
-            effort: Some(ReasoningEffort::High),
-            summary: Some(ReasoningSummary::Detailed),
-            service_tier: None,
-            collaboration_mode: None,
+            environments: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(new_cwd.path().to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                model: Some("o3".to_string()),
+                effort: Some(Some(ReasoningEffort::High)),
+                summary: Some(ReasoningSummary::Detailed),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -830,47 +830,57 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let default_summary = config.model_reasoning_summary;
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: default_cwd.to_path_buf(),
-            approval_policy: default_approval_policy,
-            approvals_reviewer: None,
-            sandbox_policy: default_sandbox_policy.clone(),
-            permission_profile: None,
-            model: default_model.clone(),
-            effort: default_effort,
-            summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-            service_tier: None,
-            collaboration_mode: None,
+            environments: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(default_cwd.to_path_buf()),
+                approval_policy: Some(default_approval_policy),
+                sandbox_policy: Some(default_sandbox_policy.clone()),
+                summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: default_model.clone(),
+                        reasoning_effort: default_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: default_cwd.to_path_buf(),
-            approval_policy: default_approval_policy,
-            approvals_reviewer: None,
-            sandbox_policy: default_sandbox_policy.clone(),
-            permission_profile: None,
-            model: default_model.clone(),
-            effort: default_effort,
-            summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-            service_tier: None,
-            collaboration_mode: None,
+            environments: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(default_cwd.to_path_buf()),
+                approval_policy: Some(default_approval_policy),
+                sandbox_policy: Some(default_sandbox_policy.clone()),
+                summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: default_model.clone(),
+                        reasoning_effort: default_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -959,24 +969,29 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let default_summary = config.model_reasoning_summary;
 
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: default_cwd.to_path_buf(),
-            approval_policy: default_approval_policy,
-            approvals_reviewer: None,
-            sandbox_policy: default_sandbox_policy.clone(),
-            permission_profile: None,
-            model: default_model,
-            effort: default_effort,
-            summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
-            service_tier: None,
-            collaboration_mode: None,
+            environments: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(default_cwd.to_path_buf()),
+                approval_policy: Some(default_approval_policy),
+                sandbox_policy: Some(default_sandbox_policy.clone()),
+                summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: default_model,
+                        reasoning_effort: default_effort,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -984,24 +999,30 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, default_cwd.as_path());
     codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: default_cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: "o3".to_string(),
-            effort: Some(ReasoningEffort::High),
-            summary: Some(ReasoningSummary::Detailed),
-            service_tier: None,
-            collaboration_mode: None,
+            environments: None,
             final_output_json_schema: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(default_cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                summary: Some(ReasoningSummary::Detailed),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: "o3".to_string(),
+                        reasoning_effort: Some(ReasoningEffort::High),
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

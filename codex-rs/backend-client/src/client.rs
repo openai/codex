@@ -424,7 +424,7 @@ impl Client {
     pub fn credential_routes_proxy_url(&self) -> String {
         match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/credential_routes/proxy", self.base_url),
-            PathStyle::ChatGptApi => format!("{}/wham/credential_routes/proxy", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/ps/credential_routes/proxy", self.base_url),
         }
     }
 
@@ -566,7 +566,7 @@ impl Client {
     fn credential_routes_url(&self) -> String {
         match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/credential_routes", self.base_url),
-            PathStyle::ChatGptApi => format!("{}/wham/credential_routes", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/ps/credential_routes", self.base_url),
         }
     }
 
@@ -925,11 +925,11 @@ mod tests {
         };
         assert_eq!(
             chatgpt_client.credential_routes_url(),
-            "https://chatgpt.com/backend-api/wham/credential_routes"
+            "https://chatgpt.com/backend-api/ps/credential_routes"
         );
         assert_eq!(
             chatgpt_client.credential_routes_proxy_url(),
-            "https://chatgpt.com/backend-api/wham/credential_routes/proxy"
+            "https://chatgpt.com/backend-api/ps/credential_routes/proxy"
         );
     }
 }

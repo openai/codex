@@ -1,6 +1,7 @@
 //! Runtime settings state and model/collaboration coordination for `ChatWidget`.
 
 use super::*;
+use crate::app_event::AppEvent;
 
 impl ChatWidget {
     /// Set the approval policy in the widget's config copy.
@@ -17,15 +18,40 @@ impl ChatWidget {
         }
     }
 
-    /// Set the permission profile in the widget's config copy.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_permission_profile(
+    pub(crate) fn set_permission_profile_from_session_snapshot(
         &mut self,
-        profile: PermissionProfile,
+        snapshot: PermissionProfileSnapshot,
     ) -> ConstraintResult<()> {
-        self.config.permissions.set_permission_profile(profile)?;
+        self.config
+            .permissions
+            .set_permission_profile_from_session_snapshot(snapshot)?;
         self.refresh_status_surfaces();
         Ok(())
+    }
+
+    pub(crate) fn set_permission_profile_with_active_profile(
+        &mut self,
+        profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) -> ConstraintResult<()> {
+        self.config
+            .permissions
+            .set_permission_profile_from_session_snapshot(
+                PermissionProfileSnapshot::from_session_snapshot(
+                    profile,
+                    active_permission_profile,
+                ),
+            )?;
+        self.refresh_status_surfaces();
+        Ok(())
+    }
+
+    pub(crate) fn set_permission_network(
+        &mut self,
+        network: Option<crate::legacy_core::config::NetworkProxySpec>,
+    ) {
+        self.config.permissions.network = network;
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -64,6 +90,7 @@ impl ChatWidget {
             }
         }
         if feature == Feature::FastMode {
+            self.refresh_effective_service_tier();
             self.sync_service_tier_commands();
         }
         if feature == Feature::Personality {
@@ -236,6 +263,7 @@ impl ChatWidget {
         {
             mask.model = Some(model.to_string());
         }
+        self.refresh_effective_service_tier();
         self.refresh_model_dependent_surfaces();
     }
 
@@ -344,6 +372,24 @@ impl ChatWidget {
         self.effective_reasoning_effort()
     }
 
+    pub(crate) fn on_thread_settings_updated(
+        &mut self,
+        notification: ThreadSettingsUpdatedNotification,
+    ) {
+        let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
+            tracing::warn!(
+                thread_id = notification.thread_id,
+                "ignoring app-server ThreadSettingsUpdated with invalid thread_id"
+            );
+            return;
+        };
+        if self.thread_id != Some(thread_id) {
+            return;
+        }
+
+        self.apply_thread_settings(notification.thread_settings);
+    }
+
     #[cfg(test)]
     pub(crate) fn active_collaboration_mode_kind(&self) -> ModeKind {
         self.active_mode_kind()
@@ -429,7 +475,7 @@ impl ChatWidget {
             .unwrap_or(current_effort)
     }
 
-    pub(super) fn effective_collaboration_mode(&self) -> CollaborationMode {
+    pub(crate) fn effective_collaboration_mode(&self) -> CollaborationMode {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.clone();
         }
@@ -459,6 +505,97 @@ impl ChatWidget {
     pub(super) fn refresh_model_dependent_surfaces(&mut self) {
         self.refresh_model_display();
         self.refresh_status_line();
+    }
+
+    fn apply_thread_settings(&mut self, mut settings: ThreadSettings) {
+        let cwd_changed = self.config.cwd != settings.cwd;
+        self.apply_thread_settings_cwd(settings.cwd.clone());
+        self.config.model_provider_id = settings.model_provider.clone();
+        self.set_service_tier(settings.service_tier.clone());
+        self.set_approval_policy(settings.approval_policy);
+        self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
+        self.config.personality = settings.personality;
+
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+            &settings.sandbox_policy.to_core(),
+            settings.cwd.as_path(),
+        );
+        let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
+            permission_profile,
+            settings.active_permission_profile.take().map(Into::into),
+        );
+        if let Err(err) = self
+            .config
+            .permissions
+            .set_permission_profile_from_session_snapshot(permission_snapshot.clone())
+        {
+            tracing::warn!(%err, "failed to sync permissions from ThreadSettingsUpdated");
+            if let Err(replace_err) = self
+                .config
+                .permissions
+                .replace_permission_profile_from_session_snapshot(permission_snapshot)
+            {
+                tracing::error!(
+                    %replace_err,
+                    "failed to replace permissions from ThreadSettingsUpdated after constraint fallback"
+                );
+            }
+        }
+
+        settings.collaboration_mode.settings.model = settings.model;
+        settings.collaboration_mode.settings.reasoning_effort = settings.effort;
+        self.set_effective_collaboration_mode(settings.collaboration_mode);
+        self.refresh_effective_service_tier();
+        self.refresh_status_surfaces();
+        self.sync_service_tier_commands();
+        self.sync_personality_command_enabled();
+        if cwd_changed {
+            self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+        }
+        self.refresh_plugin_mentions();
+        self.request_redraw();
+    }
+
+    fn apply_thread_settings_cwd(&mut self, cwd: AbsolutePathBuf) {
+        let previous_cwd = std::mem::replace(&mut self.config.cwd, cwd.clone());
+        self.current_cwd = Some(cwd.to_path_buf());
+        self.status_line_project_root_name_cache = None;
+
+        if !self.config.workspace_roots.contains(&previous_cwd) {
+            return;
+        }
+
+        let previous_roots = std::mem::take(&mut self.config.workspace_roots);
+        self.config.workspace_roots.push(cwd);
+        for root in previous_roots {
+            if root != previous_cwd && !self.config.workspace_roots.contains(&root) {
+                self.config.workspace_roots.push(root);
+            }
+        }
+        self.config
+            .permissions
+            .set_workspace_roots(self.config.workspace_roots.clone());
+    }
+
+    pub(super) fn set_effective_collaboration_mode(&mut self, mode: CollaborationMode) {
+        let mode_kind = mode.mode;
+        let settings = mode.settings;
+        if mode_kind == ModeKind::Default {
+            self.current_collaboration_mode = CollaborationMode {
+                mode: ModeKind::Default,
+                settings: settings.clone(),
+            };
+        }
+        self.active_collaboration_mask = Some(CollaborationModeMask {
+            name: mode_kind.display_name().to_string(),
+            mode: Some(mode_kind),
+            model: Some(settings.model.clone()),
+            reasoning_effort: Some(settings.reasoning_effort),
+            developer_instructions: Some(settings.developer_instructions),
+        });
+        self.update_collaboration_mode_indicator();
+        self.refresh_plan_mode_nudge();
+        self.refresh_model_dependent_surfaces();
     }
 
     pub(super) fn model_display_name(&self) -> &str {
@@ -554,8 +691,13 @@ impl ChatWidget {
             self.model_catalog.as_ref(),
             self.active_collaboration_mask.as_ref(),
         ) {
-            self.set_collaboration_mask(next_mask);
+            self.set_collaboration_mask_from_user_action(next_mask);
         }
+    }
+
+    pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
+        self.set_collaboration_mask(mask);
+        self.submit_collaboration_mode_settings_update();
     }
 
     /// Update the active collaboration mask.
@@ -607,5 +749,28 @@ impl ChatWidget {
             self.add_info_message(message, /*hint*/ None);
         }
         self.request_redraw();
+    }
+
+    fn submit_collaboration_mode_settings_update(&self) {
+        let Some(thread_id) = self.thread_id else {
+            return;
+        };
+        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+            thread_id,
+            op: AppCommand::override_turn_context(
+                /*cwd*/ None,
+                /*approval_policy*/ None,
+                /*approvals_reviewer*/ None,
+                /*permission_profile*/ None,
+                /*active_permission_profile*/ None,
+                /*windows_sandbox_level*/ None,
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                Some(self.effective_collaboration_mode()),
+                /*personality*/ None,
+            ),
+        });
     }
 }

@@ -227,14 +227,13 @@ pub(crate) fn has_yolo_permissions(
     approval_policy: AskForApproval,
     permission_profile: &PermissionProfile,
 ) -> bool {
-    let permission_profile = AppServerPermissionProfile::from(permission_profile.clone());
     approval_policy == AskForApproval::Never
         && matches!(
             permission_profile,
-            AppServerPermissionProfile::Disabled
-                | AppServerPermissionProfile::Managed {
-                    file_system: PermissionProfileFileSystemPermissions::Unrestricted,
-                    network: PermissionProfileNetworkPermissions { enabled: true },
+            PermissionProfile::Disabled
+                | PermissionProfile::Managed {
+                    file_system: ManagedFileSystemPermissions::Unrestricted,
+                    network: NetworkSandboxPolicy::Enabled,
                 }
         )
 }

@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/permissions.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Update Model Permissions
+
+› 1. Default (current)  Codex can read and edit files in the current
+                        workspace, and run commands. Approval is required to
+                        access the internet or edit other files.
+  2. Auto-review        Same workspace-write permissions as Default, but
+                        eligible `on-request` approvals are routed through the
+                        auto-reviewer subagent.
+  3. Full Access        Codex can edit files outside this workspace and access
+                        the internet without asking for approval. Exercise
+                        caution when using.
+  4. Read Only          Codex can read files in the current workspace.
+                        Approval is required to edit files or access the
+                        internet.
+
+  Press enter to confirm or esc to go back

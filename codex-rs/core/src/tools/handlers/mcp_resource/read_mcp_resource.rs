@@ -32,8 +32,8 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
         ToolName::plain("read_mcp_resource")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_read_mcp_resource_tool())
+    fn spec(&self) -> ToolSpec {
+        create_read_mcp_resource_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

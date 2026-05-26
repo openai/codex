@@ -589,6 +589,15 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_search(
+        &self,
+        params: ThreadSearchParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_search_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_loaded_list(
         &self,
         params: ThreadLoadedListParams,
@@ -1199,7 +1208,6 @@ impl ThreadRequestProcessor {
             approval_policy: config_snapshot.approval_policy.into(),
             approvals_reviewer: config_snapshot.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
         };
@@ -1240,17 +1248,18 @@ impl ThreadRequestProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
-        permissions: Option<PermissionProfileSelectionParams>,
+        permissions: Option<String>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
     ) -> ConfigOverrides {
-        let mut overrides = ConfigOverrides {
+        ConfigOverrides {
             model,
             model_provider,
             service_tier,
             cwd: cwd.map(PathBuf::from),
             workspace_roots: runtime_workspace_roots,
+            default_permissions: permissions,
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
             approvals_reviewer: approvals_reviewer
@@ -1262,9 +1271,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
             ..Default::default()
-        };
-        apply_permission_profile_selection_to_config_overrides(&mut overrides, permissions);
-        overrides
+        }
     }
 
     fn parse_environment_selections(
@@ -1506,9 +1513,13 @@ impl ThreadRequestProcessor {
             .clone()
             .ok_or_else(|| internal_error("sqlite state db unavailable for memory reset"))?;
 
-        state_db.clear_memory_data().await.map_err(|err| {
-            internal_error(format!("failed to clear memory rows in state db: {err}"))
-        })?;
+        state_db
+            .memories()
+            .clear_memory_data()
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to clear memory rows in memories db: {err}"))
+            })?;
 
         clear_memory_roots_contents(&self.config.codex_home)
             .await
@@ -1740,6 +1751,16 @@ impl ThreadRequestProcessor {
         if command.is_empty() {
             return Err(invalid_request("command must not be empty"));
         }
+        // `thread/shellCommand` is app-server's local-host shell escape hatch,
+        // not the normal turn-selected shell tool path.
+        if self
+            .thread_manager
+            .environment_manager()
+            .try_local_environment()
+            .is_none()
+        {
+            return Err(internal_error("local environment is not configured"));
+        }
 
         let (_, thread) = self.load_thread(&thread_id).await?;
         self.submit_core_op(
@@ -1847,6 +1868,131 @@ impl ThreadRequestProcessor {
             })
             .collect();
         Ok(ThreadListResponse {
+            data,
+            next_cursor,
+            backwards_cursor,
+        })
+    }
+
+    async fn thread_search_response_inner(
+        &self,
+        params: ThreadSearchParams,
+    ) -> Result<ThreadSearchResponse, JSONRPCErrorError> {
+        let ThreadSearchParams {
+            cursor,
+            limit,
+            sort_key,
+            sort_direction,
+            source_kinds,
+            archived,
+            search_term,
+        } = params;
+        let search_term = search_term.trim().to_string();
+        let search_term = (!search_term.is_empty())
+            .then_some(search_term)
+            .ok_or_else(|| invalid_request("thread/search requires a non-empty searchTerm"))?;
+        let requested_page_size = limit
+            .map(|value| value as usize)
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
+        let store_sort_key = match sort_key.unwrap_or(ThreadSortKey::CreatedAt) {
+            ThreadSortKey::CreatedAt => StoreThreadSortKey::CreatedAt,
+            ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
+        };
+        let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
+        let (allowed_sources, source_kind_filter) = compute_source_filters(source_kinds);
+        let mut cursor_obj = cursor;
+        let mut last_cursor = cursor_obj.clone();
+        let mut remaining = requested_page_size;
+        let mut search_results = Vec::with_capacity(requested_page_size);
+        let mut next_cursor = None;
+
+        while remaining > 0 {
+            let page = self
+                .thread_store
+                .search_threads(StoreSearchThreadsParams {
+                    page_size: remaining.min(THREAD_LIST_MAX_LIMIT),
+                    cursor: cursor_obj.clone(),
+                    sort_key: store_sort_key,
+                    sort_direction: match store_sort_direction {
+                        SortDirection::Asc => StoreSortDirection::Asc,
+                        SortDirection::Desc => StoreSortDirection::Desc,
+                    },
+                    allowed_sources: allowed_sources.clone(),
+                    archived: archived.unwrap_or(false),
+                    search_term: search_term.clone(),
+                })
+                .await
+                .map_err(thread_store_list_error)?;
+
+            for result in page.items {
+                let source = with_thread_spawn_agent_metadata(
+                    result.thread.source.clone(),
+                    result.thread.agent_nickname.clone(),
+                    result.thread.agent_role.clone(),
+                );
+                if source_kind_filter
+                    .as_ref()
+                    .is_none_or(|filter| source_kind_matches(&source, filter))
+                {
+                    search_results.push(result);
+                    if search_results.len() >= requested_page_size {
+                        break;
+                    }
+                }
+            }
+
+            remaining = requested_page_size.saturating_sub(search_results.len());
+            next_cursor = page.next_cursor;
+            if remaining == 0 {
+                break;
+            }
+
+            let Some(cursor_val) = next_cursor.clone() else {
+                break;
+            };
+            if last_cursor.as_ref() == Some(&cursor_val) {
+                next_cursor = None;
+                break;
+            }
+            last_cursor = Some(cursor_val.clone());
+            cursor_obj = Some(cursor_val);
+        }
+
+        let backwards_cursor = search_results.first().and_then(|result| {
+            thread_backwards_cursor_for_sort_key(
+                &result.thread,
+                store_sort_key,
+                store_sort_direction,
+            )
+        });
+        let fallback_provider = self.config.model_provider_id.clone();
+        let mut results = Vec::with_capacity(search_results.len());
+        let mut status_ids = Vec::with_capacity(search_results.len());
+        for result in search_results {
+            let (thread, _) = thread_from_stored_thread(
+                result.thread,
+                fallback_provider.as_str(),
+                &self.config.cwd,
+            );
+            status_ids.push(thread.id.clone());
+            results.push((thread, result.snippet));
+        }
+        let statuses = self
+            .thread_watch_manager
+            .loaded_statuses_for_threads(status_ids)
+            .await;
+        let data = results
+            .into_iter()
+            .map(|(mut thread, snippet)| {
+                if let Some(status) = statuses.get(&thread.id) {
+                    thread.status = status.clone();
+                }
+                ThreadSearchResult { thread, snippet }
+            })
+            .collect();
+
+        Ok(ThreadSearchResponse {
             data,
             next_cursor,
             backwards_cursor,
@@ -2554,7 +2700,6 @@ impl ThreadRequestProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox,
-                    permission_profile: Some(config_snapshot.permission_profile.into()),
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -2632,31 +2777,6 @@ impl ThreadRequestProcessor {
                 )));
             }
             None
-        } else if params.path.is_some() {
-            let source_thread = self
-                .read_stored_thread_for_resume(
-                    &params.thread_id,
-                    params.path.as_ref(),
-                    /*include_history*/ true,
-                )
-                .await?;
-            let existing_thread_id = source_thread.thread_id;
-            if let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await {
-                if let (Some(requested_path), Some(active_path)) = (
-                    params.path.as_ref(),
-                    existing_thread.rollout_path().as_ref(),
-                ) && requested_path != active_path
-                {
-                    return Err(invalid_request(format!(
-                        "cannot resume running thread {existing_thread_id} with stale path: requested `{}`, active `{}`",
-                        requested_path.display(),
-                        active_path.display()
-                    )));
-                }
-                Some((existing_thread_id, existing_thread, source_thread))
-            } else {
-                None
-            }
         } else if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
             && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
         {
@@ -2679,6 +2799,19 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
+            let existing_thread_rollout_path = existing_thread.rollout_path();
+            let active_path = existing_thread_rollout_path
+                .as_ref()
+                .or(source_thread.rollout_path.as_ref());
+            if let (Some(requested_path), Some(active_path)) = (params.path.as_ref(), active_path)
+                && requested_path != active_path
+            {
+                return Err(invalid_request(format!(
+                    "cannot resume running thread {existing_thread_id} with stale path: requested `{}`, active `{}`",
+                    requested_path.display(),
+                    active_path.display()
+                )));
+            }
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let history_items = source_thread
@@ -3215,7 +3348,6 @@ impl ThreadRequestProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox,
-            permission_profile: Some(config_snapshot.permission_profile.into()),
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };

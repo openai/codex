@@ -46,14 +46,22 @@ install:
     rustup show active-toolchain
     cargo fetch
 
-# Run `cargo nextest` since it's faster than `cargo test`, though including
-# --no-fail-fast is important to ensure all tests are run.
+# Run nextest with --no-fail-fast so all tests are run.
 #
 # Run `cargo install --locked cargo-nextest` if you don't have it installed.
 # Prefer this for routine local runs. Workspace crate features are banned, so
 # there should be no need to add `--all-features`.
-test:
-    RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast
+test *args:
+    RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast "$@"
+    just bench-smoke
+
+# Run explicit workspace benchmark targets.
+bench *args:
+    cargo bench --workspace --bench '*' "$@"
+
+# Run benchmark targets once to ensure they start successfully.
+bench-smoke:
+    just bench -- --test
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`

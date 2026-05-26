@@ -195,6 +195,37 @@ fn map_api_error_does_not_fallback_limit_name_to_limit_id() {
 }
 
 #[test]
+fn map_api_error_ignores_unparseable_rate_limit_reached_type_headers() {
+    let values = [
+        http::HeaderValue::from_static("future_rate_limit_reached_type"),
+        http::HeaderValue::from_bytes(&[0xff]).expect("valid opaque header value"),
+    ];
+
+    for value in values {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-codex-rate-limit-reached-type", value);
+        let body = serde_json::json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "plan_type": "pro",
+            }
+        })
+        .to_string();
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::TOO_MANY_REQUESTS,
+            url: Some("http://example.com/v1/responses".to_string()),
+            headers: Some(headers),
+            body: Some(body),
+        }));
+
+        let CodexErr::UsageLimitReached(usage_limit) = err else {
+            panic!("expected CodexErr::UsageLimitReached, got {err:?}");
+        };
+        assert_eq!(usage_limit.rate_limit_reached_type, None);
+    }
+}
+
+#[test]
 fn map_api_error_extracts_identity_auth_details_from_headers() {
     let mut headers = HeaderMap::new();
     headers.insert(REQUEST_ID_HEADER, http::HeaderValue::from_static("req-401"));

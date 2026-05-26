@@ -9,7 +9,6 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 
 use codex_config::config_toml::ConfigToml;
-use codex_config::profile_toml::ConfigProfile;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -269,27 +268,6 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
             enabled,
         ));
     }
-    for (profile_name, profile) in &cfg.profiles {
-        if let Some(features) = profile.features.as_ref() {
-            for (key, enabled) in features.entries() {
-                if let Some(feature) = feature_for_key(&key) {
-                    explicit_settings.push((
-                        format!("profiles.{profile_name}.features.{key}"),
-                        feature,
-                        enabled,
-                    ));
-                }
-            }
-        }
-        if let Some(enabled) = profile.experimental_use_unified_exec_tool {
-            explicit_settings.push((
-                format!("profiles.{profile_name}.experimental_use_unified_exec_tool"),
-                Feature::UnifiedExec,
-                enabled,
-            ));
-        }
-    }
-
     explicit_settings
 }
 
@@ -339,47 +317,13 @@ pub(crate) fn validate_feature_requirements_in_config_toml(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<()> {
-    fn validate_profile(
-        cfg: &ConfigToml,
-        profile_name: Option<&str>,
-        profile: &ConfigProfile,
-        feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
-    ) -> std::io::Result<()> {
-        let configured_features = Features::from_sources(
-            FeatureConfigSource {
-                features: cfg.features.as_ref(),
-                experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            },
-            FeatureConfigSource {
-                features: profile.features.as_ref(),
-                experimental_use_unified_exec_tool: profile.experimental_use_unified_exec_tool,
-            },
-            FeatureOverrides::default(),
-        );
-        ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())
-            .map(|_| ())
-            .map_err(|err| {
-                if let Some(profile_name) = profile_name {
-                    std::io::Error::new(
-                        err.kind(),
-                        format!(
-                            "invalid feature configuration for profile `{profile_name}`: {err}"
-                        ),
-                    )
-                } else {
-                    err
-                }
-            })
-    }
-
-    validate_profile(
-        cfg,
-        /*profile_name*/ None,
-        &ConfigProfile::default(),
-        feature_requirements,
-    )?;
-    for (profile_name, profile) in &cfg.profiles {
-        validate_profile(cfg, Some(profile_name), profile, feature_requirements)?;
-    }
-    Ok(())
+    let configured_features = Features::from_sources(
+        FeatureConfigSource {
+            features: cfg.features.as_ref(),
+            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    ManagedFeatures::from_configured(configured_features, feature_requirements.cloned()).map(|_| ())
 }

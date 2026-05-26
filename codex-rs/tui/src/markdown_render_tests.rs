@@ -531,6 +531,7 @@ fn nested_unordered_in_ordered() {
         Line::from_iter(["1. ".light_blue(), "Outer".into()]),
         Line::from_iter(["    - ", "Inner A"]),
         Line::from_iter(["    - ", "Inner B"]),
+        Line::default(),
         Line::from_iter(["2. ".light_blue(), "Next".into()]),
     ]);
     assert_eq!(text, expected);
@@ -544,6 +545,7 @@ fn nested_ordered_in_unordered() {
         Line::from_iter(["- ", "Outer"]),
         Line::from_iter(["    1. ".light_blue(), "One".into()]),
         Line::from_iter(["    2. ".light_blue(), "Two".into()]),
+        Line::default(),
         Line::from_iter(["- ", "Last"]),
     ]);
     assert_eq!(text, expected);
@@ -557,6 +559,7 @@ fn loose_list_item_multiple_paragraphs() {
         Line::from_iter(["1. ".light_blue(), "First paragraph".into()]),
         Line::default(),
         Line::from_iter(["   ", "Second paragraph of same item"]),
+        Line::default(),
         Line::from_iter(["2. ".light_blue(), "Next item".into()]),
     ]);
     assert_eq!(text, expected);
@@ -581,6 +584,7 @@ fn deeply_nested_mixed_three_levels() {
         Line::from_iter(["1. ".light_blue(), "A".into()]),
         Line::from_iter(["    - ", "B"]),
         Line::from_iter(["        1. ".light_blue(), "C".into()]),
+        Line::default(),
         Line::from_iter(["2. ".light_blue(), "D".into()]),
     ]);
     assert_eq!(text, expected);
@@ -1182,6 +1186,42 @@ fn list_item_after_simple_item_stays_compact() {
 }
 
 #[test]
+fn multiline_finding_items_are_separated_snapshot() {
+    let md = r#"**Findings**
+
+1. **Correctness issue: server tool-search completions are always rejected.**
+
+   In `next_prompt_suggestion.rs`, the output is ignored, suppressing suggestions after completed searches.
+
+   Minimal correction: count matching outputs and suppress only missing ones.
+
+2. **High-confidence simplification: remove the unused error channel.**
+
+   The implementation resolves failures to `None`, so its contract can be narrower.
+
+3. **High-confidence churn reduction: consolidate table-driven filter tests.**
+"#;
+    let text = render_markdown_text(md);
+    assert_snapshot!(plain_lines(&text).join("\n"));
+}
+
+#[test]
+fn wrapped_list_item_is_separated_from_next_sibling() {
+    let md = "1. This item wraps onto another visible rendered line\n2. Next item\n";
+    let text = render_markdown_text_with_width(md, Some(/*width*/ 24));
+    assert_eq!(
+        plain_lines(&text),
+        vec![
+            "1. This item wraps onto",
+            "   another visible",
+            "   rendered line",
+            "",
+            "2. Next item",
+        ]
+    );
+}
+
+#[test]
 fn mixed_url_markdown_wraps_prose_without_splitting_words_snapshot() {
     let md = "This paragraph keeps **strikethrough** intact near a [link](https://example.com/path) while enough surrounding prose forces wrapping.";
     let text = render_markdown_text_with_width(md, Some(/*width*/ 48));
@@ -1391,6 +1431,7 @@ fn nested_item_continuation_paragraph_is_indented() {
         Line::from_iter(["    - ", "B"]),
         Line::default(),
         Line::from_iter(["      ", "Continuation for B"]),
+        Line::default(),
         Line::from_iter(["2. ".light_blue(), "C".into()]),
     ]);
     assert_eq!(text, expected);
@@ -1483,6 +1524,22 @@ fn table_wraps_cell_content_when_width_is_narrow() {
             && lines.iter().any(|line| line.contains("logging output")),
         "expected wrapped row content: {lines:?}"
     );
+}
+
+#[test]
+fn table_wraps_file_paths_before_collapsing_narrative_columns_snapshot() {
+    let md = r#"| Unit | Files | Adds | Removes | What It Adds |
+|---|---:|---:|---:|---|
+| Suggestion engine and unit coverage | [next_prompt_suggestion.rs](/Users/example/code/codex/codex-rs/core/src/next_prompt_suggestion.rs:1), [next_prompt_suggestion_tests.rs](/Users/example/code/codex/codex-rs/core/src/next_prompt_suggestion_tests.rs:1) | 704 | 0 | Sampling workflow, stable-history checks, tool-flow suppression, fast reasoning profile, filtering rules, cancellation and timeout. |
+| Model instruction fragment and contextual isolation | [next_prompt_suggestion.rs](/Users/example/code/codex/codex-rs/core/src/context/next_prompt_suggestion.rs:1), [contextual_user_message_tests.rs](/Users/example/code/codex/codex-rs/core/src/context/contextual_user_message_tests.rs:1) | 54 | 0 | Synthetic suggestion prompt and an isolation test for ordinary user text. |
+"#;
+    let text = render_markdown_text_with_width_and_cwd(
+        md,
+        Some(/*width*/ 120),
+        Some(Path::new("/Users/example/code/codex")),
+    );
+
+    assert_snapshot!(plain_lines(&text).join("\n"));
 }
 
 #[test]

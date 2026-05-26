@@ -38,12 +38,6 @@ impl CodeModeExecuteHandler {
         let exec = ExecContext { session, turn };
         let enabled_tools =
             codex_tools::collect_code_mode_tool_definitions(&self.nested_tool_specs);
-        let stored_values = exec
-            .session
-            .services
-            .code_mode_service
-            .stored_values()
-            .await;
         // Allocate before starting V8 so the trace can create the parent
         // CodeCell before model-authored JavaScript issues nested tool calls.
         let runtime_cell_id = exec.session.services.code_mode_service.allocate_cell_id();
@@ -67,7 +61,6 @@ impl CodeModeExecuteHandler {
                 tool_call_id: call_id,
                 enabled_tools,
                 source: args.code,
-                stored_values,
                 yield_time_ms: args.yield_time_ms,
                 max_output_tokens: args.max_output_tokens,
             })
@@ -94,8 +87,8 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
         ToolName::plain(PUBLIC_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(self.spec.clone())
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
     async fn handle(
