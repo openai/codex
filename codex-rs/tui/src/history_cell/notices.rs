@@ -52,7 +52,8 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             .width()
             .min(usize::from(width.saturating_sub(4)))
             .max(1);
-        with_border_with_inner_width(content.lines, inner_width)
+        let lines = adaptive_wrap_lines(content.lines, RtOptions::new(inner_width));
+        with_border_with_inner_width(lines, inner_width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
