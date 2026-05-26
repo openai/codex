@@ -678,8 +678,8 @@ impl App {
                         .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
                 }
             }
-            AppEvent::FetchMcpInventory { detail } => {
-                self.fetch_mcp_inventory(app_server, detail);
+            AppEvent::FetchMcpInventory { detail, thread_id } => {
+                self.fetch_mcp_inventory(app_server, detail, thread_id);
             }
             AppEvent::McpInventoryLoaded { result, detail } => {
                 self.handle_mcp_inventory_result(result, detail);
