@@ -100,7 +100,9 @@ const MANAGED_MITM_CA_CERT: &str = "ca.pem";
 const MANAGED_MITM_CA_KEY: &str = "ca.key";
 const MANAGED_MITM_CA_TRUST_BUNDLE: &str = "ca-bundle.pem";
 
-const CUSTOM_CA_ENV_KEYS: &[&str] = &[
+// Best-effort compatibility set for common child toolchains that accept a CA bundle path.
+// This is intentionally curated rather than pretending to cover every TLS client.
+pub(crate) const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
     "CODEX_CA_CERTIFICATE",
     "SSL_CERT_FILE",
     "REQUESTS_CA_BUNDLE",
@@ -163,7 +165,7 @@ fn build_managed_ca_trust_bundle(
 
     let mut custom_ca_paths = Vec::new();
     for key in CUSTOM_CA_ENV_KEYS {
-        let Some(path) = env.get(*key).filter(|path| !path.is_empty()) else {
+        let Some(path) = env.get(key).filter(|path| !path.is_empty()) else {
             continue;
         };
         let path = PathBuf::from(path);

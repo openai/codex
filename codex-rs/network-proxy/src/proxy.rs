@@ -378,7 +378,7 @@ const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
 const NODE_USE_ENV_PROXY_ENV_KEY: &str = "NODE_USE_ENV_PROXY";
 #[cfg(any(target_os = "macos", test))]
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
-pub const PROXY_ENV_KEYS: &[&str] = &[
+const BASE_PROXY_ENV_KEYS: [&str; 35] = [
     PROXY_ACTIVE_ENV_KEY,
     ALLOW_LOCAL_BINDING_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
@@ -414,17 +414,8 @@ pub const PROXY_ENV_KEYS: &[&str] = &[
     "all_proxy",
     "FTP_PROXY",
     "ftp_proxy",
-    "CODEX_CA_CERTIFICATE",
-    "SSL_CERT_FILE",
-    "REQUESTS_CA_BUNDLE",
-    "CURL_CA_BUNDLE",
-    "NODE_EXTRA_CA_CERTS",
-    "GIT_SSL_CAINFO",
-    "PIP_CERT",
-    "BUNDLE_SSL_CA_CERT",
-    "npm_config_cafile",
-    "NPM_CONFIG_CAFILE",
 ];
+pub const PROXY_ENV_KEYS: &[&str] = &concat_proxy_env_keys();
 
 #[cfg(target_os = "macos")]
 pub const PROXY_GIT_SSH_COMMAND_ENV_KEY: &str = GIT_SSH_COMMAND_ENV_KEY;
@@ -477,6 +468,24 @@ fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
     for key in keys {
         env.insert((*key).to_string(), value.to_string());
     }
+}
+
+const fn concat_proxy_env_keys()
+-> [&'static str; BASE_PROXY_ENV_KEYS.len() + crate::certs::CUSTOM_CA_ENV_KEYS.len()] {
+    let mut keys = [""; BASE_PROXY_ENV_KEYS.len() + crate::certs::CUSTOM_CA_ENV_KEYS.len()];
+    let mut index = 0;
+    while index < BASE_PROXY_ENV_KEYS.len() {
+        keys[index] = BASE_PROXY_ENV_KEYS[index];
+        index += 1;
+    }
+
+    let mut custom_ca_index = 0;
+    while custom_ca_index < crate::certs::CUSTOM_CA_ENV_KEYS.len() {
+        keys[index + custom_ca_index] = crate::certs::CUSTOM_CA_ENV_KEYS[custom_ca_index];
+        custom_ca_index += 1;
+    }
+
+    keys
 }
 
 #[cfg(target_os = "macos")]
@@ -581,18 +590,7 @@ fn apply_proxy_env_overrides(
         let mitm_ca_trust_bundle_path = mitm_ca_trust_bundle_path.to_string_lossy();
         set_env_keys(
             env,
-            &[
-                "CODEX_CA_CERTIFICATE",
-                "SSL_CERT_FILE",
-                "REQUESTS_CA_BUNDLE",
-                "CURL_CA_BUNDLE",
-                "NODE_EXTRA_CA_CERTS",
-                "GIT_SSL_CAINFO",
-                "PIP_CERT",
-                "BUNDLE_SSL_CA_CERT",
-                "npm_config_cafile",
-                "NPM_CONFIG_CAFILE",
-            ],
+            &crate::certs::CUSTOM_CA_ENV_KEYS,
             &mitm_ca_trust_bundle_path,
         );
     }
@@ -1110,18 +1108,7 @@ mod tests {
             Some(mitm_ca_trust_bundle_path),
         );
 
-        for key in [
-            "CODEX_CA_CERTIFICATE",
-            "SSL_CERT_FILE",
-            "REQUESTS_CA_BUNDLE",
-            "CURL_CA_BUNDLE",
-            "NODE_EXTRA_CA_CERTS",
-            "GIT_SSL_CAINFO",
-            "PIP_CERT",
-            "BUNDLE_SSL_CA_CERT",
-            "npm_config_cafile",
-            "NPM_CONFIG_CAFILE",
-        ] {
+        for key in crate::certs::CUSTOM_CA_ENV_KEYS {
             assert_eq!(
                 env.get(key),
                 Some(&mitm_ca_trust_bundle_path.display().to_string())
