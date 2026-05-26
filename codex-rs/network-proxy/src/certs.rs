@@ -131,7 +131,7 @@ pub(crate) fn managed_ca_trust_bundle_path(env: &HashMap<String, String>) -> Res
         .parent()
         .ok_or_else(|| anyhow!("managed MITM CA cert path is missing a parent"))?
         .join(MANAGED_MITM_CA_TRUST_BUNDLE);
-    let trust_bundle = build_managed_ca_trust_bundle(&cert_path, env)?;
+    let trust_bundle = build_managed_ca_trust_bundle(&cert_path, &trust_bundle_path, env)?;
     write_atomic_replace(
         &trust_bundle_path,
         trust_bundle.as_bytes(),
@@ -148,6 +148,7 @@ pub(crate) fn managed_ca_trust_bundle_path(env: &HashMap<String, String>) -> Res
 
 fn build_managed_ca_trust_bundle(
     managed_ca_cert_path: &Path,
+    trust_bundle_path: &Path,
     env: &HashMap<String, String>,
 ) -> Result<String> {
     let mut trust_bundle = String::new();
@@ -169,13 +170,21 @@ fn build_managed_ca_trust_bundle(
             continue;
         };
         let path = PathBuf::from(path);
-        if path == managed_ca_cert_path || custom_ca_paths.contains(&path) {
+        if path == managed_ca_cert_path
+            || path == trust_bundle_path
+            || custom_ca_paths.contains(&path)
+        {
             continue;
         }
         custom_ca_paths.push(path);
     }
     for path in custom_ca_paths {
-        append_pem_file(&mut trust_bundle, &path)?;
+        if let Err(err) = append_pem_file(&mut trust_bundle, &path) {
+            warn!(
+                path = %path.display(),
+                "failed to append inherited custom CA bundle; continuing without it: {err}"
+            );
+        }
     }
     append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
     Ok(trust_bundle)
@@ -337,6 +346,12 @@ fn write_atomic_create_new(path: &Path, contents: &[u8], mode: u32) -> Result<()
 }
 
 fn write_atomic_replace(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
+    if fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(anyhow!("refusing to overwrite symlink {}", path.display()));
+    }
     if fs::read(path).ok().as_deref() == Some(contents) {
         return Ok(());
     }
@@ -345,12 +360,6 @@ fn write_atomic_replace(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow!("missing parent directory"))?;
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
-    if fs::symlink_metadata(path)
-        .ok()
-        .is_some_and(|metadata| metadata.file_type().is_symlink())
-    {
-        return Err(anyhow!("refusing to overwrite symlink {}", path.display()));
-    }
 
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -441,13 +450,53 @@ fn open_create_new_with_mode(path: &Path, _mode: u32) -> Result<File> {
         .with_context(|| format!("failed to create {}", path.display()))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    use pretty_assertions::assert_eq;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
+    #[test]
+    fn build_managed_ca_trust_bundle_skips_missing_inherited_bundle() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let trust_bundle_path = dir.path().join("ca-bundle.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        let env = HashMap::from([(
+            "SSL_CERT_FILE".to_string(),
+            dir.path().join("missing.pem").display().to_string(),
+        )]);
+
+        let trust_bundle =
+            build_managed_ca_trust_bundle(&managed_ca_cert_path, &trust_bundle_path, &env).unwrap();
+
+        assert!(trust_bundle.contains("managed ca"));
+    }
+
+    #[test]
+    fn build_managed_ca_trust_bundle_skips_existing_managed_bundle() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let trust_bundle_path = dir.path().join("ca-bundle.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        fs::write(&trust_bundle_path, "stale managed bundle\n").unwrap();
+        let env = HashMap::from([(
+            "SSL_CERT_FILE".to_string(),
+            trust_bundle_path.display().to_string(),
+        )]);
+
+        let trust_bundle =
+            build_managed_ca_trust_bundle(&managed_ca_cert_path, &trust_bundle_path, &env).unwrap();
+
+        assert!(trust_bundle.contains("managed ca"));
+        assert!(!trust_bundle.contains("stale managed bundle"));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn validate_existing_ca_key_file_rejects_group_world_permissions() {
         let dir = tempdir().unwrap();
@@ -462,6 +511,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn validate_existing_ca_key_file_rejects_symlink() {
         use std::os::unix::fs::symlink;
@@ -479,6 +529,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn validate_existing_ca_key_file_allows_private_permissions() {
         let dir = tempdir().unwrap();
@@ -487,5 +538,24 @@ mod tests {
         fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
 
         validate_existing_ca_key_file(&key_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_replace_rejects_matching_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("real-bundle.pem");
+        let link = dir.path().join("ca-bundle.pem");
+        fs::write(&target, "bundle").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let err = write_atomic_replace(&link, b"bundle", /*mode*/ 0o644).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!("refusing to overwrite symlink {}", link.display())
+        );
     }
 }
