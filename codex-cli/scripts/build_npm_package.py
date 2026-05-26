@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -16,7 +17,6 @@ RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / 
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
 CODEX_NPM_NAME = "@openai/codex"
 CODEX_PACKAGE_COMPONENT = "codex-package"
-CODEX_PACKAGE_ENTRIES = ("codex-package.json", "bin", "codex-resources", "codex-path")
 
 # `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
 # The underlying package published to npm is always `@openai/codex`.
@@ -88,16 +88,6 @@ PACKAGE_TARGET_FILTERS: dict[str, str] = {
 
 PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
 
-COMPONENT_DEST_DIR: dict[str, str] = {
-    "bwrap": "codex-resources",
-    "codex": "codex",
-    "codex-responses-api-proxy": "codex-responses-api-proxy",
-    "codex-windows-sandbox-setup": "codex",
-    "codex-command-runner": "codex",
-    "rg": "path",
-}
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
     parser.add_argument(
@@ -140,16 +130,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Directory containing pre-installed native binaries to bundle (vendor root).",
     )
-    parser.add_argument(
-        "--allow-missing-native-component",
-        dest="allow_missing_native_components",
-        action="append",
-        default=[],
-        help=(
-            "Native component that may be absent from --vendor-src. Intended for CI "
-            "compatibility with older artifact workflows; releases should not use this."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -190,7 +170,6 @@ def main() -> int:
                 staging_dir,
                 native_components,
                 target_filter={target_filter} if target_filter else None,
-                allow_missing_components=set(args.allow_missing_native_components),
             )
 
         if release_version:
@@ -255,9 +234,6 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
-        rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
-        if rg_manifest.exists():
-            shutil.copy2(rg_manifest, bin_dir / "rg")
 
         readme_src = REPO_ROOT / "README.md"
         if readme_src.exists():
@@ -316,7 +292,7 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         package_json["version"] = version
 
     if package == "codex":
-        package_json["files"] = ["bin"]
+        package_json["files"] = ["bin/codex.js"]
         package_json["optionalDependencies"] = {
             CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
                 f"npm:{CODEX_NPM_NAME}@"
@@ -349,7 +325,7 @@ def compute_platform_package_version(version: str, platform_tag: str) -> str:
 
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> None:
-    print("+", " ".join(cmd))
+    print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, cwd=cwd, check=True)
 
 
@@ -379,18 +355,12 @@ def copy_native_binaries(
     staging_dir: Path,
     components: list[str],
     target_filter: set[str] | None = None,
-    allow_missing_components: set[str] | None = None,
 ) -> None:
     vendor_src = vendor_src.resolve()
     if not vendor_src.exists():
         raise RuntimeError(f"Vendor source directory not found: {vendor_src}")
 
-    components_set = {
-        component
-        for component in components
-        if component == CODEX_PACKAGE_COMPONENT or component in COMPONENT_DEST_DIR
-    }
-    allow_missing_components = allow_missing_components or set()
+    components_set = set(components)
     if not components_set:
         return
 
@@ -413,34 +383,20 @@ def copy_native_binaries(
         dest_target_dir = vendor_dest / target_dir.name
 
         if CODEX_PACKAGE_COMPONENT in components_set:
-            validate_codex_package_dir(target_dir)
             if dest_target_dir.exists():
                 shutil.rmtree(dest_target_dir)
-            dest_target_dir.mkdir(parents=True, exist_ok=True)
-            for entry in CODEX_PACKAGE_ENTRIES:
-                src = target_dir / entry
-                dest = dest_target_dir / entry
-                if src.is_dir():
-                    shutil.copytree(src, dest)
-                else:
-                    shutil.copy2(src, dest)
+            shutil.copytree(target_dir, dest_target_dir)
         else:
             dest_target_dir.mkdir(parents=True, exist_ok=True)
 
-        for component in components_set - {CODEX_PACKAGE_COMPONENT}:
-            dest_dir_name = COMPONENT_DEST_DIR.get(component)
-            if dest_dir_name is None:
-                continue
-
-            src_component_dir = target_dir / dest_dir_name
+        for component in sorted(components_set - {CODEX_PACKAGE_COMPONENT}):
+            src_component_dir = target_dir / component
             if not src_component_dir.exists():
-                if component in allow_missing_components:
-                    continue
                 raise RuntimeError(
                     f"Missing native component '{component}' in vendor source: {src_component_dir}"
                 )
 
-            dest_component_dir = dest_target_dir / dest_dir_name
+            dest_component_dir = dest_target_dir / component
             if dest_component_dir.exists():
                 shutil.rmtree(dest_component_dir)
             shutil.copytree(src_component_dir, dest_component_dir)
@@ -451,45 +407,23 @@ def copy_native_binaries(
             missing_list = ", ".join(missing_targets)
             raise RuntimeError(f"Missing target directories in vendor source: {missing_list}")
 
-
-def validate_codex_package_dir(package_dir: Path) -> None:
-    is_windows = "windows" in package_dir.name
-    required_files = [
-        Path("codex-package.json"),
-        Path("bin") / ("codex.exe" if is_windows else "codex"),
-        Path("codex-path") / ("rg.exe" if is_windows else "rg"),
-    ]
-
-    if "linux" in package_dir.name:
-        required_files.append(Path("codex-resources") / "bwrap")
-
-    if is_windows:
-        required_files.extend(
-            [
-                Path("codex-resources") / "codex-command-runner.exe",
-                Path("codex-resources") / "codex-windows-sandbox-setup.exe",
-            ]
-        )
-
-    missing_files = [
-        str(relative_path)
-        for relative_path in required_files
-        if not (package_dir / relative_path).is_file()
-    ]
-    if missing_files:
-        missing = ", ".join(missing_files)
-        raise RuntimeError(f"Missing files in Codex package directory {package_dir}: {missing}")
-
-
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="codex-npm-pack-") as pack_dir_str:
         pack_dir = Path(pack_dir_str)
+        npm_cache_dir = pack_dir / "npm-cache"
+        npm_logs_dir = pack_dir / "npm-logs"
+        npm_cache_dir.mkdir()
+        npm_logs_dir.mkdir()
+        env = os.environ.copy()
+        env["NPM_CONFIG_CACHE"] = str(npm_cache_dir)
+        env["NPM_CONFIG_LOGS_DIR"] = str(npm_logs_dir)
         stdout = subprocess.check_output(
             ["npm", "pack", "--json", "--pack-destination", str(pack_dir)],
             cwd=staging_dir,
+            env=env,
             text=True,
         )
         try:

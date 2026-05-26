@@ -17,6 +17,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-string = { workspace = true }
+jsonptr = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "base64",
     "macros",
@@ -27,8 +28,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+urlencoding = { workspace = true }
 
 [dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lib]

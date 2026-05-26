@@ -61,7 +61,7 @@ use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
-use codex_mcp::McpRuntimeEnvironment;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
@@ -3319,17 +3319,10 @@ async fn build_hooks_for_config(
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();
-    let plugin_hooks_enabled = config.features.enabled(Feature::PluginHooks);
-    let (plugin_hook_sources, plugin_hook_load_warnings) = if plugin_hooks_enabled {
-        let plugins_input = config.plugins_config_input();
-        let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
-        (
-            plugin_outcome.effective_plugin_hook_sources(),
-            plugin_outcome.effective_plugin_hook_warnings(),
-        )
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    let plugins_input = config.plugins_config_input();
+    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+    let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
+    let plugin_hook_load_warnings = plugin_outcome.effective_plugin_hook_warnings();
     Hooks::new(HooksConfig {
         legacy_notify_argv: config.notify.clone(),
         feature_enabled: config.features.enabled(Feature::CodexHooks),

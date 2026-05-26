@@ -100,11 +100,11 @@ hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
 it cannot truthfully reproduce upstream's `*-pc-windows-msvc` archives until we
 add a real MSVC-targeting C++ toolchain to the Bazel graph.
 
-Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
-`RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets
-directly. We do not use `RUSTY_V8_MIRROR` for musl because the upstream `v8`
-crate hardcodes a `v<crate_version>` tag layout, while our musl artifacts are
-published under `rusty-v8-v<crate_version>`.
+Release and CI Cargo builds for Darwin and Linux use `RUSTY_V8_ARCHIVE` plus a
+downloaded `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release
+assets directly. We do not use `RUSTY_V8_MIRROR` because the upstream `v8` crate
+hardcodes a `v<crate_version>` tag layout, while our artifacts are published
+under `rusty-v8-v<crate_version>`.
 
 Do not mix artifacts across crate versions. The archive and binding must match
 the exact resolved `v8` crate version in `codex-rs/Cargo.lock`.

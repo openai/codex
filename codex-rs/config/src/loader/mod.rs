@@ -225,21 +225,26 @@ pub async fn load_config_layers_state(
     )
     .await?;
     if let Some(active_user_profile) = active_user_profile.as_ref()
-        && base_user_layer.config.as_table().is_some_and(|config| {
-            config
-                .get("profiles")
-                .and_then(TomlValue::as_table)
-                .is_some_and(|profiles| profiles.contains_key(active_user_profile.as_str()))
-        })
+        && let Some(base_user_config) = base_user_layer.config.as_table()
     {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "--profile-v2 `{active_user_profile}` cannot be used while {} contains legacy `[profiles.{active_user_profile}]` config; move those settings into {} or remove `[profiles.{active_user_profile}]`",
-                base_user_file.as_path().display(),
-                active_user_file.as_path().display()
-            ),
-        ));
+        let legacy_profile_is_selected = base_user_config
+            .get("profile")
+            .and_then(TomlValue::as_str)
+            .is_some_and(|profile| profile == active_user_profile.as_str());
+        let legacy_profile_table_exists = base_user_config
+            .get("profiles")
+            .and_then(TomlValue::as_table)
+            .is_some_and(|profiles| profiles.contains_key(active_user_profile.as_str()));
+        if legacy_profile_is_selected || legacy_profile_table_exists {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "--profile `{active_user_profile}` cannot be used while {} contains legacy `profile = \"{active_user_profile}\"` or `[profiles.{active_user_profile}]` config; move those settings into {} and remove the legacy profile selector/table. See https://developers.openai.com/codex/config-advanced#profiles for more information.",
+                    base_user_file.as_path().display(),
+                    active_user_file.as_path().display()
+                ),
+            ));
+        }
     }
     layers.push(base_user_layer);
 

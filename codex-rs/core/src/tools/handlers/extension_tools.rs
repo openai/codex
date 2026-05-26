@@ -1,19 +1,15 @@
 use std::sync::Arc;
 
+use codex_tools::ConversationHistory;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use serde_json::Value;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::flat_tool_name;
-use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::CoreToolRuntime;
-use crate::tools::registry::PostToolUsePayload;
-use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
 
 pub(crate) struct ExtensionToolAdapter(Arc<dyn codex_tools::ToolExecutor<ExtensionToolCall>>);
@@ -21,13 +17,6 @@ pub(crate) struct ExtensionToolAdapter(Arc<dyn codex_tools::ToolExecutor<Extensi
 impl ExtensionToolAdapter {
     pub(crate) fn new(executor: Arc<dyn codex_tools::ToolExecutor<ExtensionToolCall>>) -> Self {
         Self(executor)
-    }
-
-    fn arguments_from_payload<'a>(&self, payload: &'a ToolPayload) -> Option<&'a str> {
-        let ToolPayload::Function { arguments } = payload else {
-            return None;
-        };
-        Some(arguments)
     }
 }
 
@@ -53,61 +42,35 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        self.0.handle(to_extension_call(&invocation)).await
+        self.0.handle(to_extension_call(&invocation).await).await
     }
 }
 
 impl CoreToolRuntime for ExtensionToolAdapter {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        self.arguments_from_payload(payload).is_some()
-    }
-
-    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        let arguments = self.arguments_from_payload(&invocation.payload)?;
-        Some(PreToolUsePayload {
-            tool_name: HookToolName::new(flat_tool_name(&self.tool_name()).into_owned()),
-            tool_input: extension_tool_hook_input(arguments),
-        })
-    }
-
-    fn post_tool_use_payload(
-        &self,
-        invocation: &ToolInvocation,
-        result: &dyn ToolOutput,
-    ) -> Option<PostToolUsePayload> {
-        let arguments = self.arguments_from_payload(&invocation.payload)?;
-        Some(PostToolUsePayload {
-            tool_name: HookToolName::new(flat_tool_name(&self.tool_name()).into_owned()),
-            tool_use_id: invocation.call_id.clone(),
-            tool_input: extension_tool_hook_input(arguments),
-            tool_response: result
-                .post_tool_use_response(&invocation.call_id, &invocation.payload)?,
-        })
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 
-fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
+async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
+    let conversation_history =
+        ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
     ExtensionToolCall {
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
         truncation_policy: invocation.turn.truncation_policy,
+        conversation_history,
         payload: invocation.payload.clone(),
     }
-}
-
-fn extension_tool_hook_input(arguments: &str) -> Value {
-    if arguments.trim().is_empty() {
-        return Value::Object(serde_json::Map::new());
-    }
-
-    serde_json::from_str(arguments).unwrap_or_else(|_| Value::String(arguments.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -236,6 +199,17 @@ mod tests {
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let turn_id = turn.sub_id.clone();
         let truncation_policy = turn.truncation_policy;
+        let history_item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "extension history".to_string(),
+            }],
+            phase: None,
+        };
+        session
+            .record_into_history(std::slice::from_ref(&history_item), &turn)
+            .await;
         let invocation = ToolInvocation {
             session: session.into(),
             turn: turn.into(),
@@ -261,6 +235,10 @@ mod tests {
             codex_tools::ToolName::plain("extension_echo")
         );
         assert_eq!(captured_call.truncation_policy, truncation_policy);
+        assert_eq!(
+            captured_call.conversation_history.items(),
+            std::slice::from_ref(&history_item)
+        );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {
                 assert_eq!(arguments, json!({ "message": "hello" }).to_string());

@@ -67,6 +67,7 @@ fn rollout_items_from_messages(messages: &[ConversationMessage]) -> Vec<RolloutI
                 items.push(RolloutItem::EventMsg(EventMsg::TurnStarted(
                     TurnStartedEvent {
                         turn_id: turn_id.clone(),
+                        trace_id: None,
                         started_at: message.timestamp,
                         model_context_window: None,
                         collaboration_mode_kind: Default::default(),

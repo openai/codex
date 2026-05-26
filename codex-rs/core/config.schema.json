@@ -711,14 +711,6 @@
             }
           ],
           "default": null
-        },
-        "zsh_path": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            }
-          ],
-          "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
         }
       },
       "type": "object"
@@ -2304,7 +2296,7 @@
           },
           "type": "array"
         },
-        "experimental_environment": {
+        "environment_id": {
           "default": null,
           "type": "string"
         },
@@ -4654,7 +4646,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
+      "description": "Directory where Codex writes log files. Setting this value explicitly also enables the TUI text log in this directory. Defaults to `$CODEX_HOME/log`."
     },
     "marketplaces": {
       "additionalProperties": {
@@ -4986,14 +4978,6 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
-    },
-    "zsh_path": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      ],
-      "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
     }
   },
   "title": "ConfigToml",

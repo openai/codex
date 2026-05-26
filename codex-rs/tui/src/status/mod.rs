@@ -11,6 +11,7 @@ mod card;
 mod format;
 mod helpers;
 mod rate_limits;
+pub(crate) mod remote_connection;
 
 pub(crate) use account::StatusAccountDisplay;
 pub(crate) use card::StatusHistoryHandle;

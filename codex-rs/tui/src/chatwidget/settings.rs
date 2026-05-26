@@ -30,6 +30,30 @@ impl ChatWidget {
         Ok(())
     }
 
+    pub(crate) fn set_permission_profile_with_active_profile(
+        &mut self,
+        profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) -> ConstraintResult<()> {
+        self.config
+            .permissions
+            .set_permission_profile_from_session_snapshot(
+                PermissionProfileSnapshot::from_session_snapshot(
+                    profile,
+                    active_permission_profile,
+                ),
+            )?;
+        self.refresh_status_surfaces();
+        Ok(())
+    }
+
+    pub(crate) fn set_permission_network(
+        &mut self,
+        network: Option<crate::legacy_core::config::NetworkProxySpec>,
+    ) {
+        self.config.permissions.network = network;
+    }
+
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
         self.config.permissions.windows_sandbox_mode = mode;

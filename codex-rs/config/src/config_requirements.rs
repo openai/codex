@@ -89,6 +89,7 @@ pub struct ConfigRequirements {
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
+    pub allow_appshots: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
@@ -124,6 +125,7 @@ impl Default for ConfigRequirements {
                 /*source*/ None,
             ),
             allow_managed_hooks_only: None,
+            allow_appshots: None,
             computer_use: None,
             feature_requirements: None,
             managed_hooks: None,
@@ -750,6 +752,7 @@ pub struct ConfigRequirementsToml {
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     pub allow_managed_hooks_only: Option<bool>,
+    pub allow_appshots: Option<bool>,
     pub computer_use: Option<ComputerUseRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
@@ -801,6 +804,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_permissions: Option<Sourced<Vec<String>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
+    pub allow_appshots: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
@@ -840,6 +844,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
             allow_managed_hooks_only: _,
+            allow_appshots: _,
             computer_use: _,
             feature_requirements: _,
             hooks: _,
@@ -872,6 +877,7 @@ impl ConfigRequirementsWithSources {
                 allowed_permissions,
                 allowed_web_search_modes,
                 allow_managed_hooks_only,
+                allow_appshots,
                 computer_use,
                 feature_requirements,
                 hooks,
@@ -902,6 +908,7 @@ impl ConfigRequirementsWithSources {
             allowed_permissions,
             allowed_web_search_modes,
             allow_managed_hooks_only,
+            allow_appshots,
             computer_use,
             feature_requirements,
             hooks,
@@ -922,6 +929,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
+            allow_appshots: allow_appshots.map(|sourced| sourced.value),
             computer_use: computer_use.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
@@ -1008,6 +1016,7 @@ impl ConfigRequirementsToml {
             && self.remote_sandbox_config.is_none()
             && self.allowed_web_search_modes.is_none()
             && self.allow_managed_hooks_only.is_none()
+            && self.allow_appshots.is_none()
             && self
                 .computer_use
                 .as_ref()
@@ -1054,6 +1063,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_permissions: _,
             allowed_web_search_modes,
             allow_managed_hooks_only,
+            allow_appshots,
             computer_use,
             feature_requirements,
             hooks,
@@ -1291,6 +1301,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             permission_profile,
             web_search_mode,
             allow_managed_hooks_only,
+            allow_appshots,
             computer_use,
             feature_requirements,
             managed_hooks,
@@ -1361,6 +1372,7 @@ mod tests {
             remote_sandbox_config: _,
             allowed_web_search_modes,
             allow_managed_hooks_only,
+            allow_appshots,
             computer_use,
             feature_requirements,
             hooks,
@@ -1385,6 +1397,8 @@ mod tests {
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_managed_hooks_only: allow_managed_hooks_only
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_appshots: allow_appshots
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
@@ -1467,6 +1481,19 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_allow_appshots() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_appshots = true
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_appshots, Some(true));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn filesystem_requirements_table_cannot_define_a_permission_profile() {
         let err = from_str::<ConfigRequirementsToml>(
             r#"
@@ -1482,6 +1509,19 @@ mod tests {
             ),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[test]
+    fn allow_appshots_false_is_still_configured() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_appshots = false
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_appshots, Some(false));
+        assert!(!requirements.is_empty());
+        Ok(())
     }
 
     #[test]
@@ -1539,6 +1579,7 @@ mod tests {
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             allow_managed_hooks_only: Some(true),
+            allow_appshots: Some(false),
             computer_use: Some(computer_use.clone()),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
@@ -1578,6 +1619,7 @@ mod tests {
                     /*value*/ true,
                     enforce_source.clone(),
                 )),
+                allow_appshots: Some(Sourced::new(/*value*/ false, enforce_source.clone(),)),
                 computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
@@ -1623,6 +1665,7 @@ mod tests {
                 allowed_permissions: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
+                allow_appshots: None,
                 computer_use: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1673,6 +1716,7 @@ mod tests {
                 allowed_permissions: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
+                allow_appshots: None,
                 computer_use: None,
                 feature_requirements: None,
                 hooks: None,

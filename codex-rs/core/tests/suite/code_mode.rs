@@ -242,7 +242,7 @@ async fn run_code_mode_turn_with_rmcp_config(
                     env_vars: Vec::new(),
                     cwd: None,
                 },
-                experimental_environment: None,
+                environment_id: "local".to_string(),
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -1355,6 +1355,159 @@ text("session b done");
         text_item(&fourth_items, /*index*/ 0),
     );
     assert_eq!(text_item(&fourth_items, /*index*/ 1), "session b done");
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_concurrent_cells_merge_only_the_stored_values_they_write() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+    });
+    let test = builder.build(&server).await?;
+    let first_gate = test.workspace_path("code-mode-first-store.ready");
+    let first_wait = wait_for_file_source(&first_gate)?;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-init",
+                "exec",
+                r#"
+store("a", 1);
+store("b", 2);
+"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "initialized"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("initialize stored values").await?;
+
+    let first_code = format!(
+        r#"
+store("a", 3);
+yield_control();
+{first_wait}
+"#
+    );
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_custom_tool_call("call-first", "exec", &first_code),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let first_started = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "first pending"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("start first store").await?;
+
+    let first_request = first_started.single_request();
+    let first_items = custom_tool_output_items(&first_request, "call-first");
+    let first_cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-5"),
+            ev_custom_tool_call("call-second", "exec", r#"store("b", 4);"#),
+            ev_completed("resp-5"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-3", "second complete"),
+            ev_completed("resp-6"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("write the second key").await?;
+
+    fs::write(&first_gate, "ready")?;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-7"),
+            responses::ev_function_call(
+                "call-wait",
+                "wait",
+                &serde_json::to_string(&serde_json::json!({
+                    "cell_id": first_cell_id,
+                    "yield_time_ms": 1_000,
+                }))?,
+            ),
+            ev_completed("resp-7"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-4", "first completed"),
+            ev_completed("resp-8"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("complete the first store").await?;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-9"),
+            ev_custom_tool_call(
+                "call-check",
+                "exec",
+                r#"text(JSON.stringify({ a: load("a"), b: load("b") }));"#,
+            ),
+            ev_completed("resp-9"),
+        ]),
+    )
+    .await;
+    let check_response = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-5", "checked"),
+            ev_completed("resp-10"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("check merged stored values").await?;
+
+    let check_request = check_response.single_request();
+    let stored_values: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&check_request, "call-check")
+            .expect("checking stored values should emit JSON"),
+    )?;
+    assert_eq!(stored_values, serde_json::json!({ "a": 3, "b": 4 }));
 
     Ok(())
 }

@@ -27,7 +27,7 @@ use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::StartupOutcomeError;
 use crate::rmcp_client::list_tools_for_client_uncached;
-use crate::runtime::McpRuntimeEnvironment;
+use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
@@ -176,7 +176,7 @@ impl McpConnectionManager {
         submit_id: String,
         tx_event: Sender<Event>,
         initial_permission_profile: PermissionProfile,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         host_owned_codex_apps_enabled: bool,
@@ -248,7 +248,7 @@ impl McpConnectionManager {
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
-                runtime_environment.clone(),
+                runtime_context.clone(),
                 runtime_auth_provider,
                 client_elicitation_capability.clone(),
             );

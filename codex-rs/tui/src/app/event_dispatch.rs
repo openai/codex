@@ -800,18 +800,24 @@ impl App {
             AppEvent::OpenFullAccessConfirmation {
                 preset,
                 return_to_permissions,
+                profile_selection,
             } => {
-                self.chat_widget
-                    .open_full_access_confirmation(preset, return_to_permissions);
+                self.chat_widget.open_full_access_confirmation(
+                    preset,
+                    return_to_permissions,
+                    profile_selection,
+                );
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
+                profile_selection,
                 sample_paths,
                 extra_count,
                 failed_scan,
             } => {
                 self.chat_widget.open_world_writable_warning_confirmation(
                     preset,
+                    profile_selection,
                     sample_paths,
                     extra_count,
                     failed_scan,
@@ -848,10 +854,17 @@ impl App {
                     self.launch_external_editor(tui).await;
                 }
             }
-            AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
-                self.chat_widget.open_windows_sandbox_enable_prompt(preset);
+            AppEvent::OpenWindowsSandboxEnablePrompt {
+                preset,
+                profile_selection,
+            } => {
+                self.chat_widget
+                    .open_windows_sandbox_enable_prompt(preset, profile_selection);
             }
-            AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
+            AppEvent::OpenWindowsSandboxFallbackPrompt {
+                preset,
+                profile_selection,
+            } => {
                 self.session_telemetry.counter(
                     "codex.windows_sandbox.fallback_prompt_shown",
                     /*inc*/ 1,
@@ -866,12 +879,30 @@ impl App {
                     );
                 }
                 self.chat_widget
-                    .open_windows_sandbox_fallback_prompt(preset);
+                    .open_windows_sandbox_fallback_prompt(preset, profile_selection);
             }
-            AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
+            AppEvent::BeginWindowsSandboxElevatedSetup {
+                preset,
+                profile_selection,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
-                    let permission_profile = preset.permission_profile.clone();
+                    let permission_profile = match self
+                        .permission_profile_for_windows_setup(&preset, profile_selection.as_ref())
+                        .await
+                    {
+                        Ok(permission_profile) => permission_profile,
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to resolve permission profile for elevated Windows sandbox setup"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to prepare Windows sandbox for the selected permission profile: {err}"
+                            ));
+                            return Ok(AppRunControl::Continue);
+                        }
+                    };
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = policy_cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
@@ -887,6 +918,7 @@ impl App {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
+                            profile_selection,
                         });
                         return Ok(AppRunControl::Continue);
                     }
@@ -903,7 +935,10 @@ impl App {
                             );
                         })
                     else {
-                        tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt { preset });
+                        tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt {
+                            preset,
+                            profile_selection,
+                        });
                         return Ok(AppRunControl::Continue);
                     };
                     tokio::task::spawn_blocking(move || {
@@ -924,6 +959,7 @@ impl App {
                                 AppEvent::EnableWindowsSandboxForAgentMode {
                                     preset: preset.clone(),
                                     mode: WindowsSandboxEnableMode::Elevated,
+                                    profile_selection: profile_selection.clone(),
                                 }
                             }
                             Err(err) => {
@@ -955,7 +991,10 @@ impl App {
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
                                 );
-                                AppEvent::OpenWindowsSandboxFallbackPrompt { preset }
+                                AppEvent::OpenWindowsSandboxFallbackPrompt {
+                                    preset,
+                                    profile_selection,
+                                }
                             }
                         };
                         tx.send(event);
@@ -963,13 +1002,31 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, profile_selection);
                 }
             }
-            AppEvent::BeginWindowsSandboxLegacySetup { preset } => {
+            AppEvent::BeginWindowsSandboxLegacySetup {
+                preset,
+                profile_selection,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
-                    let permission_profile = preset.permission_profile.clone();
+                    let permission_profile = match self
+                        .permission_profile_for_windows_setup(&preset, profile_selection.as_ref())
+                        .await
+                    {
+                        Ok(permission_profile) => permission_profile,
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to resolve permission profile for legacy Windows sandbox setup"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to prepare Windows sandbox for the selected permission profile: {err}"
+                            ));
+                            return Ok(AppRunControl::Continue);
+                        }
+                    };
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = policy_cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
@@ -988,7 +1045,10 @@ impl App {
                             );
                         })
                     else {
-                        tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt { preset });
+                        tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt {
+                            preset,
+                            profile_selection,
+                        });
                         return Ok(AppRunControl::Continue);
                     };
                     tokio::task::spawn_blocking(move || {
@@ -1014,12 +1074,13 @@ impl App {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Legacy,
+                            profile_selection,
                         });
                     });
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, profile_selection);
                 }
             }
             AppEvent::BeginWindowsSandboxGrantReadRoot { path } => {
@@ -1082,7 +1143,11 @@ impl App {
                         ));
                 }
             },
-            AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
+            AppEvent::EnableWindowsSandboxForAgentMode {
+                preset,
+                mode,
+                profile_selection,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
                     self.chat_widget.clear_windows_sandbox_setup_status();
@@ -1093,18 +1158,20 @@ impl App {
                             &[("result", "success")],
                         );
                     }
-                    let profile = self.active_profile.as_deref();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    let builder = ConfigEditsBuilder::for_config(&self.config)
-                        .with_profile(profile)
-                        .set_windows_sandbox_mode(if elevated_enabled {
-                            "elevated"
-                        } else {
-                            "unelevated"
-                        })
-                        .clear_legacy_windows_sandbox_keys();
-                    match builder.apply().await {
-                        Ok(()) => {
+                    let edits =
+                        crate::config_update::build_windows_sandbox_mode_edits(elevated_enabled);
+                    match crate::config_update::write_config_batch(
+                        app_server.request_handle(),
+                        edits,
+                    )
+                    .await
+                    {
+                        Ok(response) if response.status == WriteStatus::OkOverridden => {
+                            self.sync_windows_sandbox_after_overridden_write(app_server, &response)
+                                .await;
+                        }
+                        Ok(_) => {
                             if elevated_enabled {
                                 self.config.set_windows_sandbox_enabled(/*value*/ false);
                                 self.config
@@ -1142,11 +1209,40 @@ impl App {
                                 self.app_event_tx.send(
                                     AppEvent::OpenWorldWritableWarningConfirmation {
                                         preset: Some(preset.clone()),
+                                        profile_selection: profile_selection.clone(),
                                         sample_paths,
                                         extra_count,
                                         failed_scan,
                                     },
                                 );
+                            } else if let Some(selection) = profile_selection {
+                                self.app_event_tx.send(AppEvent::CodexOp(
+                                    AppCommand::override_turn_context(
+                                        /*cwd*/ None,
+                                        /*approval_policy*/ None,
+                                        /*approvals_reviewer*/ None,
+                                        /*permission_profile*/ None,
+                                        /*active_permission_profile*/ None,
+                                        #[cfg(target_os = "windows")]
+                                        Some(windows_sandbox_level),
+                                        /*model*/ None,
+                                        /*effort*/ None,
+                                        /*summary*/ None,
+                                        /*service_tier*/ None,
+                                        /*collaboration_mode*/ None,
+                                        /*personality*/ None,
+                                    ),
+                                ));
+                                self.apply_permission_profile_selection(selection).await;
+                                let _ = mode;
+                                self.chat_widget.add_plain_history_lines(vec![
+                                    Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
+                                    Line::from(vec![
+                                        "  ".into(),
+                                        "Codex can now safely edit files and execute commands in your computer"
+                                            .dark_gray(),
+                                    ]),
+                                ]);
                             } else {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
@@ -1196,22 +1292,17 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = (preset, mode);
+                    let _ = (preset, mode, profile_selection);
                 }
             }
             AppEvent::PersistModelSelection { model, effort } => {
-                let profile = self.active_profile.as_deref();
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),
-                    crate::config_update::build_model_selection_edits(
-                        profile,
-                        model.as_str(),
-                        effort,
-                    ),
+                    crate::config_update::build_model_selection_edits(model.as_str(), effort),
                 )
                 .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let effort_label = effort
                             .map(|selected_effort| selected_effort.to_string())
                             .unwrap_or_else(|| "default".to_string());
@@ -1221,11 +1312,6 @@ impl App {
                             message.push(' ');
                             message.push_str(label);
                         }
-                        if let Some(profile) = profile {
-                            message.push_str(" for ");
-                            message.push_str(profile);
-                            message.push_str(" profile");
-                        }
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
@@ -1233,14 +1319,8 @@ impl App {
                             error = %err,
                             "failed to persist model selection"
                         );
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save model for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget
-                                .add_error_message(format!("Failed to save default model: {err}"));
-                        }
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save default model: {err}"));
                     }
                 }
             }
@@ -1282,24 +1362,18 @@ impl App {
                 self.chat_widget.on_plugin_mentions_loaded(plugins);
             }
             AppEvent::PersistPersonalitySelection { personality } => {
-                let profile = self.active_profile.as_deref();
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),
                     vec![crate::config_update::replace_config_value(
-                        crate::config_update::profile_scoped_key_path(profile, "personality"),
+                        "personality",
                         serde_json::json!(personality.to_string()),
                     )],
                 )
                 .await
                 {
-                    Ok(()) => {
+                    Ok(_) => {
                         let label = Self::personality_label(personality);
-                        let mut message = format!("Personality set to {label}");
-                        if let Some(profile) = profile {
-                            message.push_str(" for ");
-                            message.push_str(profile);
-                            message.push_str(" profile");
-                        }
+                        let message = format!("Personality set to {label}");
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
@@ -1307,15 +1381,9 @@ impl App {
                             error = %err,
                             "failed to persist personality selection"
                         );
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save personality for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save default personality: {err}"
-                            ));
-                        }
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save default personality: {err}"
+                        ));
                     }
                 }
             }
@@ -1324,38 +1392,25 @@ impl App {
                 self.config.service_tier = service_tier.clone();
                 self.sync_active_thread_service_tier_to_cached_session()
                     .await;
-                let profile = self.active_profile.as_deref();
                 let edits = crate::config_update::build_service_tier_selection_edits(
-                    profile,
                     service_tier.as_deref(),
                 );
                 match crate::config_update::write_config_batch(app_server.request_handle(), edits)
                     .await
                 {
-                    Ok(()) => {
-                        let mut message = if let Some(service_tier) = service_tier {
+                    Ok(_) => {
+                        let message = if let Some(service_tier) = service_tier {
                             format!("Service tier set to {service_tier}")
                         } else {
                             "Service tier cleared".to_string()
                         };
-                        if let Some(profile) = profile {
-                            message.push_str(" for ");
-                            message.push_str(profile);
-                            message.push_str(" profile");
-                        }
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
                         tracing::error!(error = %err, "failed to persist service tier selection");
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save service tier for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save default service tier: {err}"
-                            ));
-                        }
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save default service tier: {err}"
+                        ));
                     }
                 }
             }
@@ -1460,7 +1515,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_permission_profile_override =
-                    Some(self.config.permissions.permission_profile().clone());
+                    Some(RuntimePermissionProfileOverride::from_config(&self.config));
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
 
@@ -1496,19 +1551,18 @@ impl App {
                     }
                 }
             }
+            AppEvent::SelectPermissionProfile(selection) => {
+                self.apply_permission_profile_selection(selection).await;
+            }
             AppEvent::UpdateApprovalsReviewer(policy) => {
                 self.config.approvals_reviewer = policy;
                 self.chat_widget.set_approvals_reviewer(policy);
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
-                let profile = self.active_profile.as_deref();
                 if let Err(err) = crate::config_update::write_config_batch(
                     app_server.request_handle(),
                     vec![crate::config_update::replace_config_value(
-                        crate::config_update::profile_scoped_key_path(
-                            profile,
-                            "approvals_reviewer",
-                        ),
+                        "approvals_reviewer",
                         serde_json::json!(policy.to_string()),
                     )],
                 )
@@ -1523,7 +1577,7 @@ impl App {
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
-                self.update_feature_flags(updates).await;
+                self.update_feature_flags(app_server, updates).await;
             }
             AppEvent::UpdateMemorySettings {
                 use_memories,
@@ -1604,11 +1658,7 @@ impl App {
                 }
             }
             AppEvent::PersistPlanModeReasoningEffort(effort) => {
-                let profile = self.active_profile.as_deref();
-                let key_path = crate::config_update::profile_scoped_key_path(
-                    profile,
-                    "plan_mode_reasoning_effort",
-                );
+                let key_path = "plan_mode_reasoning_effort";
                 let edit = if let Some(effort) = effort {
                     crate::config_update::replace_config_value(
                         key_path,
@@ -1627,15 +1677,9 @@ impl App {
                         error = %err,
                         "failed to persist plan mode reasoning effort"
                     );
-                    if let Some(profile) = profile {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save Plan mode reasoning effort for profile `{profile}`: {err}"
-                        ));
-                    } else {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save Plan mode reasoning effort: {err}"
-                        ));
-                    }
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save Plan mode reasoning effort: {err}"
+                    ));
                 }
             }
             AppEvent::PersistModelMigrationPromptAcknowledged {

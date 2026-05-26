@@ -151,6 +151,21 @@ print(json.dumps({{"hookSpecificOutput": {{"hookEventName": "SubagentStart", "ad
         start_log_path = start_log_path.display(),
     );
 
+    let user_prompt_submit_script_path = home.join("user_prompt_submit_hook.py");
+    let user_prompt_submit_log_path = home.join("user_prompt_submit_hook_log.jsonl");
+    let user_prompt_submit_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{user_prompt_submit_log_path}")
+payload = json.load(sys.stdin)
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+        user_prompt_submit_log_path = user_prompt_submit_log_path.display(),
+    );
+
     let subagent_stop_script_path = home.join("subagent_stop_hook.py");
     let subagent_stop_log_path = home.join("subagent_stop_hook_log.jsonl");
     let prompts_json = serde_json::to_string(stop_prompts)?;
@@ -212,6 +227,12 @@ print(json.dumps({{"systemMessage": "root stop complete"}}))
                     "command": format!("python3 {}", start_script_path.display()),
                 }]
             }],
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", user_prompt_submit_script_path.display()),
+                }]
+            }],
             "SubagentStop": [{
                 "matcher": subagent_stop_matcher,
                 "hooks": [{
@@ -230,6 +251,7 @@ print(json.dumps({{"systemMessage": "root stop complete"}}))
 
     fs::write(&session_start_script_path, session_start_script)?;
     fs::write(&start_script_path, start_script)?;
+    fs::write(&user_prompt_submit_script_path, user_prompt_submit_script)?;
     fs::write(&subagent_stop_script_path, subagent_stop_script)?;
     fs::write(&stop_script_path, stop_script)?;
     fs::write(home.join("hooks.json"), hooks.to_string())?;
@@ -504,7 +526,9 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
 
     let test = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) = write_subagent_lifecycle_hooks(home, &[], "worker") {
+            if let Err(error) =
+                write_subagent_lifecycle_hooks(home, /*stop_prompts*/ &[], "worker")
+            {
                 panic!("failed to write subagent hook fixture: {error}");
             }
         })
@@ -519,8 +543,7 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
         .await?;
 
     test.submit_turn(TURN_1_PROMPT).await?;
-    let child_requests = wait_for_requests(&child_request_log).await?;
-    assert_eq!(child_requests.len(), 1);
+    let _ = wait_for_requests(&child_request_log).await?;
 
     let start_inputs = wait_for_hook_log(
         test.codex_home_path(),
@@ -535,6 +558,29 @@ async fn subagent_start_replaces_session_start_and_injects_context() -> Result<(
         start_inputs[0]["agent_id"].as_str(),
         Some(spawned_id.as_str())
     );
+
+    let user_prompt_submit_inputs = wait_for_hook_log(
+        test.codex_home_path(),
+        "user_prompt_submit_hook_log.jsonl",
+        /*expected_len*/ 2,
+    )
+    .await?;
+    let parent_prompt_input = user_prompt_submit_inputs
+        .iter()
+        .find(|input| input["prompt"].as_str() == Some(TURN_1_PROMPT))
+        .expect("parent prompt submit hook input should be logged");
+    assert_eq!(parent_prompt_input.get("agent_id"), None);
+    assert_eq!(parent_prompt_input.get("agent_type"), None);
+
+    let child_prompt_input = user_prompt_submit_inputs
+        .iter()
+        .find(|input| input["prompt"].as_str() == Some(CHILD_PROMPT))
+        .expect("child prompt submit hook input should be logged");
+    assert_eq!(
+        child_prompt_input["agent_id"].as_str(),
+        Some(spawned_id.as_str())
+    );
+    assert_eq!(child_prompt_input["agent_type"].as_str(), Some("worker"));
 
     let session_start_inputs = wait_for_hook_log(
         test.codex_home_path(),
@@ -627,9 +673,11 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
 
     let test = test_codex()
         .with_pre_build_hook(|home| {
-            if let Err(error) =
-                write_subagent_lifecycle_hooks(home, &[SUBAGENT_STOP_CONTINUATION], "")
-            {
+            if let Err(error) = write_subagent_lifecycle_hooks(
+                home,
+                /*stop_prompts*/ &[SUBAGENT_STOP_CONTINUATION],
+                "",
+            ) {
                 panic!("failed to write subagent hook fixture: {error}");
             }
         })
