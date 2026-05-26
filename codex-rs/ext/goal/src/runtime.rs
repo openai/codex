@@ -270,7 +270,7 @@ impl GoalRuntimeHandle {
                 let goal = protocol_goal_from_state(goal);
                 self.inner.event_emitter.thread_goal_updated(
                     event_id.to_string(),
-                    None,
+                    /*turn_id*/ None,
                     goal.clone(),
                 );
                 Some(AccountedGoalProgress { goal, goal_id })
