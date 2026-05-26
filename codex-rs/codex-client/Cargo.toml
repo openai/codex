@@ -12,7 +12,8 @@ futures = { workspace = true }
 http = { workspace = true }
 opentelemetry = { workspace = true }
 rand = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots", "stream"] }
+# Public helper and transport APIs expose reqwest types consumed by OAuth/RMCP callers on 0.12.
+reqwest = { version = "0.12", features = ["cookies", "json", "rustls-tls-native-roots", "stream"] }
 rustls = { workspace = true }
 rustls-native-certs = { workspace = true }
 rustls-pki-types = { workspace = true }

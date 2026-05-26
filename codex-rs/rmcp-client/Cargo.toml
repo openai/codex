@@ -26,6 +26,7 @@ bytes = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
 oauth2 = "5"
+# RMCP and OAuth expose reqwest 0.12 client types through their auth APIs.
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",

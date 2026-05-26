@@ -13,7 +13,7 @@ doctest = false
 [dependencies]
 codex-core = { path = "../core" }
 codex-model-provider-info = { path = "../model-provider-info" }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt"] }
 tracing = { version = "0.1.44", features = ["log"] }

@@ -31,7 +31,8 @@ codex-utils-plugins = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 flate2 = { workspace = true }
-reqwest = { workspace = true }
+# Must match the login client's public reqwest client type.
+reqwest = { version = "0.12" }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -113,7 +113,7 @@ hmac = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls"] }
+reqwest = { workspace = true, features = ["rustls"] }
 rmcp = { workspace = true, default-features = false, features = [
     "elicitation",
     "server",

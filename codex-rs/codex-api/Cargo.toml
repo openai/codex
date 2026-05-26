@@ -15,7 +15,8 @@ codex-protocol = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-reqwest = { workspace = true, features = ["json", "stream"] }
+# Must match codex-client's public reqwest client types.
+reqwest = { version = "0.12", features = ["json", "stream"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -36,7 +37,7 @@ pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 wiremock = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { version = "0.12" }
 
 [lints]
 workspace = true
