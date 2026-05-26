@@ -518,7 +518,7 @@ where
             TagEnd::Item => {
                 self.flush_current_line();
                 let start_line_count = self.list_item_start_line_counts.pop().unwrap_or_default();
-                if self.text.lines.len().saturating_sub(start_line_count) > 1
+                if self.text.len().saturating_sub(start_line_count) > 1
                     && let Some(needs_blank) = self.list_needs_blank_before_next_item.last_mut()
                 {
                     *needs_blank = true;
@@ -772,7 +772,7 @@ where
             self.push_blank_line();
         }
         self.flush_current_line();
-        self.list_item_start_line_counts.push(self.text.lines.len());
+        self.list_item_start_line_counts.push(self.text.len());
         self.pending_marker_line = true;
         let depth = self.list_indices.len();
         let is_ordered = self
@@ -1801,7 +1801,7 @@ where
     /// Table lines are pre-formatted with exact column widths and separators.
     /// Passing them through `word_wrap_line` would break the layout at
     /// arbitrary positions. This method prepends the indent/blockquote prefix
-    /// and pushes directly to `self.text.lines`.
+    /// and pushes directly to `self.text`.
     fn is_blockquote_active(&self) -> bool {
         self.indent_stack
             .iter()
