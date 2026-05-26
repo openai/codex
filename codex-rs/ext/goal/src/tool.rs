@@ -233,7 +233,9 @@ impl GoalToolExecutor {
             BudgetLimitedGoalDisposition::ClearActive,
         )
         .await?;
-        let previous_status = self.current_goal_status_for_metrics(None).await?;
+        let previous_status = self
+            .current_goal_status_for_metrics(/*expected_goal_id*/ None)
+            .await?;
         let goal = self
             .state_db
             .thread_goals()
