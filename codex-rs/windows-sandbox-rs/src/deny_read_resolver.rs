@@ -43,7 +43,7 @@ pub fn resolve_windows_deny_read_paths(
                 path: FileSystemPath::GlobPattern {
                     pattern: pattern.clone(),
                 },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             })
             .collect(),
     );
@@ -205,7 +205,7 @@ mod tests {
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern { pattern },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         }
     }
 
@@ -214,7 +214,7 @@ mod tests {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         }
     }
 

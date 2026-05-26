@@ -60,5 +60,5 @@ Use `spawn_pipe_process_no_stdin` to force stdin closed (commands that read stdi
 Unit tests live in `src/lib.rs` and cover both backends (PTY Python REPL and pipe-based stdin roundtrip). Run with:
 
 ```
-cargo test -p codex-utils-pty -- --nocapture
+just test -p codex-utils-pty --no-capture
 ```

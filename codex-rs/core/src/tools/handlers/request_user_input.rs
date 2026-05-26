@@ -26,10 +26,8 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputHandler {
         ToolName::plain(REQUEST_USER_INPUT_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_request_user_input_tool(
-            request_user_input_tool_description(&self.available_modes),
-        ))
+    fn spec(&self) -> ToolSpec {
+        create_request_user_input_tool(request_user_input_tool_description(&self.available_modes))
     }
 
     async fn handle(

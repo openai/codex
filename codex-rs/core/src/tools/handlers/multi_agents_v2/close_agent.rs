@@ -11,8 +11,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::plain("close_agent")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_close_agent_tool_v2())
+    fn spec(&self) -> ToolSpec {
+        create_close_agent_tool_v2()
     }
 
     async fn handle(

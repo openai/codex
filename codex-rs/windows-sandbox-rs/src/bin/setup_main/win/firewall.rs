@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::fs::File;
 use std::io::Write;
 
 use windows::Win32::Foundation::S_OK;
@@ -57,7 +56,7 @@ pub fn ensure_offline_proxy_allowlist(
     offline_sid: &str,
     proxy_ports: &[u16],
     allow_local_binding: bool,
-    log: &mut File,
+    log: &mut dyn Write,
 ) -> Result<()> {
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");
 
@@ -154,7 +153,7 @@ pub fn ensure_offline_proxy_allowlist(
     result
 }
 
-pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Result<()> {
+pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut dyn Write) -> Result<()> {
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");
 
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
@@ -206,7 +205,11 @@ pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Resul
     result
 }
 
-fn remove_rule_if_present(rules: &INetFwRules, internal_name: &str, log: &mut File) -> Result<()> {
+fn remove_rule_if_present(
+    rules: &INetFwRules,
+    internal_name: &str,
+    log: &mut dyn Write,
+) -> Result<()> {
     let name = BSTR::from(internal_name);
     if unsafe { rules.Item(&name) }.is_ok() {
         unsafe { rules.Remove(&name) }.map_err(|err| {
@@ -266,7 +269,11 @@ fn validate_local_policy_modify_result(
     )))
 }
 
-fn ensure_block_rule(rules: &INetFwRules, spec: &BlockRuleSpec<'_>, log: &mut File) -> Result<()> {
+fn ensure_block_rule(
+    rules: &INetFwRules,
+    spec: &BlockRuleSpec<'_>,
+    log: &mut dyn Write,
+) -> Result<()> {
     let name = BSTR::from(spec.internal_name);
     let rule: INetFwRule3 = match unsafe { rules.Item(&name) } {
         Ok(existing) => existing.cast().map_err(|err| {
@@ -453,7 +460,7 @@ fn port_range_string(start: u32, end: u32) -> String {
     }
 }
 
-fn log_line(log: &mut File, msg: &str) -> Result<()> {
+fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
     let ts = chrono::Utc::now().to_rfc3339();
     writeln!(log, "[{ts}] {msg}")?;
     Ok(())

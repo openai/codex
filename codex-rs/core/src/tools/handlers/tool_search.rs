@@ -59,11 +59,8 @@ impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
         ToolName::plain(TOOL_SEARCH_TOOL_NAME)
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_tool_search_tool(
-            &self.search_source_infos,
-            TOOL_SEARCH_DEFAULT_LIMIT,
-        ))
+    fn spec(&self) -> ToolSpec {
+        create_tool_search_tool(&self.search_source_infos, TOOL_SEARCH_DEFAULT_LIMIT)
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
@@ -174,6 +171,7 @@ mod tests {
             .iter()
             .map(|tool| {
                 McpHandler::new(tool.clone())
+                    .expect("MCP tool should convert")
                     .search_info()
                     .expect("MCP handler should return search info")
             })
@@ -199,8 +197,8 @@ mod tests {
             tools,
             vec![
                 LoadableToolSpec::Namespace(ResponsesApiNamespace {
-                    name: "mcp__calendar__".to_string(),
-                    description: "Tools in the mcp__calendar__ namespace.".to_string(),
+                    name: "mcp__calendar".to_string(),
+                    description: "Tools in the mcp__calendar namespace.".to_string(),
                     tools: vec![
                         ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                             name: "create_event".to_string(),
@@ -258,7 +256,7 @@ mod tests {
             supports_parallel_tool_calls: false,
             server_origin: None,
             callable_name: tool_name.to_string(),
-            callable_namespace: format!("mcp__{server_name}__"),
+            callable_namespace: format!("mcp__{server_name}"),
             namespace_description: None,
             tool: Tool {
                 name: tool_name.to_string().into(),

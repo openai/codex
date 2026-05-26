@@ -6,7 +6,7 @@ use serde_json::json;
 
 #[test]
 fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
-    let handler = McpHandler::new(tool_info());
+    let handler = McpHandler::new(tool_info()).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     assert_eq!(
@@ -26,7 +26,7 @@ fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
 fn search_info_uses_connector_name_for_output_namespace_description() {
     let mut tool_info = tool_info();
     tool_info.namespace_description = None;
-    let handler = McpHandler::new(tool_info);
+    let handler = McpHandler::new(tool_info).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     let LoadableToolSpec::Namespace(namespace) = search_info.entry.output else {

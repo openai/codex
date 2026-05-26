@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use codex_state::StateRuntime;
+use codex_state::memories_db_path;
 use codex_state::state_db_path;
 use predicates::str::contains;
 use sqlx::SqlitePool;
@@ -23,6 +24,9 @@ async fn debug_clear_memories_resets_state_and_removes_memory_dir() -> Result<()
     let thread_id = "00000000-0000-0000-0000-000000000123";
     let db_path = state_db_path(codex_home.path());
     let pool = SqlitePool::connect(&format!("sqlite://{}", db_path.display())).await?;
+    let memories_db_path = memories_db_path(codex_home.path());
+    let memories_pool =
+        SqlitePool::connect(&format!("sqlite://{}", memories_db_path.display())).await?;
 
     sqlx::query(
         r#"
@@ -74,7 +78,7 @@ INSERT INTO stage1_outputs (
         "#,
     )
     .bind(thread_id)
-    .execute(&pool)
+    .execute(&memories_pool)
     .await?;
 
     sqlx::query(
@@ -99,13 +103,14 @@ INSERT INTO jobs (
         "#,
     )
     .bind(thread_id)
-    .execute(&pool)
+    .execute(&memories_pool)
     .await?;
 
     let memory_root = codex_home.path().join("memories");
     std::fs::create_dir_all(&memory_root)?;
     std::fs::write(memory_root.join("memory_summary.md"), "stale memory")?;
     pool.close().await;
+    memories_pool.close().await;
 
     let mut cmd = codex_command(codex_home.path())?;
     cmd.args(["debug", "clear-memories"])
@@ -113,7 +118,7 @@ INSERT INTO jobs (
         .success()
         .stdout(contains("Cleared memory state"));
 
-    let pool = SqlitePool::connect(&format!("sqlite://{}", db_path.display())).await?;
+    let pool = SqlitePool::connect(&format!("sqlite://{}", memories_db_path.display())).await?;
     let stage1_outputs_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
         .fetch_one(&pool)
         .await?;
@@ -128,6 +133,57 @@ INSERT INTO jobs (
     assert!(memory_root.exists());
     assert_eq!(std::fs::read_dir(memory_root)?.count(), 0);
     pool.close().await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn debug_clear_memories_resets_memories_db_without_state_db() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let runtime =
+        StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string()).await?;
+    drop(runtime);
+
+    let db_path = state_db_path(codex_home.path());
+    let memories_db_path = memories_db_path(codex_home.path());
+    let memories_pool =
+        SqlitePool::connect(&format!("sqlite://{}", memories_db_path.display())).await?;
+
+    sqlx::query(
+        r#"
+INSERT INTO stage1_outputs (
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    generated_at,
+    rollout_slug,
+    usage_count,
+    last_usage,
+    selected_for_phase2,
+    selected_for_phase2_source_updated_at
+) VALUES ('00000000-0000-0000-0000-000000000123', 1, 'raw', 'summary', 1, NULL, 0, NULL, 0, NULL)
+        "#,
+    )
+    .execute(&memories_pool)
+    .await?;
+
+    memories_pool.close().await;
+    std::fs::remove_file(&db_path)?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["debug", "clear-memories"])
+        .assert()
+        .success()
+        .stdout(contains("Cleared memory state"));
+
+    let pool = SqlitePool::connect(&format!("sqlite://{}", memories_db_path.display())).await?;
+    let stage1_outputs_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(stage1_outputs_count, 0);
+    pool.close().await;
+    assert!(!db_path.exists());
 
     Ok(())
 }

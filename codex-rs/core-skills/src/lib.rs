@@ -1,5 +1,4 @@
 pub mod config_rules;
-mod env_var_dependencies;
 pub mod injection;
 pub(crate) mod invocation_utils;
 pub mod loader;
@@ -10,8 +9,6 @@ pub mod remote;
 pub mod render;
 pub mod system;
 
-pub use env_var_dependencies::SkillDependencyInfo;
-pub use env_var_dependencies::collect_env_var_dependencies;
 pub(crate) use invocation_utils::build_implicit_skill_path_indexes;
 pub use invocation_utils::detect_implicit_skill_invocation_for_command;
 pub use manager::SkillsLoadInput;
