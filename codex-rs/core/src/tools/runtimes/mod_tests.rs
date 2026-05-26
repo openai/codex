@@ -184,6 +184,7 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
 
@@ -191,6 +192,48 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
     assert_eq!(rewritten[1], "-c");
     assert!(rewritten[2].contains("if . '"));
     assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_sources_env_file_before_command() {
+    let dir = tempdir().expect("create temp dir");
+    let env_file_path = dir.path().join("codex-env.sh");
+    std::fs::write(
+        &env_file_path,
+        "export FROM_ENV_FILE=ready\nexport PATH=\"$PATH:/env-bin\"\n",
+    )
+    .expect("write env file");
+    let (_tx, shell_snapshot) = watch::channel(None);
+    let session_shell = Shell {
+        shell_type: ShellType::Bash,
+        shell_path: PathBuf::from("/bin/bash"),
+        shell_snapshot,
+    };
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-c".to_string(),
+        "printf '%s|%s' \"$FROM_ENV_FILE\" \"$PATH\"".to_string(),
+    ];
+    let explicit_env_overrides = HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]);
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &explicit_env_overrides,
+        Some(&env_file_path.abs()),
+        &HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env("PATH", "/worktree/bin")
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ready|/worktree/bin:/env-bin"
+    );
 }
 
 #[test]
@@ -215,6 +258,7 @@ fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
 
@@ -243,6 +287,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
 
@@ -274,6 +319,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
 
@@ -307,6 +353,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
 
@@ -342,6 +389,7 @@ fn maybe_wrap_shell_lc_with_snapshot_skips_when_cwd_mismatch() {
         &session_shell,
         &command_cwd.abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
 
@@ -371,6 +419,7 @@ fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
         &session_shell,
         &command_cwd.abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
 
@@ -407,6 +456,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_explicit_override_precedence() {
         &session_shell,
         &dir.path().abs(),
         &explicit_env_overrides,
+        None,
         &HashMap::from([("TEST_ENV_SNAPSHOT".to_string(), "worktree".to_string())]),
     );
     let output = Command::new(&rewritten[0])
@@ -447,6 +497,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::from([("CODEX_THREAD_ID".to_string(), "nested-thread".to_string())]),
     );
     let output = Command::new(&rewritten[0])
@@ -489,6 +540,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
     let output = Command::new(&rewritten[0])
@@ -546,6 +598,7 @@ fn maybe_wrap_shell_lc_with_snapshot_refreshes_codex_proxy_git_ssh_command() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
     let output = Command::new(&rewritten[0])
@@ -591,6 +644,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_custom_git_ssh_command() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
     let output = Command::new(&rewritten[0])
@@ -637,6 +691,7 @@ fn maybe_wrap_shell_lc_with_snapshot_clears_stale_codex_git_ssh_command_without_
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
     let output = Command::new(&rewritten[0])
@@ -674,6 +729,7 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_user_proxy_env_when_proxy_inactive() 
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
     let mut command = Command::new(&rewritten[0]);
@@ -724,6 +780,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_live_env_when_snapshot_proxy_activ
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::from([(
             "HTTP_PROXY".to_string(),
             "http://user.proxy:8080".to_string(),
@@ -769,6 +826,7 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
         &session_shell,
         &dir.path().abs(),
         &HashMap::new(),
+        None,
         &HashMap::new(),
     );
     let output = Command::new(&rewritten[0])
@@ -806,6 +864,7 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
         &session_shell,
         &dir.path().abs(),
         &explicit_env_overrides,
+        None,
         &HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]),
     );
     let output = Command::new(&rewritten[0])
@@ -847,6 +906,7 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
         &session_shell,
         &dir.path().abs(),
         &explicit_env_overrides,
+        None,
         &HashMap::from([(
             "OPENAI_API_KEY".to_string(),
             "super-secret-value".to_string(),
@@ -895,6 +955,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
         &session_shell,
         &dir.path().abs(),
         &explicit_env_overrides,
+        None,
         &HashMap::new(),
     );
 

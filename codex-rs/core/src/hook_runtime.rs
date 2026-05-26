@@ -124,6 +124,13 @@ pub(crate) async fn run_pending_session_start_hooks(
                 source: session_start_source,
             },
         };
+        let env_file_path = if matches!(&target, StartHookTarget::SessionStart { .. }) {
+            let env_file = sess.hook_env_file();
+            env_file.ensure_parent_dir();
+            Some(env_file.path().clone())
+        } else {
+            None
+        };
         let request = codex_hooks::SessionStartRequest {
             session_id: sess.session_id().into(),
             #[allow(deprecated)]
@@ -131,6 +138,7 @@ pub(crate) async fn run_pending_session_start_hooks(
             transcript_path: sess.hook_transcript_path().await,
             model: turn_context.model_info.slug.clone(),
             permission_mode: hook_permission_mode(turn_context),
+            env_file_path,
             target,
         };
         let hooks = sess.hooks();

@@ -185,6 +185,11 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         timeout_ms: exec_params.expiration.timeout_ms(),
         env: exec_params.env.clone(),
         explicit_env_overrides,
+        env_file_path: if turn_environment.environment.is_remote() {
+            None
+        } else {
+            Some(session.hook_env_file().path().clone())
+        },
         network: exec_params.network.clone(),
         sandbox_permissions: effective_additional_permissions.sandbox_permissions,
         additional_permissions: normalized_additional_permissions,

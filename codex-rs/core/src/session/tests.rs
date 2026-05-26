@@ -555,6 +555,7 @@ async fn preview_session_start_hooks(
             transcript_path: None,
             model: "gpt-5.2".to_string(),
             permission_mode: "default".to_string(),
+            env_file_path: None,
             target: codex_hooks::StartHookTarget::SessionStart {
                 source: codex_hooks::SessionStartSource::Startup,
             },
@@ -1326,6 +1327,7 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
+        env_file_path: None,
         target: codex_hooks::StartHookTarget::SessionStart {
             source: codex_hooks::SessionStartSource::Startup,
         },
@@ -1433,6 +1435,7 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
+        env_file_path: None,
         target: codex_hooks::StartHookTarget::SessionStart {
             source: codex_hooks::SessionStartSource::Startup,
         },
@@ -4544,6 +4547,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
         })),
+        hook_env_file: crate::hook_env::HookEnvFile::new(&config.codex_home, thread_id),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
@@ -6379,6 +6383,7 @@ where
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
         })),
+        hook_env_file: crate::hook_env::HookEnvFile::new(&config.codex_home, thread_id),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,

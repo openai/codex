@@ -45,6 +45,7 @@ pub struct SessionStartRequest {
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
+    pub env_file_path: Option<AbsolutePathBuf>,
     pub target: StartHookTarget,
 }
 
@@ -111,7 +112,7 @@ pub(crate) async fn run(
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
-    let matched = dispatcher::select_handlers(
+    let mut matched = dispatcher::select_handlers(
         handlers,
         request.target.event_name(),
         Some(request.target.matcher_input()),
@@ -123,6 +124,11 @@ pub(crate) async fn run(
             stop_reason: None,
             additional_contexts: Vec::new(),
         };
+    }
+    if matches!(&request.target, StartHookTarget::SessionStart { .. })
+        && let Some(env_file_path) = &request.env_file_path
+    {
+        apply_env_file_to_handlers(&mut matched, env_file_path);
     }
 
     let (input_json, turn_id) = match request.target {
@@ -205,6 +211,20 @@ pub(crate) async fn run(
         should_stop,
         stop_reason,
         additional_contexts,
+    }
+}
+
+fn apply_env_file_to_handlers(handlers: &mut [ConfiguredHandler], env_file_path: &AbsolutePathBuf) {
+    let env_file_path = env_file_path.display().to_string();
+    for handler in handlers {
+        handler.env.insert(
+            crate::CODEX_ENV_FILE_ENV_VAR.to_string(),
+            env_file_path.clone(),
+        );
+        handler.env.insert(
+            crate::CLAUDE_ENV_FILE_ENV_VAR.to_string(),
+            env_file_path.clone(),
+        );
     }
 }
 

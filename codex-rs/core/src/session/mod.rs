@@ -3265,6 +3265,10 @@ impl Session {
         self.services.hooks.load_full()
     }
 
+    pub(crate) fn hook_env_file(&self) -> &crate::hook_env::HookEnvFile {
+        &self.services.hook_env_file
+    }
+
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {
         Arc::clone(&self.services.user_shell)
     }

@@ -31,6 +31,9 @@ use tempfile::tempdir;
 use super::ClaudeHooksEngine;
 use super::CommandShell;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::session_start::SessionStartRequest;
+use crate::events::session_start::SessionStartSource;
+use crate::events::session_start::StartHookTarget;
 
 fn cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::current_dir().expect("current dir")
@@ -1251,6 +1254,114 @@ print(json.dumps({
         serde_json::json!({
             "plugin": plugin_root.display().to_string(),
             "claude": plugin_root.display().to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn session_start_hooks_receive_codex_env_file_and_claude_alias() {
+    let temp = tempdir().expect("create temp dir");
+    let script_path = temp.path().join("env_file_hook.py");
+    fs::write(
+        &script_path,
+        r#"import json
+import os
+
+print(json.dumps({
+    "systemMessage": json.dumps({
+        "codex": os.environ.get("CODEX_ENV_FILE"),
+        "claude": os.environ.get("CLAUDE_ENV_FILE"),
+    })
+}))
+"#,
+    )
+    .expect("write hook script");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let env_file_path =
+        AbsolutePathBuf::try_from(temp.path().join("codex-env.sh")).expect("absolute env path");
+    let mut config_toml = TomlValue::Table(Default::default());
+    let TomlValue::Table(config_table) = &mut config_toml else {
+        unreachable!("config TOML root should be a table");
+    };
+    let mut hooks_table = TomlValue::Table(Default::default());
+    let TomlValue::Table(hooks_entries) = &mut hooks_table else {
+        unreachable!("hooks entry should be a table");
+    };
+    let mut session_start_group = TomlValue::Table(Default::default());
+    let TomlValue::Table(session_start_group_entries) = &mut session_start_group else {
+        unreachable!("SessionStart group should be a table");
+    };
+    session_start_group_entries.insert(
+        "matcher".to_string(),
+        TomlValue::String("startup".to_string()),
+    );
+    let mut handler = TomlValue::Table(Default::default());
+    let TomlValue::Table(handler_entries) = &mut handler else {
+        unreachable!("SessionStart handler should be a table");
+    };
+    handler_entries.insert("type".to_string(), TomlValue::String("command".to_string()));
+    handler_entries.insert(
+        "command".to_string(),
+        TomlValue::String(format!("python3 {}", script_path.display())),
+    );
+    session_start_group_entries.insert("hooks".to_string(), TomlValue::Array(vec![handler]));
+    hooks_entries.insert(
+        "SessionStart".to_string(),
+        TomlValue::Array(vec![session_start_group]),
+    );
+    config_table.insert("hooks".to_string(), hooks_table);
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
+            config_toml,
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    let outcome = engine
+        .run_session_start(
+            SessionStartRequest {
+                session_id: ThreadId::new(),
+                cwd: cwd(),
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                env_file_path: Some(env_file_path.clone()),
+                target: StartHookTarget::SessionStart {
+                    source: SessionStartSource::Startup,
+                },
+            },
+            Some("turn-1".to_string()),
+        )
+        .await;
+
+    assert_eq!(outcome.hook_events.len(), 1);
+    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
+    let logged: serde_json::Value =
+        serde_json::from_str(&outcome.hook_events[0].run.entries[0].text)
+            .expect("parse env payload");
+    assert_eq!(
+        logged,
+        serde_json::json!({
+            "codex": env_file_path.display().to_string(),
+            "claude": env_file_path.display().to_string(),
         })
     );
 }

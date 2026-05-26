@@ -10,6 +10,9 @@ mod types;
 
 use codex_protocol::protocol::HookEventName;
 
+pub const CODEX_ENV_FILE_ENV_VAR: &str = "CODEX_ENV_FILE";
+pub const CLAUDE_ENV_FILE_ENV_VAR: &str = "CLAUDE_ENV_FILE";
+
 pub use config_rules::hook_states_from_stack;
 pub use declarations::PluginHookDeclaration;
 pub use declarations::plugin_hook_declarations;

@@ -1050,6 +1050,11 @@ impl UnifiedExecProcessManager {
             env,
             exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            env_file_path: if request.environment.is_remote() {
+                None
+            } else {
+                Some(context.session.hook_env_file().path().clone())
+            },
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,

@@ -54,6 +54,7 @@ pub struct ShellRequest {
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub env_file_path: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
@@ -231,12 +232,16 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let session_shell = ctx.session.user_shell();
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
-        let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+        let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+        if let Some(env_file_path) = &req.env_file_path {
+            crate::hook_env::add_env_file_vars(&mut env, env_file_path);
+        }
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
+            req.env_file_path.as_ref(),
             &env,
         );
         let command = disable_powershell_profile_for_elevated_windows_sandbox(

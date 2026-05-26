@@ -132,6 +132,8 @@ pub(crate) async fn execute_user_shell_command(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
+    let env_file_path = session.hook_env_file().path();
+    session.hook_env_file().add_to_env(&mut exec_env_map);
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
         for key in PROXY_ENV_KEYS {
             exec_env_map.remove(*key);
@@ -152,6 +154,7 @@ pub(crate) async fn execute_user_shell_command(
         #[allow(deprecated)]
         &turn_context.cwd,
         &turn_context.shell_environment_policy.r#set,
+        Some(env_file_path),
         &exec_env_map,
     );
 

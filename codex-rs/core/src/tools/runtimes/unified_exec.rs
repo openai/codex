@@ -66,6 +66,7 @@ pub struct UnifiedExecRequest {
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub env_file_path: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
@@ -258,6 +259,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
         let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+        if let Some(env_file_path) = &req.env_file_path {
+            crate::hook_env::add_env_file_vars(&mut env, env_file_path);
+        }
         if let Some(network) = managed_network {
             network.apply_to_env(&mut env);
         }
@@ -270,6 +274,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 session_shell.as_ref(),
                 &req.cwd,
                 &req.explicit_env_overrides,
+                req.env_file_path.as_ref(),
                 &env,
             )
         };
@@ -418,6 +423,7 @@ mod tests {
             env: HashMap::new(),
             exec_server_env_config: None,
             explicit_env_overrides: HashMap::new(),
+            env_file_path: None,
             network: None,
             tty: false,
             sandbox_permissions: SandboxPermissions::UseDefault,
