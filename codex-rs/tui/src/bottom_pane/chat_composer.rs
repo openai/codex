@@ -4351,6 +4351,9 @@ mod tests {
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
     use codex_protocol::models::local_image_label_text;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -8002,191 +8005,89 @@ mod tests {
         );
     }
 
-    #[test]
-    fn slash_completion_preserves_existing_draft_tail_for_goal() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
+    fn test_composer() -> ChatComposer {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        )
+    }
 
-        let draft = "preserve this draft as the goal objective";
+    fn press(composer: &mut ChatComposer, code: KeyCode) -> InputResult {
+        composer
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
+            .0
+    }
+
+    fn composer_with_draft_tail(prefix: &[char], draft: &str, goal_enabled: bool) -> ChatComposer {
+        let mut composer = test_composer();
+        composer.set_goal_command_enabled(goal_enabled);
+
         let draft_chars = draft.chars().collect::<Vec<_>>();
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer.set_goal_command_enabled(/*enabled*/ true);
-
         type_chars_humanlike(&mut composer, &draft_chars);
-        let (_result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        type_chars_humanlike(&mut composer, &['/', 'g', 'o']);
+        press(&mut composer, KeyCode::Home);
+        type_chars_humanlike(&mut composer, prefix);
+        composer
+    }
 
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-        assert_eq!(result, InputResult::None);
-        assert_eq!(
-            composer.draft.textarea.text(),
-            "/goal preserve this draft as the goal objective"
-        );
-        assert_eq!(
-            composer.draft.textarea.cursor(),
-            composer.draft.textarea.text().len()
-        );
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer.set_goal_command_enabled(/*enabled*/ true);
-
-        type_chars_humanlike(&mut composer, &draft_chars);
-        let (_result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        type_chars_humanlike(&mut composer, &['/', 'g', 'o']);
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(
-            result,
-            InputResult::CommandWithArgs(SlashCommand::Goal, draft.to_string(), Vec::new())
-        );
-        assert_eq!(
-            composer.draft.textarea.text(),
-            "/goal preserve this draft as the goal objective"
-        );
-
-        let command = "/re use the text after the slash command as review instructions";
-        let review_args = "use the text after the slash command as review instructions";
-        let cursor_after_re = "/re".len();
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer.draft.textarea.set_text_clearing_elements(command);
-        composer.draft.textarea.set_cursor(cursor_after_re);
+    fn composer_with_text_at_cursor(text: &str, cursor: usize) -> ChatComposer {
+        let mut composer = test_composer();
+        composer.draft.textarea.set_text_clearing_elements(text);
+        composer.draft.textarea.set_cursor(cursor);
         composer.sync_popups();
+        composer
+    }
 
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    #[test]
+    fn slash_completion_preserves_existing_draft_tail_for_opted_in_commands() {
+        let cases: &[(SlashCommand, &[char], &str, &str, bool)] = &[
+            (
+                SlashCommand::Goal,
+                &['/', 'g', 'o'],
+                "preserve this draft as the goal objective",
+                "/goal preserve this draft as the goal objective",
+                true,
+            ),
+            (
+                SlashCommand::Review,
+                &['/', 'r', 'e'],
+                "view the diff",
+                "/review view the diff",
+                false,
+            ),
+        ];
 
-        assert_eq!(
-            result,
-            InputResult::CommandWithArgs(SlashCommand::Review, review_args.to_string(), Vec::new())
-        );
-        assert_eq!(
-            composer.draft.textarea.text(),
-            "/review use the text after the slash command as review instructions"
-        );
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer.draft.textarea.set_text_clearing_elements(command);
-        composer.draft.textarea.set_cursor(cursor_after_re);
-        composer.sync_popups();
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-        assert_eq!(result, InputResult::None);
-        assert_eq!(
-            composer.draft.textarea.text(),
-            "/review use the text after the slash command as review instructions"
-        );
-
-        let make_goal_composer = |cursor| {
-            let (tx, _rx) = unbounded_channel::<AppEvent>();
-            let sender = AppEventSender::new(tx);
-            let mut composer = ChatComposer::new(
-                /*has_input_focus*/ true,
-                sender,
-                /*enhanced_keys_supported*/ false,
-                "Ask Codex to do anything".to_string(),
-                /*disable_paste_burst*/ false,
-            );
-            composer.set_goal_command_enabled(/*enabled*/ true);
-            composer
-                .draft
-                .textarea
-                .set_text_clearing_elements("/goal ship it");
-            composer.draft.textarea.set_cursor(cursor);
-            composer.sync_popups();
-            composer
-        };
-
-        for cursor in [0, 1] {
-            let mut composer = make_goal_composer(cursor);
-            let (result, _needs_redraw) =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-            assert_eq!(result, InputResult::None);
-            assert_eq!(composer.draft.textarea.text(), "/goal ship it");
-        }
-
-        for cursor in [0, 1] {
-            let mut composer = make_goal_composer(cursor);
-            let (result, _needs_redraw) =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
+        for &(cmd, prefix, draft, expected_text, goal_enabled) in cases {
+            let mut composer = composer_with_draft_tail(prefix, draft, goal_enabled);
+            assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+            assert_eq!(composer.draft.textarea.text(), expected_text);
             assert_eq!(
-                result,
-                InputResult::CommandWithArgs(SlashCommand::Goal, "ship it".to_string(), Vec::new())
+                composer.draft.textarea.cursor(),
+                composer.draft.textarea.text().len()
             );
-            assert_eq!(composer.draft.textarea.text(), "/goal ship it");
+
+            let mut composer = composer_with_draft_tail(prefix, draft, goal_enabled);
+            assert_eq!(
+                press(&mut composer, KeyCode::Enter),
+                InputResult::CommandWithArgs(cmd, draft.to_string(), Vec::new())
+            );
+            assert_eq!(composer.draft.textarea.text(), expected_text);
         }
     }
 
     #[test]
     fn slash_completion_does_not_preserve_existing_draft_tail_for_other_commands() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let draft = "preserve this draft only for opted-in slash commands";
-        let draft_chars = draft.chars().collect::<Vec<_>>();
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
+        let mut composer = composer_with_draft_tail(
+            &['/', 'm', 'o'],
+            "preserve this draft only for opted-in slash commands",
+            false,
         );
 
-        type_chars_humanlike(&mut composer, &draft_chars);
-        let (_result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
-
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-        assert_eq!(result, InputResult::None);
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
         assert_eq!(composer.draft.textarea.text(), "/model ");
         assert_eq!(
             composer.draft.textarea.cursor(),
@@ -8196,84 +8097,16 @@ mod tests {
 
     #[test]
     fn slash_completion_does_not_turn_command_suffix_into_args() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let make_review_composer = || {
-            let (tx, _rx) = unbounded_channel::<AppEvent>();
-            let sender = AppEventSender::new(tx);
-            let mut composer = ChatComposer::new(
-                /*has_input_focus*/ true,
-                sender,
-                /*enhanced_keys_supported*/ false,
-                "Ask Codex to do anything".to_string(),
-                /*disable_paste_burst*/ false,
-            );
-            composer
-                .draft
-                .textarea
-                .set_text_clearing_elements("/review");
-            composer.draft.textarea.set_cursor("/re".len());
-            composer.sync_popups();
-            composer
-        };
-
-        let mut composer = make_review_composer();
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-        assert_eq!(result, InputResult::None);
+        let mut composer = composer_with_text_at_cursor("/review", "/re".len());
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
         assert_eq!(composer.draft.textarea.text(), "/review ");
 
-        let mut composer = make_review_composer();
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(result, InputResult::Command(SlashCommand::Review));
-        assert!(composer.draft.textarea.is_empty());
-    }
-
-    #[test]
-    fn slash_completion_preserves_draft_tail_that_completes_command_name() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let draft = "view the diff";
-        let make_review_composer = || {
-            let (tx, _rx) = unbounded_channel::<AppEvent>();
-            let sender = AppEventSender::new(tx);
-            let mut composer = ChatComposer::new(
-                /*has_input_focus*/ true,
-                sender,
-                /*enhanced_keys_supported*/ false,
-                "Ask Codex to do anything".to_string(),
-                /*disable_paste_burst*/ false,
-            );
-            type_chars_humanlike(&mut composer, &draft.chars().collect::<Vec<_>>());
-            let (_result, _needs_redraw) =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-            type_chars_humanlike(&mut composer, &['/', 'r', 'e']);
-            composer
-        };
-
-        let mut composer = make_review_composer();
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-        assert_eq!(result, InputResult::None);
-        assert_eq!(composer.draft.textarea.text(), "/review view the diff");
-
-        let mut composer = make_review_composer();
-        let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
+        let mut composer = composer_with_text_at_cursor("/review", "/re".len());
         assert_eq!(
-            result,
-            InputResult::CommandWithArgs(SlashCommand::Review, draft.to_string(), Vec::new())
+            press(&mut composer, KeyCode::Enter),
+            InputResult::Command(SlashCommand::Review)
         );
-        assert_eq!(composer.draft.textarea.text(), "/review view the diff");
+        assert!(composer.draft.textarea.is_empty());
     }
 
     #[test]
