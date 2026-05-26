@@ -19,6 +19,7 @@ const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
 const PHASE2_SUCCESS_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
+const PHASE2_INPUT_SELECTION_PAGE_SIZE: usize = 512;
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
@@ -40,29 +41,7 @@ impl MemoryStore {
     /// stage-1 (`memory_stage1`) and phase-2 (`memory_consolidate_global`)
     /// memory pipelines.
     pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        sqlx::query(
-            r#"
-DELETE FROM stage1_outputs
-            "#,
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            r#"
-DELETE FROM jobs
-WHERE kind = ? OR kind = ?
-            "#,
-        )
-        .bind(JOB_KIND_MEMORY_STAGE1)
-        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-        Ok(())
+        clear_memory_data_in_pool(self.pool.as_ref()).await
     }
 
     /// Record usage for cited stage-1 outputs.
@@ -450,15 +429,17 @@ WHERE thread_id IN (
         }
         let cutoff = (Utc::now() - Duration::days(max_unused_days.max(0))).timestamp();
 
-        let current_rows = sqlx::query(
-            r#"
+        let page_size = n.max(1).min(PHASE2_INPUT_SELECTION_PAGE_SIZE);
+        let page_size_i64 = i64::try_from(page_size).unwrap_or(i64::MAX);
+        let mut offset = 0_i64;
+        let mut selected_keys = Vec::with_capacity(n);
+
+        while selected_keys.len() < n {
+            let candidate_rows = sqlx::query(
+                r#"
 SELECT
     so.thread_id,
-    so.source_updated_at,
-    so.raw_memory,
-    so.rollout_summary,
-    so.rollout_slug,
-    so.generated_at
+    so.source_updated_at
 FROM stage1_outputs AS so
 WHERE (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
   AND (
@@ -470,22 +451,66 @@ ORDER BY
     COALESCE(so.last_usage, so.source_updated_at) DESC,
     so.source_updated_at DESC,
     so.thread_id DESC
+LIMIT ? OFFSET ?
             "#,
-        )
-        .bind(cutoff)
-        .bind(cutoff)
-        .fetch_all(self.pool.as_ref())
-        .await?;
+            )
+            .bind(cutoff)
+            .bind(cutoff)
+            .bind(page_size_i64)
+            .bind(offset)
+            .fetch_all(self.pool.as_ref())
+            .await?;
 
-        let mut selected = Vec::new();
-        for row in current_rows {
-            if let Some(output) = self.stage1_output_from_row_if_thread_enabled(&row).await? {
-                selected.push(output);
-                if selected.len() >= n {
-                    break;
+            if candidate_rows.is_empty() {
+                break;
+            }
+
+            let candidate_count = i64::try_from(candidate_rows.len()).unwrap_or(i64::MAX);
+            for row in candidate_rows {
+                let thread_id: String = row.try_get("thread_id")?;
+                let source_updated_at: i64 = row.try_get("source_updated_at")?;
+                if self
+                    .enabled_thread_metadata(ThreadId::try_from(thread_id.as_str())?)
+                    .await?
+                    .is_some()
+                {
+                    selected_keys.push((thread_id, source_updated_at));
+                    if selected_keys.len() >= n {
+                        break;
+                    }
                 }
             }
+
+            offset = offset.saturating_add(candidate_count);
         }
+
+        let mut selected = Vec::with_capacity(selected_keys.len());
+        for (thread_id, source_updated_at) in selected_keys {
+            let Some(row) = sqlx::query(
+                r#"
+SELECT
+    so.thread_id,
+    so.source_updated_at,
+    so.raw_memory,
+    so.rollout_summary,
+    so.rollout_slug,
+    so.generated_at
+FROM stage1_outputs AS so
+WHERE so.thread_id = ? AND so.source_updated_at = ?
+            "#,
+            )
+            .bind(thread_id.as_str())
+            .bind(source_updated_at)
+            .fetch_optional(self.pool.as_ref())
+            .await?
+            else {
+                continue;
+            };
+            if let Some(output) = self.stage1_output_from_row_if_thread_enabled(&row).await? {
+                selected.push(output);
+            }
+        }
+
         selected.sort_by(|a, b| a.thread_id.to_string().cmp(&b.thread_id.to_string()));
 
         Ok(selected)
@@ -502,21 +527,7 @@ ORDER BY
         else {
             return Ok(None);
         };
-        let source_updated_at: i64 = row.try_get("source_updated_at")?;
-        let generated_at: i64 = row.try_get("generated_at")?;
-        let source_updated_at = datetime_from_epoch_seconds(source_updated_at)?;
-        let generated_at = datetime_from_epoch_seconds(generated_at)?;
-        Ok(Some(Stage1Output {
-            thread_id: thread.id,
-            rollout_path: thread.rollout_path,
-            source_updated_at,
-            raw_memory: row.try_get("raw_memory")?,
-            rollout_summary: row.try_get("rollout_summary")?,
-            rollout_slug: row.try_get("rollout_slug")?,
-            cwd: thread.cwd,
-            git_branch: thread.git_branch,
-            generated_at,
-        }))
+        Ok(Some(stage1_output_from_row_and_thread(row, thread)?))
     }
 
     async fn enabled_thread_metadata(
@@ -570,18 +581,6 @@ WHERE threads.id = ? AND threads.memory_mode = 'enabled'
     ) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
         let thread_id = thread_id.to_string();
-        let rows_affected = sqlx::query(
-            r#"
-UPDATE threads
-SET memory_mode = 'polluted'
-WHERE id = ? AND memory_mode != 'polluted'
-            "#,
-        )
-        .bind(thread_id.as_str())
-        .execute(self.state_pool.as_ref())
-        .await?
-        .rows_affected();
-
         let selected_for_phase2 = sqlx::query_scalar::<_, i64>(
             r#"
 SELECT selected_for_phase2
@@ -596,6 +595,18 @@ WHERE thread_id = ?
         if selected_for_phase2 != 0 {
             self.enqueue_global_consolidation(now).await?;
         }
+
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE threads
+SET memory_mode = 'polluted'
+WHERE id = ? AND memory_mode != 'polluted'
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .execute(self.state_pool.as_ref())
+        .await?
+        .rows_affected();
 
         Ok(rows_affected > 0)
     }
@@ -1360,6 +1371,53 @@ WHERE kind = ? AND job_key = ?
     .rows_affected();
 
     Ok(rows_affected)
+}
+
+pub(super) async fn clear_memory_data_in_pool(pool: &SqlitePool) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        r#"
+DELETE FROM stage1_outputs
+            "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+DELETE FROM jobs
+WHERE kind = ? OR kind = ?
+            "#,
+    )
+    .bind(JOB_KIND_MEMORY_STAGE1)
+    .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+fn stage1_output_from_row_and_thread(
+    row: &sqlx::sqlite::SqliteRow,
+    thread: ThreadMetadata,
+) -> anyhow::Result<Stage1Output> {
+    let source_updated_at: i64 = row.try_get("source_updated_at")?;
+    let generated_at: i64 = row.try_get("generated_at")?;
+    let source_updated_at = datetime_from_epoch_seconds(source_updated_at)?;
+    let generated_at = datetime_from_epoch_seconds(generated_at)?;
+    Ok(Stage1Output {
+        thread_id: thread.id,
+        rollout_path: thread.rollout_path,
+        source_updated_at,
+        raw_memory: row.try_get("raw_memory")?,
+        rollout_summary: row.try_get("rollout_summary")?,
+        rollout_slug: row.try_get("rollout_slug")?,
+        cwd: thread.cwd,
+        git_branch: thread.git_branch,
+        generated_at,
+    })
 }
 
 fn datetime_from_epoch_seconds(secs: i64) -> anyhow::Result<DateTime<Utc>> {

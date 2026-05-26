@@ -283,6 +283,19 @@ impl StateRuntime {
     pub fn memories(&self) -> &MemoryStore {
         &self.memories
     }
+
+    pub async fn clear_memory_data_in_sqlite_home(sqlite_home: &Path) -> anyhow::Result<bool> {
+        let memories_path = MEMORIES_DB.path(sqlite_home);
+        if !tokio::fs::try_exists(&memories_path).await? {
+            return Ok(false);
+        }
+
+        let memories_migrator = runtime_memories_migrator();
+        let pool = open_memories_sqlite(&memories_path, &memories_migrator, None).await?;
+        memories::clear_memory_data_in_pool(&pool).await?;
+        pool.close().await;
+        Ok(true)
+    }
 }
 
 fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
