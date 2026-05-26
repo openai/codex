@@ -443,6 +443,33 @@ async fn host_context_gates_goal_and_agent_job_tools() {
 }
 
 #[tokio::test]
+async fn request_user_input_is_hidden_from_unsupported_session_sources() {
+    let interactive_root = probe(|turn| {
+        turn.session_source = SessionSource::VSCode;
+    })
+    .await;
+    interactive_root.assert_visible_contains(&["request_user_input"]);
+
+    let exec = probe(|turn| {
+        turn.session_source = SessionSource::Exec;
+    })
+    .await;
+    exec.assert_visible_lacks(&["request_user_input"]);
+
+    let sub_agent = probe(|turn| {
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: Default::default(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+    })
+    .await;
+    sub_agent.assert_visible_lacks(&["request_user_input"]);
+}
+
+#[tokio::test]
 async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},
@@ -700,6 +727,7 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
 #[tokio::test]
 async fn code_mode_only_keeps_request_user_input_as_a_direct_modal_tool() {
     let plan = probe(|turn| {
+        turn.session_source = SessionSource::VSCode;
         set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
     })
     .await;
@@ -897,6 +925,7 @@ async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support(
 #[tokio::test]
 async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
     let plan = probe(|turn| {
+        turn.session_source = SessionSource::VSCode;
         set_features(
             turn,
             &[

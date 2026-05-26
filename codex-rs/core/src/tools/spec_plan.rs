@@ -568,9 +568,13 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         planned_tools.add(UpdateGoalHandler);
     }
 
-    planned_tools.add(RequestUserInputHandler {
-        available_modes: request_user_input_available_modes(),
-    });
+    if !turn_context.session_source.is_non_root_agent()
+        && !matches!(&turn_context.session_source, SessionSource::Exec)
+    {
+        planned_tools.add(RequestUserInputHandler {
+            available_modes: request_user_input_available_modes(),
+        });
+    }
 
     if features.enabled(Feature::RequestPermissionsTool) {
         planned_tools.add(RequestPermissionsHandler);

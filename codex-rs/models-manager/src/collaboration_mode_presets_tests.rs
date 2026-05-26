@@ -30,7 +30,8 @@ fn default_mode_instructions_replace_mode_names_placeholder() {
     assert!(default_instructions.contains(
         "Use the `request_user_input` tool only when it is listed in the available tools"
     ));
-    assert!(
-        default_instructions.contains("ask the user directly with a concise plain-text question")
-    );
+    assert!(default_instructions.contains("use `request_user_input` when it is available"));
+    assert!(default_instructions.contains(
+        "If the tool is unavailable, ask the user directly with a concise plain-text question"
+    ));
 }
