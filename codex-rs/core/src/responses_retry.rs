@@ -48,7 +48,12 @@ pub(crate) async fn handle_retryable_response_stream_error(
     if *retries < max_retries {
         *retries += 1;
         let retry_count = *retries;
-        let delay = retry_delay(&err, retry_count);
+        let delay = match &err {
+            CodexErr::Stream(_, requested_delay) => {
+                requested_delay.unwrap_or_else(|| backoff(retry_count))
+            }
+            _ => backoff(retry_count),
+        };
         log_retry(request, turn_context, &err, retry_count, max_retries, delay);
 
         // In release builds, hide the first websocket retry notification to reduce noisy
@@ -71,13 +76,6 @@ pub(crate) async fn handle_retryable_response_stream_error(
     }
 
     Err(err)
-}
-
-fn retry_delay(err: &CodexErr, retries: u64) -> Duration {
-    match err {
-        CodexErr::Stream(_, requested_delay) => requested_delay.unwrap_or_else(|| backoff(retries)),
-        _ => backoff(retries),
-    }
 }
 
 fn log_retry(
