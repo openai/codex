@@ -3,7 +3,6 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -251,12 +250,11 @@ fn write_permissions_for_paths_skip_dirs_already_writable_under_workspace_root()
     std::fs::create_dir_all(&nested).expect("create nested dir");
     let file_path = AbsolutePathBuf::try_from(nested.join("file.txt"))
         .expect("nested file path should be absolute");
-    let sandbox_policy = FileSystemSandboxPolicy::from(&SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: false,
-    });
+    let sandbox_policy = FileSystemSandboxPolicy::workspace_write(
+        &[],
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ false,
+    );
 
     let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd);
 
@@ -273,12 +271,11 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
     let file_path = AbsolutePathBuf::try_from(outside.join("file.txt"))
         .expect("outside file path should be absolute");
     let cwd_abs = cwd.abs();
-    let sandbox_policy = FileSystemSandboxPolicy::from(&SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    });
+    let sandbox_policy = FileSystemSandboxPolicy::workspace_write(
+        &[],
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
 
     let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd_abs);
     let expected_outside =

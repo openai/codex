@@ -77,6 +77,13 @@ fn apply_patch_freeform_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn plugin_hooks_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::PluginHooks.stage(), Stage::Removed);
+    assert_eq!(Feature::PluginHooks.default_enabled(), false);
+    assert_eq!(feature_for_key("plugin_hooks"), Some(Feature::PluginHooks));
+}
+
+#[test]
 fn code_mode_only_requires_code_mode() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeModeOnly);
@@ -188,15 +195,10 @@ fn network_proxy_is_experimental_and_disabled_by_default() {
 }
 
 #[test]
-fn tool_search_is_stable_and_enabled_by_default() {
-    assert_eq!(Feature::ToolSearch.stage(), Stage::Stable);
-    assert_eq!(Feature::ToolSearch.default_enabled(), true);
-}
-
-#[test]
-fn plugin_hooks_are_stable_and_enabled_by_default() {
-    assert_eq!(Feature::PluginHooks.stage(), Stage::Stable);
-    assert_eq!(Feature::PluginHooks.default_enabled(), true);
+fn tool_search_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::ToolSearch.stage(), Stage::Removed);
+    assert_eq!(Feature::ToolSearch.default_enabled(), false);
+    assert_eq!(feature_for_key("tool_search"), Some(Feature::ToolSearch));
 }
 
 #[test]
@@ -499,6 +501,22 @@ fn from_sources_ignores_removed_apply_patch_freeform_feature_key() {
 }
 
 #[test]
+fn from_sources_ignores_removed_plugin_hooks_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([("plugin_hooks".to_string(), true)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
 fn multi_agent_v2_feature_config_deserializes_boolean_toggle() {
     let features: FeaturesToml = toml::from_str(
         r#"
@@ -528,6 +546,7 @@ usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
+tool_namespace = "agents"
 hide_spawn_agent_metadata = true
 non_code_mode_only = true
 "#,
@@ -550,6 +569,7 @@ non_code_mode_only = true
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
             root_agent_usage_hint_text: Some("Root guidance.".to_string()),
             subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
+            tool_namespace: Some("agents".to_string()),
             hide_spawn_agent_metadata: Some(true),
             non_code_mode_only: Some(true),
         }))
@@ -588,6 +608,7 @@ usage_hint_enabled = false
             usage_hint_text: None,
             root_agent_usage_hint_text: None,
             subagent_usage_hint_text: None,
+            tool_namespace: None,
             hide_spawn_agent_metadata: None,
             non_code_mode_only: None,
         }))
@@ -600,7 +621,6 @@ fn materialize_resolved_enabled_writes_all_features_and_preserves_custom_config(
     features.enable(Feature::CodeMode);
     features.enable(Feature::MultiAgentV2);
     features.enable(Feature::NetworkProxy);
-    features.disable(Feature::ToolSearch);
 
     let mut features_toml = FeaturesToml {
         multi_agent_v2: Some(FeatureToml::Config(crate::MultiAgentV2ConfigToml {

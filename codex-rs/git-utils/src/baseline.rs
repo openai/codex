@@ -584,6 +584,51 @@ mod tests {
         assert_eq!(git_stdout(&root, &["ls-files"]), "MEMORY.md\n");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_index_ignores_configured_hooks_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = TempDir::new().expect("tempdir");
+        let root = home.path().join("repo");
+        let hooks_dir = root.join(".git/hooks-path-test");
+        let marker_path = root.join("hook-ran");
+        let hook_path = hooks_dir.join("post-index-change");
+
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("MEMORY.md"), "baseline").expect("write memory");
+        reset_git_repository(&root).await.expect("reset repo");
+        fs::create_dir_all(&hooks_dir).expect("create hook dir");
+        fs::write(
+            &hook_path,
+            format!(
+                "#!/bin/sh\nprintf ran > \"{}\"\n",
+                marker_path.to_string_lossy()
+            ),
+        )
+        .expect("write post-index-change hook");
+        let mut permissions = fs::metadata(&hook_path)
+            .expect("read hook metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&hook_path, permissions).expect("mark hook executable");
+        git_stdout(
+            &root,
+            &[
+                "config",
+                "core.hooksPath",
+                hooks_dir.to_string_lossy().as_ref(),
+            ],
+        );
+
+        write_index_from_head(&root).expect("rewrite baseline index");
+
+        assert!(
+            !marker_path.exists(),
+            "baseline index writes should not invoke configured hook directories"
+        );
+    }
+
     #[tokio::test]
     async fn diff_reports_added_modified_and_deleted_files() {
         let home = TempDir::new().expect("tempdir");

@@ -83,7 +83,6 @@ impl WindowsSandboxRequestProcessor {
                         command_cwd,
                         env_map: std::env::vars().collect(),
                         codex_home: config.codex_home.to_path_buf(),
-                        active_profile: config.active_profile.clone(),
                     };
                     codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await
                 }

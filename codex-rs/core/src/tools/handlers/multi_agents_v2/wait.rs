@@ -25,8 +25,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::plain("wait_agent")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_wait_agent_tool_v2(self.options))
+    fn spec(&self) -> ToolSpec {
+        create_wait_agent_tool_v2(self.options)
     }
 
     async fn handle(
@@ -60,7 +60,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
             None => default_timeout_ms,
         };
 
-        let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
+        let mut mailbox_rx = session.input_queue.subscribe_mailbox().await;
 
         session
             .send_event(
@@ -76,12 +76,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
             )
             .await;
 
-        let timed_out = if session.has_pending_mailbox_items().await {
-            false
-        } else {
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            !wait_for_mailbox_change(&mut mailbox_seq_rx, deadline).await
-        };
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        let timed_out = !wait_for_mailbox_change(&mut mailbox_rx, deadline).await;
         let result = WaitAgentResult::from_timed_out(timed_out);
 
         session
@@ -153,10 +149,10 @@ impl ToolOutput for WaitAgentResult {
 }
 
 async fn wait_for_mailbox_change(
-    mailbox_seq_rx: &mut tokio::sync::watch::Receiver<u64>,
+    mailbox_rx: &mut tokio::sync::watch::Receiver<()>,
     deadline: Instant,
 ) -> bool {
-    match timeout_at(deadline, mailbox_seq_rx.changed()).await {
+    match timeout_at(deadline, mailbox_rx.changed()).await {
         Ok(Ok(())) => true,
         Ok(Err(_)) | Err(_) => false,
     }

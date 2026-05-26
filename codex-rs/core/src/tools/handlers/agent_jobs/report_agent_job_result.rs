@@ -19,8 +19,8 @@ impl ToolExecutor<ToolInvocation> for ReportAgentJobResultHandler {
         ToolName::plain("report_agent_job_result")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_report_agent_job_result_tool())
+    fn spec(&self) -> ToolSpec {
+        create_report_agent_job_result_tool()
     }
 
     async fn handle(

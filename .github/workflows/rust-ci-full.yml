@@ -28,8 +28,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           components: rustfmt
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Rust benchmark smoke test
+        run: just bench-smoke
 
   cargo_shear:
     name: cargo shear
@@ -436,9 +441,9 @@ jobs:
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
-        name: Configure musl rusty_v8 artifact overrides and verify checksums
-        uses: ./.github/actions/setup-rusty-v8-musl
+      - if: ${{ !contains(matrix.target, 'windows') }}
+        name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
 
@@ -521,235 +526,73 @@ jobs:
             /var/cache/apt
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
-  tests:
-    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
-    # Perhaps we can bring this back down to 30m once we finish the cutover
-    # from tui_app_server/ to tui/. Incidentally, windows-arm64 was the main
-    # offender for exceeding the timeout.
-    timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: codex-rs
-    env:
-      # Speed up repeated builds across CI runs by caching compiled objects, except on
-      # arm64 macOS runners cross-targeting x86_64 where ring/cc-rs can produce
-      # mixed-architecture archives under sccache.
-      USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15-xlarge' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_CACHE_SIZE: 10G
+  tests_macos_aarch64:
+    name: Tests — macos-15-xlarge - aarch64-apple-darwin
+    uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
+    with:
+      runner: macos-15-xlarge
+      target: aarch64-apple-darwin
+      profile: ci-test
+      artifact_id: macos-aarch64
+      use_sccache: true
+    secrets: inherit
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            profile: dev
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            profile: dev
-            remote_env: "true"
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+  tests_linux_x64_remote:
+    name: Tests — ubuntu-24.04 - x86_64-unknown-linux-gnu (remote)
+    uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
+    with:
+      runner: ubuntu-24.04
+      runner_group: codex-runners
+      runner_labels: codex-linux-x64
+      target: x86_64-unknown-linux-gnu
+      profile: ci-test
+      artifact_id: linux-x64-remote
+      remote_env: true
+      use_sccache: true
+    secrets: inherit
 
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - name: Install Linux build dependencies
-        if: ${{ runner.os == 'Linux' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
-          fi
+  tests_linux_arm64:
+    name: Tests — ubuntu-24.04-arm - aarch64-unknown-linux-gnu
+    uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
+    with:
+      runner: ubuntu-24.04-arm
+      runner_group: codex-runners
+      runner_labels: codex-linux-arm64
+      target: aarch64-unknown-linux-gnu
+      profile: ci-test
+      artifact_id: linux-arm64
+      use_sccache: true
+    secrets: inherit
 
-      # Some integration tests rely on DotSlash being installed.
-      # See https://github.com/openai/codex/pull/7617.
-      - name: Install DotSlash
-        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+  tests_windows_x64:
+    name: Tests — windows-x64 - x86_64-pc-windows-msvc
+    uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
+    with:
+      runner: windows-x64
+      runner_group: codex-runners
+      runner_labels: codex-windows-x64
+      target: x86_64-pc-windows-msvc
+      profile: ci-test
+      artifact_id: windows-x64
+      test_threads: 8
+    secrets: inherit
 
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Compute lockfile hash
-        id: lockhash
-        working-directory: codex-rs
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "hash=$(sha256sum Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "toolchain_hash=$(sha256sum rust-toolchain.toml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore cargo home cache
-        id: cache_cargo_home_restore
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
-          restore-keys: |
-            cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
-
-      - name: Install sccache
-        if: ${{ env.USE_SCCACHE == 'true' }}
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: sccache
-          version: 0.7.5
-
-      - name: Configure sccache backend
-        if: ${{ env.USE_SCCACHE == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
-            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-            echo "Using sccache GitHub backend"
-          else
-            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
-            echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
-            echo "Using sccache local disk + actions/cache fallback"
-          fi
-
-      - name: Enable sccache wrapper
-        if: ${{ env.USE_SCCACHE == 'true' }}
-        shell: bash
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-
-      - name: Restore sccache cache (fallback)
-        if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
-        id: cache_sccache_restore
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ github.workspace }}/.sccache/
-          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-
-            sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
-
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: nextest
-          version: 0.9.103
-
-      - name: Enable unprivileged user namespaces (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          # Required for bubblewrap to work on Linux CI runners.
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          # Ubuntu 24.04+ can additionally gate unprivileged user namespaces
-          # behind AppArmor.
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
-      - name: Set up remote test env (Docker)
-        if: ${{ runner.os == 'Linux' && matrix.remote_env == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
-          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
-          echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
-          echo "CODEX_TEST_REMOTE_EXEC_SERVER_URL=${CODEX_TEST_REMOTE_EXEC_SERVER_URL}" >> "$GITHUB_ENV"
-
-      - name: tests
-        id: test
-        run: cargo nextest run --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
-        env:
-          RUST_BACKTRACE: 1
-          RUST_MIN_STACK: "8388608" # 8 MiB
-          NEXTEST_STATUS_LEVEL: leak
-
-      - name: Upload Cargo timings (nextest)
-        if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}
-          path: codex-rs/target/**/cargo-timings/cargo-timing.html
-          if-no-files-found: warn
-
-      - name: Save cargo home cache
-        if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
-
-      - name: Save sccache cache (fallback)
-        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ github.workspace }}/.sccache/
-          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
-
-      - name: sccache stats
-        if: always() && env.USE_SCCACHE == 'true'
-        continue-on-error: true
-        run: sccache --show-stats || true
-
-      - name: sccache summary
-        if: always() && env.USE_SCCACHE == 'true'
-        shell: bash
-        run: |
-          {
-            echo "### sccache stats — ${{ matrix.target }} (tests)";
-            echo;
-            echo '```';
-            sccache --show-stats || true;
-            echo '```';
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Tear down remote test env
-        if: ${{ always() && runner.os == 'Linux' && matrix.remote_env == 'true' }}
-        shell: bash
-        run: |
-          set +e
-          if [[ "${STEPS_TEST_OUTCOME}" != "success" ]]; then
-            docker logs codex-remote-test-env || true
-          fi
-          docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
-        env:
-          STEPS_TEST_OUTCOME: ${{ steps.test.outcome }}
-
-      - name: verify tests passed
-        if: steps.test.outcome == 'failure'
-        run: |
-          echo "Tests failed. See logs for details."
-          exit 1
+  tests_windows_arm64:
+    name: Tests — windows-arm64 - aarch64-pc-windows-msvc
+    uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
+    with:
+      runner: windows-arm64
+      runner_group: codex-runners
+      runner_labels: codex-windows-arm64
+      archive_runner: windows-x64
+      archive_runner_group: codex-runners
+      archive_runner_labels: codex-windows-x64
+      target: aarch64-pc-windows-msvc
+      profile: ci-test
+      artifact_id: windows-arm64
+      test_threads: 8
+      use_sccache: true
+    secrets: inherit
 
   # --- Gatherer job for the full post-merge workflow --------------------------
   results:
@@ -761,7 +604,11 @@ jobs:
         argument_comment_lint_package,
         argument_comment_lint_prebuilt,
         lint_build,
-        tests,
+        tests_macos_aarch64,
+        tests_linux_x64_remote,
+        tests_linux_arm64,
+        tests_windows_x64,
+        tests_windows_arm64,
       ]
     if: always()
     runs-on: ubuntu-24.04
@@ -774,13 +621,21 @@ jobs:
           echo "general: ${{ needs.general.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
-          echo "tests  : ${{ needs.tests.result }}"
+          echo "test macos : ${{ needs.tests_macos_aarch64.result }}"
+          echo "test linux : ${{ needs.tests_linux_x64_remote.result }}"
+          echo "test arm64 : ${{ needs.tests_linux_arm64.result }}"
+          echo "test winx64: ${{ needs.tests_windows_x64.result }}"
+          echo "test winarm: ${{ needs.tests_windows_arm64.result }}"
           [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
           [[ '${{ needs.argument_comment_lint_prebuilt.result }}' == 'success' ]] || { echo 'argument_comment_lint_prebuilt failed'; exit 1; }
           [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
           [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
           [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
-          [[ '${{ needs.tests.result }}' == 'success' ]] || { echo 'tests failed'; exit 1; }
+          [[ '${{ needs.tests_macos_aarch64.result }}' == 'success' ]] || { echo 'tests_macos_aarch64 failed'; exit 1; }
+          [[ '${{ needs.tests_linux_x64_remote.result }}' == 'success' ]] || { echo 'tests_linux_x64_remote failed'; exit 1; }
+          [[ '${{ needs.tests_linux_arm64.result }}' == 'success' ]] || { echo 'tests_linux_arm64 failed'; exit 1; }
+          [[ '${{ needs.tests_windows_x64.result }}' == 'success' ]] || { echo 'tests_windows_x64 failed'; exit 1; }
+          [[ '${{ needs.tests_windows_arm64.result }}' == 'success' ]] || { echo 'tests_windows_arm64 failed'; exit 1; }
 
       - name: sccache summary note
         if: always()

@@ -8,8 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 /// various process hardening steps, such as
 /// - disabling core dumps
 /// - disabling ptrace attach on Linux and macOS.
-/// - removing dangerous or noisy environment variables such as LD_PRELOAD,
-///   DYLD_*, and macOS malloc stack-logging controls
+/// - removing dangerous environment variables such as LD_PRELOAD and DYLD_*
 pub fn pre_main_hardening() {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pre_main_hardening_linux();
@@ -98,12 +97,6 @@ pub(crate) fn pre_main_hardening_macos() {
     // Remove all DYLD_ environment variables, which can be used to subvert
     // library loading.
     remove_env_vars_with_prefix(b"DYLD_");
-
-    // Remove macOS malloc stack-logging controls so allocator diagnostics from
-    // Codex or inherited child processes do not get sprayed into the TUI:
-    // https://github.com/openai/codex/issues/11555
-    remove_env_vars_with_prefix(b"MallocStackLogging");
-    remove_env_vars_with_prefix(b"MallocLogFile");
 }
 
 #[cfg(unix)]

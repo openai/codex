@@ -20,8 +20,8 @@ CONTEXT: MEMORY FOLDER STRUCTURE
 Folder structure (under {{ memory_root }}/):
 
 - memory_summary.md
-  - Always loaded into the system prompt. Must remain informative and highly navigational,
-    but still discriminative enough to guide retrieval.
+  - Always loaded into the system prompt. First line must be exactly `v1`.
+    Must stay dense, highly navigational, and discriminative enough to guide retrieval.
 - MEMORY.md
   - Handbook entries. Used to grep for keywords; aggregated insights from rollouts;
     pointers to rollout summaries if certain past rollouts are very relevant.
@@ -133,7 +133,8 @@ Under `{{ memory_root }}/`:
   - merged memories; produce a lightly clustered version if applicable
 - `rollout_summaries/*.md`
 - `memory_summary.md`
-  - read the existing summary so updates stay consistent
+  - read the existing summary so updates stay consistent only if its first line is exactly `v1`;
+    otherwise treat the summary as schema-incompatible and regenerate the whole file from scratch
 - `skills/*`
   - read existing skills so updates are incremental and non-duplicative
 {{ memory_extensions_primary_inputs }}
@@ -143,6 +144,8 @@ Mode selection:
   and `skills/`).
 - INCREMENTAL UPDATE: existing artifacts already exist and `raw_memories.md`
   mostly contains new additions.
+- Summary schema reset: if `memory_summary.md` is missing, empty, or does not start with exactly
+  `v1`, regenerate only `memory_summary.md` from scratch after `MEMORY.md` is current.
 
 Memory workspace diff:
 
@@ -183,6 +186,8 @@ Rules:
 
 - If there is no meaningful signal to add beyond what already exists, keep outputs minimal.
 - You should always make sure `MEMORY.md` and `memory_summary.md` exist and are up to date.
+- `memory_summary.md` must start with the exact line `v1`; if it does not, rewrite the entire
+  file rather than patching the previous summary in place.
 - Follow the format and schema of the artifacts below.
 - Do not target fixed counts (memory blocks, task groups, topics, or bullets). Let the
   signal determine the granularity and depth.
@@ -441,13 +446,39 @@ task group/task` from the full raw inventory so you can have a better overview.
 - Prefer placing reusable user preferences in `## User preferences` and the rest of the durable
   know-how in `## Reusable knowledge` and `## Failures and how to do differently`.
 - Use `memory_summary.md` as the cross-task summary layer, not the place for project-specific
-  runbooks. It should stay compact in narrative/profile sections, but its `## User preferences`
-  section is the main actionable payload and may be much longer when that helps future agents
-  avoid repeated user steering.
+  runbooks. Its `## User preferences` section is the main actionable payload, but it should
+  still stay compact, deduplicated, and limited to preferences likely to change future behavior.
 
 ============================================================
 2) `memory_summary.md` FORMAT (STRICT)
 ============================================================
+
+File header:
+
+The file must begin exactly:
+
+```md
+v1
+
+## User Profile
+```
+
+- The first line must be exactly `v1` with no leading/trailing whitespace and no frontmatter
+  before it.
+- If the existing `memory_summary.md` first line is not exactly `v1`, discard the old summary
+  structure and regenerate the entire file from the finalized `MEMORY.md`, skills, and current
+  rollout evidence.
+
+Density objective (strict):
+
+- `memory_summary.md` is prompt-loaded context, so optimize for high signal per token.
+- Keep only high-level, cross-task signal and brief routing summaries. Put details, provenance,
+  runbooks, and task-local nuance in `MEMORY.md`, skills, or rollout summaries.
+- Deduplicate aggressively. If two bullets would cause the same future behavior or route to the
+  same `MEMORY.md` area, merge them or keep the sharper one.
+- Prefer short, concrete bullets over narrative explanation. Delete low-signal caveats,
+  examples, and historical detail unless they change future agent behavior.
+- Give directly links to important information to maximize the retrieval efficiency.
 
 Format:
 
@@ -474,15 +505,15 @@ For example, include (when known):
 You may end with short fun facts if they are real and useful, but keep the main profile concrete
 and grounded. Do not let the optional fun-facts tail make the rest of the section more stylized
 or abstract.
-This entire section is free-form, <= 500 words.
+This entire section is free-form, <= 350 words.
 
 ## User preferences
 Include a dedicated bullet list of actionable user preferences that are likely to matter again,
 not just inside one task group.
 This section should be more concrete and easier to apply than `## User Profile`.
 Prefer preferences that repeatedly save user keystrokes or avoid predictable interruption.
-This section may be long. Do not compress it to just a few umbrella bullets when `MEMORY.md`
-contains many distinct actionable preferences.
+Keep it dense and non-duplicative. Include only stable or high-leverage preferences that would
+change future agent behavior across recurring workflows.
 Treat this as the main actionable payload of `memory_summary.md`.
 
 For example, include (when known):
@@ -500,16 +531,12 @@ Rules:
 - Keep each bullet actionable and future-facing.
 - Default to lifting or lightly adapting strong bullets from `MEMORY.md` `## User preferences`
   rather than rewriting them into smoother higher-level summaries.
-- Preserve more of the user's original point than a terse summary would. Prefer evidence-aware
-  bullets that still keep some original wording over abstract umbrella summaries.
+- Preserve the user's original point when it is compact and behavior-changing; otherwise compress
+  to the shortest faithful wording.
 - When a short quoted or near-verbatim phrase makes the preference easier to recognize or grep
   for later, keep that phrase in the bullet instead of replacing it with an abstraction.
-- Do not over-merge adjacent preferences. If several distinct preferences would change different
-  future defaults, keep them as separate bullets.
-- Prefer many narrow actionable bullets over a few broad umbrella bullets.
-- Prefer a broad actionable inventory over a short highly deduped list.
-- Do not treat 5-10 bullets as an implicit target; long-lived memory sets may justify a much
-  longer list.
+- Merge adjacent preferences unless they would change different future defaults.
+- Prefer a compact set of sharp bullets over a broad inventory.
 - Do not require a preference to be broad across task families. If it is likely to matter again
   in a recurring workflow, it belongs here.
 - When deciding whether to include a preference, ask whether omitting it would make the next
@@ -542,16 +569,20 @@ For example, include (when known):
 
 This is a compact index to help future agents quickly find details in `MEMORY.md`,
 `skills/`, and `rollout_summaries/`.
-Treat it as a routing/index layer, not a mini-handbook:
+Treat it as a dense routing/index layer, not a mini-handbook:
 
 - tell future agents what to search first,
 - preserve enough specificity to route into the right `MEMORY.md` block quickly.
+- keep topic descriptions brief; delete stale, duplicated, or low-signal topics even if they
+  existed in the previous summary.
 
 Topic selection and quality rules:
 
 - Organize the index first by cwd / project scope, then by topic.
 - Split the index into a recent high-utility window and older topics.
 - Do not target a fixed topic count. Include informative topics and omit low-signal noise.
+- Keep the index current. Feel free to restructure, rename, merge, or delete topics when the
+  current `MEMORY.md` organization or evidence has changed.
 - Prefer grouping by task family / workflow intent, not by incidental tool overlap alone.
 - Order topics by utility, using `updated_at` recency as a strong default proxy unless there is
   strong contrary evidence.
@@ -588,7 +619,7 @@ Recent Active Memory Window behavior (scope-first, then day-ordered):
 - Within each scope, order day subsections by recency.
 - If a scope has only one meaningful recent day, include only that day for that scope.
 - For each recent-day subsection inside a scope, prioritize informative, likely-to-recur topics and make
-  those entries richer (better keywords, clearer descriptions, and useful recent learnings);
+  those entries denser (better keywords, brief descriptions, and useful recent learnings);
   do not spend much space on trivial tasks touched that day.
 - Preserve routing coverage for `MEMORY.md` in the overall index. If a scope/day includes
   less useful topics, include shorter/compact entries for routing rather than dropping them.
@@ -596,16 +627,16 @@ Recent Active Memory Window behavior (scope-first, then day-ordered):
   appears; do not duplicate it under multiple day sections.
 - If a topic spans multiple scopes and retrieval would differ by scope, split it. Otherwise,
   place it under the dominant scope and mention the secondary scope in the description.
-- Recent-day entries should be richer than older-topic entries: stronger keywords, clearer
-  descriptions, and concise recent learnings/change notes.
+- Recent-day entries should be more informative than older-topic entries through stronger
+  keywords and concise recent learnings/change notes, not longer prose.
 - Group similar tasks/topics together when it improves routing clarity.
 - Do not over cluster topics together, especially when they contain distinct task intents.
 
 Recent-topic format:
 
 - <topic>: <keyword1>, <keyword2>, <keyword3>, ...
-  - desc: <clear and specific description of what tasks are inside this topic; what future task/user goal this helps with; what kinds of outcomes/artifacts/procedures are covered; when to search this topic first; preserve original source phrasing when it is a useful retrieval handle; and include explicit cwd applicability text when the work is checkout-sensitive>
-  - learnings: <some concise, topic-local recent takeaways / decision triggers / updates worth checking first; include useful specifics, original source phrasing where possible, and cwd mismatch caveats when important; avoid overlap with `## User preferences` and `## General Tips` (cross-task actionable defaults belong in `## User preferences`; broad reusable guidance belongs in `## General Tips`)>
+  - desc: <brief description of what is inside this topic, when to search it first, and any cwd applicability needed for routing>
+  - learnings: <one dense line of topic-local takeaways / decision triggers / updates worth checking first; avoid overlap with `## User preferences` and `## General Tips`>
 
 ### <cwd / project scope>
 
@@ -643,10 +674,9 @@ Notes:
   caveats, and decision triggers; move cross-task, stable, broadly reusable user defaults to
   `## User preferences`.
 - Coverage guardrail: ensure every top-level `# Task Group` in `MEMORY.md` is represented by
-  at least one topic bullet in this index (either directly or via a clearly subsuming topic).
-- Keep descriptions explicit: what is inside, when to use it, and what kind of
-  outcome/procedure depth is available (for example: runbook, diagnostics, reporting, recovery),
-  so a future agent can quickly choose which topic/keyword cluster to search first.
+  at least one topic bullet in this index (either directly or via a clearly subsuming compact topic).
+- Keep descriptions explicit but short: enough for a future agent to choose the right
+  topic/keyword cluster, not enough to replace opening `MEMORY.md`.
 - `memory_summary.md` should not sound like a second-order executive summary. Prefer concrete,
   source-faithful wording over polished abstraction, especially in:
   - `## User preferences`
@@ -731,6 +761,9 @@ WORKFLOW
 ============================================================
 
 1. Determine mode (INIT vs INCREMENTAL UPDATE) using artifact availability and current run context.
+   Independently check `memory_summary.md` first line: if it is not exactly `v1`, regenerate
+   `memory_summary.md` from scratch after the other artifacts are finalized, even when `MEMORY.md`
+   itself can be updated incrementally.
 
 2. INIT phase behavior:
    - Read `raw_memories.md` first, then rollout summaries carefully.
@@ -747,8 +780,8 @@ WORKFLOW
      conflicting task families until MEMORY blocks are richer and more useful than raw memories
 
 3. INCREMENTAL UPDATE behavior:
-   - Read existing `MEMORY.md` and `memory_summary.md` first for continuity and to locate
-     existing references that may need surgical cleanup.
+   - Read existing `MEMORY.md` and, only when it starts with exactly `v1`, existing
+     `memory_summary.md` first for continuity and to locate references that may need surgical cleanup.
    - Use the injected git-style workspace changes as the first routing pass:
      - added/modified `raw_memories.md` and `rollout_summaries/*.md` = ingestion queue
      - deleted `rollout_summaries/*.md` and `extensions/*/resources/*.md` = forgetting /
@@ -775,6 +808,8 @@ WORKFLOW
      - doing light clustering and merging if needed
      - refreshing `MEMORY.md` top-of-file ordering so recent high-utility task families stay easy to find
      - rebuilding the `memory_summary.md` recent active window (last 3 memory days) from current `updated_at` coverage
+     - freely restructuring `memory_summary.md` so it reflects the current memory set without
+       stale topics, duplicated preference bullets, or obsolete routing labels
      - updating existing skills or adding new skills only when there is clear new reusable procedure
      - updating `memory_summary.md` last to reflect the final state of the memory folder
    - Minimize churn in incremental mode: if an existing `MEMORY.md` block or `## What's in Memory`
@@ -816,6 +851,9 @@ WORKFLOW
 
 7. Final pass:
    - remove duplication in memory_summary, skills/, and MEMORY.md
+   - verify `memory_summary.md` still begins with exactly `v1`
+   - verify `memory_summary.md` is dense: brief high-level profile, compact actionable
+     preferences, compact general tips, and a routing index rather than a second handbook
    - remove stale or low-signal blocks that are less likely to be useful in the future
    - remove or rewrite blocks/task sections whose supporting rollout references point only to
      deleted inputs or missing rollout summary files

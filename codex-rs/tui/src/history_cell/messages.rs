@@ -283,16 +283,26 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        adaptive_wrap_lines(
-            &self.lines,
-            RtOptions::new(width as usize)
-                .initial_indent(if self.is_first_line {
-                    "• ".dim().into()
-                } else {
-                    "  ".into()
-                })
-                .subsequent_indent("  ".into()),
-        )
+        let mut wrapped = Vec::new();
+        for (index, line) in self.lines.iter().enumerate() {
+            let initial_indent = if index == 0 && self.is_first_line {
+                "• ".dim().into()
+            } else {
+                "  ".into()
+            };
+            let mut subsequent_indent = Line::from("  ");
+            subsequent_indent
+                .spans
+                .extend(crate::insert_history::leading_whitespace_prefix(line).spans);
+            let line_wrapped = adaptive_wrap_line(
+                line,
+                RtOptions::new(width as usize)
+                    .initial_indent(initial_indent)
+                    .subsequent_indent(subsequent_indent),
+            );
+            push_owned_lines(&line_wrapped, &mut wrapped);
+        }
+        wrapped
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {

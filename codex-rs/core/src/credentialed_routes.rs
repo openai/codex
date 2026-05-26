@@ -81,7 +81,6 @@ impl CredentialedRoutesSessionConfig {
             )
             .collect()
     }
-
     pub(crate) fn developer_instructions(&self) -> Option<String> {
         let route_prefixes = self
             .routes
@@ -185,7 +184,7 @@ mod tests {
                 value: http::HeaderValue::from_static("Bearer codex-token"),
             }],
             proxy_url: Some(
-                "https://chatgpt.com/backend-api/wham/credential_routes/proxy".to_string(),
+                "https://chatgpt.com/backend-api/ps/credential_routes/proxy".to_string(),
             ),
         };
 
@@ -203,8 +202,7 @@ mod tests {
                     name: http::header::AUTHORIZATION,
                     value: http::HeaderValue::from_static("Bearer codex-token"),
                 }],
-                proxy_url: "https://chatgpt.com/backend-api/wham/credential_routes/proxy"
-                    .to_string(),
+                proxy_url: "https://chatgpt.com/backend-api/ps/credential_routes/proxy".to_string(),
             })
         );
     }
@@ -234,7 +232,7 @@ mod tests {
             ],
             proxy_headers: Vec::new(),
             proxy_url: Some(
-                "https://chatgpt.com/backend-api/wham/credential_routes/proxy".to_string(),
+                "https://chatgpt.com/backend-api/ps/credential_routes/proxy".to_string(),
             ),
         };
 
