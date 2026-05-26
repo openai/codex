@@ -125,6 +125,15 @@ async fn responses_api_parent_and_subagent_requests_include_identity_headers() -
         child.header("x-codex-parent-thread-id").as_deref(),
         Some(parent_thread_id)
     );
+    let child_turn_metadata: serde_json::Value = serde_json::from_str(
+        &child
+            .header("x-codex-turn-metadata")
+            .ok_or_else(|| anyhow!("child request missing x-codex-turn-metadata"))?,
+    )?;
+    assert_eq!(
+        child_turn_metadata["forked_from_thread_id"].as_str(),
+        Some(parent_thread_id)
+    );
 
     Ok(())
 }

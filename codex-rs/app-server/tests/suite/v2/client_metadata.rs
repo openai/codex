@@ -4,6 +4,10 @@ use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewDelivery;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewStartResponse;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadSource;
@@ -64,6 +68,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     let client_metadata = HashMap::from([
         ("fiber_run_id".to_string(), "fiber-start-123".to_string()),
         ("origin".to_string(), "gaas".to_string()),
+        ("thread_source".to_string(), "client-supplied".to_string()),
     ]);
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -97,6 +102,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
     assert_eq!(metadata["fiber_run_id"].as_str(), Some("fiber-start-123"));
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
+    assert_eq!(metadata["thread_source"].as_str(), Some("client-supplied"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("session_id").is_some());
 
@@ -137,19 +143,8 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let fork_req = mcp
-        .send_thread_fork_request(ThreadForkParams {
-            thread_id: source_thread_id.clone(),
-            thread_source: Some(ThreadSource::User),
-            ..Default::default()
-        })
-        .await?;
-    let fork_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(fork_req)),
-    )
-    .await??;
-    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+    let ThreadForkResponse { thread, .. } =
+        fork_fake_rollout_thread(&mut mcp, source_thread_id.clone()).await?;
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -167,6 +162,88 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
     )
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let metadata = request
+        .header("x-codex-turn-metadata")
+        .as_deref()
+        .map(parse_json_header)
+        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+    assert_eq!(
+        metadata["forked_from_thread_id"].as_str(),
+        Some(source_thread_id.as_str())
+    );
+    assert_eq!(metadata["thread_id"].as_str(), Some(thread.id.as_str()));
+    assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn review_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let review_payload = serde_json::json!({
+        "findings": [],
+        "overall_correctness": "good",
+        "overall_explanation": "Done",
+        "overall_confidence_score": 0.5
+    })
+    .to_string();
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", &review_payload),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        /*supports_websockets*/ false,
+    )?;
+
+    let source_thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let ThreadForkResponse { thread, .. } =
+        fork_fake_rollout_thread(&mut mcp, source_thread_id.clone()).await?;
+
+    let review_req = mcp
+        .send_review_start_request(ReviewStartParams {
+            thread_id: thread.id.clone(),
+            delivery: Some(ReviewDelivery::Inline),
+            target: ReviewTarget::Custom {
+                instructions: "Review the fork".to_string(),
+            },
+        })
+        .await?;
+    let review_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(review_req)),
+    )
+    .await??;
+    let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -433,6 +510,25 @@ supports_websockets = {supports_websockets}
 "#
         ),
     )
+}
+
+async fn fork_fake_rollout_thread(
+    mcp: &mut McpProcess,
+    source_thread_id: String,
+) -> Result<ThreadForkResponse> {
+    let fork_req = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: source_thread_id,
+            thread_source: Some(ThreadSource::User),
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_req)),
+    )
+    .await??;
+    to_response::<ThreadForkResponse>(fork_resp)
 }
 
 fn parse_json_header(value: &str) -> serde_json::Value {

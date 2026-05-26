@@ -114,7 +114,6 @@ fn merge_turn_metadata(
                 key.as_str(),
                 "session_id"
                     | "thread_id"
-                    | "thread_source"
                     | "turn_id"
                     | TURN_STARTED_AT_UNIX_MS_KEY
                     | "forked_from_thread_id"
