@@ -25,7 +25,7 @@ use crate::local::LocalMemoriesBackend;
 #[test]
 fn install_registers_tool_contributor() {
     let mut builder = ExtensionRegistryBuilder::<codex_core::config::Config>::new();
-    crate::install(&mut builder);
+    crate::install(&mut builder, None);
     let registry = builder.build();
 
     assert_eq!(registry.tool_contributors().len(), 1);
@@ -91,7 +91,7 @@ fn tools_are_contributed_when_enabled() {
 
 #[test]
 fn tools_are_not_contributed_when_custom_tools_disabled() {
-    let extension = MemoriesExtension;
+    let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
