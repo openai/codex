@@ -174,12 +174,12 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
     SkillEnvVarDependencyPrompt,
+    /// Enable the unified mention popup prototype.
+    MentionsV2,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
-    /// Enable the unified mention popup prototype.
-    MentionsV2,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
