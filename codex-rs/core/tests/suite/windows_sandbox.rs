@@ -18,6 +18,7 @@ use serial_test::serial;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 struct EnvVarGuard {
@@ -46,17 +47,68 @@ impl Drop for EnvVarGuard {
     }
 }
 
+enum TestCodexHome {
+    Persistent(PathBuf),
+    Temporary(TempDir),
+}
+
+impl TestCodexHome {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Persistent(path) => path.as_path(),
+            Self::Temporary(temp_dir) => temp_dir.path(),
+        }
+    }
+}
+
+fn codex_home_for_windows_sandbox_test(name: &str) -> anyhow::Result<TestCodexHome> {
+    if let Some(test_tmpdir) = std::env::var_os("TEST_TMPDIR") {
+        // The elevated backend provisions machine-local sandbox users. Bazel
+        // retries run in the same Windows VM, so keep CODEX_HOME stable within
+        // the test temp root and let setup reconcile its persisted ACL state.
+        let codex_home = PathBuf::from(test_tmpdir).join(name);
+        std::fs::create_dir_all(&codex_home)
+            .with_context(|| format!("create stable test CODEX_HOME {}", codex_home.display()))?;
+        return Ok(TestCodexHome::Persistent(codex_home));
+    }
+
+    Ok(TestCodexHome::Temporary(TempDir::new()?))
+}
+
 fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
     let test_exe = std::env::current_exe().context("resolve current Windows test executable")?;
     let test_exe_dir = test_exe
         .parent()
         .context("Windows test executable should have a parent directory")?;
     let resources_dir = test_exe_dir.join("codex-resources");
-    std::fs::create_dir_all(&resources_dir)?;
+    match std::fs::create_dir_all(&resources_dir) {
+        Ok(()) => {}
+        Err(err)
+            if err.kind() == std::io::ErrorKind::PermissionDenied && resources_dir.is_dir() => {}
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("create resources dir {}", resources_dir.display()));
+        }
+    }
     for helper_name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
         let helper = codex_utils_cargo_bin::cargo_bin(helper_name)?;
         let file_name = Path::new(helper_name).with_extension("exe");
-        std::fs::copy(helper, resources_dir.join(file_name))?;
+        let destination = resources_dir.join(file_name);
+        if let Err(err) = std::fs::copy(&helper, &destination) {
+            // A sandbox helper can briefly remain alive after the sandboxed
+            // command exits. Bazel may retry the test while that process still
+            // has the staged executable open, so keep the already-staged copy.
+            if err.kind() == std::io::ErrorKind::PermissionDenied && destination.exists() {
+                continue;
+            }
+            return Err(err).with_context(|| {
+                format!(
+                    "stage Windows sandbox helper {} at {}",
+                    helper.display(),
+                    destination.display()
+                )
+            });
+        }
     }
     Ok(())
 }
@@ -64,8 +116,9 @@ fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
 #[tokio::test]
 #[serial(codex_home)]
 async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
-    let temp_home = TempDir::new()?;
-    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
+    let codex_home =
+        codex_home_for_windows_sandbox_test("windows-restricted-token-deny-read-codex-home")?;
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     let workspace = TempDir::new()?;
     let cwd = dunce::canonicalize(workspace.path())?.abs();
     let secret = cwd.join("secret.env");
@@ -91,13 +144,13 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
             path: FileSystemPath::GlobPattern {
                 pattern: "**/*.env".to_string(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: future_secret,
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(
@@ -144,8 +197,8 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
 #[tokio::test]
 #[serial(codex_home)]
 async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
-    let temp_home = TempDir::new()?;
-    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
+    let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-deny-read-codex-home")?;
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     stage_windows_sandbox_helpers()?;
     let workspace = TempDir::new()?;
     let cwd = dunce::canonicalize(workspace.path())?.abs();
@@ -173,11 +226,11 @@ async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::
             path: FileSystemPath::GlobPattern {
                 pattern: "**/*.env".to_string(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: exact_secret },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(

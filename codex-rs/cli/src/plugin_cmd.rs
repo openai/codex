@@ -5,6 +5,7 @@ use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::ConfiguredMarketplace;
+use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
@@ -15,9 +16,13 @@ use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::marketplace_cmd::MarketplaceCli;
+
+const OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME: &str = "openai-bundled-alpha";
+const OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME: &str = "openai-primary-runtime";
 
 #[derive(Debug, Parser)]
 #[command(bin_name = "codex plugin")]
@@ -168,9 +173,13 @@ pub async fn run_plugin_list(
             println!("No marketplace plugins found.");
         }
     } else {
-        for marketplace in marketplaces {
-            println!("Marketplace `{}`", marketplace.name);
-            println!("Path: {}", marketplace.path.as_path().display());
+        for (index, marketplace) in marketplaces.into_iter().enumerate() {
+            let mut rows = Vec::new();
+            let mut plugin_width = "PLUGIN".len();
+            let mut status_width = "STATUS".len();
+            let mut installed_version_width = "VERSION".len();
+            let mut path_width = "PATH".len();
+
             for plugin in &marketplace.plugins {
                 let state = if plugin.installed && plugin.enabled {
                     "installed, enabled"
@@ -179,7 +188,51 @@ pub async fn run_plugin_list(
                 } else {
                     "not installed"
                 };
-                println!("  {} ({state})", plugin.id);
+                let installed_version = plugin.installed_version.clone().unwrap_or_default();
+                let path = match &plugin.source {
+                    codex_core_plugins::marketplace::MarketplacePluginSource::Local { path } => {
+                        path.as_path().display().to_string()
+                    }
+                    codex_core_plugins::marketplace::MarketplacePluginSource::Git {
+                        url,
+                        path,
+                        ref_name,
+                        sha,
+                    } => {
+                        let mut parts = vec![url.clone()];
+                        if let Some(path) = path {
+                            parts.push(format!("path `{path}`"));
+                        }
+                        if let Some(ref_name) = ref_name {
+                            parts.push(format!("ref `{ref_name}`"));
+                        }
+                        if let Some(sha) = sha {
+                            parts.push(format!("sha `{sha}`"));
+                        }
+                        parts.join(", ")
+                    }
+                };
+                plugin_width = plugin_width.max(plugin.id.len());
+                status_width = status_width.max(state.len());
+                installed_version_width = installed_version_width.max(installed_version.len());
+                path_width = path_width.max(path.len());
+                rows.push((plugin.id.clone(), state, installed_version, path));
+            }
+
+            if index > 0 {
+                println!();
+            }
+            println!("Marketplace `{}`", marketplace.name);
+            println!("{}", marketplace.path.as_path().display());
+            println!();
+            println!(
+                "{:<plugin_width$}  {:<status_width$}  {:<installed_version_width$}  {:<path_width$}",
+                "PLUGIN", "STATUS", "VERSION", "PATH"
+            );
+            for (plugin, status, installed_version, path) in rows {
+                println!(
+                    "{plugin:<plugin_width$}  {status:<status_width$}  {installed_version:<installed_version_width$}  {path:<path_width$}"
+                );
             }
         }
     }
@@ -306,10 +359,10 @@ fn find_marketplace_for_plugin(
     }
 }
 
-struct ConfiguredMarketplaceSnapshotIssue {
-    marketplace_name: String,
-    path: PathBuf,
-    message: String,
+pub(crate) struct ConfiguredMarketplaceSnapshotIssue {
+    pub(crate) marketplace_name: String,
+    pub(crate) path: PathBuf,
+    pub(crate) message: String,
 }
 
 fn ensure_configured_marketplace_snapshots_loaded(
@@ -343,17 +396,16 @@ fn ensure_configured_marketplace_snapshots_loaded(
     bail!("failed to load configured marketplace snapshot(s):\n{issue_lines}");
 }
 
-fn configured_marketplace_snapshot_issues(
+pub(crate) fn configured_marketplace_snapshot_issues(
     codex_home: &std::path::Path,
     plugins_input: &PluginsConfigInput,
     load_errors: &[MarketplaceListError],
     marketplace_name: Option<&str>,
 ) -> Vec<ConfiguredMarketplaceSnapshotIssue> {
-    let Some(user_layer) = plugins_input.config_layer_stack.get_active_user_layer() else {
+    let Some(user_config) = plugins_input.config_layer_stack.effective_user_config() else {
         return Vec::new();
     };
-    let Some(configured_marketplaces) = user_layer
-        .config
+    let Some(configured_marketplaces) = user_config
         .get("marketplaces")
         .and_then(toml::Value::as_table)
     else {
@@ -367,9 +419,33 @@ fn configured_marketplace_snapshot_issues(
         if marketplace_name.is_some_and(|name| configured_name != name) {
             continue;
         }
-        if !marketplace.is_table()
-            || validate_plugin_segment(configured_name, "marketplace name").is_err()
+        if !marketplace.is_table() {
+            issues.push(ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: configured_name.clone(),
+                path: PathBuf::from("<invalid config>"),
+                message: "configured marketplace entry must be a table".to_string(),
+            });
+            continue;
+        }
+        if let Err(err) = validate_plugin_segment(configured_name, "marketplace name") {
+            issues.push(ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: configured_name.clone(),
+                path: PathBuf::from("<invalid config>"),
+                message: err.to_string(),
+            });
+            continue;
+        }
+        if marketplace.get("source_type").and_then(toml::Value::as_str) == Some("local")
+            && marketplace
+                .get("source")
+                .and_then(toml::Value::as_str)
+                .is_none_or(str::is_empty)
         {
+            issues.push(ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: configured_name.clone(),
+                path: PathBuf::from("<invalid source>"),
+                message: "configured local marketplace source is missing or empty".to_string(),
+            });
             continue;
         }
         let Some(root) = resolve_configured_marketplace_root(
@@ -381,11 +457,16 @@ fn configured_marketplace_snapshot_issues(
         };
         match find_marketplace_manifest_path(&root) {
             Some(path) => manifest_paths.push((configured_name.clone(), path)),
-            None => issues.push(ConfiguredMarketplaceSnapshotIssue {
-                marketplace_name: configured_name.clone(),
-                path: root,
-                message: "marketplace root does not contain a supported manifest".to_string(),
-            }),
+            None => {
+                if is_implicit_system_marketplace_root(configured_name, codex_home, &root) {
+                    continue;
+                }
+                issues.push(ConfiguredMarketplaceSnapshotIssue {
+                    marketplace_name: configured_name.clone(),
+                    path: root,
+                    message: "marketplace root does not contain a supported manifest".to_string(),
+                });
+            }
         }
     }
 
@@ -402,4 +483,42 @@ fn configured_marketplace_snapshot_issues(
         }
     }
     issues
+}
+
+fn is_implicit_system_marketplace_root(
+    marketplace_name: &str,
+    _codex_home: &Path,
+    root: &Path,
+) -> bool {
+    if matches!(
+        marketplace_name,
+        OPENAI_BUNDLED_MARKETPLACE_NAME | OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME
+    ) && path_ends_with(root, &[".tmp", "bundled-marketplaces", marketplace_name])
+    {
+        return true;
+    }
+
+    marketplace_name == OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME
+        && path_ends_with(
+            root,
+            &[
+                "codex-runtimes",
+                "codex-primary-runtime",
+                "plugins",
+                marketplace_name,
+            ],
+        )
+}
+
+fn path_ends_with(path: &Path, suffix: &[&str]) -> bool {
+    let path_components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    path_components.as_slice().ends_with(
+        &suffix
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>(),
+    )
 }

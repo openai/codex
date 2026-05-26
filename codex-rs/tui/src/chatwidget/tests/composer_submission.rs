@@ -1,11 +1,10 @@
 use super::*;
-use codex_app_server_protocol::FileSystemAccessMode;
-use codex_app_server_protocol::FileSystemPath;
-use codex_app_server_protocol::FileSystemSandboxEntry;
-use codex_app_server_protocol::FileSystemSpecialPath;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
-use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
-use codex_app_server_protocol::PermissionProfileNetworkPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 
@@ -31,6 +30,8 @@ async fn submission_preserves_text_elements_and_local_images() {
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -58,7 +59,8 @@ async fn submission_preserves_text_elements_and_local_images() {
     assert_eq!(
         items[0],
         UserInput::LocalImage {
-            path: local_images[0].clone()
+            path: local_images[0].clone(),
+            detail: None,
         }
     );
     assert_eq!(
@@ -93,14 +95,14 @@ async fn submission_preserves_text_elements_and_local_images() {
 }
 
 #[tokio::test]
-async fn submission_includes_configured_permission_profile() {
+async fn submission_includes_configured_active_permission_profile() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let expected_permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Restricted {
+    let expected_permission_profile: PermissionProfile = PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 FileSystemSandboxEntry {
                     path: FileSystemPath::Special {
@@ -112,13 +114,13 @@ async fn submission_includes_configured_permission_profile() {
                     path: FileSystemPath::GlobPattern {
                         pattern: "/home/user/project/secrets/**".to_string(),
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                 },
             ],
             glob_scan_max_depth: None,
         },
-    }
-    .into();
+    };
+    let expected_active_permission_profile = ActivePermissionProfile::new("custom");
     let configured = crate::session_state::ThreadSessionState {
         thread_id,
         forked_from_id: None,
@@ -129,12 +131,14 @@ async fn submission_includes_configured_permission_profile() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: expected_permission_profile.clone(),
-        active_permission_profile: None,
+        permission_profile: expected_permission_profile,
+        active_permission_profile: Some(expected_active_permission_profile.clone()),
         cwd: test_path_buf("/home/user/project").abs(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -149,26 +153,29 @@ async fn submission_includes_configured_permission_profile() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let permission_profile = match next_submit_op(&mut op_rx) {
+    let active_permission_profile = match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            permission_profile, ..
-        } => permission_profile,
+            active_permission_profile,
+            ..
+        } => active_permission_profile,
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
-    assert_eq!(permission_profile, expected_permission_profile);
+    assert_eq!(
+        active_permission_profile,
+        Some(expected_active_permission_profile)
+    );
 }
 
 #[tokio::test]
-async fn submission_keeps_profile_when_legacy_projection_is_external() {
+async fn submission_omits_active_permission_profile_for_legacy_snapshot() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let expected_permission_profile: PermissionProfile = AppServerPermissionProfile::Managed {
-        network: PermissionProfileNetworkPermissions { enabled: false },
-        file_system: PermissionProfileFileSystemPermissions::Unrestricted,
-    }
-    .into();
+    let expected_permission_profile: PermissionProfile = PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Unrestricted,
+    };
     let configured = crate::session_state::ThreadSessionState {
         thread_id,
         forked_from_id: None,
@@ -179,12 +186,14 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: expected_permission_profile.clone(),
+        permission_profile: expected_permission_profile,
         active_permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -196,13 +205,14 @@ async fn submission_keeps_profile_when_legacy_projection_is_external() {
         .set_composer_text("submit".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let permission_profile = match next_submit_op(&mut op_rx) {
+    let active_permission_profile = match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            permission_profile, ..
-        } => permission_profile,
+            active_permission_profile,
+            ..
+        } => active_permission_profile,
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
-    assert_eq!(permission_profile, expected_permission_profile);
+    assert_eq!(active_permission_profile, None);
 }
 
 #[tokio::test]
@@ -227,6 +237,8 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -259,12 +271,14 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         items[0],
         UserInput::Image {
             url: remote_url.clone(),
+            detail: None,
         }
     );
     assert_eq!(
         items[1],
         UserInput::LocalImage {
             path: local_images[0].clone(),
+            detail: None,
         }
     );
     assert_eq!(
@@ -321,6 +335,8 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -342,6 +358,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         items,
         vec![UserInput::Image {
             url: remote_url.clone(),
+            detail: None,
         }]
     );
     assert_eq!(summary, None);
@@ -385,6 +402,8 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -424,6 +443,8 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -463,6 +484,8 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -505,6 +528,8 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -1157,9 +1182,11 @@ fn user_message_display_from_inputs_matches_flattened_user_message_shape() {
         },
         UserInput::Image {
             url: "https://example.com/remote.png".to_string(),
+            detail: None,
         },
         UserInput::LocalImage {
             path: local_image.clone(),
+            detail: None,
         },
         UserInput::Skill {
             name: "demo".to_string(),
@@ -1232,6 +1259,7 @@ async fn committed_user_message_with_hidden_prompt_context_renders_local_images(
             },
             UserInput::LocalImage {
                 path: local_image.clone(),
+                detail: None,
             },
         ],
     );

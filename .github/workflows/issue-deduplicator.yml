@@ -15,14 +15,8 @@ jobs:
     permissions:
       contents: read
     outputs:
-      issues_json: ${{ steps.normalize-all.outputs.issues_json }}
-      reason: ${{ steps.normalize-all.outputs.reason }}
-      has_matches: ${{ steps.normalize-all.outputs.has_matches }}
+      codex_output: ${{ steps.codex-all.outputs.final-message }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
       - name: Prepare Codex inputs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -67,6 +61,8 @@ jobs:
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
+          safety-strategy: drop-sudo
+          sandbox: read-only
           prompt: |
             You are an assistant that triages new GitHub issues by identifying potential duplicates.
 
@@ -100,10 +96,21 @@ jobs:
               "additionalProperties": false
             }
 
+  normalize-duplicates-all:
+    name: Normalize pass 1 output
+    needs: gather-duplicates-all
+    if: ${{ needs.gather-duplicates-all.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      issues_json: ${{ steps.normalize-all.outputs.issues_json }}
+      reason: ${{ steps.normalize-all.outputs.reason }}
+      has_matches: ${{ steps.normalize-all.outputs.has_matches }}
+    steps:
       - id: normalize-all
         name: Normalize pass 1 output
         env:
-          CODEX_OUTPUT: ${{ steps.codex-all.outputs.final-message }}
+          CODEX_OUTPUT: ${{ needs.gather-duplicates-all.outputs.codex_output }}
           CURRENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -eo pipefail
@@ -146,21 +153,15 @@ jobs:
 
   gather-duplicates-open:
     name: Identify potential duplicates (open issues fallback)
-    # Pass 1 may drop sudo on the runner, so run the fallback in a fresh job.
-    needs: gather-duplicates-all
-    if: ${{ needs.gather-duplicates-all.result == 'success' && needs.gather-duplicates-all.outputs.has_matches != 'true' }}
+    # Pass 1 Codex execution drops sudo on its runner, so run the fallback in a fresh job.
+    needs: normalize-duplicates-all
+    if: ${{ needs.normalize-duplicates-all.result == 'success' && needs.normalize-duplicates-all.outputs.has_matches != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      issues_json: ${{ steps.normalize-open.outputs.issues_json }}
-      reason: ${{ steps.normalize-open.outputs.reason }}
-      has_matches: ${{ steps.normalize-open.outputs.has_matches }}
+      codex_output: ${{ steps.codex-open.outputs.final-message }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
       - name: Prepare Codex inputs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -203,6 +204,8 @@ jobs:
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
+          safety-strategy: drop-sudo
+          sandbox: read-only
           prompt: |
             You are an assistant that triages new GitHub issues by identifying potential duplicates.
 
@@ -236,10 +239,21 @@ jobs:
               "additionalProperties": false
             }
 
+  normalize-duplicates-open:
+    name: Normalize pass 2 output
+    needs: gather-duplicates-open
+    if: ${{ needs.gather-duplicates-open.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      issues_json: ${{ steps.normalize-open.outputs.issues_json }}
+      reason: ${{ steps.normalize-open.outputs.reason }}
+      has_matches: ${{ steps.normalize-open.outputs.has_matches }}
+    steps:
       - id: normalize-open
         name: Normalize pass 2 output
         env:
-          CODEX_OUTPUT: ${{ steps.codex-open.outputs.final-message }}
+          CODEX_OUTPUT: ${{ needs.gather-duplicates-open.outputs.codex_output }}
           CURRENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -eo pipefail
@@ -283,9 +297,9 @@ jobs:
   select-final:
     name: Select final duplicate set
     needs:
-      - gather-duplicates-all
-      - gather-duplicates-open
-    if: ${{ always() && needs.gather-duplicates-all.result == 'success' && (needs.gather-duplicates-open.result == 'success' || needs.gather-duplicates-open.result == 'skipped') }}
+      - normalize-duplicates-all
+      - normalize-duplicates-open
+    if: ${{ always() && needs.normalize-duplicates-all.result == 'success' && (needs.normalize-duplicates-open.result == 'success' || needs.normalize-duplicates-open.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -295,12 +309,12 @@ jobs:
       - id: select-final
         name: Select final duplicate set
         env:
-          PASS1_ISSUES: ${{ needs.gather-duplicates-all.outputs.issues_json }}
-          PASS1_REASON: ${{ needs.gather-duplicates-all.outputs.reason }}
-          PASS2_ISSUES: ${{ needs.gather-duplicates-open.outputs.issues_json }}
-          PASS2_REASON: ${{ needs.gather-duplicates-open.outputs.reason }}
-          PASS1_HAS_MATCHES: ${{ needs.gather-duplicates-all.outputs.has_matches }}
-          PASS2_HAS_MATCHES: ${{ needs.gather-duplicates-open.outputs.has_matches }}
+          PASS1_ISSUES: ${{ needs.normalize-duplicates-all.outputs.issues_json }}
+          PASS1_REASON: ${{ needs.normalize-duplicates-all.outputs.reason }}
+          PASS2_ISSUES: ${{ needs.normalize-duplicates-open.outputs.issues_json }}
+          PASS2_REASON: ${{ needs.normalize-duplicates-open.outputs.reason }}
+          PASS1_HAS_MATCHES: ${{ needs.normalize-duplicates-all.outputs.has_matches }}
+          PASS2_HAS_MATCHES: ${{ needs.normalize-duplicates-open.outputs.has_matches }}
         run: |
           set -eo pipefail
 

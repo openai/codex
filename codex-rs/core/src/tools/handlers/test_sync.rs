@@ -63,8 +63,8 @@ impl ToolExecutor<ToolInvocation> for TestSyncHandler {
         ToolName::plain("test_sync_tool")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_test_sync_tool())
+    fn spec(&self) -> ToolSpec {
+        create_test_sync_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

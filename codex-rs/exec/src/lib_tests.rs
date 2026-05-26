@@ -458,16 +458,32 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
     );
 }
 
+#[tokio::test]
+async fn thread_start_params_include_user_thread_source() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+
+    let params = thread_start_params_from_config(&config);
+
+    assert_eq!(
+        params.thread_source,
+        Some(codex_app_server_protocol::ThreadSource::User)
+    );
+}
+
 #[test]
 fn active_profile_selection_uses_profile_id_only() {
-    let selection = permissions_selection_from_active_profile(ActivePermissionProfile::new(
+    let selection = permission_profile_id_from_active_profile(ActivePermissionProfile::new(
         BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
     ));
 
-    assert_eq!(
-        selection,
-        PermissionProfileSelectionParams::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
-    );
+    assert_eq!(selection, BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string());
 }
 
 #[tokio::test]
@@ -528,7 +544,7 @@ async fn session_configured_from_thread_response_uses_review_policy_from_respons
 }
 
 #[tokio::test]
-async fn session_configured_from_thread_response_uses_permission_profile_from_response() {
+async fn session_configured_from_thread_response_uses_permission_profile_from_config() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
@@ -537,13 +553,36 @@ async fn session_configured_from_thread_response_uses_permission_profile_from_re
         .build()
         .await
         .expect("build config");
-    let mut response = sample_thread_start_response();
-    response.permission_profile = Some(PermissionProfile::Disabled.into());
+    let response = sample_thread_start_response();
 
     let event = session_configured_from_thread_start_response(&response, &config)
         .expect("build bootstrap session configured event");
 
-    assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+    assert_eq!(
+        event.permission_profile,
+        config.permissions.effective_permission_profile()
+    );
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_preserves_thread_source() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let response = sample_thread_start_response();
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(
+        event.thread_source,
+        Some(codex_protocol::protocol::ThreadSource::User)
+    );
 }
 
 fn sample_thread_start_response() -> ThreadStartResponse {
@@ -562,7 +601,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             cwd: test_path_buf("/tmp").abs(),
             cli_version: "0.0.0".to_string(),
             source: codex_app_server_protocol::SessionSource::Cli,
-            thread_source: None,
+            thread_source: Some(codex_app_server_protocol::ThreadSource::User),
             agent_nickname: None,
             agent_role: None,
             git_info: None,
@@ -583,7 +622,6 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         },
-        permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
     }

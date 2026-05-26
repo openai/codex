@@ -26,6 +26,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
             name: "Fast".to_string(),
             description: "1.5x speed, increased usage".to_string(),
         }],
+        default_service_tier: None,
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -74,12 +75,10 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         description
             .contains("Available model overrides (optional; inherited parent model is preferred):")
     );
-    assert!(description.contains("visible display (`visible-model`)"));
-    assert!(
-        description
-            .contains("Supported service tiers: priority (Fast: 1.5x speed, increased usage).")
-    );
-    assert!(!description.contains("hidden display (`hidden-model`)"));
+    assert!(description.contains(
+        "- `visible-model`: visible description Reasoning efforts: medium (default). Service tiers: priority."
+    ));
+    assert!(!description.contains("hidden-model"));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
     assert!(properties.contains_key("fork_turns"));
@@ -122,11 +121,17 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         max_concurrent_threads_per_session: None,
     });
 
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
-        panic!("spawn_agent should be a function tool");
+    let ToolSpec::Namespace(namespace) = tool else {
+        panic!("spawn_agent v1 should be a namespace tool");
+    };
+    assert_eq!(namespace.name, MULTI_AGENT_V1_NAMESPACE);
+    let Some(ResponsesApiNamespaceTool::Function(ResponsesApiTool { parameters, .. })) =
+        namespace.tools.first()
+    else {
+        panic!("spawn_agent should be a namespace function tool");
     };
     assert_eq!(
-        parameters.schema_type,
+        parameters.schema_type.clone(),
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
     );
     let properties = parameters
@@ -148,6 +153,37 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
             .and_then(|schema| schema.description.as_deref()),
         Some(SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION)
     );
+}
+
+#[test]
+fn spawn_agent_tool_caps_visible_model_summaries() {
+    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
+        available_models: vec![
+            model_preset("first", /*show_in_picker*/ true),
+            model_preset("second", /*show_in_picker*/ true),
+            model_preset("third", /*show_in_picker*/ true),
+            model_preset("fourth", /*show_in_picker*/ true),
+            model_preset("fifth", /*show_in_picker*/ true),
+            model_preset("sixth", /*show_in_picker*/ true),
+        ],
+        agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: false,
+        include_usage_hint: true,
+        usage_hint_text: None,
+        max_concurrent_threads_per_session: Some(4),
+    });
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = tool else {
+        panic!("spawn_agent should be a function tool");
+    };
+
+    for model in ["first", "second", "third", "fourth", "fifth"] {
+        assert!(
+            description.contains(&format!("`{model}-model`")),
+            "expected {model} model summary in spawn_agent description: {description:?}"
+        );
+    }
+    assert!(!description.contains("`sixth-model`"));
 }
 
 #[test]

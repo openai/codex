@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::Prompt;
@@ -63,6 +62,7 @@ pub(crate) async fn run_remote_compact_task(
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
+        trace_id: turn_context.trace_id.clone(),
         started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
@@ -174,9 +174,6 @@ async fn run_remote_compact_task_inner_impl(
     let tool_router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
-        &prompt_input,
-        &HashSet::new(),
-        /*skills_outcome*/ None,
         &CancellationToken::new(),
     )
     .await?;
@@ -290,7 +287,7 @@ pub(crate) async fn process_compacted_history(
 /// - `user`-role warnings that parse as `TurnItem::UserMessage` and compaction-generated summary
 ///   messages. Legacy warning fragments are filtered by `parse_turn_item` before they reach this
 ///   check.
-fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
+pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } if role == "developer" => false,
         ResponseItem::Message { role, .. } if role == "user" => {

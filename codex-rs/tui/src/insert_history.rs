@@ -166,7 +166,7 @@ where
     Ok(())
 }
 
-fn leading_whitespace_prefix(line: &Line<'_>) -> Line<'static> {
+pub(crate) fn leading_whitespace_prefix(line: &Line<'_>) -> Line<'static> {
     let mut spans = Vec::new();
     for span in &line.spans {
         let prefix_end = span

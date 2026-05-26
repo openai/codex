@@ -1,0 +1,464 @@
+name: rust-ci-full nextest platform
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      runner_group:
+        required: false
+        default: ""
+        type: string
+      runner_labels:
+        required: false
+        default: ""
+        type: string
+      archive_runner:
+        required: false
+        default: ""
+        type: string
+      archive_runner_group:
+        required: false
+        default: ""
+        type: string
+      archive_runner_labels:
+        required: false
+        default: ""
+        type: string
+      target:
+        required: true
+        type: string
+      profile:
+        required: true
+        type: string
+      artifact_id:
+        required: true
+        type: string
+      remote_env:
+        required: false
+        default: false
+        type: boolean
+      test_threads:
+        required: false
+        default: 0
+        type: number
+      use_sccache:
+        required: false
+        default: false
+        type: boolean
+
+# Caller workflow-level env does not flow through workflow_call, so keep the
+# Cargo git transport hardening on the archive and shard jobs directly here.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  archive:
+    name: Build nextest archive
+    runs-on: ${{ inputs.archive_runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.archive_runner_group, inputs.archive_runner_labels)) || inputs.archive_runner != '' && inputs.archive_runner || inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      # Windows ARM64 archives are built on Windows x64, while their shards run
+      # on native Windows ARM64. Key producer-side caches by the archive runner
+      # so the cross-compile build reuses the Windows x64 cache lineage.
+      ARCHIVE_CACHE_RUNNER: ${{ inputs.archive_runner != '' && inputs.archive_runner || inputs.runner }}
+      USE_SCCACHE: ${{ inputs.use_sccache && 'true' || 'false' }}
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 10G
+      NEXTEST_ARCHIVE_FILE: nextest-${{ inputs.artifact_id }}.tar.zst
+      TEST_HELPERS_ARTIFACT: nextest-test-helpers-${{ inputs.artifact_id }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configure Dev Drive (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: ../.github/scripts/setup-dev-drive.ps1
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
+          fi
+
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: ${{ inputs.target }}
+
+      - name: Expose MSVC SDK environment (Windows)
+        if: ${{ runner.os == 'Windows' && inputs.target == 'aarch64-pc-windows-msvc' }}
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ inputs.target }}
+
+      - name: Compute lockfile hash
+        id: lockhash
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "hash=$(sha256sum Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "toolchain_hash=$(sha256sum rust-toolchain.toml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo home cache
+        id: cache_cargo_home_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
+          restore-keys: |
+            cargo-home-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-
+
+      - name: Install sccache
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: sccache
+          version: 0.7.5
+
+      - name: Configure sccache backend
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Using sccache GitHub backend"
+          else
+            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+            if [[ -n "${DEV_DRIVE:-}" ]]; then
+              echo "SCCACHE_DIR=${DEV_DRIVE}\\.sccache" >> "$GITHUB_ENV"
+            else
+              echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
+            fi
+            echo "Using sccache local disk + actions/cache fallback"
+          fi
+
+      - name: Enable sccache wrapper
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          wrapper="$(command -v sccache)"
+          if [[ "${RUNNER_OS}" == "Windows" ]] && command -v cygpath >/dev/null 2>&1; then
+            wrapper="$(cygpath -w "${wrapper}")"
+          fi
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+
+      - name: Restore sccache cache (fallback)
+        if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
+        id: cache_sccache_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-${{ steps.lockhash.outputs.hash }}-
+            sccache-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+          version: 0.9.103
+
+      - name: Enable unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Build nextest archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_dir="${RUNNER_TEMP}/nextest-archive"
+          mkdir -p "${archive_dir}"
+          cargo nextest archive \
+            --target ${{ inputs.target }} \
+            --cargo-profile ${{ inputs.profile }} \
+            --timings \
+            --archive-file "${archive_dir}/${NEXTEST_ARCHIVE_FILE}"
+
+      - name: Build runtime test helpers
+        if: ${{ runner.os == 'Linux' || runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper_dir="${RUNNER_TEMP}/${TEST_HELPERS_ARTIFACT}"
+          mkdir -p "${helper_dir}"
+
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            cargo build \
+              --target ${{ inputs.target }} \
+              --profile ${{ inputs.profile }} \
+              -p codex-linux-sandbox \
+              --bin codex-linux-sandbox
+            cp "target/${{ inputs.target }}/${{ inputs.profile }}/codex-linux-sandbox" "${helper_dir}/"
+          else
+            cargo build \
+              --target ${{ inputs.target }} \
+              --profile ${{ inputs.profile }} \
+              -p codex-windows-sandbox \
+              --bin codex-windows-sandbox-setup \
+              --bin codex-command-runner
+            cp "target/${{ inputs.target }}/${{ inputs.profile }}/codex-windows-sandbox-setup.exe" "${helper_dir}/"
+            cp "target/${{ inputs.target }}/${{ inputs.profile }}/codex-command-runner.exe" "${helper_dir}/"
+          fi
+
+      - name: Upload Cargo timings (nextest)
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: cargo-timings-rust-ci-nextest-${{ inputs.target }}-${{ inputs.profile }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: Upload nextest archive
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: nextest-archive-${{ inputs.artifact_id }}
+          path: ${{ runner.temp }}/nextest-archive/${{ env.NEXTEST_ARCHIVE_FILE }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload runtime test helpers
+        if: ${{ runner.os == 'Linux' || runner.os == 'Windows' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.TEST_HELPERS_ARTIFACT }}
+          path: ${{ runner.temp }}/${{ env.TEST_HELPERS_ARTIFACT }}/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Save cargo home cache
+        if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
+
+      - name: Save sccache cache (fallback)
+        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
+
+      - name: sccache stats
+        if: always() && env.USE_SCCACHE == 'true'
+        continue-on-error: true
+        run: sccache --show-stats || true
+
+      - name: sccache summary
+        if: always() && env.USE_SCCACHE == 'true'
+        shell: bash
+        run: |
+          {
+            echo "### sccache stats — ${{ inputs.target }} (tests)";
+            echo;
+            echo '```';
+            sccache --show-stats || true;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  shard:
+    name: Tests shard ${{ matrix.shard }}/4
+    needs: archive
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      NEXTEST_ARCHIVE_FILE: nextest-${{ inputs.artifact_id }}.tar.zst
+      TEST_HELPERS_ARTIFACT: nextest-test-helpers-${{ inputs.artifact_id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
+          fi
+
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: ${{ inputs.target }}
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+          version: 0.9.103
+
+      - name: Enable unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Set up remote test env (Docker)
+        if: ${{ runner.os == 'Linux' && inputs.remote_env }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME="codex-remote-test-env-${{ github.run_id }}-${{ matrix.shard }}"
+          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
+          echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
+          echo "CODEX_TEST_REMOTE_EXEC_SERVER_URL=${CODEX_TEST_REMOTE_EXEC_SERVER_URL}" >> "$GITHUB_ENV"
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nextest-archive-${{ inputs.artifact_id }}
+          path: ${{ runner.temp }}/nextest-archive
+
+      - name: Download runtime test helpers
+        if: ${{ runner.os == 'Linux' || runner.os == 'Windows' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.TEST_HELPERS_ARTIFACT }}
+          path: ${{ runner.temp }}/${{ env.TEST_HELPERS_ARTIFACT }}
+
+      - name: tests
+        id: test
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_file="${RUNNER_TEMP}/nextest-archive/${NEXTEST_ARCHIVE_FILE}"
+          workspace_root="$(pwd)"
+
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            archive_file="$(cygpath -w "${archive_file}")"
+            workspace_root="$(cygpath -w "${workspace_root}")"
+          fi
+
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            helper_dir="${RUNNER_TEMP}/${TEST_HELPERS_ARTIFACT}"
+            helper_target_dir="$(pwd)/target/${{ inputs.target }}/${{ inputs.profile }}"
+            mkdir -p "${helper_target_dir}"
+            cp "${helper_dir}/codex-linux-sandbox" "${helper_target_dir}/"
+            chmod +x "${helper_target_dir}/codex-linux-sandbox"
+          elif [[ "${RUNNER_OS}" == "Windows" ]]; then
+            helper_dir="${RUNNER_TEMP}/${TEST_HELPERS_ARTIFACT}"
+            helper_target_dir="$(pwd)/target/${{ inputs.target }}/${{ inputs.profile }}"
+            mkdir -p "${helper_target_dir}"
+            cp "${helper_dir}/codex-windows-sandbox-setup.exe" "${helper_target_dir}/"
+            cp "${helper_dir}/codex-command-runner.exe" "${helper_target_dir}/"
+          fi
+
+          nextest_args=(
+            run
+            --no-fail-fast
+            --archive-file "${archive_file}"
+            --workspace-remap "${workspace_root}"
+            --partition "hash:${{ matrix.shard }}/4"
+          )
+          if [[ "${{ inputs.test_threads }}" != "0" ]]; then
+            nextest_args+=(--test-threads "${{ inputs.test_threads }}")
+          fi
+
+          test_command=(cargo nextest "${nextest_args[@]}")
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            sandbox_helper="${helper_target_dir}/codex-linux-sandbox"
+            test_command=(
+              env
+              "CARGO_BIN_EXE_codex-linux-sandbox=${sandbox_helper}"
+              "CARGO_BIN_EXE_codex_linux_sandbox=${sandbox_helper}"
+              cargo nextest "${nextest_args[@]}"
+            )
+          elif [[ "${RUNNER_OS}" == "Windows" ]]; then
+            setup_helper="$(cygpath -w "${helper_target_dir}/codex-windows-sandbox-setup.exe")"
+            command_runner="$(cygpath -w "${helper_target_dir}/codex-command-runner.exe")"
+            test_command=(
+              env
+              "CARGO_BIN_EXE_codex_windows_sandbox_setup=${setup_helper}"
+              "CARGO_BIN_EXE_codex_command_runner=${command_runner}"
+              cargo nextest "${nextest_args[@]}"
+            )
+          fi
+
+          "${test_command[@]}"
+        env:
+          RUST_BACKTRACE: 1
+          RUST_MIN_STACK: "8388608" # 8 MiB
+          NEXTEST_STATUS_LEVEL: leak
+
+      - name: Upload nextest JUnit report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: nextest-junit-rust-ci-${{ inputs.artifact_id }}-shard-${{ matrix.shard }}
+          path: codex-rs/target/nextest/default/junit.xml
+          if-no-files-found: warn
+
+      - name: Tear down remote test env
+        if: ${{ always() && runner.os == 'Linux' && inputs.remote_env }}
+        shell: bash
+        run: |
+          set +e
+          if [[ "${STEPS_TEST_OUTCOME}" != "success" ]]; then
+            docker logs "${CODEX_TEST_REMOTE_ENV}" || true
+          fi
+          docker rm -f "${CODEX_TEST_REMOTE_ENV}" >/dev/null 2>&1 || true
+        env:
+          STEPS_TEST_OUTCOME: ${{ steps.test.outcome }}
+
+      - name: verify tests passed
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "Tests failed. See logs for details."
+          exit 1
+
+  result:
+    name: Platform result
+    needs: shard
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm test shards passed
+        shell: bash
+        run: |
+          if [[ "${{ needs.shard.result }}" != "success" ]]; then
+            echo "Nextest shards finished with result: ${{ needs.shard.result }}" >&2
+            exit 1
+          fi

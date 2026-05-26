@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
@@ -46,9 +45,12 @@ pub async fn build_prompt_input(
         Arc::clone(&auth_manager),
         SessionSource::Exec,
         Arc::new(
-            EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths)
-                .await
-                .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+            EnvironmentManager::from_codex_home(
+                config.codex_home.clone(),
+                Some(local_runtime_paths),
+            )
+            .await
+            .map_err(|err| CodexErr::Fatal(err.to_string()))?,
         ),
         empty_extension_registry(),
         /*analytics_events_client*/ None,
@@ -86,15 +88,7 @@ pub(crate) async fn build_prompt_input_from_session(
         .clone_history()
         .await
         .for_prompt(&turn_context.model_info.input_modalities);
-    let router = built_tools(
-        sess,
-        turn_context.as_ref(),
-        &prompt_input,
-        &HashSet::new(),
-        Some(turn_context.turn_skills.outcome.as_ref()),
-        &CancellationToken::new(),
-    )
-    .await?;
+    let router = built_tools(sess, turn_context.as_ref(), &CancellationToken::new()).await?;
     let base_instructions = sess.get_base_instructions().await;
     let prompt = build_prompt(
         prompt_input,

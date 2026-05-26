@@ -23,6 +23,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecExpirationOutcome;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
+use codex_exec_server::EnvironmentManager;
 use codex_protocol::exec_output::bytes_to_string_smart;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
@@ -48,13 +49,18 @@ const OUTPUT_CHUNK_SIZE_HINT: usize = 64 * 1024;
 #[derive(Clone)]
 pub(crate) struct ProcessExecRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    environment_manager: Arc<EnvironmentManager>,
     process_exec_manager: ProcessExecManager,
 }
 
 impl ProcessExecRequestProcessor {
-    pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>) -> Self {
+    pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        environment_manager: Arc<EnvironmentManager>,
+    ) -> Self {
         Self {
             outgoing,
+            environment_manager,
             process_exec_manager: ProcessExecManager::default(),
         }
     }
@@ -64,6 +70,7 @@ impl ProcessExecRequestProcessor {
         request_id: ConnectionRequestId,
         params: ProcessSpawnParams,
     ) -> Result<(), JSONRPCErrorError> {
+        self.require_local_environment()?;
         let ProcessSpawnParams {
             command,
             process_handle,
@@ -172,6 +179,14 @@ impl ProcessExecRequestProcessor {
         self.process_exec_manager
             .connection_closed(connection_id)
             .await;
+    }
+
+    fn require_local_environment(&self) -> Result<(), JSONRPCErrorError> {
+        self.environment_manager
+            .try_local_environment()
+            .is_some()
+            .then_some(())
+            .ok_or_else(|| internal_error("local environment is not configured"))
     }
 }
 

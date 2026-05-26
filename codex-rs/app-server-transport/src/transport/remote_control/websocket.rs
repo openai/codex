@@ -15,6 +15,7 @@ use super::protocol::ClientId;
 use super::protocol::RemoteControlTarget;
 use super::protocol::ServerEnvelope;
 use super::protocol::StreamId;
+use super::remote_control_status_with_connection_status;
 use super::segment::ClientSegmentObservation;
 use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
@@ -63,6 +64,8 @@ const REMOTE_CONTROL_WEBSOCKET_PONG_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(60);
 const REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(1);
+const REMOTE_CONTROL_RECONNECT_BACKOFF_CAP: std::time::Duration =
+    std::time::Duration::from_secs(30);
 
 struct BoundedOutboundBuffer {
     buffer_by_stream: HashMap<(ClientId, StreamId), VecDeque<ServerEnvelope>>,
@@ -216,6 +219,7 @@ impl WebsocketState {
 pub(crate) struct RemoteControlWebsocket {
     remote_control_url: String,
     installation_id: String,
+    server_name: String,
     remote_control_target: Option<RemoteControlTarget>,
     state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
@@ -224,6 +228,7 @@ pub(crate) struct RemoteControlWebsocket {
     reconnect_attempt: u64,
     enrollment: Option<RemoteControlEnrollment>,
     auth_recovery: UnauthorizedRecovery,
+    auth_change_rx: watch::Receiver<u64>,
     client_tracker: Arc<Mutex<ClientTracker>>,
     state: Arc<Mutex<WebsocketState>>,
     server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
@@ -235,6 +240,13 @@ pub(crate) struct RemoteControlWebsocketConfig {
     pub(crate) remote_control_url: String,
     pub(crate) installation_id: String,
     pub(crate) remote_control_target: Option<RemoteControlTarget>,
+    pub(crate) server_name: String,
+}
+
+pub(super) struct RemoteControlAuthContext<'a> {
+    auth_manager: &'a Arc<AuthManager>,
+    auth_recovery: &'a mut UnauthorizedRecovery,
+    auth_change_rx: &'a mut watch::Receiver<u64>,
 }
 
 enum ConnectOutcome {
@@ -260,15 +272,8 @@ impl RemoteControlStatusPublisher {
 
     fn publish_status(&self, connection_status: RemoteControlConnectionStatus) {
         self.tx.send_if_modified(|status| {
-            let next_status = RemoteControlStatusChangedNotification {
-                status: connection_status,
-                installation_id: status.installation_id.clone(),
-                environment_id: if connection_status == RemoteControlConnectionStatus::Disabled {
-                    None
-                } else {
-                    status.environment_id.clone()
-                },
-            };
+            let next_status =
+                remote_control_status_with_connection_status(status, connection_status);
             if *status == next_status {
                 return false;
             }
@@ -285,6 +290,7 @@ impl RemoteControlStatusPublisher {
             }
             let next_status = RemoteControlStatusChangedNotification {
                 status: status.status,
+                server_name: status.server_name.clone(),
                 installation_id: status.installation_id.clone(),
                 environment_id,
             };
@@ -301,6 +307,7 @@ impl RemoteControlStatusPublisher {
 #[derive(Clone, Copy)]
 pub(super) struct RemoteControlConnectOptions<'a> {
     installation_id: &'a str,
+    server_name: &'a str,
     subscribe_cursor: Option<&'a str>,
     app_server_client_name: Option<&'a str>,
 }
@@ -323,10 +330,12 @@ impl RemoteControlWebsocket {
         );
         let (outbound_buffer, used_rx) = BoundedOutboundBuffer::new();
         let auth_recovery = auth_manager.unauthorized_recovery();
+        let auth_change_rx = auth_manager.auth_change_receiver();
 
         Self {
             remote_control_url: config.remote_control_url,
             installation_id: config.installation_id,
+            server_name: config.server_name,
             remote_control_target: config.remote_control_target,
             state_db,
             auth_manager,
@@ -335,6 +344,7 @@ impl RemoteControlWebsocket {
             reconnect_attempt: 0,
             enrollment: None,
             auth_recovery,
+            auth_change_rx,
             client_tracker: Arc::new(Mutex::new(client_tracker)),
             state: Arc::new(Mutex::new(WebsocketState {
                 outbound_buffer,
@@ -454,8 +464,14 @@ impl RemoteControlWebsocket {
             let subscribe_cursor = self.state.lock().await.subscribe_cursor.clone();
             let connect_options = RemoteControlConnectOptions {
                 installation_id: &self.installation_id,
+                server_name: &self.server_name,
                 subscribe_cursor: subscribe_cursor.as_deref(),
                 app_server_client_name,
+            };
+            let auth_context = RemoteControlAuthContext {
+                auth_manager: &self.auth_manager,
+                auth_recovery: &mut self.auth_recovery,
+                auth_change_rx: &mut self.auth_change_rx,
             };
             let connect_result = tokio::select! {
                 _ = shutdown_token.cancelled() => return ConnectOutcome::Shutdown,
@@ -468,8 +484,7 @@ impl RemoteControlWebsocket {
                 connect_result = connect_remote_control_websocket(
                     &remote_control_target,
                     self.state_db.as_deref(),
-                    &self.auth_manager,
-                    &mut self.auth_recovery,
+                    auth_context,
                     &mut self.enrollment,
                     connect_options,
                     &self.status_publisher,
@@ -501,12 +516,23 @@ impl RemoteControlWebsocket {
                     } else {
                         self.status_publisher
                             .publish_status(RemoteControlConnectionStatus::Errored);
+                        let reconnect_attempt = self.reconnect_attempt.saturating_add(1);
+                        let (reconnect_delay, reconnect_backoff_reset) =
+                            next_reconnect_delay(&mut self.reconnect_attempt);
                         warn!(
-                            "failed to connect to app-server remote control websocket: {}, err: {}",
-                            remote_control_target.websocket_url, err
+                            websocket_url = %remote_control_target.websocket_url,
+                            error = %err,
+                            reconnect_attempt,
+                            reconnect_delay = ?reconnect_delay,
+                            reconnect_backoff_reset,
+                            "failed to connect to app-server remote control websocket"
                         );
-                        let reconnect_delay = backoff(self.reconnect_attempt);
-                        self.reconnect_attempt += 1;
+                        if reconnect_backoff_reset {
+                            info!(
+                                reconnect_backoff_cap = ?REMOTE_CONTROL_RECONNECT_BACKOFF_CAP,
+                                "reset app-server remote control websocket reconnect backoff after cap"
+                            );
+                        }
                         reconnect_delay
                     };
                     tokio::select! {
@@ -516,6 +542,14 @@ impl RemoteControlWebsocket {
                                 return ConnectOutcome::Shutdown;
                             }
                             return ConnectOutcome::Disabled;
+                        }
+                        changed = self.auth_change_rx.changed() => {
+                            if changed.is_err() {
+                                return ConnectOutcome::Shutdown;
+                            }
+                            self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                            self.reconnect_attempt = 0;
+                            info!("retrying app-server remote control websocket after auth changed");
                         }
                         _ = tokio::time::sleep(reconnect_delay) => {}
                     }
@@ -1015,11 +1049,21 @@ pub(crate) async fn load_remote_control_auth(
     })
 }
 
+fn next_reconnect_delay(reconnect_attempt: &mut u64) -> (std::time::Duration, bool) {
+    let reconnect_delay = backoff(*reconnect_attempt).min(REMOTE_CONTROL_RECONNECT_BACKOFF_CAP);
+    let reconnect_backoff_reset = reconnect_delay == REMOTE_CONTROL_RECONNECT_BACKOFF_CAP;
+    *reconnect_attempt = if reconnect_backoff_reset {
+        0
+    } else {
+        (*reconnect_attempt).saturating_add(1)
+    };
+    (reconnect_delay, reconnect_backoff_reset)
+}
+
 pub(super) async fn connect_remote_control_websocket(
     remote_control_target: &RemoteControlTarget,
     state_db: Option<&StateRuntime>,
-    auth_manager: &Arc<AuthManager>,
-    auth_recovery: &mut UnauthorizedRecovery,
+    auth_context: RemoteControlAuthContext<'_>,
     enrollment: &mut Option<RemoteControlEnrollment>,
     connect_options: RemoteControlConnectOptions<'_>,
     status_publisher: &RemoteControlStatusPublisher,
@@ -1028,6 +1072,11 @@ pub(super) async fn connect_remote_control_websocket(
     tungstenite::http::Response<()>,
 )> {
     ensure_rustls_crypto_provider();
+    let RemoteControlAuthContext {
+        auth_manager,
+        auth_recovery,
+        auth_change_rx,
+    } = auth_context;
 
     let Some(state_db) = state_db else {
         *enrollment = None;
@@ -1076,7 +1125,10 @@ pub(super) async fn connect_remote_control_websocket(
         if let Some(loaded_enrollment) = loaded_enrollment.as_ref() {
             status_publisher.publish_environment_id(Some(loaded_enrollment.environment_id.clone()));
         }
-        *enrollment = loaded_enrollment;
+        *enrollment = loaded_enrollment.map(|mut enrollment| {
+            enrollment.server_name = connect_options.server_name.to_string();
+            enrollment
+        });
     }
 
     if enrollment.is_none() {
@@ -1088,13 +1140,14 @@ pub(super) async fn connect_remote_control_websocket(
             remote_control_target,
             &auth,
             connect_options.installation_id,
+            connect_options.server_name,
         )
         .await
         {
             Ok(new_enrollment) => new_enrollment,
             Err(err)
                 if err.kind() == ErrorKind::PermissionDenied
-                    && recover_remote_control_auth(auth_recovery).await =>
+                    && recover_remote_control_auth(auth_recovery, auth_change_rx).await =>
             {
                 return Err(io::Error::other(format!(
                     "{err}; retrying after auth recovery"
@@ -1168,7 +1221,7 @@ pub(super) async fn connect_remote_control_websocket(
                 tungstenite::Error::Http(response)
                     if matches!(response.status().as_u16(), 401 | 403) =>
                 {
-                    if recover_remote_control_auth(auth_recovery).await {
+                    if recover_remote_control_auth(auth_recovery, auth_change_rx).await {
                         return Err(io::Error::other(format!(
                             "remote control websocket auth failed with HTTP {}; retrying after auth recovery",
                             response.status()
@@ -1187,15 +1240,25 @@ pub(super) async fn connect_remote_control_websocket(
     }
 }
 
-async fn recover_remote_control_auth(auth_recovery: &mut UnauthorizedRecovery) -> bool {
+async fn recover_remote_control_auth(
+    auth_recovery: &mut UnauthorizedRecovery,
+    auth_change_rx: &mut watch::Receiver<u64>,
+) -> bool {
     if !auth_recovery.has_next() {
         return false;
     }
 
     let mode = auth_recovery.mode_name();
     let step = auth_recovery.step_name();
+    let auth_change_revision_before_recovery = *auth_change_rx.borrow();
     match auth_recovery.next().await {
         Ok(step_result) => {
+            if step_result.auth_state_changed() == Some(true) {
+                mark_recovery_auth_change_seen(
+                    auth_change_rx,
+                    auth_change_revision_before_recovery,
+                );
+            }
             info!(
                 "remote control websocket auth recovery succeeded: mode={mode}, step={step}, auth_state_changed={:?}",
                 step_result.auth_state_changed()
@@ -1206,6 +1269,20 @@ async fn recover_remote_control_auth(auth_recovery: &mut UnauthorizedRecovery) -
             warn!("remote control websocket auth recovery failed: mode={mode}, step={step}: {err}");
             false
         }
+    }
+}
+
+fn mark_recovery_auth_change_seen(
+    auth_change_rx: &mut watch::Receiver<u64>,
+    auth_change_revision_before_recovery: u64,
+) {
+    let auth_change_revision_after_recovery = *auth_change_rx.borrow();
+    if auth_change_revision_after_recovery == auth_change_revision_before_recovery.wrapping_add(1) {
+        // Recovery updated the same watch that wakes the outer reconnect
+        // loop. Mark only that single revision seen; if more revisions
+        // arrived while recovery was in flight, leave them pending so the
+        // reconnect loop still reacts to the later external auth change.
+        auth_change_rx.borrow_and_update();
     }
 }
 
@@ -1273,16 +1350,68 @@ mod tests {
     const TEST_HTTP_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
     const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
+    #[test]
+    fn next_reconnect_delay_resets_after_cap() {
+        let mut reconnect_attempt = 9;
+
+        let (reconnect_delay, reconnect_backoff_reset) =
+            next_reconnect_delay(&mut reconnect_attempt);
+
+        assert_eq!(reconnect_delay, REMOTE_CONTROL_RECONNECT_BACKOFF_CAP);
+        assert!(reconnect_backoff_reset);
+        assert_eq!(reconnect_attempt, 0);
+
+        let (reconnect_delay, reconnect_backoff_reset) =
+            next_reconnect_delay(&mut reconnect_attempt);
+
+        assert!(reconnect_delay >= Duration::from_millis(180));
+        assert!(reconnect_delay <= Duration::from_millis(220));
+        assert!(!reconnect_backoff_reset);
+        assert_eq!(reconnect_attempt, 1);
+    }
+
     fn remote_control_status_channel() -> (
         RemoteControlStatusPublisher,
         watch::Receiver<RemoteControlStatusChangedNotification>,
     ) {
         let (status_tx, status_rx) = watch::channel(RemoteControlStatusChangedNotification {
             status: RemoteControlConnectionStatus::Connecting,
+            server_name: "test-server".to_string(),
             installation_id: TEST_INSTALLATION_ID.to_string(),
             environment_id: None,
         });
         (RemoteControlStatusPublisher::new(status_tx), status_rx)
+    }
+
+    #[test]
+    fn mark_recovery_auth_change_seen_marks_only_recovery_revision_seen() {
+        let (auth_change_tx, mut auth_change_rx) = watch::channel(0u64);
+        let auth_change_revision_before_recovery = *auth_change_rx.borrow();
+        auth_change_tx.send_modify(|revision| *revision += 1);
+
+        mark_recovery_auth_change_seen(&mut auth_change_rx, auth_change_revision_before_recovery);
+
+        assert!(
+            !auth_change_rx
+                .has_changed()
+                .expect("auth change watch should remain open")
+        );
+    }
+
+    #[test]
+    fn mark_recovery_auth_change_seen_preserves_racing_auth_change() {
+        let (auth_change_tx, mut auth_change_rx) = watch::channel(0u64);
+        let auth_change_revision_before_recovery = *auth_change_rx.borrow();
+        auth_change_tx.send_modify(|revision| *revision += 1);
+        auth_change_tx.send_modify(|revision| *revision += 1);
+
+        mark_recovery_auth_change_seen(&mut auth_change_rx, auth_change_revision_before_recovery);
+
+        assert!(
+            auth_change_rx
+                .has_changed()
+                .expect("auth change watch should remain open")
+        );
     }
 
     async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime> {
@@ -1370,6 +1499,7 @@ mod tests {
         let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = remote_control_auth_manager();
         let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_change_rx = auth_manager.auth_change_receiver();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: "account_id".to_string(),
             environment_id: "env_test".to_string(),
@@ -1381,11 +1511,15 @@ mod tests {
         let err = match connect_remote_control_websocket(
             &remote_control_target,
             Some(state_db.as_ref()),
-            &auth_manager,
-            &mut auth_recovery,
+            RemoteControlAuthContext {
+                auth_manager: &auth_manager,
+                auth_recovery: &mut auth_recovery,
+                auth_change_rx: &mut auth_change_rx,
+            },
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1403,6 +1537,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connecting,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: Some("env_test".to_string()),
             }
@@ -1433,6 +1568,7 @@ mod tests {
         )
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_change_rx = auth_manager.auth_change_receiver();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: "account_id".to_string(),
             environment_id: "env_test".to_string(),
@@ -1459,11 +1595,15 @@ mod tests {
         let err = connect_remote_control_websocket(
             &remote_control_target,
             Some(state_db.as_ref()),
-            &auth_manager,
-            &mut auth_recovery,
+            RemoteControlAuthContext {
+                auth_manager: &auth_manager,
+                auth_recovery: &mut auth_recovery,
+                auth_change_rx: &mut auth_change_rx,
+            },
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1477,6 +1617,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connecting,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: Some("env_test".to_string()),
             }
@@ -1493,6 +1634,12 @@ mod tests {
                 .get_token()
                 .expect("token should be readable"),
             "fresh-token"
+        );
+        assert!(
+            !auth_change_rx
+                .has_changed()
+                .expect("auth change watch should remain open"),
+            "recovery's own auth reload should not wake the reconnect loop"
         );
     }
 
@@ -1529,6 +1676,7 @@ mod tests {
         )
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_change_rx = auth_manager.auth_change_receiver();
         let mut enrollment = None;
         let (status_publisher, status_rx) = remote_control_status_channel();
         save_auth(
@@ -1541,11 +1689,15 @@ mod tests {
         let err = connect_remote_control_websocket(
             &remote_control_target,
             Some(state_db.as_ref()),
-            &auth_manager,
-            &mut auth_recovery,
+            RemoteControlAuthContext {
+                auth_manager: &auth_manager,
+                auth_recovery: &mut auth_recovery,
+                auth_change_rx: &mut auth_change_rx,
+            },
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1575,6 +1727,12 @@ mod tests {
                 .expect("token should be readable"),
             "fresh-token"
         );
+        assert!(
+            !auth_change_rx
+                .has_changed()
+                .expect("auth change watch should remain open"),
+            "recovery's own auth reload should not wake the reconnect loop"
+        );
     }
 
     #[tokio::test]
@@ -1583,6 +1741,7 @@ mod tests {
             .expect("target should parse");
         let auth_manager = remote_control_auth_manager();
         let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_change_rx = auth_manager.auth_change_receiver();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: "account_id".to_string(),
             environment_id: "env_test".to_string(),
@@ -1594,11 +1753,15 @@ mod tests {
         let err = connect_remote_control_websocket(
             &remote_control_target,
             /*state_db*/ None,
-            &auth_manager,
-            &mut auth_recovery,
+            RemoteControlAuthContext {
+                auth_manager: &auth_manager,
+                auth_recovery: &mut auth_recovery,
+                auth_change_rx: &mut auth_change_rx,
+            },
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1626,6 +1789,7 @@ mod tests {
         )
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_change_rx = auth_manager.auth_change_receiver();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: "account_id".to_string(),
             environment_id: "env_test".to_string(),
@@ -1642,11 +1806,15 @@ mod tests {
         let err = connect_remote_control_websocket(
             &remote_control_target,
             Some(state_db.as_ref()),
-            &auth_manager,
-            &mut auth_recovery,
+            RemoteControlAuthContext {
+                auth_manager: &auth_manager,
+                auth_recovery: &mut auth_recovery,
+                auth_change_rx: &mut auth_change_rx,
+            },
             &mut enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
+                server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
             },
@@ -1665,6 +1833,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connecting,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: None,
             }
@@ -1694,6 +1863,7 @@ mod tests {
                         remote_control_url,
                         installation_id: TEST_INSTALLATION_ID.to_string(),
                         remote_control_target: Some(remote_control_target),
+                        server_name: "test-server".to_string(),
                     },
                     /*state_db*/ None,
                     remote_control_auth_manager(),
@@ -1738,6 +1908,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connecting,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: Some("env_first".to_string()),
             }
@@ -1759,6 +1930,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connected,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: Some("env_first".to_string()),
             }
@@ -1773,6 +1945,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Connected,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: None,
             }
@@ -1788,6 +1961,7 @@ mod tests {
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
                 status: RemoteControlConnectionStatus::Disabled,
+                server_name: "test-server".to_string(),
                 installation_id: TEST_INSTALLATION_ID.to_string(),
                 environment_id: None,
             }

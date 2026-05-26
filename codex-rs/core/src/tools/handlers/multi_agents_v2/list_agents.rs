@@ -11,8 +11,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::plain("list_agents")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_list_agents_tool())
+    fn spec(&self) -> ToolSpec {
+        create_list_agents_tool()
     }
 
     async fn handle(

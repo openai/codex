@@ -45,6 +45,7 @@ members = [
     "execpolicy",
     "execpolicy-legacy",
     "ext/extension-api",
+    "ext/goal",
     "ext/guardian",
     "ext/memories",
     "external-agent-migration",
@@ -57,7 +58,6 @@ members = [
     "login",
     "codex-mcp",
     "mcp-server",
-    "memories/mcp",
     "memories/read",
     "memories/write",
     "model-provider-info",
@@ -162,6 +162,7 @@ codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
+codex-goal-extension = { path = "ext/goal" }
 codex-guardian = { path = "ext/guardian" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
@@ -273,6 +274,7 @@ deno_core_icudata = "0.77.0"
 derive_more = "2"
 diffy = "0.4.2"
 dirs = "6"
+divan = "0.1.21"
 dns-lookup = "3.0.1"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
@@ -299,6 +301,7 @@ indexmap = "2.12.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
+jsonptr = { version = "0.7.1", default-features = false }
 jsonwebtoken = "9.3.1"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
@@ -411,7 +414,7 @@ unicode-width = "0.2"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
-v8 = "=146.4.0"
+v8 = "=147.4.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
@@ -470,7 +473,7 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
-    "codex-memories-extension",
+    "codex-goal-extension",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",
