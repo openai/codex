@@ -4853,6 +4853,27 @@ mod tests {
         );
     }
 
+    fn plugin_mention_foreground_color(composer: &ChatComposer) -> Option<Color> {
+        let area = Rect::new(0, 0, 40, 5);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let textarea_row = 1;
+        let row_text = (0..area.width)
+            .map(|x| {
+                buf[(x, textarea_row)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' ')
+            })
+            .collect::<String>();
+        let mention_x = row_text
+            .find("@sample")
+            .expect("expected plugin mention in composer row");
+        buf[(mention_x as u16, textarea_row)].style().fg
+    }
+
     #[test]
     fn plugin_at_mentions_use_plugin_accent_style() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -4875,25 +4896,8 @@ mod tests {
             }],
         );
 
-        let area = Rect::new(0, 0, 40, 5);
-        let mut buf = Buffer::empty(area);
-        composer.render(area, &mut buf);
-
-        let textarea_row = 1;
-        let row_text = (0..area.width)
-            .map(|x| {
-                buf[(x, textarea_row)]
-                    .symbol()
-                    .chars()
-                    .next()
-                    .unwrap_or(' ')
-            })
-            .collect::<String>();
-        let mention_x = row_text
-            .find("@sample")
-            .expect("expected plugin mention in composer row");
         assert_eq!(
-            buf[(mention_x as u16, textarea_row)].style().fg,
+            plugin_mention_foreground_color(&composer),
             Some(Color::Magenta)
         );
     }
@@ -4928,25 +4932,8 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert!(needs_redraw);
 
-        let area = Rect::new(0, 0, 40, 5);
-        let mut buf = Buffer::empty(area);
-        composer.render(area, &mut buf);
-
-        let textarea_row = 1;
-        let row_text = (0..area.width)
-            .map(|x| {
-                buf[(x, textarea_row)]
-                    .symbol()
-                    .chars()
-                    .next()
-                    .unwrap_or(' ')
-            })
-            .collect::<String>();
-        let mention_x = row_text
-            .find("@sample")
-            .expect("expected recalled plugin mention in composer row");
         assert_eq!(
-            buf[(mention_x as u16, textarea_row)].style().fg,
+            plugin_mention_foreground_color(&composer),
             Some(Color::Magenta)
         );
     }
@@ -6896,93 +6883,53 @@ mod tests {
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
-            config_name: "sample@test".to_string(),
-            display_name: "sample".to_string(),
-            description: None,
-            has_skills: true,
-            mcp_server_names: vec!["sample".to_string()],
-            app_connector_ids: Vec::new(),
-        }]));
+        for (text, move_cursor_to_end) in [
+            ("@sample".to_string(), false),
+            ("Please ask @sample.".to_string(), true),
+        ] {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+                config_name: "sample@test".to_string(),
+                display_name: "sample".to_string(),
+                description: None,
+                has_skills: true,
+                mcp_server_names: vec!["sample".to_string()],
+                app_connector_ids: Vec::new(),
+            }]));
 
-        composer.set_text_content_with_mention_bindings(
-            "@sample".to_string(),
-            Vec::new(),
-            Vec::new(),
-            vec![MentionBinding {
-                sigil: '@',
-                mention: "sample".to_string(),
-                path: "plugin://sample@test".to_string(),
-            }],
-        );
+            composer.set_text_content_with_mention_bindings(
+                text.clone(),
+                Vec::new(),
+                Vec::new(),
+                vec![MentionBinding {
+                    sigil: '@',
+                    mention: "sample".to_string(),
+                    path: "plugin://sample@test".to_string(),
+                }],
+            );
+            if move_cursor_to_end {
+                composer.move_cursor_to_end();
+            }
 
-        assert!(matches!(composer.popups.active, ActivePopup::None));
+            assert!(matches!(composer.popups.active, ActivePopup::None));
 
-        let (result, consumed) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(consumed);
-        match result {
-            InputResult::Submitted { text, .. } => assert_eq!(text, "@sample"),
-            _ => panic!("expected restored bound mention to submit"),
-        }
-    }
-
-    #[test]
-    fn restored_bound_punctuated_at_mentions_do_not_open_mention_popup() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ false,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
-        );
-        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
-            config_name: "sample@test".to_string(),
-            display_name: "sample".to_string(),
-            description: None,
-            has_skills: true,
-            mcp_server_names: vec!["sample".to_string()],
-            app_connector_ids: Vec::new(),
-        }]));
-
-        let text = "Please ask @sample.".to_string();
-        composer.set_text_content_with_mention_bindings(
-            text.clone(),
-            Vec::new(),
-            Vec::new(),
-            vec![MentionBinding {
-                sigil: '@',
-                mention: "sample".to_string(),
-                path: "plugin://sample@test".to_string(),
-            }],
-        );
-        composer.move_cursor_to_end();
-
-        assert!(matches!(composer.popups.active, ActivePopup::None));
-
-        let (result, consumed) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(consumed);
-        match result {
-            InputResult::Submitted {
-                text: submitted, ..
-            } => assert_eq!(submitted, text),
-            _ => panic!("expected restored bound mention to submit"),
+            let (result, consumed) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert!(consumed);
+            match result {
+                InputResult::Submitted {
+                    text: submitted, ..
+                } => assert_eq!(submitted, text),
+                _ => panic!("expected restored bound mention to submit"),
+            }
         }
     }
 
