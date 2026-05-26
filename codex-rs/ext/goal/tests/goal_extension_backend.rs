@@ -594,7 +594,7 @@ async fn installed_tools(
     thread_id: ThreadId,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
-    install_with_backend(&mut builder, runtime, Weak::new(), |_| true);
+    install_with_backend(&mut builder, runtime, None, Weak::new(), |_| true);
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = ExtensionData::new(thread_id.to_string());
@@ -629,7 +629,7 @@ impl GoalExtensionHarness {
     ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
         let mut builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
-        install_with_backend(&mut builder, runtime, Weak::new(), |_| true);
+        install_with_backend(&mut builder, runtime, None, Weak::new(), |_| true);
         let registry = builder.build();
         let session_store = ExtensionData::new("session-1");
         let thread_store = ExtensionData::new(thread_id.to_string());

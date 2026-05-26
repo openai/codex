@@ -11,6 +11,7 @@ use codex_protocol::protocol::ThreadGoal;
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
+use crate::metrics::GoalMetrics;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 
@@ -23,6 +24,7 @@ struct GoalRuntimeInner {
     thread_id: ThreadId,
     state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
+    metrics: GoalMetrics,
     thread_manager: Weak<ThreadManager>,
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
@@ -61,6 +63,7 @@ impl GoalRuntimeHandle {
         thread_id: ThreadId,
         state_dbs: Arc<codex_state::StateRuntime>,
         event_emitter: GoalEventEmitter,
+        metrics: GoalMetrics,
         thread_manager: Weak<ThreadManager>,
         accounting_state: Arc<GoalAccountingState>,
         enabled: bool,
@@ -70,6 +73,7 @@ impl GoalRuntimeHandle {
                 thread_id,
                 state_dbs,
                 event_emitter,
+                metrics,
                 thread_manager,
                 accounting_state,
                 enabled: AtomicBool::new(enabled),
@@ -127,6 +131,21 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
+        let replaced_existing_goal = previous_goal
+            .as_ref()
+            .is_some_and(|previous_goal| previous_goal.goal_id != goal.goal_id);
+        if previous_goal.is_none() || replaced_existing_goal {
+            self.inner.metrics.record_created();
+        }
+        let previous_status = previous_goal
+            .as_ref()
+            .and_then(|previous_goal| (!replaced_existing_goal).then_some(previous_goal.status));
+        self.inner
+            .metrics
+            .record_resumed_if_status_changed(previous_status, goal.status);
+        self.inner
+            .metrics
+            .record_terminal_if_status_changed(previous_status, &goal);
         let should_steer_active_turn = previous_goal.as_ref().is_none_or(|previous_goal| {
             previous_goal.goal_id != goal.goal_id
                 || previous_goal.status != codex_state::ThreadGoalStatus::Active
@@ -202,6 +221,9 @@ impl GoalRuntimeHandle {
         let Some(snapshot) = accounting.progress_snapshot(turn_id) else {
             return Ok(None);
         };
+        let previous_status = self
+            .current_goal_status_for_metrics(Some(snapshot.expected_goal_id.as_str()))
+            .await?;
         let outcome = self
             .inner
             .state_dbs
@@ -218,6 +240,9 @@ impl GoalRuntimeHandle {
         Ok(match outcome {
             codex_state::GoalAccountingOutcome::Updated(goal) => {
                 let goal_id = goal.goal_id.clone();
+                self.inner
+                    .metrics
+                    .record_terminal_if_status_changed(previous_status, &goal);
                 accounting.mark_progress_accounted_for_status(
                     turn_id,
                     &snapshot,
@@ -246,6 +271,9 @@ impl GoalRuntimeHandle {
         let Some(snapshot) = accounting.idle_progress_snapshot() else {
             return Ok(None);
         };
+        let previous_status = self
+            .current_goal_status_for_metrics(Some(snapshot.expected_goal_id.as_str()))
+            .await?;
         let outcome = self
             .inner
             .state_dbs
@@ -262,6 +290,9 @@ impl GoalRuntimeHandle {
         Ok(match outcome {
             codex_state::GoalAccountingOutcome::Updated(goal) => {
                 let goal_id = goal.goal_id.clone();
+                self.inner
+                    .metrics
+                    .record_terminal_if_status_changed(previous_status, &goal);
                 accounting.mark_idle_progress_accounted_for_status(
                     &snapshot,
                     goal.status,
@@ -280,5 +311,23 @@ impl GoalRuntimeHandle {
                 None
             }
         })
+    }
+
+    async fn current_goal_status_for_metrics(
+        &self,
+        expected_goal_id: Option<&str>,
+    ) -> Result<Option<codex_state::ThreadGoalStatus>, String> {
+        let goal = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(goal.and_then(|goal| {
+            expected_goal_id
+                .is_none_or(|expected_goal_id| goal.goal_id == expected_goal_id)
+                .then_some(goal.status)
+        }))
     }
 }
