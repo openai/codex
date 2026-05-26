@@ -1906,7 +1906,7 @@ Use this checklist when introducing a field/method that should only be available
 
 At runtime, clients must send `initialize` with `capabilities.experimentalApi = true` to use experimental methods or fields.
 
-1. Annotate the field in the protocol type (usually `app-server-protocol/src/protocol/v2.rs`) with:
+1. Annotate the field in the relevant protocol type under `app-server-protocol/src/protocol/v2/` with:
    ```rust
    #[experimental("thread/start.myField")]
    pub my_field: Option<String>,
