@@ -592,10 +592,6 @@ WHERE thread_id = ?
         .fetch_optional(self.pool.as_ref())
         .await?
         .unwrap_or(0);
-        if selected_for_phase2 != 0 {
-            self.enqueue_global_consolidation(now).await?;
-        }
-
         let rows_affected = sqlx::query(
             r#"
 UPDATE threads
@@ -607,6 +603,10 @@ WHERE id = ? AND memory_mode != 'polluted'
         .execute(self.state_pool.as_ref())
         .await?
         .rows_affected();
+
+        if selected_for_phase2 != 0 {
+            self.enqueue_global_consolidation(now).await?;
+        }
 
         Ok(rows_affected > 0)
     }
