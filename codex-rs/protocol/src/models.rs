@@ -1237,7 +1237,9 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url, detail } => {
+                    UserInput::Image {
+                        image_url, detail, ..
+                    } => {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         vec![ContentItem::InputImage {
@@ -1245,7 +1247,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             detail: Some(detail),
                         }]
                     }
-                    UserInput::LocalImage { path, detail } => {
+                    UserInput::LocalImage { path, detail, .. } => {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         match std::fs::read(&path) {
@@ -2652,6 +2654,7 @@ mod tests {
         let image_url = "data:image/png;base64,abc".to_string();
 
         let item = ResponseInputItem::from(vec![UserInput::Image {
+            client_id: None,
             image_url: image_url.clone(),
             detail: None,
         }]);
@@ -2675,6 +2678,7 @@ mod tests {
         let image_url = "data:image/png;base64,abc".to_string();
 
         let item = ResponseInputItem::from(vec![UserInput::Image {
+            client_id: None,
             image_url: image_url.clone(),
             detail: Some(ImageDetail::Original),
         }]);
@@ -2867,10 +2871,12 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![
             UserInput::Image {
+                client_id: None,
                 image_url: image_url.clone(),
                 detail: None,
             },
             UserInput::LocalImage {
+                client_id: None,
                 path: local_path,
                 detail: None,
             },
@@ -2915,6 +2921,7 @@ mod tests {
         std::fs::write(&local_path, TINY_PNG_BYTES)?;
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            client_id: None,
             path: local_path,
             detail: Some(ImageDetail::Original),
         }]);
@@ -2941,6 +2948,7 @@ mod tests {
         let missing_path = dir.path().join("missing-image.png");
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            client_id: None,
             path: missing_path.clone(),
             detail: None,
         }]);
@@ -2976,6 +2984,7 @@ mod tests {
         std::fs::write(&json_path, br#"{"hello":"world"}"#)?;
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            client_id: None,
             path: json_path.clone(),
             detail: None,
         }]);
@@ -3014,6 +3023,7 @@ mod tests {
         )?;
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            client_id: None,
             path: svg_path.clone(),
             detail: None,
         }]);

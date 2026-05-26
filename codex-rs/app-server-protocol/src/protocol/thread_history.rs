@@ -1069,6 +1069,7 @@ impl ThreadHistoryBuilder {
         let mut content = Vec::new();
         if !payload.message.trim().is_empty() {
             content.push(UserInput::Text {
+                client_id: None,
                 text: payload.message.clone(),
                 text_elements: payload
                     .text_elements
@@ -1081,6 +1082,7 @@ impl ThreadHistoryBuilder {
         if let Some(images) = &payload.images {
             for (idx, image) in images.iter().enumerate() {
                 content.push(UserInput::Image {
+                    client_id: None,
                     url: image.clone(),
                     detail: payload.image_details.get(idx).copied().flatten(),
                 });
@@ -1088,6 +1090,7 @@ impl ThreadHistoryBuilder {
         }
         for (idx, path) in payload.local_images.iter().enumerate() {
             content.push(UserInput::LocalImage {
+                client_id: None,
                 path: path.clone(),
                 detail: payload.local_image_details.get(idx).copied().flatten(),
             });
@@ -1294,10 +1297,12 @@ mod tests {
                 id: "item-1".into(),
                 content: vec![
                     UserInput::Text {
+                        client_id: None,
                         text: "First turn".into(),
                         text_elements: Vec::new(),
                     },
                     UserInput::Image {
+                        client_id: None,
                         url: "https://example.com/one.png".into(),
                         detail: None,
                     }
@@ -1331,6 +1336,7 @@ mod tests {
             ThreadItem::UserMessage {
                 id: "item-4".into(),
                 content: vec![UserInput::Text {
+                    client_id: None,
                     text: "Second turn".into(),
                     text_elements: Vec::new(),
                 }],
@@ -1370,14 +1376,17 @@ mod tests {
                 id: "item-1".into(),
                 content: vec![
                     UserInput::Text {
+                        client_id: None,
                         text: "inspect these".into(),
                         text_elements: Vec::new(),
                     },
                     UserInput::Image {
+                        client_id: None,
                         url: "https://example.com/image.png".into(),
                         detail: Some(ImageDetail::Original),
                     },
                     UserInput::LocalImage {
+                        client_id: None,
                         path: local_path,
                         detail: Some(ImageDetail::Original),
                     },
@@ -1435,6 +1444,7 @@ mod tests {
             ThreadItem::UserMessage {
                 id: "item-1".into(),
                 content: vec![UserInput::Text {
+                    client_id: None,
                     text: "hello".into(),
                     text_elements: Vec::new(),
                 }],
@@ -1516,6 +1526,7 @@ mod tests {
                     ThreadItem::UserMessage {
                         id: "item-1".into(),
                         content: vec![UserInput::Text {
+                            client_id: None,
                             text: "generate an image".into(),
                             text_elements: Vec::new(),
                         }],
@@ -1635,6 +1646,7 @@ mod tests {
             ThreadItem::UserMessage {
                 id: "item-1".into(),
                 content: vec![UserInput::Text {
+                    client_id: None,
                     text: "Please do the thing".into(),
                     text_elements: Vec::new(),
                 }],
@@ -1658,6 +1670,7 @@ mod tests {
             ThreadItem::UserMessage {
                 id: "item-3".into(),
                 content: vec![UserInput::Text {
+                    client_id: None,
                     text: "Let's try again".into(),
                     text_elements: Vec::new(),
                 }],
@@ -1733,6 +1746,7 @@ mod tests {
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
                     content: vec![UserInput::Text {
+                        client_id: None,
                         text: "First".into(),
                         text_elements: Vec::new(),
                     }],
@@ -1751,6 +1765,7 @@ mod tests {
                 ThreadItem::UserMessage {
                     id: "item-3".into(),
                     content: vec![UserInput::Text {
+                        client_id: None,
                         text: "Third".into(),
                         text_elements: Vec::new(),
                     }],
@@ -1849,6 +1864,7 @@ mod tests {
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
                     content: vec![UserInput::Text {
+                        client_id: None,
                         text: "Start".into(),
                         text_elements: Vec::new(),
                     }],
@@ -1856,6 +1872,7 @@ mod tests {
                 ThreadItem::UserMessage {
                     id: "item-2".into(),
                     content: vec![UserInput::Text {
+                        client_id: None,
                         text: "Steer".into(),
                         text_elements: Vec::new(),
                     }],
@@ -2529,6 +2546,7 @@ mod tests {
             ThreadItem::UserMessage {
                 id: "item-2".into(),
                 content: vec![UserInput::Text {
+                    client_id: None,
                     text: "second".into(),
                     text_elements: Vec::new(),
                 }],
@@ -2585,6 +2603,7 @@ mod tests {
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
                     content: vec![UserInput::Text {
+                        client_id: None,
                         text: "apply patch".into(),
                         text_elements: Vec::new(),
                     }],
@@ -2653,6 +2672,7 @@ mod tests {
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
                     content: vec![UserInput::Text {
+                        client_id: None,
                         text: "apply patch".into(),
                         text_elements: Vec::new(),
                     }],
@@ -3106,6 +3126,7 @@ mod tests {
                 items: vec![ThreadItem::UserMessage {
                     id: "item-1".into(),
                     content: vec![UserInput::Text {
+                        client_id: None,
                         text: "hello".into(),
                         text_elements: Vec::new(),
                     }],

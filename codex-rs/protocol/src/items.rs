@@ -272,6 +272,7 @@ impl UserMessageItem {
             if let UserInput::Text {
                 text,
                 text_elements,
+                ..
             } = input
             {
                 // Text element ranges are relative to each text chunk; offset them so they align
