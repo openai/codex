@@ -76,6 +76,10 @@ fn sandbox_log(codex_home: &Path) -> String {
         .unwrap_or_else(|err| format!("failed to read {}: {err}", log_path.display()))
 }
 
+fn workspace_roots_for(root: &Path) -> Vec<AbsolutePathBuf> {
+    vec![AbsolutePathBuf::from_absolute_path(root).expect("absolute workspace root")]
+}
+
 fn wait_for_frame_count(frames_path: &Path, expected_frames: usize) -> Vec<Message> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -153,7 +157,7 @@ fn legacy_non_tty_cmd_emits_output() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
@@ -194,7 +198,7 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
         let permission_profile = PermissionProfile::workspace_write();
         let err = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
@@ -234,7 +238,7 @@ fn legacy_non_tty_powershell_emits_output() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 pwsh.display().to_string(),
@@ -420,7 +424,7 @@ fn legacy_capture_powershell_emits_output() {
     let permission_profile = PermissionProfile::workspace_write();
     let result = run_windows_sandbox_capture(
         &permission_profile,
-        cwd.as_path(),
+        workspace_roots_for(cwd.as_path()).as_slice(),
         codex_home.path(),
         vec![
             pwsh.display().to_string(),
@@ -460,7 +464,7 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 pwsh.display().to_string(),
@@ -514,7 +518,7 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
@@ -568,7 +572,7 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
