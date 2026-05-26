@@ -401,6 +401,7 @@ fn sample_turn_steer_request(
                 },
             ],
             responsesapi_client_metadata: None,
+            additional_context: None,
         },
     }
 }

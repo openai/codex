@@ -409,7 +409,7 @@ impl App {
         }
 
         tokio::spawn(async move {
-            match fetch_plugin_mentions(request_handle, config).await {
+            match fetch_plugin_mentions(request_handle, config.cwd.to_path_buf()).await {
                 Ok(plugins) => {
                     app_event_tx.send(AppEvent::PluginMentionsLoaded {
                         plugins: Some(plugins),

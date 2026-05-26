@@ -902,6 +902,13 @@ pub enum ResponseItem {
     Other,
 }
 
+impl ResponseItem {
+    /// Returns whether this item is an ordinary user-role message.
+    pub fn is_user_message(&self) -> bool {
+        matches!(self, Self::Message { role, .. } if role == "user")
+    }
+}
+
 pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
 
 /// Base instructions for the model in a thread. Corresponds to the `instructions` field in the ResponsesAPI.

@@ -27,7 +27,7 @@ use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
 use codex_rollout_trace::replay_bundle;
 use codex_state::StateRuntime;
-use codex_state::state_db_path;
+use codex_state::memories_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
@@ -1751,22 +1751,16 @@ async fn run_debug_clear_memories_command(
         .build()
         .await?;
 
-    let state_path = state_db_path(config.sqlite_home.as_path());
-    let mut cleared_state_db = false;
-    if tokio::fs::try_exists(&state_path).await? {
-        let state_db =
-            StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
-                .await?;
-        state_db.clear_memory_data().await?;
-        cleared_state_db = true;
-    }
+    let memories_path = memories_db_path(config.sqlite_home.as_path());
+    let cleared_memories_db =
+        StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_home.as_path()).await?;
 
     clear_memory_roots_contents(&config.codex_home).await?;
 
-    let mut message = if cleared_state_db {
-        format!("Cleared memory state from {}.", state_path.display())
+    let mut message = if cleared_memories_db {
+        format!("Cleared memory state from {}.", memories_path.display())
     } else {
-        format!("No state db found at {}.", state_path.display())
+        format!("No memories db found at {}.", memories_path.display())
     };
     message.push_str(&format!(
         " Cleared memory directories under {}.",

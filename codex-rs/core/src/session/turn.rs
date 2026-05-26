@@ -466,7 +466,7 @@ async fn run_hooks_and_record_inputs(
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
             accepted_input = true;
-            if matches!(input_item, TurnInput::UserInput(_)) {
+            if matches!(input_item, TurnInput::UserInput(items) if !items.is_empty()) {
                 accepted_user_input = true;
             }
             record_pending_input(
