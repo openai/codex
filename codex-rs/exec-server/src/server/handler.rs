@@ -59,7 +59,6 @@ pub(crate) struct ExecServerHandler {
     background_task_shutdown: CancellationToken,
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
-    codex_self_exe: codex_utils_absolute_path::AbsolutePathBuf,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -77,7 +76,6 @@ impl ExecServerHandler {
             active_body_stream_ids: Mutex::new(HashSet::new()),
             background_task_shutdown: CancellationToken::new(),
             background_tasks: TaskTracker::new(),
-            codex_self_exe: runtime_paths.codex_self_exe.clone(),
             file_system: FileSystemHandler::new(runtime_paths),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -132,7 +130,6 @@ impl ExecServerHandler {
         Ok(InitializeResponse {
             session_id,
             codex_home: crate::codex_home::default_codex_home()?,
-            codex_self_exe: self.codex_self_exe.clone(),
         })
     }
 

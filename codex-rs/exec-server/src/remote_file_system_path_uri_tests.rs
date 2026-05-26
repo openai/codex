@@ -154,10 +154,6 @@ async fn complete_websocket_initialize(websocket: &mut WebSocketStream<TcpStream
                     std::env::current_dir().expect("current directory"),
                 )
                 .expect("absolute current directory"),
-                codex_self_exe: AbsolutePathBuf::from_absolute_path(
-                    std::env::current_exe().expect("current executable"),
-                )
-                .expect("absolute current executable"),
             })
             .expect("initialize response should serialize"),
         }),

@@ -531,21 +531,6 @@ impl Environment {
             .codex_home()
             .ok_or_else(|| internal_error("remote exec-server did not report a codex home"))
     }
-
-    pub async fn codex_self_exe(&self) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
-        if let Some(client) = self.remote_client.as_ref() {
-            let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
-            return client.codex_self_exe().ok_or_else(|| {
-                internal_error("remote exec-server did not report its Codex executable")
-            });
-        }
-        self.local_runtime_paths
-            .as_ref()
-            .map(|runtime_paths| runtime_paths.codex_self_exe.clone())
-            .ok_or_else(|| {
-                internal_error("failed to locate local Codex executable for runtime install")
-            })
-    }
 }
 
 fn default_local_codex_home() -> Option<AbsolutePathBuf> {

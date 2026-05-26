@@ -18,7 +18,6 @@ codex-apply-patch = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-install-context = { workspace = true }
 codex-linux-sandbox = { workspace = true }
-codex-runtime-install = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-shell-escalation = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

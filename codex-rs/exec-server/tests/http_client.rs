@@ -1015,7 +1015,6 @@ impl JsonRpcPeer {
             InitializeResponse {
                 session_id: "session-1".to_string(),
                 codex_home: AbsolutePathBuf::try_from(std::env::current_dir()?)?,
-                codex_self_exe: AbsolutePathBuf::try_from(std::env::current_exe()?)?,
             },
         )
         .await?;

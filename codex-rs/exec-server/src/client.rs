@@ -187,7 +187,6 @@ struct Inner {
     http_body_stream_next_id: AtomicU64,
     session_id: std::sync::RwLock<Option<String>>,
     codex_home: std::sync::RwLock<Option<AbsolutePathBuf>>,
-    codex_self_exe: std::sync::RwLock<Option<AbsolutePathBuf>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -368,14 +367,6 @@ impl ExecServerClient {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *codex_home = Some(response.codex_home.clone());
             }
-            {
-                let mut codex_self_exe = self
-                    .inner
-                    .codex_self_exe
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                *codex_self_exe = Some(response.codex_self_exe.clone());
-            }
             self.notify_initialized().await?;
             Ok(response)
         })
@@ -534,14 +525,6 @@ impl ExecServerClient {
             .clone()
     }
 
-    pub fn codex_self_exe(&self) -> Option<AbsolutePathBuf> {
-        self.inner
-            .codex_self_exe
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-
     pub(crate) async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
@@ -590,7 +573,6 @@ impl ExecServerClient {
                 http_body_stream_next_id: AtomicU64::new(1),
                 session_id: std::sync::RwLock::new(None),
                 codex_home: std::sync::RwLock::new(None),
-                codex_self_exe: std::sync::RwLock::new(None),
                 reader_task,
             }
         });
@@ -1159,10 +1141,6 @@ mod tests {
                         std::env::current_dir().expect("current dir"),
                     )
                     .expect("absolute current dir"),
-                    codex_self_exe: AbsolutePathBuf::try_from(
-                        std::env::current_exe().expect("current exe"),
-                    )
-                    .expect("absolute current exe"),
                 })
                 .expect("initialize response should serialize"),
             }),
@@ -1198,7 +1176,7 @@ mod tests {
                 program: "sh".to_string(),
                 args: vec![
                     "-c".to_string(),
-                    "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\",\"codexSelfExe\":\"/tmp/codex\"}}'; read _line; sleep 60".to_string(),
+                    "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\"}}'; read _line; sleep 60".to_string(),
                 ],
                 env: HashMap::new(),
                 cwd: None,
@@ -1222,7 +1200,7 @@ mod tests {
                     program: "sh".to_string(),
                     args: vec![
                         "-c".to_string(),
-                        "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\",\"codexSelfExe\":\"/tmp/codex\"}}'; read _line; sleep 60".to_string(),
+                        "read _line; printf '%s\\n' '{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\"}}'; read _line; sleep 60".to_string(),
                     ],
                     env: HashMap::new(),
                     cwd: None,
@@ -1245,7 +1223,7 @@ mod tests {
                 args: vec![
                     "-NoProfile".to_string(),
                     "-Command".to_string(),
-                    "$null = [Console]::In.ReadLine(); [Console]::Out.WriteLine('{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"C:\\\\Users\\\\codex\\\\.codex\",\"codexSelfExe\":\"C:\\\\codex\\\\codex.exe\"}}'); $null = [Console]::In.ReadLine(); Start-Sleep -Seconds 60".to_string(),
+                    "$null = [Console]::In.ReadLine(); [Console]::Out.WriteLine('{\"id\":1,\"result\":{\"sessionId\":\"stdio-test\",\"codexHome\":\"C:\\\\Users\\\\codex\\\\.codex\"}}'); $null = [Console]::In.ReadLine(); Start-Sleep -Seconds 60".to_string(),
                 ],
                 env: HashMap::new(),
                 cwd: None,
@@ -1270,7 +1248,7 @@ mod tests {
             "read _line; \
              echo \"$$\" > {}; \
              sleep 60 >/dev/null 2>&1 & echo \"$!\" > {}; \
-             printf '%s\\n' '{{\"id\":1,\"result\":{{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\",\"codexSelfExe\":\"/tmp/codex\"}}}}'; \
+             printf '%s\\n' '{{\"id\":1,\"result\":{{\"sessionId\":\"stdio-test\",\"codexHome\":\"/tmp\"}}}}'; \
              read _line; \
              wait",
             shell_quote(pid_file.as_path()),
@@ -1400,10 +1378,6 @@ mod tests {
                             std::env::current_dir().expect("current dir"),
                         )
                         .expect("absolute current dir"),
-                        codex_self_exe: AbsolutePathBuf::try_from(
-                            std::env::current_exe().expect("current exe"),
-                        )
-                        .expect("absolute current exe"),
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -1551,10 +1525,6 @@ mod tests {
                             std::env::current_dir().expect("current dir"),
                         )
                         .expect("absolute current dir"),
-                        codex_self_exe: AbsolutePathBuf::try_from(
-                            std::env::current_exe().expect("current exe"),
-                        )
-                        .expect("absolute current exe"),
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -1696,10 +1666,6 @@ mod tests {
                             std::env::current_dir().expect("current dir"),
                         )
                         .expect("absolute current dir"),
-                        codex_self_exe: AbsolutePathBuf::try_from(
-                            std::env::current_exe().expect("current exe"),
-                        )
-                        .expect("absolute current exe"),
                     })
                     .expect("initialize response should serialize"),
                 }),

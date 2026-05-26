@@ -61,7 +61,7 @@ impl RuntimeInstallRequestProcessor {
             }
         });
 
-        let install_result = crate::runtime_install_worker::install_runtime_with_progress(
+        let install_result = codex_runtime_install::install_runtime_with_progress(
             &environment,
             params,
             progress_tx,

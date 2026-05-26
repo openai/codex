@@ -14,17 +14,14 @@ workspace = true
 
 [dependencies]
 codex-app-server-protocol = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-futures = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+codex-utils-path-uri = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = [
     "fs",
-    "io-std",
-    "io-util",
     "macros",
     "process",
     "rt",
@@ -32,7 +29,9 @@ tokio = { workspace = true, features = [
 ] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
-zip = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
