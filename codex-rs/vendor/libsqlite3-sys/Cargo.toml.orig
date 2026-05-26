@@ -1,0 +1,50 @@
+[package]
+name = "libsqlite3-sys"
+version = "0.30.1"
+authors = ["The rusqlite developers"]
+edition = "2021"
+repository = "https://github.com/rusqlite/rusqlite"
+description = "Native bindings to the libsqlite3 library"
+license = "MIT"
+links = "sqlite3"
+build = "build.rs"
+keywords = ["sqlite", "sqlcipher", "ffi"]
+categories = ["external-ffi-bindings"]
+
+[features]
+default = ["min_sqlite_version_3_14_0"]
+bundled = ["cc", "bundled_bindings"]
+bundled-windows = ["cc", "bundled_bindings"]
+bundled-sqlcipher = ["bundled"]
+bundled-sqlcipher-vendored-openssl = ["bundled-sqlcipher", "openssl-sys/vendored"]
+buildtime_bindgen = ["bindgen", "pkg-config", "vcpkg"]
+sqlcipher = []
+min_sqlite_version_3_14_0 = ["pkg-config", "vcpkg"]
+# Bundle only the bindings file. Note that this does nothing if
+# `buildtime_bindgen` is enabled.
+bundled_bindings = []
+loadable_extension = ["prettyplease", "quote", "syn"]
+# sqlite3_unlock_notify >= 3.6.12
+unlock_notify = []
+# 3.13.0
+preupdate_hook = ["buildtime_bindgen"]
+# 3.13.0
+session = ["preupdate_hook", "buildtime_bindgen"]
+in_gecko = []
+with-asan = []
+wasm32-wasi-vfs = []
+
+[dependencies]
+openssl-sys = { version = "0.9.103", optional = true }
+
+[build-dependencies]
+bindgen = { version = "0.69", optional = true, default-features = false, features = ["runtime"] }
+pkg-config = { version = "0.3.19", optional = true }
+cc = { version = "1.1.6", optional = true }
+vcpkg = { version = "0.2.15", optional = true }
+# for loadable_extension:
+prettyplease = {version = "0.2.20", optional = true }
+# like bindgen
+quote = { version = "1.0.36", optional = true, default-features = false }
+# like bindgen
+syn = { version = "2.0.72", optional = true, features = ["full", "extra-traits", "visit-mut"] }

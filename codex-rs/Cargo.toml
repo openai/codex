@@ -515,6 +515,10 @@ inherits = "test"
 opt-level = 0
 
 [patch.crates-io]
+# sqlx-sqlite 0.8.6 requires libsqlite3-sys ^0.30.1, whose bundled SQLite
+# predates the WAL-reset corruption fix. Keep its compatible Rust API while
+# bundling the fixed SQLite source documented in vendor/libsqlite3-sys/UPSTREAM.md.
+libsqlite3-sys = { path = "vendor/libsqlite3-sys" }
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc99427fd3b071681b07fc31c6ce995" }
