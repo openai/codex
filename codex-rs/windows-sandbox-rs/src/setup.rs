@@ -1074,6 +1074,7 @@ mod tests {
         let command_cwd = tmp.path().join("workspace");
         let codex_home = tmp.path().join("codex-home");
         fs::create_dir_all(&command_cwd).expect("create workspace");
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
 
         for permission_profile in [
             PermissionProfile::Disabled,
@@ -1083,7 +1084,7 @@ mod tests {
         ] {
             super::run_setup_refresh(
                 &permission_profile,
-                command_cwd.as_path(),
+                workspace_roots.as_slice(),
                 command_cwd.as_path(),
                 &HashMap::new(),
                 codex_home.as_path(),
@@ -1093,7 +1094,7 @@ mod tests {
 
             super::run_setup_refresh_with_extra_read_roots(
                 &permission_profile,
-                command_cwd.as_path(),
+                workspace_roots.as_slice(),
                 command_cwd.as_path(),
                 &HashMap::new(),
                 codex_home.as_path(),
