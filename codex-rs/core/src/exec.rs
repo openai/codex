@@ -1365,6 +1365,8 @@ async fn consume_output(
                     )
                 }
                 Some(ExecExpirationOutcome::Cancelled) => {
+                    // Let TERM-aware processes run cleanup briefly, then kill any
+                    // remaining members of the original process group.
                     let process_group_id = child.id();
                     let should_escalate = if let Some(process_group_id) = process_group_id {
                         codex_utils_pty::process_group::terminate_process_group(process_group_id)?

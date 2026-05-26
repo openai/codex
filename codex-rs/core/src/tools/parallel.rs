@@ -142,6 +142,11 @@ impl ToolCallRuntime {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         abort_dispatch_span.record("aborted", true);
                         if wait_for_runtime_cancellation {
+                            if terminal_outcome_reached.swap(true, Ordering::AcqRel) {
+                                return handle.await.map_err(Self::tool_task_join_error)?;
+                            }
+                            // The abort owns the terminal outcome; await only so
+                            // the runtime can finish process teardown.
                             match handle.await {
                                 Ok(_) => {}
                                 Err(err) if err.is_cancelled() => {}
@@ -271,6 +276,74 @@ mod tests {
 
     impl CoreToolRuntime for ImmediateHandler {}
 
+    struct CancellationCleanupHandler {
+        tool_name: codex_tools::ToolName,
+        started: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+        cleanup_started: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+        allow_cleanup: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolExecutor<ToolInvocation> for CancellationCleanupHandler {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            self.tool_name.clone()
+        }
+
+        async fn handle(
+            &self,
+            invocation: ToolInvocation,
+        ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+            let started = self
+                .started
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(started) = started {
+                let _ = started.send(());
+            }
+            invocation.cancellation_token.cancelled().await;
+            let cleanup_started = self
+                .cleanup_started
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(cleanup_started) = cleanup_started {
+                let _ = cleanup_started.send(());
+            }
+            self.allow_cleanup.notified().await;
+            Ok(Box::new(FunctionToolOutput::from_text(
+                "cleanup complete".to_string(),
+                Some(false),
+            )))
+        }
+    }
+
+    impl CoreToolRuntime for CancellationCleanupHandler {
+        fn waits_for_runtime_cancellation(&self) -> bool {
+            true
+        }
+    }
+
+    struct FinishRecorder {
+        records: Arc<std::sync::Mutex<Vec<ToolCallOutcome>>>,
+    }
+
+    impl codex_extension_api::ToolLifecycleContributor for FinishRecorder {
+        fn on_tool_finish<'a>(
+            &'a self,
+            input: codex_extension_api::ToolFinishInput<'a>,
+        ) -> codex_extension_api::ToolLifecycleFuture<'a> {
+            let records = Arc::clone(&self.records);
+            let outcome = input.outcome;
+            Box::pin(async move {
+                records
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(outcome);
+            })
+        }
+    }
+
     struct BlockingFinishContributor {
         records: Arc<std::sync::Mutex<Vec<ToolCallOutcome>>>,
         finish_started: std::sync::Mutex<Option<oneshot::Sender<()>>>,
@@ -369,6 +442,77 @@ mod tests {
             .drain(..)
             .collect::<Vec<_>>();
         assert_eq!(vec![ToolCallOutcome::Completed { success: true }], actual);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancellation_waiting_for_runtime_cleanup_emits_only_aborted_lifecycle()
+    -> anyhow::Result<()> {
+        let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut builder =
+            codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+        builder.tool_lifecycle_contributor(Arc::new(FinishRecorder {
+            records: Arc::clone(&records),
+        }));
+        session.services.extensions = Arc::new(builder.build());
+
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("cleanup_tool");
+        let (started_tx, started_rx) = oneshot::channel();
+        let (cleanup_started_tx, cleanup_started_rx) = oneshot::channel();
+        let allow_cleanup = Arc::new(Notify::new());
+        let handler = Arc::new(CancellationCleanupHandler {
+            tool_name: tool_name.clone(),
+            started: std::sync::Mutex::new(Some(started_tx)),
+            cleanup_started: std::sync::Mutex::new(Some(cleanup_started_tx)),
+            allow_cleanup: Arc::clone(&allow_cleanup),
+        }) as Arc<dyn CoreToolRuntime>;
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+        ));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(router, session, turn_context, tracker);
+        let cancellation_token = CancellationToken::new();
+        let call = ToolCall {
+            tool_name,
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+
+        let response_task =
+            tokio::spawn(runtime.handle_tool_call(call, cancellation_token.clone()));
+        started_rx.await.expect("handler should start");
+        cancellation_token.cancel();
+        cleanup_started_rx
+            .await
+            .expect("handler should start cleanup");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        allow_cleanup.notify_one();
+
+        let response = tokio::time::timeout(Duration::from_secs(1), response_task)
+            .await
+            .expect("timed out waiting for tool response")
+            .expect("tool response task should join")?;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+            anyhow::bail!("cancelled tool should return function output");
+        };
+        let FunctionCallOutputBody::Text(text) = output.body else {
+            anyhow::bail!("cancelled tool output should be text");
+        };
+        assert!(text.contains("aborted by user"));
+
+        let actual = records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect::<Vec<_>>();
+        assert_eq!(vec![ToolCallOutcome::Aborted], actual);
 
         Ok(())
     }

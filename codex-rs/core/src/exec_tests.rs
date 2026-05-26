@@ -1135,17 +1135,17 @@ async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<
     let ready_marker = temp_dir.path().join("ready");
     let cleanup_marker = temp_dir.path().join("cleanup");
     let descendant_pid_marker = temp_dir.path().join("descendant-pid");
+    // The parent handles TERM and records cleanup, while a TERM-ignoring child
+    // proves cancellation still escalates any survivors in the process group.
     let command = vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
-        concat!(
-            "(trap '' TERM; sleep 60) &\n",
-            "printf '%s' \"$!\" > \"$DESCENDANT_PID_MARKER\"\n",
-            "trap 'printf cleaned > \"$CLEANUP_MARKER\"; exit 0' TERM\n",
-            "printf ready > \"$READY_MARKER\"\n",
-            "while :; do sleep 1; done"
-        )
-        .to_string(),
+        r#"(trap '' TERM; sleep 60) &
+printf '%s' "$!" > "$DESCENDANT_PID_MARKER"
+trap 'printf cleaned > "$CLEANUP_MARKER"; exit 0' TERM
+printf ready > "$READY_MARKER"
+while :; do sleep 1; done"#
+            .to_string(),
     ];
     let cwd = codex_utils_absolute_path::AbsolutePathBuf::current_dir()?;
     let mut env: HashMap<String, String> = std::env::vars().collect();

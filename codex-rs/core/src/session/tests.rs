@@ -9927,18 +9927,23 @@ async fn shell_tool_cancellation_waits_for_runtime_cleanup() -> anyhow::Result<(
     let temp_dir = tempfile::TempDir::new()?;
     let ready_marker = temp_dir.path().join("ready");
     let cleanup_marker = temp_dir.path().join("cleanup");
+    // Interrupt after the shell starts, then verify dispatch waits for its TERM cleanup trap.
     let command = format!(
-        "trap 'printf cleaned > \"{}\"; exit 0' TERM\nprintf ready > \"{}\"\nwhile :; do sleep 1; done",
+        r#"trap 'printf cleaned > "{}"; exit 0' TERM
+printf ready > "{}"
+while :; do sleep 1; done"#,
         cleanup_marker.display(),
         ready_marker.display(),
     );
+    #[allow(deprecated)]
+    let workdir = turn_context.cwd.to_string_lossy().to_string();
     let item = ResponseItem::FunctionCall {
         id: None,
         name: "shell_command".to_string(),
         namespace: None,
         arguments: serde_json::json!({
             "command": command,
-            "workdir": ".",
+            "workdir": workdir,
             "timeout_ms": 60_000,
         })
         .to_string(),
