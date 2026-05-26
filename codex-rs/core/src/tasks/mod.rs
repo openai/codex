@@ -62,6 +62,7 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
+const TASK_COMPACT_METRIC: &str = "codex.task.compact";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterruptedTurnHistoryMarker {
@@ -142,6 +143,18 @@ fn emit_turn_memory_metric(
             ("config_use_memories", bool_tag(config_enabled)),
             ("has_citations", bool_tag(has_citations)),
         ],
+    );
+}
+
+pub(crate) fn emit_compact_metric(
+    session_telemetry: &SessionTelemetry,
+    compact_type: &'static str,
+    manual: bool,
+) {
+    session_telemetry.counter(
+        TASK_COMPACT_METRIC,
+        /*inc*/ 1,
+        &[("type", compact_type), ("manual", bool_tag(manual))],
     );
 }
 
