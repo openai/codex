@@ -219,15 +219,13 @@ fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>
     examples.items.into_iter().map(parse_example).collect()
 }
 
-fn parse_literal_absolute_path(raw: &str) -> Result<AbsolutePathBuf> {
-    if !Path::new(raw).is_absolute() {
-        return Err(Error::InvalidRule(format!(
-            "host_executable paths must be absolute (got {raw})"
-        )));
-    }
-
-    AbsolutePathBuf::try_from(raw.to_string())
-        .map_err(|error| Error::InvalidRule(format!("invalid absolute path `{raw}`: {error}")))
+fn parse_host_executable_path(raw: &str) -> Result<AbsolutePathBuf> {
+    AbsolutePathBuf::from_absolute_path_checked(raw).map_err(|error| {
+        Error::InvalidRule(format!(
+            "host_executable paths must be absolute or use `~/...` home-relative syntax \
+             (got {raw}): {error}"
+        ))
+    })
 }
 
 fn validate_host_executable_name(name: &str) -> Result<()> {
@@ -448,7 +446,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                     value.get_type()
                 ))
             })?;
-            let path = parse_literal_absolute_path(raw)?;
+            let path = parse_host_executable_path(raw)?;
             let Some(path_name) = executable_path_lookup_key(path.as_path()) else {
                 return Err(Error::InvalidRule(format!(
                     "host_executable path `{raw}` must have basename `{name}`"

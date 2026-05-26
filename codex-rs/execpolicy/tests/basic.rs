@@ -696,9 +696,74 @@ host_executable(
 }
 
 #[test]
+fn home_relative_host_executable_path_is_expanded_and_used_for_resolution() -> Result<()> {
+    let executable_name = host_executable_name("az");
+    let home_relative_path = format!("~/.openai/bin/{executable_name}");
+    let expected_path = AbsolutePathBuf::from_absolute_path_checked(&home_relative_path)?;
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["az", "account", "show"], decision = "prompt")
+host_executable(name = "az", paths = ["{home_relative_path}"])
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src)?;
+    let policy = parser.build();
+
+    assert_eq!(
+        policy
+            .host_executables()
+            .get("az")
+            .expect("missing az host executable")
+            .as_ref(),
+        [expected_path.clone()]
+    );
+
+    let evaluation = policy.check_with_options(
+        &[
+            expected_path.to_string_lossy().into_owned(),
+            "account".to_string(),
+            "show".to_string(),
+        ],
+        &allow_all,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    );
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["az", "account", "show"]),
+                decision: Decision::Prompt,
+                resolved_program: Some(expected_path),
+                justification: None,
+            }],
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn host_executable_rejects_non_absolute_path() {
     let policy_src = r#"
 host_executable(name = "git", paths = ["git"])
+"#;
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", policy_src)
+        .expect_err("expected parse error");
+    assert!(
+        err.to_string()
+            .contains("host_executable paths must be absolute")
+    );
+}
+
+#[test]
+fn host_executable_rejects_named_user_home_path() {
+    let policy_src = r#"
+host_executable(name = "git", paths = ["~someone/bin/git"])
 "#;
     let mut parser = PolicyParser::new();
     let err = parser

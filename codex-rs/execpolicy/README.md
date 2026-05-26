@@ -37,6 +37,16 @@ host_executable(
 )
 ```
 
+- Paths may use `~/...` to identify executables installed beneath the current
+  user's home directory without hard-coding a username:
+
+```starlark
+host_executable(
+    name = "az",
+    paths = ["~/.openai/bin/az"],
+)
+```
+
 - Matching semantics:
   - execpolicy always tries exact first-token matches first.
   - With host-executable resolution disabled, `/usr/bin/git status` only matches a rule whose first token is `/usr/bin/git`.
