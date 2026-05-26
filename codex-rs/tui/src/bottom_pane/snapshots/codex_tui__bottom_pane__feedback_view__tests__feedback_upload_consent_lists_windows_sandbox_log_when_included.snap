@@ -1,6 +1,6 @@
 ---
 source: tui/src/bottom_pane/feedback_view.rs
-assertion_line: 716
+assertion_line: 734
 expression: rendered
 ---
 Upload logs?
@@ -8,5 +8,6 @@ Upload logs?
 The following files will be sent:
   • codex-logs.log
   • codex-doctor-report.json
+  • windows-sandbox.log
   • rollout.jsonl
   • auto-review-rollout.jsonl

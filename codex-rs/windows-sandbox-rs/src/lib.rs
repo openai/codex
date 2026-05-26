@@ -185,6 +185,8 @@ pub use ipc_framed::write_frame;
 #[cfg(target_os = "windows")]
 pub use logging::current_log_file_path;
 #[cfg(target_os = "windows")]
+pub use logging::current_log_file_path_for_codex_home;
+#[cfg(target_os = "windows")]
 pub use logging::log_file_path_for_utc_date;
 #[cfg(target_os = "windows")]
 pub use logging::log_note;

@@ -1929,6 +1929,7 @@ dependencies = [
  "codex-utils-json-to-toml",
  "codex-utils-pty",
  "codex-web-search-extension",
+ "codex-windows-sandbox",
  "core_test_support",
  "flate2",
  "futures",
