@@ -183,7 +183,7 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 
 ### Core Rules
 
-- All active API development should happen in app-server v2. Do not add new API surface area to v1.
+- All active API development should happen in app-server v2.
 - Follow payload naming consistently:
   `*Params` for request payloads, `*Response` for responses, and `*Notification` for notifications.
 - Expose RPC methods as `<resource>/<method>` and keep `<resource>` singular (for example, `thread/read`, `app/list`).
