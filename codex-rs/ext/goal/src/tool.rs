@@ -250,7 +250,6 @@ impl GoalToolExecutor {
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to update goal: {err}"))
             })?
-            .map(protocol_goal_from_state)
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(
                     "cannot update goal because this thread has no goal".to_string(),
