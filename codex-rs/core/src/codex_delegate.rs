@@ -86,7 +86,7 @@ pub(crate) async fn run_codex_thread_interactive(
         extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source.clone()),
-        forked_from_thread_id: None,
+        forked_from_thread_id: Some(parent_session.conversation_id),
         thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),

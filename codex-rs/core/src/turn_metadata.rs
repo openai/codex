@@ -25,6 +25,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 const MODEL_KEY: &str = "model";
 const REASONING_EFFORT_KEY: &str = "reasoning_effort";
+const FORKED_FROM_THREAD_ID_METADATA_KEY: &str = "forked-from-thread-id";
 const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 const USER_INPUT_REQUESTED_DURING_TURN_KEY: &str = "user_input_requested_during_turn";
 
@@ -74,7 +75,11 @@ pub(crate) struct TurnMetadataBag {
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "forked-from-thread-id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     forked_from_thread_id: Option<ThreadId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_source: Option<ThreadSource>,
@@ -116,7 +121,7 @@ fn merge_turn_metadata(
                     | "thread_id"
                     | "turn_id"
                     | TURN_STARTED_AT_UNIX_MS_KEY
-                    | "forked_from_thread_id"
+                    | FORKED_FROM_THREAD_ID_METADATA_KEY
             ) {
                 continue;
             }

@@ -169,7 +169,7 @@ fn turn_metadata_state_includes_root_fork_lineage() {
     let json: Value = serde_json::from_str(&header).expect("json");
 
     assert_eq!(
-        json["forked_from_thread_id"].as_str(),
+        json[FORKED_FROM_THREAD_ID_METADATA_KEY].as_str(),
         Some("11111111-1111-4111-8111-111111111111")
     );
 }
@@ -322,7 +322,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
             "client-supplied".to_string(),
         ),
         (
-            "forked_from_thread_id".to_string(),
+            FORKED_FROM_THREAD_ID_METADATA_KEY.to_string(),
             "client-supplied".to_string(),
         ),
     ]));
@@ -331,7 +331,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     let json: Value = serde_json::from_str(&header).expect("json");
 
     assert!(json.get("turn_started_at_unix_ms").is_none());
-    assert!(json.get("forked_from_thread_id").is_none());
+    assert!(json.get(FORKED_FROM_THREAD_ID_METADATA_KEY).is_none());
 }
 
 #[test]
@@ -364,8 +364,12 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         ("session_id".to_string(), "client-supplied".to_string()),
         ("thread_id".to_string(), "client-supplied".to_string()),
         (
-            "forked_from_thread_id".to_string(),
+            FORKED_FROM_THREAD_ID_METADATA_KEY.to_string(),
             "client-supplied".to_string(),
+        ),
+        (
+            "forked_from_thread_id".to_string(),
+            "client-forwarded".to_string(),
         ),
         ("thread_source".to_string(), "client-supplied".to_string()),
         (
@@ -387,8 +391,12 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
     assert_eq!(json["thread_id"].as_str(), Some("thread-a"));
     assert_eq!(
-        json["forked_from_thread_id"].as_str(),
+        json[FORKED_FROM_THREAD_ID_METADATA_KEY].as_str(),
         Some("44444444-4444-4444-8444-444444444444")
+    );
+    assert_eq!(
+        json["forked_from_thread_id"].as_str(),
+        Some("client-forwarded")
     );
     assert_eq!(json["thread_source"].as_str(), Some("user"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));

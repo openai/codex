@@ -61,7 +61,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         "overall_confidence_score": 0.8
     })
     .to_string();
-    let (server, _request_log) = start_responses_server_with_sse(
+    let (server, request_log) = start_responses_server_with_sse(
         assistant_message_sse(&review_json),
         /*expected_requests*/ 1,
     )
@@ -110,6 +110,25 @@ async fn review_op_emits_lifecycle_and_review_output() {
     };
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    assert_eq!(
+        request.header("x-openai-subagent").as_deref(),
+        Some("review")
+    );
+    let parent_thread_id = request
+        .header("x-codex-parent-thread-id")
+        .expect("review request parent thread id");
+    let turn_metadata: serde_json::Value = serde_json::from_str(
+        &request
+            .header("x-codex-turn-metadata")
+            .expect("review request turn metadata"),
+    )
+    .expect("review request turn metadata json");
+    assert_eq!(
+        turn_metadata["forked-from-thread-id"].as_str(),
+        Some(parent_thread_id.as_str())
+    );
 
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
