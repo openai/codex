@@ -1026,12 +1026,9 @@ impl Session {
             exec_policy: current_exec_policy.as_ref(),
             permission_profile: &session_configuration.permission_profile(),
             network_policy_decider: None,
-            blocked_request_observer: self
-                .services
-                .managed_network_requirements_configured
-                .then(|| {
-                    build_blocked_request_observer(Arc::clone(&self.services.network_approval))
-                }),
+            blocked_request_observer: self.services.managed_network_requirements_configured.then(
+                || build_blocked_request_observer(Arc::clone(&self.services.network_approval)),
+            ),
             managed_network_requirements_enabled: self
                 .services
                 .managed_network_requirements_configured,
