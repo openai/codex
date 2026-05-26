@@ -187,6 +187,34 @@ fn session_thread_config_to_toml(
     }
 
     if !config.model_providers.is_empty() {
+        // Session-scoped providers must not pair a session-provided base_url with
+        // process-owned credentials from auth.json or environment variables.
+        if let Some((provider_id, field)) = config
+            .model_providers
+            .iter()
+            .filter_map(|(id, provider)| {
+                let field = if provider.requires_openai_auth {
+                    Some("requires_openai_auth")
+                } else if provider.env_key.is_some() {
+                    Some("env_key")
+                } else if provider.env_http_headers.is_some() {
+                    Some("env_http_headers")
+                } else {
+                    None
+                };
+                field.map(|field| (id, field))
+            })
+            .min_by(|(left, _), (right, _)| left.cmp(right))
+        {
+            return Err(ThreadConfigLoadError::new(
+                ThreadConfigLoadErrorCode::Parse,
+                /*status_code*/ None,
+                format!(
+                    "session model_providers.{provider_id} cannot set {field}; \
+session-scoped providers must not read process-owned credentials",
+                ),
+            ));
+        }
         let model_providers = TomlValue::try_from(config.model_providers).map_err(|err| {
             ThreadConfigLoadError::new(
                 ThreadConfigLoadErrorCode::Parse,
@@ -292,6 +320,49 @@ mod tests {
                 .into()
             )]
         );
+    }
+
+    #[tokio::test]
+    async fn loader_rejects_session_model_provider_process_credentials() {
+        let mut openai_auth_provider = test_provider("local");
+        openai_auth_provider.requires_openai_auth = true;
+        let mut env_key_provider = test_provider("local");
+        env_key_provider.env_key = Some("OPENAI_API_KEY".to_string());
+        let mut env_header_provider = test_provider("local");
+        env_header_provider.env_http_headers = Some(HashMap::from([(
+            "Authorization".to_string(),
+            "OPENAI_API_KEY".to_string(),
+        )]));
+
+        for (field, provider) in [
+            ("requires_openai_auth", openai_auth_provider),
+            ("env_key", env_key_provider),
+            ("env_http_headers", env_header_provider),
+        ] {
+            let loader = StaticThreadConfigLoader::new(vec![ThreadConfigSource::Session(
+                SessionThreadConfig {
+                    model_provider: Some("local".to_string()),
+                    model_providers: HashMap::from([("local".to_string(), provider)]),
+                    features: BTreeMap::new(),
+                },
+            )]);
+            let err = loader
+                .load_config_layers(ThreadConfigContext::default())
+                .await
+                .expect_err("session-scoped providers must not read process credentials");
+
+            assert_eq!(
+                err,
+                ThreadConfigLoadError::new(
+                    ThreadConfigLoadErrorCode::Parse,
+                    /*status_code*/ None,
+                    format!(
+                        "session model_providers.local cannot set {field}; \
+session-scoped providers must not read process-owned credentials",
+                    ),
+                )
+            );
+        }
     }
 
     fn test_provider(name: &str) -> ModelProviderInfo {

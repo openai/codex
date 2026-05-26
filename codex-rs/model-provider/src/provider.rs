@@ -475,6 +475,25 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn custom_non_openai_provider_does_not_use_base_auth_manager() {
+        let provider = create_model_provider(
+            provider_for("http://localhost:1234/v1".to_string()),
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "openai-api-key",
+            ))),
+        );
+
+        assert!(
+            provider
+                .api_auth()
+                .await
+                .expect("auth should resolve")
+                .to_auth_headers()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn amazon_bedrock_provider_returns_bedrock_account_state() {
         let provider = create_model_provider(
