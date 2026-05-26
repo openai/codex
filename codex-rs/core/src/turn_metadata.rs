@@ -129,34 +129,6 @@ fn merge_turn_metadata(
     to_ascii_json_string(&metadata).ok()
 }
 
-fn build_turn_metadata_bag(
-    session_id: Option<String>,
-    thread_id: Option<String>,
-    forked_from_thread_id: Option<ThreadId>,
-    thread_source: Option<ThreadSource>,
-    turn_id: Option<String>,
-    sandbox: Option<String>,
-    repo_root: Option<String>,
-    workspace_git_metadata: Option<WorkspaceGitMetadata>,
-) -> TurnMetadataBag {
-    let mut workspaces = BTreeMap::new();
-    if let (Some(repo_root), Some(workspace_git_metadata)) = (repo_root, workspace_git_metadata)
-        && !workspace_git_metadata.is_empty()
-    {
-        workspaces.insert(repo_root, workspace_git_metadata.into());
-    }
-
-    TurnMetadataBag {
-        session_id,
-        thread_id,
-        forked_from_thread_id,
-        thread_source,
-        turn_id,
-        workspaces,
-        sandbox,
-    }
-}
-
 pub async fn build_turn_metadata_header(
     cwd: &AbsolutePathBuf,
     sandbox: Option<&str>,
@@ -177,21 +149,24 @@ pub async fn build_turn_metadata_header(
         return None;
     }
 
-    build_turn_metadata_bag(
-        /*session_id*/ None,
-        /*thread_id*/ None,
-        /*forked_from_thread_id*/ None,
-        /*thread_source*/ None,
-        /*turn_id*/ None,
-        sandbox.map(ToString::to_string),
-        repo_root,
-        Some(WorkspaceGitMetadata {
-            associated_remote_urls,
-            latest_git_commit_hash,
-            has_changes,
-        }),
-    )
-    .to_header_value()
+    let workspace_git_metadata = WorkspaceGitMetadata {
+        associated_remote_urls,
+        latest_git_commit_hash,
+        has_changes,
+    };
+    let mut metadata = TurnMetadataBag {
+        sandbox: sandbox.map(ToString::to_string),
+        ..Default::default()
+    };
+    if let Some(repo_root) = repo_root
+        && !workspace_git_metadata.is_empty()
+    {
+        metadata
+            .workspaces
+            .insert(repo_root, workspace_git_metadata.into());
+    }
+
+    metadata.to_header_value()
 }
 
 #[derive(Clone, Debug)]
@@ -229,16 +204,15 @@ impl TurnMetadataState {
             )
             .to_string(),
         );
-        let base_metadata = build_turn_metadata_bag(
-            Some(session_id),
-            Some(thread_id),
+        let base_metadata = TurnMetadataBag {
+            session_id: Some(session_id),
+            thread_id: Some(thread_id),
             forked_from_thread_id,
             thread_source,
-            Some(turn_id),
+            turn_id: Some(turn_id),
             sandbox,
-            /*repo_root*/ None,
-            /*workspace_git_metadata*/ None,
-        );
+            ..Default::default()
+        };
         let base_header = base_metadata
             .to_header_value()
             .unwrap_or_else(|| "{}".to_string());

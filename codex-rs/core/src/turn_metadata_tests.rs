@@ -93,7 +93,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
-        None,
+        /*forked_from_thread_id*/ None,
         Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
@@ -129,7 +129,7 @@ fn turn_metadata_state_uses_explicit_subagent_thread_source() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
-        None,
+        /*forked_from_thread_id*/ None,
         Some(ThreadSource::Subagent),
         "turn-a".to_string(),
         cwd,
@@ -183,7 +183,7 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
-        None,
+        /*forked_from_thread_id*/ None,
         Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
@@ -211,7 +211,7 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
-        None,
+        /*forked_from_thread_id*/ None,
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
@@ -257,7 +257,7 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
-        None,
+        /*forked_from_thread_id*/ None,
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
@@ -308,7 +308,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
-        None,
+        /*forked_from_thread_id*/ None,
         Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,

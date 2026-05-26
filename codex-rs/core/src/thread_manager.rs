@@ -582,7 +582,7 @@ impl ThreadManager {
         &self,
         options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        self.start_thread_with_options_and_fork_source(options, None)
+        self.start_thread_with_options_and_fork_source(options, /*forked_from_thread_id*/ None)
             .await
     }
 
