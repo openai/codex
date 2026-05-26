@@ -1,6 +1,6 @@
+[CmdletBinding()]
 param(
-    [string]$Release = $env:CODEX_RELEASE,
-    [switch]$NonInteractive
+    [string]$Release = $env:CODEX_RELEASE
 )
 
 Set-StrictMode -Version Latest
@@ -11,9 +11,7 @@ if ([string]::IsNullOrWhiteSpace($Release)) {
     $Release = "latest"
 }
 
-if (-not $PSBoundParameters.ContainsKey("NonInteractive") -and $env:CODEX_NON_INTERACTIVE -match "^(?i:1|true|yes)$") {
-    $NonInteractive = $true
-}
+$NonInteractive = $env:CODEX_NON_INTERACTIVE -match "^(?i:1|true|yes)$"
 
 function Write-Step {
     param(

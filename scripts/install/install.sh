@@ -58,12 +58,9 @@ parse_args() {
         RELEASE="$2"
         shift
         ;;
-      --non-interactive)
-        NON_INTERACTIVE=true
-        ;;
       --help | -h)
         cat <<EOF
-Usage: install.sh [--release VERSION] [--non-interactive]
+Usage: install.sh [--release VERSION]
 
 Environment:
   CODEX_RELEASE          Version to install; overridden by --release.
