@@ -100,7 +100,7 @@ fn tools_are_contributed_when_enabled_with_dedicated_tools() {
 #[test]
 fn install_registers_dedicated_tool_contributor() {
     let mut builder = ExtensionRegistryBuilder::<codex_core::config::Config>::new();
-    crate::install(&mut builder, None);
+    crate::install(&mut builder, /*metrics_client*/ None);
     let registry = builder.build();
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
