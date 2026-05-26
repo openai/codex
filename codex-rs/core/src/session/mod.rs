@@ -1100,7 +1100,13 @@ impl Session {
             self.services
                 .managed_network_requirements_configured
                 .then(|| {
-                    build_blocked_request_observer(Arc::clone(&self.services.network_approval))
+                    build_blocked_request_observer(
+                        Arc::clone(&self.services.network_approval),
+                        crate::security_events::SandboxViolationAuditContext::from_network_proxy(
+                            self.services.state_db.clone(),
+                            self.services.network_proxy_audit_metadata.clone(),
+                        ),
+                    )
                 }),
             self.services.managed_network_requirements_configured,
             self.services.network_proxy_audit_metadata.clone(),
