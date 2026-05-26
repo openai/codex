@@ -868,6 +868,7 @@ mod tests {
         let mut history = ChatComposerHistory::new();
         history.set_metadata(test_thread_id(), /*log_id*/ 42, /*entry_count*/ 1);
 
+        assert!(history.navigate_up(&tx).is_none());
         let disabled = history.on_entry_response(
             /*log_id*/ 42,
             /*offset*/ 0,
@@ -898,6 +899,7 @@ mod tests {
         );
 
         history.set_at_mention_restore_enabled(/*enabled*/ true);
+        assert!(history.navigate_up(&tx).is_none());
         let enabled = history.on_entry_response(
             /*log_id*/ 42,
             /*offset*/ 0,

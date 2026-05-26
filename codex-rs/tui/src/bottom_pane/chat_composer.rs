@@ -3492,7 +3492,7 @@ impl ChatComposer {
         let file_token = if self.mentions_v2_enabled {
             None
         } else {
-            Self::current_at_token(&self.draft.textarea)
+            self.current_editable_at_token()
         };
         let browsing_history = self
             .history
