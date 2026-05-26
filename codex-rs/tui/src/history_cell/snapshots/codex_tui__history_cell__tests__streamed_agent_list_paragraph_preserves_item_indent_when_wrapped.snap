@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "lines.join(\"\\n\")"
+---
+• 1. Correctness issue: server tool-search completions are
+  rejected.
+  
+     In next_prompt_suggestion.rs, ToolSearchCall records its
+     call id, but a paired output is ignored and suppresses
+     suggestions.

@@ -110,7 +110,7 @@ pub(crate) async fn handle_mcp_tool_call(
     call_id: String,
     server: String,
     tool_name: String,
-    hook_tool_name: String,
+    hook_tool_name: HookToolName,
     arguments: String,
 ) -> HandledMcpToolCall {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
@@ -1158,7 +1158,7 @@ async fn maybe_request_mcp_tool_approval(
     turn_context: &Arc<TurnContext>,
     call_id: &str,
     invocation: &McpInvocation,
-    hook_tool_name: &str,
+    hook_tool_name: &HookToolName,
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
@@ -1193,7 +1193,7 @@ async fn maybe_request_mcp_tool_approval(
         turn_context,
         call_id,
         PermissionRequestPayload {
-            tool_name: HookToolName::new(hook_tool_name),
+            tool_name: hook_tool_name.clone(),
             tool_input: invocation
                 .arguments
                 .clone()

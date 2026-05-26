@@ -1832,7 +1832,8 @@ impl Session {
         let active = self.active_turn.lock().await;
         active
             .as_ref()
-            .and_then(|turn| turn.tasks.get(sub_id))
+            .and_then(|turn| turn.task.as_ref())
+            .filter(|task| task.turn_context.sub_id == sub_id)
             .map(|task| Arc::clone(&task.turn_context))
     }
 
@@ -1840,7 +1841,7 @@ impl Session {
         &self,
     ) -> Option<(Arc<TurnContext>, CancellationToken)> {
         let active = self.active_turn.lock().await;
-        let (_, task) = active.as_ref()?.tasks.first()?;
+        let task = active.as_ref()?.task.as_ref()?;
         Some((
             Arc::clone(&task.turn_context),
             task.cancellation_token.child_token(),
@@ -3159,9 +3160,10 @@ impl Session {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+        let Some(active_task) = active_turn.task.as_ref() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
+        let active_turn_id = &active_task.turn_context.sub_id;
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
@@ -3172,28 +3174,25 @@ impl Session {
             });
         }
 
-        match active_turn.tasks.first().map(|(_, task)| task.kind) {
-            Some(crate::state::TaskKind::Regular) => {}
-            Some(crate::state::TaskKind::Review) => {
+        match active_task.kind {
+            crate::state::TaskKind::Regular => {}
+            crate::state::TaskKind::Review => {
                 return Err(SteerInputError::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Review,
                 });
             }
-            Some(crate::state::TaskKind::Compact) => {
+            crate::state::TaskKind::Compact => {
                 return Err(SteerInputError::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Compact,
                 });
             }
-            None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
         }
 
-        if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
-            && let Some((_, active_task)) = active_turn.tasks.first()
-        {
+        if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
             active_task
                 .turn_context
                 .turn_metadata_state

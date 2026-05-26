@@ -447,7 +447,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},
         ToolPlanInputs {
-            mcp_tools: Some(vec![mcp_tool("direct", "mcp__direct__", "lookup")]),
+            mcp_tools: Some(vec![mcp_tool("direct", "mcp__direct", "lookup")]),
             ..ToolPlanInputs::default()
         },
     )
@@ -458,12 +458,12 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "read_mcp_resource",
     ]);
     assert_eq!(
-        direct_mcp.namespace_function_names("mcp__direct__"),
+        direct_mcp.namespace_function_names("mcp__direct"),
         &["lookup".to_string()]
     );
 
     let searchable_mcp = ToolPlanInputs {
-        deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable__", "lookup")]),
+        deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable", "lookup")]),
         ..ToolPlanInputs::default()
     };
 
@@ -512,7 +512,10 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     )
     .await;
     enabled.assert_visible_contains(&["tool_search"]);
-    enabled.assert_registered_contains(&["tool_search", "mcp__searchable__lookup"]);
+    enabled.assert_registered_contains(&[
+        "tool_search",
+        &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
+    ]);
 }
 
 #[tokio::test]
@@ -520,18 +523,14 @@ async fn invalid_mcp_tools_are_not_registered() {
     let plan = probe_with(
         |_| {},
         ToolPlanInputs {
-            mcp_tools: Some(vec![invalid_mcp_tool(
-                "invalid",
-                "mcp__invalid__",
-                "lookup",
-            )]),
+            mcp_tools: Some(vec![invalid_mcp_tool("invalid", "mcp__invalid", "lookup")]),
             ..ToolPlanInputs::default()
         },
     )
     .await;
 
-    plan.assert_visible_lacks(&["mcp__invalid__"]);
-    plan.assert_registered_lacks(&["mcp__invalid__lookup"]);
+    plan.assert_visible_lacks(&["mcp__invalid"]);
+    plan.assert_registered_lacks(&[&ToolName::namespaced("mcp__invalid", "lookup").to_string()]);
 }
 
 #[tokio::test]

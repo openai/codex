@@ -2073,6 +2073,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
 
     let target = TargetPath::OutsideWorkspace("apply_patch_allow_session.txt");
     let (path, patch_path) = target.resolve_for_patch(&test);
+    let _path_cleanup = tempfile::TempPath::try_from_path(path.clone())?;
     let _ = fs::remove_file(&path);
 
     let patch_add = build_add_file_patch(&patch_path, "before");

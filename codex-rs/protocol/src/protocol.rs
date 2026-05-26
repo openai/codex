@@ -1850,6 +1850,10 @@ pub struct TurnCompleteEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
     pub turn_id: String,
+    // Persist for rollout consumers that correlate turns with telemetry traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub trace_id: Option<String>,
     /// Unix timestamp (in seconds) when the turn started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "number | null", optional)]
@@ -1994,6 +1998,21 @@ pub enum RateLimitReachedType {
     WorkspaceMemberCreditsDepleted,
     WorkspaceOwnerUsageLimitReached,
     WorkspaceMemberUsageLimitReached,
+}
+
+impl FromStr for RateLimitReachedType {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "rate_limit_reached" => Ok(Self::RateLimitReached),
+            "workspace_owner_credits_depleted" => Ok(Self::WorkspaceOwnerCreditsDepleted),
+            "workspace_member_credits_depleted" => Ok(Self::WorkspaceMemberCreditsDepleted),
+            "workspace_owner_usage_limit_reached" => Ok(Self::WorkspaceOwnerUsageLimitReached),
+            "workspace_member_usage_limit_reached" => Ok(Self::WorkspaceMemberUsageLimitReached),
+            other => Err(format!("unknown rate limit reached type: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]

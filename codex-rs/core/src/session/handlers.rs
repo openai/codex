@@ -460,16 +460,8 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-    sess.spawn_task(
-        Arc::clone(&turn_context),
-        vec![UserInput::Text {
-            text: turn_context.compact_prompt().to_string(),
-            // Compaction prompt is synthesized; no UI element ranges to preserve.
-            text_elements: Vec::new(),
-        }],
-        CompactTask,
-    )
-    .await;
+    sess.spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
+        .await;
 }
 
 pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {

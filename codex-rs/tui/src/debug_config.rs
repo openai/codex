@@ -156,6 +156,17 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(allow_appshots) = requirements_toml.allow_appshots {
+        requirement_lines.push(requirement_line(
+            "allow_appshots",
+            allow_appshots.to_string(),
+            requirements
+                .allow_appshots
+                .as_ref()
+                .map(|sourced| &sourced.source),
+        ));
+    }
+
     if requirements_toml.guardian_policy_config.is_some() {
         requirement_lines.push(requirement_line(
             "guardian_policy_config",
@@ -662,6 +673,10 @@ mod tests {
                 /*value*/ true,
                 RequirementSource::CloudRequirements,
             )),
+            allow_appshots: Some(Sourced::new(
+                /*value*/ false,
+                RequirementSource::CloudRequirements,
+            )),
             feature_requirements: Some(Sourced::new(
                 FeatureRequirementsToml {
                     entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
@@ -701,6 +716,7 @@ mod tests {
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             allow_managed_hooks_only: Some(true),
+            allow_appshots: Some(false),
             computer_use: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
@@ -763,6 +779,7 @@ mod tests {
             )
         );
         assert!(rendered.contains("allow_managed_hooks_only: true (source: cloud requirements)"));
+        assert!(rendered.contains("allow_appshots: false (source: cloud requirements)"));
         assert!(
             rendered.contains("guardian_policy_config: configured (source: cloud requirements)")
         );
@@ -917,6 +934,7 @@ approval_policy = "never"
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             allow_managed_hooks_only: None,
+            allow_appshots: None,
             computer_use: None,
             guardian_policy_config: None,
             feature_requirements: None,

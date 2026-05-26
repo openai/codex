@@ -7715,6 +7715,12 @@
       },
       "ConfigRequirements": {
         "properties": {
+          "allowAppshots": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowManagedHooksOnly": {
             "type": [
               "boolean",
@@ -10335,6 +10341,12 @@
             "minimum": 0.0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": [
+              "string",
               "null"
             ]
           }

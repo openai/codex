@@ -2236,6 +2236,7 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
+ "codex-git-utils",
  "codex-install-context",
  "codex-login",
  "codex-mcp",
@@ -2247,6 +2248,7 @@ dependencies = [
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-rollout",
  "codex-rollout-trace",
  "codex-sandboxing",
  "codex-state",
@@ -2260,7 +2262,9 @@ dependencies = [
  "codex-windows-sandbox",
  "crossterm",
  "http 1.4.0",
+ "insta",
  "libc",
+ "os_info",
  "owo-colors",
  "predicates",
  "pretty_assertions",
@@ -2269,12 +2273,16 @@ dependencies = [
  "serde_json",
  "sqlx",
  "supports-color 3.0.2",
+ "sys-locale",
  "tempfile",
  "tokio",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "unicode-segmentation",
+ "which 8.0.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2507,6 +2515,7 @@ dependencies = [
  "codex-feedback",
  "codex-git-utils",
  "codex-hooks",
+ "codex-install-context",
  "codex-login",
  "codex-mcp",
  "codex-memories-read",
@@ -3173,28 +3182,12 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-features",
- "codex-memories-read",
+ "codex-otel",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
+ "codex-utils-template",
  "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "codex-memories-mcp"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-utils-absolute-path",
- "codex-utils-output-truncation",
- "pretty_assertions",
- "rmcp",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -3210,11 +3203,7 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",
- "codex-utils-output-truncation",
- "codex-utils-template",
  "pretty_assertions",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -3770,6 +3759,7 @@ dependencies = [
  "codex-features",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "codex-utils-output-truncation",
  "codex-utils-pty",
  "codex-utils-string",
@@ -3981,6 +3971,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "codex-utils-cache",
+ "divan",
  "image",
  "mime_guess",
  "thiserror 2.0.18",
@@ -4146,6 +4137,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing-appender",
  "windows 0.58.0",
  "windows-sys 0.52.0",
 ]
@@ -4221,6 +4213,12 @@ checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
 ]
+
+[[package]]
+name = "condtype"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
 
 [[package]]
 name = "console"
@@ -5219,6 +5217,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "divan"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a405457ec78b8fe08b0e32b4a3570ab5dff6dd16eb9e76a5ee0a9d9cbd898933"
+dependencies = [
+ "cfg-if",
+ "clap",
+ "condtype",
+ "divan-macros",
+ "libc",
+ "regex-lite",
+]
+
+[[package]]
+name = "divan-macros"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9556bc800956545d6420a640173e5ba7dfa82f38d3ea5a167eb555bc69ac3323"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "dns-lookup"
 version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5491,7 +5514,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

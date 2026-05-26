@@ -37,6 +37,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3"
 tokio = { workspace = true, features = ["sync", "rt"] }
+tracing-appender = { workspace = true }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",

@@ -53,6 +53,15 @@ install:
 # there should be no need to add `--all-features`.
 test *args:
     RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast "$@"
+    just bench-smoke
+
+# Run explicit workspace benchmark targets.
+bench *args:
+    cargo bench --workspace --bench '*' "$@"
+
+# Run benchmark targets once to ensure they start successfully.
+bench-smoke:
+    just bench -- --test
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`

@@ -1,14 +1,12 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
+use std::sync::Weak;
 
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
-use codex_extension_api::NoopResponseItemInjector;
-use codex_extension_api::ResponseItemInjectionFuture;
-use codex_extension_api::ResponseItemInjector;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
@@ -18,13 +16,13 @@ use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_goal_extension::GoalRuntimeHandle;
+use codex_goal_extension::PreviousGoalSnapshot;
 use codex_goal_extension::install_with_backend;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
@@ -302,23 +300,11 @@ async fn budget_limited_goal_keeps_accruing_until_turn_stop() -> anyhow::Result<
         harness.sink.goal_events()
     );
 
-    let steering_items = harness.response_item_injector.items();
-    let [ResponseInputItem::Message { role, content, .. }] = steering_items.as_slice() else {
-        panic!("expected one budget-limit steering item, got {steering_items:#?}");
-    };
-    assert_eq!("user", role);
-    let [ContentItem::InputText { text }] = content.as_slice() else {
-        panic!("expected one steering text item, got {content:#?}");
-    };
-    assert!(text.starts_with("<goal_context>"));
-    assert!(text.trim_end().ends_with("</goal_context>"));
-    assert!(text.contains("budget_limited"));
-    assert!(text.to_lowercase().contains("wrap up this turn soon"));
     Ok(())
 }
 
 #[tokio::test]
-async fn budget_limited_goal_steering_injects_once_after_later_tool_finish() -> anyhow::Result<()> {
+async fn budget_limited_goal_keeps_accounting_after_later_tool_finish() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -372,7 +358,6 @@ async fn budget_limited_goal_steering_injects_once_after_later_tool_finish() -> 
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
     assert_eq!(35, goal.tokens_used);
     assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
-    assert_eq!(1, harness.response_item_injector.items().len());
     Ok(())
 }
 
@@ -458,17 +443,158 @@ async fn update_goal_can_block_and_accounts_final_progress() -> anyhow::Result<(
     Ok(())
 }
 
+#[tokio::test]
+async fn external_goal_mutation_start_accounts_active_goal_progress() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let tools = harness.tools();
+    let create_tool = tool_by_name(&tools, "create_goal");
+    create_tool
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "ship goal extension backend" }),
+        ))
+        .await?;
+    harness.sink.clear();
+
+    harness
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 20, /*cached_input_tokens*/ 5, /*output_tokens*/ 8,
+                /*reasoning_output_tokens*/ 2, /*total_tokens*/ 30,
+            ),
+        )
+        .await;
+    harness
+        .runtime_handle()
+        .prepare_external_goal_mutation()
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(23, goal.tokens_used);
+    assert_eq!(
+        vec![CapturedGoalEvent {
+            event_id: "turn-1:external-goal-mutation".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            status: ThreadGoalStatus::Active,
+            tokens_used: 23,
+        }],
+        harness.sink.goal_events()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_goal_set_active_resets_baseline_without_live_thread() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness
+        .start_turn(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 100, /*cached_input_tokens*/ 0,
+                /*output_tokens*/ 0, /*reasoning_output_tokens*/ 0,
+                /*total_tokens*/ 100,
+            ),
+        )
+        .await;
+
+    let tools = harness.tools();
+    let create_tool = tool_by_name(&tools, "create_goal");
+    create_tool
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "old objective" }),
+        ))
+        .await?;
+    harness.sink.clear();
+
+    harness
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 120, /*cached_input_tokens*/ 0,
+                /*output_tokens*/ 0, /*reasoning_output_tokens*/ 0,
+                /*total_tokens*/ 120,
+            ),
+        )
+        .await;
+    harness
+        .runtime_handle()
+        .prepare_external_goal_mutation()
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let previous_goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    let updated_goal = runtime
+        .thread_goals()
+        .update_thread_goal(
+            thread_id,
+            codex_state::GoalUpdate {
+                objective: Some("new objective".to_string()),
+                status: Some(codex_state::ThreadGoalStatus::Active),
+                token_budget: None,
+                expected_goal_id: Some(previous_goal.goal_id.clone()),
+            },
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal update should succeed"))?;
+    harness
+        .runtime_handle()
+        .apply_external_goal_set(
+            updated_goal,
+            Some(PreviousGoalSnapshot::from(&previous_goal)),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    harness
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 130, /*cached_input_tokens*/ 0,
+                /*output_tokens*/ 0, /*reasoning_output_tokens*/ 0,
+                /*total_tokens*/ 130,
+            ),
+        )
+        .await;
+    harness
+        .notify_tool_finish("turn-1", "call-shell", "shell")
+        .await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(30, goal.tokens_used);
+    Ok(())
+}
+
 async fn installed_tools(
     runtime: Arc<codex_state::StateRuntime>,
     thread_id: ThreadId,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
-    install_with_backend(
-        &mut builder,
-        runtime,
-        Arc::new(NoopResponseItemInjector),
-        |_| true,
-    );
+    install_with_backend(&mut builder, runtime, Weak::new(), |_| true);
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = ExtensionData::new(thread_id.to_string());
@@ -494,7 +620,6 @@ struct GoalExtensionHarness {
     session_store: ExtensionData,
     thread_store: ExtensionData,
     sink: Arc<RecordingEventSink>,
-    response_item_injector: Arc<RecordingResponseItemInjector>,
 }
 
 impl GoalExtensionHarness {
@@ -503,14 +628,8 @@ impl GoalExtensionHarness {
         thread_id: ThreadId,
     ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
-        let response_item_injector = Arc::new(RecordingResponseItemInjector::default());
         let mut builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
-        install_with_backend(
-            &mut builder,
-            runtime,
-            response_item_injector.clone(),
-            |_| true,
-        );
+        install_with_backend(&mut builder, runtime, Weak::new(), |_| true);
         let registry = builder.build();
         let session_store = ExtensionData::new("session-1");
         let thread_store = ExtensionData::new(thread_id.to_string());
@@ -528,7 +647,6 @@ impl GoalExtensionHarness {
             session_store,
             thread_store,
             sink,
-            response_item_injector,
         })
     }
 
@@ -606,6 +724,12 @@ impl GoalExtensionHarness {
                 })
                 .await;
         }
+    }
+
+    fn runtime_handle(&self) -> Arc<GoalRuntimeHandle> {
+        self.thread_store
+            .get::<GoalRuntimeHandle>()
+            .unwrap_or_else(|| panic!("goal runtime handle should exist"))
     }
 }
 
@@ -689,34 +813,6 @@ impl RecordingEventSink {
 impl ExtensionEventSink for RecordingEventSink {
     fn emit(&self, event: Event) {
         self.events().push(event);
-    }
-}
-
-#[derive(Debug, Default)]
-struct RecordingResponseItemInjector {
-    items: Mutex<Vec<ResponseInputItem>>,
-}
-
-impl RecordingResponseItemInjector {
-    fn items(&self) -> Vec<ResponseInputItem> {
-        self.items
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    fn items_mut(&self) -> std::sync::MutexGuard<'_, Vec<ResponseInputItem>> {
-        self.items.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl ResponseItemInjector for RecordingResponseItemInjector {
-    fn inject_response_items<'a>(
-        &'a self,
-        items: Vec<ResponseInputItem>,
-    ) -> ResponseItemInjectionFuture<'a> {
-        self.items_mut().extend(items);
-        Box::pin(std::future::ready(Ok(())))
     }
 }
 
