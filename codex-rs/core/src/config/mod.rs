@@ -70,6 +70,7 @@ use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
+use codex_login::CliAuthKeyringBackendKind;
 use codex_mcp::McpConfig;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -1103,6 +1104,10 @@ impl AuthManagerConfig for Config {
         self.cli_auth_credentials_store_mode
     }
 
+    fn cli_auth_keyring_backend_kind(&self) -> CliAuthKeyringBackendKind {
+        Config::cli_auth_keyring_backend_kind(self)
+    }
+
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id.clone()
     }
@@ -1349,6 +1354,16 @@ impl Config {
         workspace_roots.extend(self.permissions.profile_workspace_roots().iter().cloned());
         dedupe_absolute_paths(&mut workspace_roots);
         workspace_roots
+    }
+
+    pub fn cli_auth_keyring_backend_kind(&self) -> CliAuthKeyringBackendKind {
+        // TODO: Migrate all keyring-backed CLI auth storage to the secrets
+        // backend after validating this path on Windows.
+        if self.features.enabled(Feature::SecretAuthStorage) {
+            CliAuthKeyringBackendKind::Secrets
+        } else {
+            CliAuthKeyringBackendKind::Direct
+        }
     }
 
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {

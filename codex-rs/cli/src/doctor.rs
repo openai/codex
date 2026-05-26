@@ -1196,7 +1196,11 @@ fn auth_check(config: &Config) -> DoctorCheck {
         return check;
     }
 
-    match load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode) {
+    match load_auth_dot_json(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.cli_auth_keyring_backend_kind(),
+    ) {
         Ok(Some(auth)) => {
             details.push(format!("stored auth mode: {}", stored_auth_mode(&auth)));
             details.push(format!("stored API key: {}", auth.openai_api_key.is_some()));
@@ -2519,10 +2523,13 @@ impl ProviderAuthReachabilityMode {
 }
 
 fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
-    let stored_auth =
-        load_auth_dot_json(&config.codex_home, config.cli_auth_credentials_store_mode)
-            .ok()
-            .flatten();
+    let stored_auth = load_auth_dot_json(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.cli_auth_keyring_backend_kind(),
+    )
+    .ok()
+    .flatten();
     let mode = provider_auth_reachability_mode_from_auth(
         config.model_provider.requires_openai_auth,
         env_var_present,

@@ -7,6 +7,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
+use codex_login::CliAuthKeyringBackendKind;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
 use codex_login::load_auth_dot_json;
@@ -291,6 +292,7 @@ async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
         ctx.codex_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
+        CliAuthKeyringBackendKind::default(),
     )?;
 
     ctx.auth_manager
@@ -359,6 +361,7 @@ async fn refresh_token_errors_on_account_mismatch() -> Result<()> {
         ctx.codex_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
+        CliAuthKeyringBackendKind::default(),
     )?;
 
     let err = ctx
@@ -531,6 +534,7 @@ async fn auth_reloads_disk_auth_when_cached_auth_is_stale() -> Result<()> {
         ctx.codex_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
+        CliAuthKeyringBackendKind::default(),
     )?;
 
     let cached_auth = ctx
@@ -596,6 +600,7 @@ async fn auth_reloads_disk_auth_without_calling_expired_refresh_token() -> Resul
         ctx.codex_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
+        CliAuthKeyringBackendKind::default(),
     )?;
 
     let cached_auth = ctx
@@ -860,6 +865,7 @@ async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<
         ctx.codex_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
+        CliAuthKeyringBackendKind::default(),
     )?;
 
     ctx.auth_manager
@@ -985,6 +991,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
         ctx.codex_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
+        CliAuthKeyringBackendKind::default(),
     )?;
 
     let cached_before = ctx
@@ -1082,6 +1089,7 @@ async fn unauthorized_recovery_errors_on_account_mismatch() -> Result<()> {
         ctx.codex_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
+        CliAuthKeyringBackendKind::default(),
     )?;
 
     let cached_before = ctx
@@ -1173,6 +1181,7 @@ impl RefreshTokenTestContext {
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
             /*chatgpt_base_url*/ None,
+            CliAuthKeyringBackendKind::default(),
         )
         .await;
 
@@ -1184,9 +1193,13 @@ impl RefreshTokenTestContext {
     }
 
     fn load_auth(&self) -> Result<AuthDotJson> {
-        load_auth_dot_json(self.codex_home.path(), AuthCredentialsStoreMode::File)
-            .context("load auth.json")?
-            .context("auth.json should exist")
+        load_auth_dot_json(
+            self.codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            CliAuthKeyringBackendKind::default(),
+        )
+        .context("load auth.json")?
+        .context("auth.json should exist")
     }
 
     async fn write_auth(&self, auth_dot_json: &AuthDotJson) -> Result<()> {
@@ -1194,6 +1207,7 @@ impl RefreshTokenTestContext {
             self.codex_home.path(),
             auth_dot_json,
             AuthCredentialsStoreMode::File,
+            CliAuthKeyringBackendKind::default(),
         )?;
         self.auth_manager.reload().await;
         Ok(())
