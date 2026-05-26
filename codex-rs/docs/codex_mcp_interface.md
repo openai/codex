@@ -8,7 +8,7 @@ This document describes Codex's experimental MCP server interface: a JSON-RPC AP
 
 ## Overview
 
-Codex exposes MCP-compatible methods to manage threads, turns, accounts, config, and approvals. The types live in `app-server-protocol/src/protocol/{common,v1,v2}.rs` and are consumed by the app server implementation in `app-server/`.
+Codex exposes MCP-compatible methods to manage threads, turns, accounts, config, and approvals. The shared and v1 types live in `app-server-protocol/src/protocol/common.rs` and `app-server-protocol/src/protocol/v1.rs`; v2 types live under `app-server-protocol/src/protocol/v2/`. The app server implementation in `app-server/` consumes those protocol definitions.
 
 At a glance:
 
@@ -30,7 +30,7 @@ At a glance:
 - Approvals (server -> client requests)
   - `applyPatchApproval`, `execCommandApproval`
 
-See code for full type definitions and exact shapes: `app-server-protocol/src/protocol/{common,v1,v2}.rs`.
+See code for full type definitions and exact shapes: `app-server-protocol/src/protocol/common.rs`, `app-server-protocol/src/protocol/v1.rs`, and `app-server-protocol/src/protocol/v2/`.
 
 ## Starting the server
 
@@ -141,4 +141,4 @@ The server still accepts a narrow v1 compatibility surface for existing app clie
 
 ## Compatibility and stability
 
-This interface is experimental. Method names, fields, and event shapes may evolve. For the authoritative schema, consult `app-server-protocol/src/protocol/{common,v1,v2}.rs` and the corresponding server wiring in `app-server/`.
+This interface is experimental. Method names, fields, and event shapes may evolve. For the authoritative schema, consult `app-server-protocol/src/protocol/common.rs`, `app-server-protocol/src/protocol/v1.rs`, `app-server-protocol/src/protocol/v2/`, and the corresponding server wiring in `app-server/`.
