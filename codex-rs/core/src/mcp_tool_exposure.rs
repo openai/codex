@@ -20,10 +20,15 @@ pub(crate) fn build_mcp_tool_exposure(
     config: &Config,
     search_tool_enabled: bool,
 ) -> McpToolExposure {
-    let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
+    let model_visible_tools = all_mcp_tools
+        .iter()
+        .filter(|tool| tool.is_model_visible())
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(&model_visible_tools);
     if let Some(connectors) = connectors {
         deferred_tools.extend(filter_codex_apps_mcp_tools(
-            all_mcp_tools,
+            &model_visible_tools,
             connectors,
             config,
         ));

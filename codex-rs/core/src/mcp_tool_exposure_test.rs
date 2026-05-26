@@ -7,6 +7,7 @@ use codex_mcp::ToolInfo;
 use codex_tools::ToolName;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
+use rmcp::model::Meta;
 use rmcp::model::Tool;
 
 use super::*;
@@ -79,11 +80,71 @@ fn numbered_mcp_tools(count: usize) -> Vec<ToolInfo> {
         .collect()
 }
 
+fn with_ui_visibility(mut tool: ToolInfo, visibility: &[&str]) -> ToolInfo {
+    tool.tool.meta = Some(Meta(
+        serde_json::json!({
+            "ui": {
+                "visibility": visibility,
+            },
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    ));
+    tool
+}
+
 fn tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
     tools
         .iter()
         .map(codex_mcp::ToolInfo::canonical_tool_name)
         .collect()
+}
+
+#[tokio::test]
+async fn hides_app_only_tools_from_model_exposure() {
+    let config = test_config().await;
+    let public_tool = make_mcp_tool(
+        "rmcp",
+        "public_tool",
+        "mcp__rmcp",
+        "public_tool",
+        /*connector_id*/ None,
+        /*connector_name*/ None,
+    );
+    let app_only_tool = with_ui_visibility(
+        make_mcp_tool(
+            "rmcp",
+            "app_only_tool",
+            "mcp__rmcp",
+            "app_only_tool",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+        ),
+        &["app"],
+    );
+    let model_only_tool = with_ui_visibility(
+        make_mcp_tool(
+            "rmcp",
+            "model_only_tool",
+            "mcp__rmcp",
+            "model_only_tool",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+        ),
+        &["model"],
+    );
+    let mcp_tools = vec![public_tool.clone(), app_only_tool, model_only_tool.clone()];
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools, /*connectors*/ None, &config, /*search_tool_enabled*/ true,
+    );
+
+    assert_eq!(
+        tool_names(&exposure.direct_tools),
+        tool_names(&[public_tool, model_only_tool])
+    );
+    assert!(exposure.deferred_tools.is_none());
 }
 
 #[tokio::test]

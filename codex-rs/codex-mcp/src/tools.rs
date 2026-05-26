@@ -59,6 +59,22 @@ impl ToolInfo {
     pub fn canonical_tool_name(&self) -> ToolName {
         ToolName::namespaced(self.callable_namespace.clone(), self.callable_name.clone())
     }
+
+    /// Returns whether MCP Apps metadata allows this tool to be presented to the model.
+    pub fn is_model_visible(&self) -> bool {
+        self.tool
+            .meta
+            .as_deref()
+            .and_then(|meta| meta.get(META_UI))
+            .and_then(JsonValue::as_object)
+            .and_then(|ui| ui.get(META_UI_VISIBILITY))
+            .and_then(JsonValue::as_array)
+            .is_none_or(|visibility| {
+                visibility
+                    .iter()
+                    .any(|value| value.as_str() == Some(META_UI_VISIBILITY_MODEL))
+            })
+    }
 }
 
 pub fn declared_openai_file_input_param_names(
@@ -261,6 +277,9 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
+const META_UI: &str = "ui";
+const META_UI_VISIBILITY: &str = "visibility";
+const META_UI_VISIBILITY_MODEL: &str = "model";
 
 fn callable_namespace_with_prefix(namespace: &str, prefix_mcp_tool_names: bool) -> String {
     if !prefix_mcp_tool_names || namespace.starts_with(LEGACY_MCP_TOOL_NAME_PREFIX) {
