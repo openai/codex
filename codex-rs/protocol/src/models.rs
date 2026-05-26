@@ -1238,18 +1238,10 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::Image { image_url, detail } => {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
-                        vec![
-                            ContentItem::InputText {
-                                text: image_open_tag_text(),
-                            },
-                            ContentItem::InputImage {
-                                image_url,
-                                detail: Some(detail),
-                            },
-                            ContentItem::InputText {
-                                text: image_close_tag_text(),
-                            },
-                        ]
+                        vec![ContentItem::InputImage {
+                            image_url,
+                            detail: Some(detail),
+                        }]
                     }
                     UserInput::LocalImage { path, detail } => {
                         image_index += 1;
@@ -2622,7 +2614,7 @@ mod tests {
     }
 
     #[test]
-    fn wraps_image_user_input_with_tags() -> Result<()> {
+    fn serializes_image_user_input_without_tags() -> Result<()> {
         let image_url = "data:image/png;base64,abc".to_string();
 
         let item = ResponseInputItem::from(vec![UserInput::Image {
@@ -2632,18 +2624,10 @@ mod tests {
 
         match item {
             ResponseInputItem::Message { content, .. } => {
-                let expected = vec![
-                    ContentItem::InputText {
-                        text: image_open_tag_text(),
-                    },
-                    ContentItem::InputImage {
-                        image_url,
-                        detail: Some(DEFAULT_IMAGE_DETAIL),
-                    },
-                    ContentItem::InputText {
-                        text: image_close_tag_text(),
-                    },
-                ];
+                let expected = vec![ContentItem::InputImage {
+                    image_url,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                }];
                 assert_eq!(content, expected);
             }
             other => panic!("expected message response but got {other:?}"),
@@ -2664,7 +2648,7 @@ mod tests {
         match item {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(
-                    content.get(1),
+                    content.first(),
                     Some(&ContentItem::InputImage {
                         image_url,
                         detail: Some(ImageDetail::Original),
@@ -2862,35 +2846,23 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(
                     content.first(),
-                    Some(&ContentItem::InputText {
-                        text: image_open_tag_text(),
-                    })
-                );
-                assert_eq!(
-                    content.get(1),
                     Some(&ContentItem::InputImage {
                         image_url,
                         detail: Some(DEFAULT_IMAGE_DETAIL),
                     })
                 );
                 assert_eq!(
-                    content.get(2),
-                    Some(&ContentItem::InputText {
-                        text: image_close_tag_text(),
-                    })
-                );
-                assert_eq!(
-                    content.get(3),
+                    content.get(1),
                     Some(&ContentItem::InputText {
                         text: local_image_open_tag_text(/*label_number*/ 2),
                     })
                 );
                 assert!(matches!(
-                    content.get(4),
+                    content.get(2),
                     Some(ContentItem::InputImage { .. })
                 ));
                 assert_eq!(
-                    content.get(5),
+                    content.get(3),
                     Some(&ContentItem::InputText {
                         text: image_close_tag_text(),
                     })
