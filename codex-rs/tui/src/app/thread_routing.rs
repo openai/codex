@@ -515,14 +515,11 @@ impl App {
                                 if actual_turn_id == interrupt_turn_id {
                                     return Err(error).wrap_err("turn/interrupt failed in TUI");
                                 }
-                                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
-                                    let mut store = channel.store.lock().await;
-                                    store.active_turn_id = Some(actual_turn_id.clone());
-                                }
                                 // Review flows can swap the active turn before the TUI processes
                                 // the corresponding notification. Retry once with the
                                 // server-reported turn id so Ctrl+C/Esc do not fatally exit on that
-                                // stale cache.
+                                // stale cache, but let lifecycle notifications own the cached
+                                // active turn id.
                                 interrupt_turn_id = actual_turn_id;
                             }
                             Err(error) => {
