@@ -146,7 +146,6 @@ struct ConnectionState {
 #[derive(Default)]
 struct ThreadAnalyticsState {
     connection_id: Option<u64>,
-    session_id: Option<String>,
     metadata: Option<ThreadMetadataState>,
 }
 
@@ -226,7 +225,6 @@ impl<'a> AnalyticsDropSite<'a> {
 
 enum MissingAnalyticsContext {
     ThreadConnection,
-    ThreadSessionId,
     Connection { connection_id: u64 },
     ThreadMetadata,
 }
@@ -257,6 +255,7 @@ struct ItemReviewSummary {
 
 #[derive(Clone)]
 struct ThreadMetadataState {
+    session_id: String,
     thread_source: Option<ThreadSource>,
     initialization_mode: ThreadInitializationMode,
     subagent_source: Option<String>,
@@ -265,6 +264,7 @@ struct ThreadMetadataState {
 
 impl ThreadMetadataState {
     fn from_thread_metadata(
+        session_id: String,
         session_source: &SessionSource,
         thread_source: Option<ThreadSource>,
         initialization_mode: ThreadInitializationMode,
@@ -283,6 +283,7 @@ impl ThreadMetadataState {
             | SessionSource::Unknown => (None, None),
         };
         Self {
+            session_id,
             thread_source,
             initialization_mode,
             subagent_source,
@@ -525,11 +526,9 @@ impl AnalyticsReducer {
             .and_then(|thread| thread.connection_id);
         let thread_state = self.threads.entry(input.thread_id.clone()).or_default();
         thread_state
-            .session_id
-            .get_or_insert_with(|| input.session_id.clone());
-        thread_state
             .metadata
             .get_or_insert_with(|| ThreadMetadataState {
+                session_id: input.session_id.clone(),
                 thread_source: Some(ThreadSource::Subagent),
                 initialization_mode: ThreadInitializationMode::New,
                 subagent_source: Some(subagent_source_name(&input.subagent_source)),
@@ -548,18 +547,16 @@ impl AnalyticsReducer {
         input: GuardianReviewEventParams,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let drop_site = AnalyticsDropSite::guardian(&input);
-        let Some(connection_state) = self.thread_connection_or_warn(drop_site) else {
-            return;
-        };
-        let Some(session_id) = self.thread_session_id_or_warn(drop_site) else {
+        let Some((connection_state, thread_metadata)) =
+            self.thread_context_or_warn(AnalyticsDropSite::guardian(&input))
+        else {
             return;
         };
         out.push(TrackEventRequest::GuardianReview(Box::new(
             GuardianReviewEventRequest {
                 event_type: "codex_guardian_review",
                 event_params: GuardianReviewEventPayload {
-                    session_id: session_id.to_string(),
+                    session_id: thread_metadata.session_id.clone(),
                     app_server_client: connection_state.app_server_client.clone(),
                     runtime: connection_state.runtime.clone(),
                     guardian_review: input,
@@ -1245,6 +1242,7 @@ impl AnalyticsReducer {
             return;
         };
         let thread_metadata = ThreadMetadataState::from_thread_metadata(
+            session_id.clone(),
             &session_source,
             thread.thread_source.map(Into::into),
             initialization_mode,
@@ -1253,7 +1251,6 @@ impl AnalyticsReducer {
             thread_id.clone(),
             ThreadAnalyticsState {
                 connection_id: Some(connection_id),
-                session_id: Some(session_id.clone()),
                 metadata: Some(thread_metadata.clone()),
             },
         );
@@ -1278,12 +1275,9 @@ impl AnalyticsReducer {
     }
 
     fn ingest_compaction(&mut self, input: CodexCompactionEvent, out: &mut Vec<TrackEventRequest>) {
-        let drop_site = AnalyticsDropSite::compaction(&input);
-        let Some((connection_state, thread_metadata)) = self.thread_context_or_warn(drop_site)
+        let Some((connection_state, thread_metadata)) =
+            self.thread_context_or_warn(AnalyticsDropSite::compaction(&input))
         else {
-            return;
-        };
-        let Some(session_id) = self.thread_session_id_or_warn(drop_site) else {
             return;
         };
         out.push(TrackEventRequest::Compaction(Box::new(
@@ -1291,7 +1285,7 @@ impl AnalyticsReducer {
                 event_type: "codex_compaction_event",
                 event_params: codex_compaction_event_params(
                     input,
-                    session_id.to_string(),
+                    thread_metadata.session_id.clone(),
                     connection_state.app_server_client.clone(),
                     connection_state.runtime.clone(),
                     thread_metadata.thread_source,
@@ -1390,14 +1384,11 @@ impl AnalyticsReducer {
             warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadMetadata);
             return;
         };
-        let Some(session_id) = self.thread_session_id_or_warn(drop_site) else {
-            return;
-        };
         out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
             event_type: "codex_turn_steer_event",
             event_params: CodexTurnSteerEventParams {
                 thread_id: pending_request.thread_id,
-                session_id: session_id.to_string(),
+                session_id: thread_metadata.session_id.clone(),
                 expected_turn_id: Some(pending_request.expected_turn_id),
                 accepted_turn_id,
                 app_server_client: connection_state.app_server_client.clone(),
@@ -1513,16 +1504,12 @@ impl AnalyticsReducer {
             warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadMetadata);
             return;
         };
-        let Some(session_id) = self.thread_session_id_or_warn(drop_site) else {
-            return;
-        };
         let turn_event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
             event_type: "codex_turn_event",
             event_params: codex_turn_event_params(
                 connection_state.app_server_client.clone(),
                 connection_state.runtime.clone(),
                 turn_id.to_string(),
-                session_id.to_string(),
                 turn_state,
                 thread_metadata,
             ),
@@ -1574,18 +1561,6 @@ impl AnalyticsReducer {
         };
         Some((connection_state, thread_metadata))
     }
-
-    fn thread_session_id_or_warn(&self, drop_site: AnalyticsDropSite<'_>) -> Option<&str> {
-        let Some(session_id) = self
-            .threads
-            .get(drop_site.thread_id)
-            .and_then(|thread| thread.session_id.as_deref())
-        else {
-            warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadSessionId);
-            return None;
-        };
-        Some(session_id)
-    }
 }
 
 fn warn_missing_analytics_context(
@@ -1594,7 +1569,6 @@ fn warn_missing_analytics_context(
 ) {
     let (missing_context, connection_id) = match missing {
         MissingAnalyticsContext::ThreadConnection => ("thread_connection", None),
-        MissingAnalyticsContext::ThreadSessionId => ("thread_session_id", None),
         MissingAnalyticsContext::Connection { connection_id } => {
             ("connection", Some(connection_id))
         }
@@ -2447,7 +2421,6 @@ fn codex_turn_event_params(
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
     turn_id: String,
-    session_id: String,
     turn_state: &TurnState,
     thread_metadata: &ThreadMetadataState,
 ) -> CodexTurnEventParams {
@@ -2484,7 +2457,7 @@ fn codex_turn_event_params(
     let token_usage = turn_state.token_usage.clone();
     CodexTurnEventParams {
         thread_id,
-        session_id,
+        session_id: thread_metadata.session_id.clone(),
         turn_id,
         app_server_client,
         runtime,
