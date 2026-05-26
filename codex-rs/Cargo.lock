@@ -3182,6 +3182,7 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-features",
+ "codex-otel",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
