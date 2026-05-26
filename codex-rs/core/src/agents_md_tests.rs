@@ -7,6 +7,8 @@ use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -417,6 +419,15 @@ async fn linked_worktrees_inherit_agents_local_md_from_primary_checkout() {
         get_user_instructions(&cfg).await.as_deref(),
         Some("primary local")
     );
+
+    #[cfg(unix)]
+    {
+        fs::set_permissions(&repo, fs::Permissions::from_mode(0o000)).unwrap();
+        let instructions = get_user_instructions(&cfg).await;
+        fs::set_permissions(&repo, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(instructions.as_deref(), Some("versioned"));
+    }
 }
 
 /// When AGENTS.md is absent but a configured fallback exists, the fallback is used.

@@ -326,14 +326,20 @@ impl<'a> AgentsMdManager<'a> {
         let mut found: Vec<AbsolutePathBuf> = Vec::new();
         let candidate_filenames = self.candidate_filenames();
         for d in search_dirs {
-            let mut candidates = vec![d.join(LOCAL_AGENTS_MD_FILENAME)];
+            let mut candidates = vec![(d.join(LOCAL_AGENTS_MD_FILENAME), false)];
             if let Some((checkout_root, repo_root)) = linked_checkout_roots.as_ref()
                 && let Ok(relative) = d.as_path().strip_prefix(checkout_root.as_path())
             {
-                candidates.push(repo_root.join(relative).join(LOCAL_AGENTS_MD_FILENAME));
+                let inherited = repo_root.join(relative).join(LOCAL_AGENTS_MD_FILENAME);
+                candidates.push((inherited, true));
             }
-            candidates.extend(candidate_filenames.iter().skip(1).map(|name| d.join(name)));
-            for candidate in candidates {
+            candidates.extend(
+                candidate_filenames
+                    .iter()
+                    .skip(1)
+                    .map(|name| (d.join(name), false)),
+            );
+            for (candidate, is_inherited) in candidates {
                 match fs.get_metadata(&candidate, /*sandbox*/ None).await {
                     Ok(md) if md.is_file => {
                         found.push(candidate);
@@ -341,6 +347,7 @@ impl<'a> AgentsMdManager<'a> {
                     }
                     Ok(_) => {}
                     Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                    Err(_) if is_inherited => continue,
                     Err(err) => return Err(err),
                 }
             }
