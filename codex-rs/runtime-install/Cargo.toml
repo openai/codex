@@ -1,0 +1,38 @@
+[package]
+name = "codex-runtime-install"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_runtime_install"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-app-server-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "macros",
+    "process",
+    "rt",
+    "sync",
+] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

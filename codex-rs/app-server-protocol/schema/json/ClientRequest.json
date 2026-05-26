@@ -2927,7 +2927,7 @@
         }
       ]
     },
-    "RuntimeInstallManifest": {
+    "RuntimeInstallManifestParams": {
       "properties": {
         "archiveName": {
           "type": [
@@ -2991,7 +2991,7 @@
           ]
         },
         "manifest": {
-          "$ref": "#/definitions/RuntimeInstallManifest"
+          "$ref": "#/definitions/RuntimeInstallManifestParams"
         },
         "release": {
           "type": "string"
@@ -5706,6 +5706,29 @@
         "params"
       ],
       "title": "Runtime/installRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "runtime/install/cancel"
+          ],
+          "title": "Runtime/install/cancelRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Runtime/install/cancelRequest",
       "type": "object"
     },
     {

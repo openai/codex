@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_install_context::InstallContext;
+use codex_runtime_install::CODEX_RUNTIME_INSTALL_HELPER_ARG1;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
@@ -98,6 +99,9 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     let argv1 = args.next().unwrap_or_default();
     if argv1 == CODEX_FS_HELPER_ARG1 {
         codex_exec_server::run_fs_helper_main();
+    }
+    if argv1 == CODEX_RUNTIME_INSTALL_HELPER_ARG1 {
+        codex_runtime_install::run_runtime_install_helper_main();
     }
     if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
         let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));

@@ -1,12 +1,9 @@
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::RuntimeInstallParams;
-use codex_app_server_protocol::RuntimeInstallResponse;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -57,11 +54,12 @@ use crate::server::session_registry::SessionRegistry;
 pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
     notifications: RpcNotificationSender,
-    session: StdMutex<Option<SessionHandle>>,
+    session: std::sync::Mutex<Option<SessionHandle>>,
     active_body_stream_ids: Mutex<HashSet<String>>,
     background_task_shutdown: CancellationToken,
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
+    codex_self_exe: codex_utils_absolute_path::AbsolutePathBuf,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -75,10 +73,11 @@ impl ExecServerHandler {
         Self {
             session_registry,
             notifications,
-            session: StdMutex::new(None),
+            session: std::sync::Mutex::new(None),
             active_body_stream_ids: Mutex::new(HashSet::new()),
             background_task_shutdown: CancellationToken::new(),
             background_tasks: TaskTracker::new(),
+            codex_self_exe: runtime_paths.codex_self_exe.clone(),
             file_system: FileSystemHandler::new(runtime_paths),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -133,6 +132,7 @@ impl ExecServerHandler {
         Ok(InitializeResponse {
             session_id,
             codex_home: crate::codex_home::default_codex_home()?,
+            codex_self_exe: self.codex_self_exe.clone(),
         })
     }
 
@@ -293,14 +293,6 @@ impl ExecServerHandler {
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.copy(params).await
-    }
-
-    pub(crate) async fn runtime_install(
-        &self,
-        params: RuntimeInstallParams,
-    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
-        self.require_initialized_for("runtime")?;
-        crate::runtime_install::install_runtime(params).await
     }
 
     fn require_initialized_for(

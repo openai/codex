@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicBool;
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
-use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
@@ -34,6 +33,7 @@ use crate::request_processors::McpRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
 use crate::request_processors::ProcessExecRequestProcessor;
 use crate::request_processors::RemoteControlRequestProcessor;
+use crate::request_processors::RuntimeInstallRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
@@ -189,7 +189,6 @@ pub(crate) struct MessageProcessor {
     command_exec_processor: CommandExecRequestProcessor,
     process_exec_processor: ProcessExecRequestProcessor,
     config_processor: ConfigRequestProcessor,
-    environment_manager: Arc<EnvironmentManager>,
     environment_processor: EnvironmentRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
     feedback_processor: FeedbackRequestProcessor,
@@ -200,8 +199,8 @@ pub(crate) struct MessageProcessor {
     mcp_processor: McpRequestProcessor,
     plugin_processor: PluginRequestProcessor,
     remote_control_processor: RemoteControlRequestProcessor,
+    runtime_install_processor: RuntimeInstallRequestProcessor,
     search_processor: SearchRequestProcessor,
-    thread_manager: Arc<ThreadManager>,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
@@ -455,6 +454,11 @@ impl MessageProcessor {
             workspace_settings_cache,
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
+        let runtime_install_processor = RuntimeInstallRequestProcessor::new(
+            Arc::clone(&environment_manager_for_requests),
+            outgoing.clone(),
+            Arc::clone(&thread_manager),
+        );
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
@@ -543,7 +547,6 @@ impl MessageProcessor {
             command_exec_processor,
             process_exec_processor,
             config_processor,
-            environment_manager: thread_manager.environment_manager(),
             environment_processor,
             external_agent_config_processor,
             feedback_processor,
@@ -554,8 +557,8 @@ impl MessageProcessor {
             mcp_processor,
             plugin_processor,
             remote_control_processor,
+            runtime_install_processor,
             search_processor,
-            thread_manager,
             thread_goal_processor,
             thread_processor,
             turn_processor,
@@ -1061,29 +1064,14 @@ impl MessageProcessor {
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::RuntimeInstall { params, .. } => {
-                let mut params = params;
-                let environment = if let Some(environment_id) = params.environment_id.take() {
-                    self.environment_manager
-                        .get_environment(&environment_id)
-                        .ok_or_else(|| {
-                            invalid_request(format!(
-                                "unknown runtime install environment id `{environment_id}`"
-                            ))
-                        })?
-                } else {
-                    self.environment_manager
-                        .default_or_local_environment()
-                        .ok_or_else(|| {
-                            internal_error("runtime install environment is not configured")
-                        })?
-                };
-                let response = environment.install_runtime(params).await?;
-                let response =
-                    crate::runtime_install::finalize_runtime_install(&environment, response)
-                        .await?;
-                self.thread_manager.plugins_manager().clear_cache();
-                self.thread_manager.skills_manager().clear_cache();
-                Ok(Some(response.into()))
+                self.runtime_install_processor
+                    .install_runtime(connection_id, params)
+                    .await
+            }
+            ClientRequest::RuntimeInstallCancel { .. } => {
+                self.runtime_install_processor
+                    .cancel_runtime_install()
+                    .await
             }
             ClientRequest::ThreadStart { params, .. } => {
                 self.thread_processor

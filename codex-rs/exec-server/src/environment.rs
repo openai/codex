@@ -3,8 +3,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::RuntimeInstallParams;
-use codex_app_server_protocol::RuntimeInstallResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -323,7 +321,7 @@ pub struct Environment {
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
     http_client: Arc<dyn HttpClient>,
-    runtime_installer: RuntimeInstaller,
+    remote_client: Option<LazyRemoteExecServerClient>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
     codex_home: Option<AbsolutePathBuf>,
 }
@@ -356,31 +354,6 @@ impl EnvironmentInfoProvider for RemoteEnvironmentInfoProvider {
         async move { self.client.environment_info().await }.boxed()
     }
 }
-
-#[derive(Clone)]
-enum RuntimeInstaller {
-    Local,
-    Remote(LazyRemoteExecServerClient),
-}
-
-impl RuntimeInstaller {
-    async fn install_runtime(
-        &self,
-        params: RuntimeInstallParams,
-    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
-        match self {
-            RuntimeInstaller::Local => crate::runtime_install::install_runtime(params).await,
-            RuntimeInstaller::Remote(client) => {
-                let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
-                client
-                    .runtime_install(params)
-                    .await
-                    .map_err(exec_server_error_to_jsonrpc)
-            }
-        }
-    }
-}
-
 fn exec_server_error_to_jsonrpc(err: ExecServerError) -> JSONRPCErrorError {
     match err {
         ExecServerError::Server { code, message } => JSONRPCErrorError {
@@ -402,7 +375,7 @@ impl Environment {
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             http_client: Arc::new(ReqwestHttpClient),
-            runtime_installer: RuntimeInstaller::Local,
+            remote_client: None,
             local_runtime_paths: None,
             codex_home: default_local_codex_home(),
         }
@@ -470,7 +443,7 @@ impl Environment {
                 local_runtime_paths.clone(),
             )),
             http_client: Arc::new(ReqwestHttpClient),
-            runtime_installer: RuntimeInstaller::Local,
+            remote_client: None,
             local_runtime_paths: Some(local_runtime_paths),
             codex_home,
         }
@@ -510,7 +483,7 @@ impl Environment {
             exec_backend,
             filesystem,
             http_client: Arc::new(http_client),
-            runtime_installer: RuntimeInstaller::Remote(client),
+            remote_client: Some(client),
             local_runtime_paths,
             codex_home: None,
         }
@@ -546,28 +519,32 @@ impl Environment {
         Arc::clone(&self.filesystem)
     }
 
-    pub async fn install_runtime(
-        &self,
-        params: RuntimeInstallParams,
-    ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
-        self.runtime_installer.install_runtime(params).await
-    }
-
     pub async fn codex_home(&self) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
         if let Some(codex_home) = self.codex_home.clone() {
             return Ok(codex_home);
         }
-        match &self.runtime_installer {
-            RuntimeInstaller::Local => default_local_codex_home().ok_or_else(|| {
-                internal_error("failed to locate local codex home for runtime install")
-            }),
-            RuntimeInstaller::Remote(client) => {
-                let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
-                client
-                    .codex_home()
-                    .ok_or_else(|| internal_error("remote exec-server did not report a codex home"))
-            }
+        let client = self.remote_client.as_ref().ok_or_else(|| {
+            internal_error("failed to locate local codex home for runtime install")
+        })?;
+        let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
+        client
+            .codex_home()
+            .ok_or_else(|| internal_error("remote exec-server did not report a codex home"))
+    }
+
+    pub async fn codex_self_exe(&self) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
+        if let Some(client) = self.remote_client.as_ref() {
+            let client = client.get().await.map_err(exec_server_error_to_jsonrpc)?;
+            return client.codex_self_exe().ok_or_else(|| {
+                internal_error("remote exec-server did not report its Codex executable")
+            });
         }
+        self.local_runtime_paths
+            .as_ref()
+            .map(|runtime_paths| runtime_paths.codex_self_exe.clone())
+            .ok_or_else(|| {
+                internal_error("failed to locate local Codex executable for runtime install")
+            })
     }
 }
 

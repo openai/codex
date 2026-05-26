@@ -45,6 +45,7 @@ members = [
     "exec",
     "file-system",
     "exec-server",
+    "runtime-install",
     "execpolicy",
     "execpolicy-legacy",
     "ext/extension-api",
@@ -172,6 +173,7 @@ codex-core-skills = { path = "core-skills" }
 codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
+codex-runtime-install = { path = "runtime-install" }
 codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
 codex-goal-extension = { path = "ext/goal" }

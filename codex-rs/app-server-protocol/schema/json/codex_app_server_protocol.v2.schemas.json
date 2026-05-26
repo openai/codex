@@ -2372,6 +2372,29 @@
             },
             "method": {
               "enum": [
+                "runtime/install/cancel"
+              ],
+              "title": "Runtime/install/cancelRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Runtime/install/cancelRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/uninstall"
               ],
               "title": "Plugin/uninstallRequestMethod",
@@ -11597,7 +11620,27 @@
         }
       ]
     },
-    "RuntimeInstallManifest": {
+    "RuntimeInstallCancelResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/RuntimeInstallCancelStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "RuntimeInstallCancelResponse",
+      "type": "object"
+    },
+    "RuntimeInstallCancelStatus": {
+      "enum": [
+        "canceled",
+        "not-found"
+      ],
+      "type": "string"
+    },
+    "RuntimeInstallManifestParams": {
       "properties": {
         "archiveName": {
           "type": [
@@ -11662,7 +11705,7 @@
           ]
         },
         "manifest": {
-          "$ref": "#/definitions/RuntimeInstallManifest"
+          "$ref": "#/definitions/RuntimeInstallManifestParams"
         },
         "release": {
           "type": "string"
@@ -11714,6 +11757,53 @@
         "skillsToRemove"
       ],
       "type": "object"
+    },
+    "RuntimeInstallProgressNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "bundleVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "downloadedBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/definitions/RuntimeInstallProgressPhase"
+        },
+        "totalBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase"
+      ],
+      "title": "RuntimeInstallProgressNotification",
+      "type": "object"
+    },
+    "RuntimeInstallProgressPhase": {
+      "enum": [
+        "checking",
+        "downloading",
+        "verifying",
+        "extracting",
+        "validating",
+        "installed",
+        "configuring"
+      ],
+      "type": "string"
     },
     "RuntimeInstallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -12087,6 +12177,26 @@
             "params"
           ],
           "title": "Skills/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "runtime/install/progress"
+              ],
+              "title": "Runtime/install/progressNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/RuntimeInstallProgressNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Runtime/install/progressNotification",
           "type": "object"
         },
         {

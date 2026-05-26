@@ -2973,6 +2973,51 @@
       },
       "type": "object"
     },
+    "RuntimeInstallProgressNotification": {
+      "properties": {
+        "bundleVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "downloadedBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/definitions/RuntimeInstallProgressPhase"
+        },
+        "totalBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase"
+      ],
+      "type": "object"
+    },
+    "RuntimeInstallProgressPhase": {
+      "enum": [
+        "checking",
+        "downloading",
+        "verifying",
+        "extracting",
+        "validating",
+        "installed",
+        "configuring"
+      ],
+      "type": "string"
+    },
     "SandboxPolicy": {
       "oneOf": [
         {
@@ -5543,6 +5588,26 @@
         "params"
       ],
       "title": "Skills/changedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "runtime/install/progress"
+          ],
+          "title": "Runtime/install/progressNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RuntimeInstallProgressNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Runtime/install/progressNotification",
       "type": "object"
     },
     {

@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RuntimeInstallProgressPhase": {
+      "enum": [
+        "checking",
+        "downloading",
+        "verifying",
+        "extracting",
+        "validating",
+        "installed",
+        "configuring"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "bundleVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "downloadedBytes": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "phase": {
+      "$ref": "#/definitions/RuntimeInstallProgressPhase"
+    },
+    "totalBytes": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "phase"
+  ],
+  "title": "RuntimeInstallProgressNotification",
+  "type": "object"
+}

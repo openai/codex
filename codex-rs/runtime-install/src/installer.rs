@@ -5,9 +5,11 @@ use std::path::PathBuf;
 use std::process::Stdio;
 
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::RuntimeInstallManifest;
+use codex_app_server_protocol::RuntimeInstallManifestParams;
 use codex_app_server_protocol::RuntimeInstallParams;
 use codex_app_server_protocol::RuntimeInstallPaths;
+use codex_app_server_protocol::RuntimeInstallProgressNotification;
+use codex_app_server_protocol::RuntimeInstallProgressPhase;
 use codex_app_server_protocol::RuntimeInstallResponse;
 use codex_app_server_protocol::RuntimeInstallStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -19,12 +21,14 @@ use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-use crate::rpc::internal_error;
-use crate::rpc::invalid_params;
+use crate::errors::internal_error;
+use crate::errors::invalid_params;
 
 const PUBLISHED_ARTIFACT_NAME: &str = "codex-primary-runtime";
-const USER_AGENT: &str = "codex-exec-server-runtime-installer";
+const USER_AGENT: &str = "codex-runtime-installer";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeArchiveFormat {
@@ -42,16 +46,68 @@ struct InstalledRuntimeMetadata {
     skills_to_remove: Option<Vec<String>>,
 }
 
-pub(crate) async fn install_runtime(
-    params: RuntimeInstallParams,
-) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
-    let install_root = default_install_root()?;
-    install_runtime_with_root(params, install_root).await
+pub type RuntimeInstallProgressSender = mpsc::UnboundedSender<RuntimeInstallProgressNotification>;
+
+#[derive(Clone)]
+struct RuntimeInstallProgressReporter {
+    bundle_version: Option<String>,
+    sender: Option<RuntimeInstallProgressSender>,
 }
 
-async fn install_runtime_with_root(
+impl RuntimeInstallProgressReporter {
+    fn new(bundle_version: Option<String>, sender: Option<RuntimeInstallProgressSender>) -> Self {
+        Self {
+            bundle_version,
+            sender,
+        }
+    }
+
+    fn phase(&self, phase: RuntimeInstallProgressPhase) {
+        self.send(
+            phase, /*downloaded_bytes*/ None, /*total_bytes*/ None,
+        );
+    }
+
+    fn download_progress(&self, downloaded_bytes: u64, total_bytes: Option<u64>) {
+        self.send(
+            RuntimeInstallProgressPhase::Downloading,
+            Some(downloaded_bytes),
+            total_bytes,
+        );
+    }
+
+    fn send(
+        &self,
+        phase: RuntimeInstallProgressPhase,
+        downloaded_bytes: Option<u64>,
+        total_bytes: Option<u64>,
+    ) {
+        let Some(sender) = self.sender.as_ref() else {
+            return;
+        };
+        let _ = sender.send(RuntimeInstallProgressNotification {
+            bundle_version: self.bundle_version.clone(),
+            downloaded_bytes,
+            phase,
+            total_bytes,
+        });
+    }
+}
+
+pub(crate) async fn install_runtime_with_progress(
+    params: RuntimeInstallParams,
+    progress: RuntimeInstallProgressSender,
+    cancellation: CancellationToken,
+) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
+    let install_root = default_install_root()?;
+    install_runtime_with_root_and_control(params, install_root, Some(progress), cancellation).await
+}
+
+async fn install_runtime_with_root_and_control(
     params: RuntimeInstallParams,
     install_root: PathBuf,
+    progress: Option<RuntimeInstallProgressSender>,
+    cancellation: CancellationToken,
 ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
     validate_manifest(&params.manifest)?;
     let archive_format = runtime_archive_format(&params.manifest)?;
@@ -62,11 +118,38 @@ async fn install_runtime_with_root(
         .unwrap_or_else(|| default_archive_name(archive_format).to_string());
     validate_path_segment(&archive_name, "archiveName")?;
 
+    let progress =
+        RuntimeInstallProgressReporter::new(params.manifest.bundle_version.clone(), progress);
+    progress.phase(RuntimeInstallProgressPhase::Checking);
+    ensure_not_cancelled(&cancellation)?;
+    if let Some(response) =
+        reuse_current_runtime(&params.manifest, &install_root, &progress, &cancellation).await?
+    {
+        return Ok(response);
+    }
     let staging_dir = make_staging_dir(&install_root).await?;
     let archive_path = staging_dir.join(archive_name);
     let result = async {
-        download_archive(&params.manifest.archive_url, &archive_path).await?;
-        install_runtime_from_archive(&params.manifest, &archive_path, &install_root).await
+        progress.download_progress(
+            /*downloaded_bytes*/ 0,
+            params.manifest.archive_size_bytes,
+        );
+        download_archive(
+            &params.manifest.archive_url,
+            &archive_path,
+            params.manifest.archive_size_bytes,
+            &progress,
+            &cancellation,
+        )
+        .await?;
+        install_runtime_from_archive_with_control(
+            &params.manifest,
+            &archive_path,
+            &install_root,
+            &progress,
+            &cancellation,
+        )
+        .await
     }
     .await;
     let cleanup_result = fs::remove_dir_all(&staging_dir).await;
@@ -81,44 +164,54 @@ async fn install_runtime_with_root(
     result
 }
 
+#[cfg(test)]
 async fn install_runtime_from_archive(
-    manifest: &RuntimeInstallManifest,
+    manifest: &RuntimeInstallManifestParams,
     archive_path: &Path,
     install_root: &Path,
+) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
+    install_runtime_from_archive_with_control(
+        manifest,
+        archive_path,
+        install_root,
+        &RuntimeInstallProgressReporter::new(manifest.bundle_version.clone(), None),
+        &CancellationToken::new(),
+    )
+    .await
+}
+
+async fn install_runtime_from_archive_with_control(
+    manifest: &RuntimeInstallManifestParams,
+    archive_path: &Path,
+    install_root: &Path,
+    progress: &RuntimeInstallProgressReporter,
+    cancellation: &CancellationToken,
 ) -> Result<RuntimeInstallResponse, JSONRPCErrorError> {
     let runtime_root_directory_name = runtime_root_directory_name(manifest)?;
     let installed_runtime_root = install_root.join(&runtime_root_directory_name);
     let target_platform = target_platform();
 
-    if let Some(bundle_version) = manifest.bundle_version.as_ref()
-        && let Ok(Some(metadata)) = read_installed_runtime_metadata(&installed_runtime_root).await
-        && metadata.bundle_version.as_ref() == Some(bundle_version)
-        && let Ok(paths) = validate_runtime_root(
-            &installed_runtime_root,
-            manifest.bundle_format_version,
-            target_platform,
-        )
-        .await
+    if let Some(response) =
+        reuse_current_runtime(manifest, install_root, progress, cancellation).await?
     {
-        return Ok(RuntimeInstallResponse {
-            bundle_version: Some(bundle_version.clone()),
-            paths,
-            status: RuntimeInstallStatus::AlreadyCurrent,
-        });
+        return Ok(response);
     }
 
     fs::create_dir_all(install_root)
         .await
         .map_err(|err| internal_error(format!("failed to create runtime install root: {err}")))?;
 
+    progress.phase(RuntimeInstallProgressPhase::Verifying);
     verify_archive_checksum(
         archive_path,
         &manifest.archive_sha256,
         &manifest.archive_url,
+        cancellation,
     )
     .await?;
 
     let archive_format = runtime_archive_format(manifest)?;
+    ensure_not_cancelled(cancellation)?;
     let staging_dir = make_staging_dir(install_root).await?;
     let result = async {
         let extract_dir = staging_dir.join("payload");
@@ -126,17 +219,23 @@ async fn install_runtime_from_archive(
             internal_error(format!("failed to create runtime extract dir: {err}"))
         })?;
 
+        progress.phase(RuntimeInstallProgressPhase::Extracting);
+        ensure_not_cancelled(cancellation)?;
         let entries = list_archive_entries(archive_format, archive_path).await?;
         assert_archive_entries_stay_within_directory(&entries, &extract_dir)?;
+        ensure_not_cancelled(cancellation)?;
         extract_archive(archive_format, archive_path, &extract_dir).await?;
 
         let extracted_runtime_root = extract_dir.join(&runtime_root_directory_name);
+        progress.phase(RuntimeInstallProgressPhase::Validating);
+        ensure_not_cancelled(cancellation)?;
         validate_runtime_root(
             &extracted_runtime_root,
             manifest.bundle_format_version,
             target_platform,
         )
         .await?;
+        ensure_not_cancelled(cancellation)?;
 
         let previous_runtime_root =
             install_root.join(format!("{runtime_root_directory_name}.previous"));
@@ -193,7 +292,38 @@ async fn install_runtime_from_archive(
             staging_dir.display()
         );
     }
+    if result.is_ok() {
+        progress.phase(RuntimeInstallProgressPhase::Installed);
+    }
     result
+}
+
+async fn reuse_current_runtime(
+    manifest: &RuntimeInstallManifestParams,
+    install_root: &Path,
+    progress: &RuntimeInstallProgressReporter,
+    cancellation: &CancellationToken,
+) -> Result<Option<RuntimeInstallResponse>, JSONRPCErrorError> {
+    let installed_runtime_root = install_root.join(runtime_root_directory_name(manifest)?);
+    ensure_not_cancelled(cancellation)?;
+    if let Some(bundle_version) = manifest.bundle_version.as_ref()
+        && let Ok(Some(metadata)) = read_installed_runtime_metadata(&installed_runtime_root).await
+        && metadata.bundle_version.as_ref() == Some(bundle_version)
+        && let Ok(paths) = validate_runtime_root(
+            &installed_runtime_root,
+            manifest.bundle_format_version,
+            target_platform(),
+        )
+        .await
+    {
+        progress.phase(RuntimeInstallProgressPhase::Installed);
+        return Ok(Some(RuntimeInstallResponse {
+            bundle_version: Some(bundle_version.clone()),
+            paths,
+            status: RuntimeInstallStatus::AlreadyCurrent,
+        }));
+    }
+    Ok(None)
 }
 
 fn default_install_root() -> Result<PathBuf, JSONRPCErrorError> {
@@ -219,7 +349,7 @@ async fn make_staging_dir(install_root: &Path) -> Result<PathBuf, JSONRPCErrorEr
         })
 }
 
-fn validate_manifest(manifest: &RuntimeInstallManifest) -> Result<(), JSONRPCErrorError> {
+fn validate_manifest(manifest: &RuntimeInstallManifestParams) -> Result<(), JSONRPCErrorError> {
     if manifest.archive_url.trim().is_empty() {
         return Err(invalid_params(
             "runtime manifest archiveUrl must not be empty",
@@ -259,7 +389,7 @@ fn validate_path_segment(value: &str, field_name: &str) -> Result<(), JSONRPCErr
 }
 
 fn runtime_root_directory_name(
-    manifest: &RuntimeInstallManifest,
+    manifest: &RuntimeInstallManifestParams,
 ) -> Result<String, JSONRPCErrorError> {
     let runtime_root_directory_name = manifest
         .runtime_root_directory_name
@@ -270,7 +400,7 @@ fn runtime_root_directory_name(
 }
 
 fn runtime_archive_format(
-    manifest: &RuntimeInstallManifest,
+    manifest: &RuntimeInstallManifestParams,
 ) -> Result<RuntimeArchiveFormat, JSONRPCErrorError> {
     if let Some(format) = manifest.format.as_deref() {
         match format.to_ascii_lowercase().as_str() {
@@ -301,13 +431,21 @@ fn default_archive_name(format: RuntimeArchiveFormat) -> &'static str {
     }
 }
 
-async fn download_archive(url: &str, destination: &Path) -> Result<(), JSONRPCErrorError> {
-    let response = reqwest::Client::new()
-        .get(url)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .send()
-        .await
-        .map_err(|err| internal_error(format!("failed to download runtime archive: {err}")))?;
+async fn download_archive(
+    url: &str,
+    destination: &Path,
+    expected_size_bytes: Option<u64>,
+    progress: &RuntimeInstallProgressReporter,
+    cancellation: &CancellationToken,
+) -> Result<(), JSONRPCErrorError> {
+    let response = tokio::select! {
+        _ = cancellation.cancelled() => return Err(runtime_install_canceled()),
+        response = reqwest::Client::new()
+            .get(url)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .send() => response
+    }
+    .map_err(|err| internal_error(format!("failed to download runtime archive: {err}")))?;
     if !response.status().is_success() {
         return Err(internal_error(format!(
             "failed to download runtime archive ({} {})",
@@ -322,14 +460,27 @@ async fn download_archive(url: &str, destination: &Path) -> Result<(), JSONRPCEr
     let mut file = fs::File::create(destination)
         .await
         .map_err(|err| internal_error(format!("failed to create runtime archive file: {err}")))?;
+    let total_bytes = response.content_length().or(expected_size_bytes);
+    let mut downloaded_bytes = 0_u64;
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = tokio::select! {
+            _ = cancellation.cancelled() => return Err(runtime_install_canceled()),
+            chunk = stream.next() => chunk
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
         let chunk = chunk.map_err(|err| {
             internal_error(format!("failed to read runtime archive bytes: {err}"))
         })?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|err| internal_error(format!("failed to write runtime archive: {err}")))?;
+        tokio::select! {
+            _ = cancellation.cancelled() => return Err(runtime_install_canceled()),
+            result = file.write_all(&chunk) => result
+        }
+        .map_err(|err| internal_error(format!("failed to write runtime archive: {err}")))?;
+        downloaded_bytes += chunk.len() as u64;
+        progress.download_progress(downloaded_bytes, total_bytes);
     }
     file.flush()
         .await
@@ -341,8 +492,9 @@ async fn verify_archive_checksum(
     archive_path: &Path,
     expected_sha256: &str,
     source_url: &str,
+    cancellation: &CancellationToken,
 ) -> Result<(), JSONRPCErrorError> {
-    let actual_sha256 = compute_sha256(archive_path).await?;
+    let actual_sha256 = compute_sha256_with_cancellation(archive_path, cancellation).await?;
     if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
         return Err(invalid_params(format!(
             "checksum mismatch for '{source_url}': expected {expected_sha256}, got {actual_sha256}"
@@ -351,23 +503,44 @@ async fn verify_archive_checksum(
     Ok(())
 }
 
+#[cfg(test)]
 async fn compute_sha256(path: &Path) -> Result<String, JSONRPCErrorError> {
+    compute_sha256_with_cancellation(path, &CancellationToken::new()).await
+}
+
+async fn compute_sha256_with_cancellation(
+    path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<String, JSONRPCErrorError> {
     let mut file = fs::File::open(path)
         .await
         .map_err(|err| internal_error(format!("failed to open runtime archive: {err}")))?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let bytes_read = file
-            .read(&mut buffer)
-            .await
-            .map_err(|err| internal_error(format!("failed to read runtime archive: {err}")))?;
+        let bytes_read = tokio::select! {
+            _ = cancellation.cancelled() => return Err(runtime_install_canceled()),
+            bytes_read = file.read(&mut buffer) => bytes_read
+        }
+        .map_err(|err| internal_error(format!("failed to read runtime archive: {err}")))?;
         if bytes_read == 0 {
             break;
         }
         digest.update(&buffer[..bytes_read]);
     }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+fn ensure_not_cancelled(cancellation: &CancellationToken) -> Result<(), JSONRPCErrorError> {
+    if cancellation.is_cancelled() {
+        Err(runtime_install_canceled())
+    } else {
+        Ok(())
+    }
+}
+
+fn runtime_install_canceled() -> JSONRPCErrorError {
+    internal_error("runtime install canceled")
 }
 
 async fn list_archive_entries(
@@ -789,6 +962,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_runtime_reuses_current_runtime_without_downloading_archive() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let install_root = temp_dir.path().join("install");
+        let runtime_root = install_root.join(PUBLISHED_ARTIFACT_NAME);
+        create_runtime_root(&runtime_root, "v1").await;
+        let archive_path = temp_dir.path().join("unused.tar.xz");
+        fs::write(&archive_path, b"not used")
+            .await
+            .expect("write archive");
+        let mut manifest = manifest_for_archive(&archive_path, "v1").await;
+        manifest.archive_url = "not a valid archive URL".to_string();
+
+        let response = install_runtime_with_root_and_control(
+            RuntimeInstallParams {
+                environment_id: None,
+                manifest: Box::new(manifest),
+                release: "primary".to_string(),
+            },
+            install_root,
+            /*progress*/ None,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("installed runtime should be reused without downloading");
+
+        assert_eq!(response.status, RuntimeInstallStatus::AlreadyCurrent);
+    }
+
+    #[tokio::test]
     async fn install_from_archive_uses_runtime_metadata_bundle_format_when_manifest_omits_it() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let install_root = temp_dir.path().join("install");
@@ -900,7 +1102,7 @@ mod tests {
         fs::write(&archive_path, b"archive")
             .await
             .expect("write archive");
-        let manifest = RuntimeInstallManifest {
+        let manifest = RuntimeInstallManifestParams {
             archive_name: None,
             archive_sha256: "0".repeat(64),
             archive_size_bytes: None,
@@ -955,6 +1157,70 @@ mod tests {
         assert_eq!(metadata.bundle_version.as_deref(), Some("old"));
     }
 
+    #[tokio::test]
+    async fn install_from_archive_reports_install_progress() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let payload_root = temp_dir
+            .path()
+            .join("payload")
+            .join(PUBLISHED_ARTIFACT_NAME);
+        create_runtime_root(&payload_root, "v1").await;
+        let archive_path = temp_dir.path().join("archive.tar.xz");
+        create_tar_xz(temp_dir.path().join("payload").as_path(), &archive_path).await;
+        let manifest = manifest_for_archive(&archive_path, "v1").await;
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+        let progress =
+            RuntimeInstallProgressReporter::new(manifest.bundle_version.clone(), Some(progress_tx));
+
+        install_runtime_from_archive_with_control(
+            &manifest,
+            &archive_path,
+            &temp_dir.path().join("install"),
+            &progress,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("install should succeed");
+
+        let mut phases = Vec::new();
+        while let Ok(notification) = progress_rx.try_recv() {
+            phases.push(notification.phase);
+        }
+        assert_eq!(
+            phases,
+            vec![
+                RuntimeInstallProgressPhase::Verifying,
+                RuntimeInstallProgressPhase::Extracting,
+                RuntimeInstallProgressPhase::Validating,
+                RuntimeInstallProgressPhase::Installed,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn install_from_archive_stops_when_canceled() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let archive_path = temp_dir.path().join("unused.tar.xz");
+        fs::write(&archive_path, b"unused")
+            .await
+            .expect("write archive");
+        let manifest = manifest_for_archive(&archive_path, "v1").await;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let error = install_runtime_from_archive_with_control(
+            &manifest,
+            &archive_path,
+            &temp_dir.path().join("install"),
+            &RuntimeInstallProgressReporter::new(manifest.bundle_version.clone(), None),
+            &cancellation,
+        )
+        .await
+        .expect_err("canceled install should fail");
+
+        assert_eq!(error.message, "runtime install canceled");
+    }
+
     async fn create_runtime_root(runtime_root: &Path, bundle_version: &str) {
         let node_bin = runtime_root.join("dependencies").join("node").join("bin");
         let python_bin = runtime_root.join("dependencies").join("python").join("bin");
@@ -991,8 +1257,8 @@ mod tests {
     async fn manifest_for_archive(
         archive_path: &Path,
         bundle_version: &str,
-    ) -> RuntimeInstallManifest {
-        RuntimeInstallManifest {
+    ) -> RuntimeInstallManifestParams {
+        RuntimeInstallManifestParams {
             archive_name: None,
             archive_sha256: compute_sha256(archive_path).await.expect("sha256"),
             archive_size_bytes: None,

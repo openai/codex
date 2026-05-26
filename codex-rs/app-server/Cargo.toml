@@ -70,6 +70,7 @@ codex-app-server-transport = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-rollout = { workspace = true }
+codex-runtime-install = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-thread-store = { workspace = true }

@@ -1970,6 +1970,7 @@ dependencies = [
  "codex-protocol",
  "codex-rmcp-client",
  "codex-rollout",
+ "codex-runtime-install",
  "codex-sandboxing",
  "codex-shell-command",
  "codex-skills-extension",
@@ -2179,6 +2180,7 @@ dependencies = [
  "codex-exec-server",
  "codex-install-context",
  "codex-linux-sandbox",
+ "codex-runtime-install",
  "codex-sandboxing",
  "codex-shell-escalation",
  "codex-utils-absolute-path",
@@ -2858,7 +2860,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
- "sha2 0.10.9",
  "tempfile",
  "test-case",
  "thiserror 2.0.18",
@@ -2869,7 +2870,6 @@ dependencies = [
  "tracing",
  "uuid",
  "wiremock",
- "zip 2.4.2",
 ]
 
 [[package]]
@@ -3740,6 +3740,25 @@ dependencies = [
  "tempfile",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "codex-runtime-install"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server-protocol",
+ "codex-utils-absolute-path",
+ "futures",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "zip 2.4.2",
 ]
 
 [[package]]

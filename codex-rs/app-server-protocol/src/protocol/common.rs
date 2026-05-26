@@ -796,6 +796,11 @@ client_request_definitions! {
         serialization: global("runtime-install"),
         response: v2::RuntimeInstallResponse,
     },
+    RuntimeInstallCancel => "runtime/install/cancel" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::RuntimeInstallCancelResponse,
+    },
     PluginUninstall => "plugin/uninstall" {
         params: v2::PluginUninstallParams,
         serialization: global("config"),
@@ -1565,6 +1570,7 @@ server_notification_definitions! {
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
+    RuntimeInstallProgress => "runtime/install/progress" (v2::RuntimeInstallProgressNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
