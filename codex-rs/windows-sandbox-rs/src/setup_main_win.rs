@@ -66,6 +66,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+const PAYLOAD_FILE_ARG_PREFIX: &str = "--payload-file=";
 
 mod read_acl_mutex;
 mod sandbox_users;
@@ -367,6 +368,30 @@ pub fn main() -> Result<()> {
     ret
 }
 
+fn decode_payload_arg(payload_arg: &str) -> Result<Vec<u8>> {
+    if let Some(path) = payload_arg.strip_prefix(PAYLOAD_FILE_ARG_PREFIX) {
+        let payload_path = PathBuf::from(path);
+        let payload_json = std::fs::read(&payload_path).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperRequestArgsFailed,
+                format!(
+                    "failed to read payload file {}: {err}",
+                    payload_path.display()
+                ),
+            ))
+        })?;
+        let _ = std::fs::remove_file(&payload_path);
+        return Ok(payload_json);
+    }
+
+    BASE64.decode(payload_arg).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperRequestArgsFailed,
+            format!("failed to decode payload b64: {err}"),
+        ))
+    })
+}
+
 fn real_main() -> Result<()> {
     let mut args = std::env::args().collect::<Vec<_>>();
     if args.len() != 2 {
@@ -375,13 +400,7 @@ fn real_main() -> Result<()> {
             "expected payload argument",
         )));
     }
-    let payload_b64 = args.remove(1);
-    let payload_json = BASE64.decode(payload_b64).map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperRequestArgsFailed,
-            format!("failed to decode payload b64: {err}"),
-        ))
-    })?;
+    let payload_json = decode_payload_arg(&args.remove(1))?;
     let payload: Payload = serde_json::from_slice(&payload_json).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
@@ -912,6 +931,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    use super::BASE64;
     use super::Payload;
     use super::SETUP_VERSION;
     use codex_otel::StatsigMetricsSettings;
@@ -953,5 +973,28 @@ mod tests {
                 environment: "prod".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn decode_payload_arg_accepts_inline_base64() {
+        let bytes = super::decode_payload_arg(&BASE64.encode(br#"{"ok":true}"#)).expect("decode");
+        assert_eq!(bytes, br#"{"ok":true}"#);
+    }
+
+    #[test]
+    fn decode_payload_arg_accepts_payload_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("payload.json");
+        std::fs::write(&path, br#"{"ok":true}"#).expect("write payload");
+
+        let bytes = super::decode_payload_arg(&format!(
+            "{}{}",
+            super::PAYLOAD_FILE_ARG_PREFIX,
+            path.display()
+        ))
+        .expect("decode");
+
+        assert_eq!(bytes, br#"{"ok":true}"#);
+        assert!(!path.exists());
     }
 }

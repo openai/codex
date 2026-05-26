@@ -9,6 +9,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
@@ -596,6 +598,33 @@ fn report_helper_failure(
     }
 }
 
+const PAYLOAD_FILE_ARG_PREFIX: &str = "--payload-file=";
+
+fn persist_setup_payload_file(codex_home: &Path, payload_json: &str) -> Result<PathBuf> {
+    let dir = sandbox_dir(codex_home);
+    std::fs::create_dir_all(&dir).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+            format!("failed to create sandbox dir {}: {err}", dir.display()),
+        )
+    })?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = dir.join(format!(
+        "setup-payload-{}-{nonce}.json",
+        std::process::id()
+    ));
+    std::fs::write(&path, payload_json).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorPayloadSerializeFailed,
+            format!("failed to write setup payload file {}: {err}", path.display()),
+        )
+    })?;
+    Ok(path)
+}
+
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
@@ -661,7 +690,11 @@ fn run_setup_exe(
     }
 
     let exe_w = crate::winutil::to_wide(&exe);
-    let params = quote_arg(&payload_b64);
+    let payload_path = persist_setup_payload_file(codex_home, &payload_json)?;
+    let params = quote_arg(&format!(
+        "{PAYLOAD_FILE_ARG_PREFIX}{}",
+        payload_path.display()
+    ));
     let params_w = crate::winutil::to_wide(params);
     let verb_w = crate::winutil::to_wide("runas");
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
