@@ -8524,10 +8524,6 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
             .features
             .enable(Feature::Goals)
             .expect("goal mode should be enableable in tests");
-        config
-            .features
-            .enable(Feature::DefaultModeRequestUserInput)
-            .expect("default-mode request_user_input should be enableable in tests");
     });
     let test = builder.build(&server).await?;
     let responses = mount_sse_sequence(

@@ -569,7 +569,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     }
 
     planned_tools.add(RequestUserInputHandler {
-        available_modes: request_user_input_available_modes(features),
+        available_modes: request_user_input_available_modes(),
     });
 
     if features.enabled(Feature::RequestPermissionsTool) {

@@ -1318,8 +1318,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_uses_thread_feature_overrides_for_request_user_input_tool_description_v2()
--> Result<()> {
+async fn turn_start_includes_default_mode_request_user_input_tool_description_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1344,10 +1343,6 @@ async fn turn_start_uses_thread_feature_overrides_for_request_user_input_tool_de
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.3-codex".to_string()),
-            config: Some(HashMap::from([(
-                "features.default_mode_request_user_input".to_string(),
-                json!(true),
-            )])),
             ..Default::default()
         })
         .await?;

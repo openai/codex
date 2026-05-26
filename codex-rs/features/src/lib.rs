@@ -172,7 +172,7 @@ pub enum Feature {
     SkillEnvVarDependencyPrompt,
     /// Enable the unified mention popup prototype.
     MentionsV2,
-    /// Allow request_user_input in Default collaboration mode.
+    /// Removed compatibility flag; request_user_input is always available in Default mode.
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
@@ -438,6 +438,9 @@ impl Features {
                     continue;
                 }
                 "skill_env_var_dependency_prompt" => {
+                    continue;
+                }
+                "default_mode_request_user_input" => {
                     continue;
                 }
                 "use_legacy_landlock" => {
@@ -1068,7 +1071,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

@@ -110,17 +110,9 @@ fn shell_command_backend_requires_both_shell_tool_and_zsh_fork() {
 }
 
 #[test]
-fn request_user_input_modes_follow_default_mode_feature() {
-    let mut features = Features::with_defaults();
-    features.disable(Feature::DefaultModeRequestUserInput);
+fn request_user_input_modes_include_default_and_plan() {
     assert_eq!(
-        request_user_input_available_modes(&features),
-        vec![ModeKind::Plan]
-    );
-
-    features.enable(Feature::DefaultModeRequestUserInput);
-    assert_eq!(
-        request_user_input_available_modes(&features),
+        request_user_input_available_modes(),
         vec![ModeKind::Default, ModeKind::Plan]
     );
 }

@@ -22,14 +22,10 @@ pub enum ToolUserShellType {
     Cmd,
 }
 
-pub fn request_user_input_available_modes(features: &Features) -> Vec<ModeKind> {
+pub fn request_user_input_available_modes() -> Vec<ModeKind> {
     TUI_VISIBLE_COLLABORATION_MODES
         .into_iter()
-        .filter(|mode| {
-            mode.allows_request_user_input()
-                || (features.enabled(Feature::DefaultModeRequestUserInput)
-                    && *mode == ModeKind::Default)
-        })
+        .filter(|mode| mode.allows_request_user_input())
         .collect()
 }
 

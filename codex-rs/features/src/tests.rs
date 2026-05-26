@@ -289,6 +289,19 @@ fn js_repl_features_are_removed_feature_keys() {
 }
 
 #[test]
+fn default_mode_request_user_input_is_a_removed_feature_key() {
+    assert_eq!(Feature::DefaultModeRequestUserInput.stage(), Stage::Removed);
+    assert_eq!(
+        Feature::DefaultModeRequestUserInput.default_enabled(),
+        false
+    );
+    assert_eq!(
+        feature_for_key("default_mode_request_user_input"),
+        Some(Feature::DefaultModeRequestUserInput)
+    );
+}
+
+#[test]
 fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolCallMcpElicitation.stage(), Stage::Stable);
     assert_eq!(Feature::ToolCallMcpElicitation.default_enabled(), true);
@@ -470,6 +483,25 @@ fn from_sources_ignores_removed_js_repl_feature_keys() {
         ("js_repl".to_string(), true),
         ("js_repl_tools_only".to_string(), true),
     ]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
+fn from_sources_ignores_removed_default_mode_request_user_input_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([(
+        "default_mode_request_user_input".to_string(),
+        true,
+    )]));
 
     let features = Features::from_sources(
         FeatureConfigSource {

@@ -11,6 +11,7 @@ use crate::tools::handlers::request_user_input_spec::request_user_input_tool_des
 use crate::tools::handlers::request_user_input_spec::request_user_input_unavailable_message;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::registry::ToolExposure;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::ToolName;
@@ -28,6 +29,10 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputHandler {
 
     fn spec(&self) -> ToolSpec {
         create_request_user_input_tool(request_user_input_tool_description(&self.available_modes))
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::DirectModelOnly
     }
 
     async fn handle(
