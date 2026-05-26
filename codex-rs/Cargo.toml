@@ -14,7 +14,7 @@ members = [
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
-    "app-server-start-bench",
+    "benchmarks/app-server-start",
     "debug-client",
     "apply-patch",
     "arg0",
