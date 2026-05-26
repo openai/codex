@@ -36,6 +36,8 @@ pub struct ListMcpServerStatusParams {
     /// Defaults to `Full` when omitted.
     #[ts(optional = nullable)]
     pub detail: Option<McpServerStatusDetail>,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

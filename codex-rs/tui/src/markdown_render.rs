@@ -20,7 +20,7 @@
 //!    artifacts of pulldown-cmark's lenient parsing.
 //! 2. **Normalize column counts** -- pad or truncate so every row matches the
 //!    alignment count.
-//! 3. **Compute column widths** -- allocate widths with Narrative/Structured
+//! 3. **Compute column widths** -- allocate widths with content-aware
 //!    priority and iterative shrinking.
 //! 4. **Render box grid** -- Unicode borders (`┌───┬───┐`) or fallback to pipe
 //!    format when the minimum cannot fit.
@@ -29,12 +29,12 @@
 //!
 //! ## Width allocation
 //!
-//! Columns are classified as Narrative (long prose, >= 4 avg words or >= 28
-//! avg char width) or Structured (short tokens).  The shrink loop removes
-//! one character at a time, preferring Narrative columns, until the total
-//! fits the available width.  A guard cost penalises shrinking below a
-//! column's header token width.  When even 3-char-wide columns cannot fit,
-//! the table falls back to pipe-delimited format.
+//! Columns are classified as Narrative (long prose), TokenHeavy (paths, URLs,
+//! or hashes), or Compact (short values such as counts and status labels).
+//! Token-heavy columns give up excess width before narrative columns so an
+//! oversized path does not collapse readable prose; compact values are
+//! preserved last.  When even 3-char-wide columns cannot fit, the table falls
+//! back to pipe-delimited format.
 
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
@@ -219,18 +219,16 @@ struct RenderedTableLines {
 
 /// Classification of a table column for width-allocation priority.
 ///
-/// Narrative columns (long prose, many words per cell) are shrunk first when the table exceeds
-/// available width.  Structured columns (short tokens like dates, status words, numbers) are
-/// preserved as long as possible to keep their content on a single line.
-///
-/// The heuristic is simple: >= 4 average words per cell OR >= 28 average character width →
-/// Narrative. Everything else → Structured.
+/// Token-heavy columns such as paths and URLs are allowed to wrap before prose becomes unreadable.
+/// Compact columns such as counts or status words resist wrapping so their values stay scannable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TableColumnKind {
     /// Long-form prose content (>= 4 avg words/cell or >= 28 avg char width).
     Narrative,
-    /// Short, token-like content that should resist wrapping.
-    Structured,
+    /// Content dominated by long tokens, such as paths, URLs, and hashes.
+    TokenHeavy,
+    /// Short values, such as counts and status labels, that should resist wrapping.
+    Compact,
 }
 
 /// Per-column statistics used to drive the width-allocation algorithm.
@@ -245,11 +243,7 @@ struct TableColumnMetrics {
     header_token_width: usize,
     /// Display width of the longest whitespace-delimited token across body rows.
     body_token_width: usize,
-    /// Average number of whitespace-delimited words per non-empty body cell.
-    avg_words_per_cell: f64,
-    /// Average display width of non-empty body cells.
-    avg_cell_width: f64,
-    /// Classification derived from `avg_words_per_cell` and `avg_cell_width`.
+    /// Classification derived from body token density and average cell content.
     kind: TableColumnKind,
 }
 
@@ -342,7 +336,7 @@ where
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
     list_needs_blank_before_next_item: Vec<bool>,
-    list_item_contains_code_block: Vec<bool>,
+    list_item_start_line_counts: Vec<usize>,
     link: Option<LinkState>,
     needs_newline: bool,
     pending_marker_line: bool,
@@ -376,7 +370,7 @@ where
             indent_stack: Vec::new(),
             list_indices: Vec::new(),
             list_needs_blank_before_next_item: Vec::new(),
-            list_item_contains_code_block: Vec::new(),
+            list_item_start_line_counts: Vec::new(),
             link: None,
             needs_newline: false,
             pending_marker_line: false,
@@ -486,7 +480,9 @@ where
             TagEnd::CodeBlock => self.end_codeblock(),
             TagEnd::List(_) => self.end_list(),
             TagEnd::Item => {
-                if self.list_item_contains_code_block.pop().unwrap_or(false)
+                self.flush_current_line();
+                let start_line_count = self.list_item_start_line_counts.pop().unwrap_or_default();
+                if self.text.lines.len().saturating_sub(start_line_count) > 1
                     && let Some(needs_blank) = self.list_needs_blank_before_next_item.last_mut()
                 {
                     *needs_blank = true;
@@ -743,8 +739,9 @@ where
         {
             self.push_blank_line();
         }
+        self.flush_current_line();
+        self.list_item_start_line_counts.push(self.text.lines.len());
         self.pending_marker_line = true;
-        self.list_item_contains_code_block.push(false);
         let depth = self.list_indices.len();
         let is_ordered = self
             .list_indices
@@ -784,9 +781,6 @@ where
     }
 
     fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
-        for item_contains_code_block in &mut self.list_item_contains_code_block {
-            *item_contains_code_block = true;
-        }
         self.flush_current_line();
         if !self.text.lines.is_empty() {
             self.push_blank_line();
@@ -1099,9 +1093,9 @@ where
     ///
     /// Each column starts at its natural (max cell content) width, then columns
     /// are iteratively shrunk one character at a time until the total fits within
-    /// `available_width`. Narrative columns (long prose) are shrunk before
-    /// Structured columns (short tokens). Returns `None` when even the minimum
-    /// width (3 chars per column) cannot fit.
+    /// `available_width`. Token-heavy columns surrender excess width before
+    /// narrative prose; compact columns are preserved last. Returns `None` when
+    /// even the minimum width (3 chars per column) cannot fit.
     fn compute_column_widths(
         &self,
         header: &[TableCell],
@@ -1130,19 +1124,17 @@ where
             .collect();
         let mut floor_total: usize = floors.iter().sum();
         if floor_total > max_width {
-            // Relax preferred floors (starting with narrative columns) until we can satisfy the
-            // width budget. We still keep hard minimums.
+            // Relax preferred floors in wrapping priority order until the hard width budget fits.
             while floor_total > max_width {
                 let Some((idx, _)) = floors
                     .iter()
                     .enumerate()
                     .filter(|(_, floor)| **floor > min_column_width)
                     .min_by_key(|(idx, floor)| {
-                        let kind_priority = match metrics[*idx].kind {
-                            TableColumnKind::Narrative => 0,
-                            TableColumnKind::Structured => 1,
-                        };
-                        (kind_priority, *floor)
+                        (
+                            Self::column_shrink_priority(metrics[*idx].kind),
+                            usize::MAX.saturating_sub(**floor),
+                        )
                     })
                 else {
                     break;
@@ -1182,6 +1174,8 @@ where
             let header_token_width = Self::longest_token_width(&header_plain);
             let mut max_width = Self::cell_display_width(header_cell);
             let mut body_token_width = 0usize;
+            let mut body_token_count = 0usize;
+            let mut long_body_token_count = 0usize;
             let mut total_words = 0usize;
             let mut total_cells = 0usize;
             let mut total_cell_width = 0usize;
@@ -1193,6 +1187,11 @@ where
                 body_token_width = body_token_width.max(Self::longest_token_width(&plain));
                 let word_count = plain.split_whitespace().count();
                 if word_count > 0 {
+                    body_token_count += word_count;
+                    long_body_token_count += plain
+                        .split_whitespace()
+                        .filter(|token| token.width() >= 20)
+                        .count();
                     total_words += word_count;
                     total_cells += 1;
                     total_cell_width += plain.width();
@@ -1209,22 +1208,20 @@ where
             } else {
                 total_cell_width as f64 / total_cells as f64
             };
-            let kind = if body_token_width >= 20 && avg_words_per_cell <= 2.0 {
-                // URL-like/token-heavy columns should resist collapse even if their
-                // average cell width is high.
-                TableColumnKind::Structured
+            let kind = if long_body_token_count > 0
+                && long_body_token_count >= body_token_count.saturating_sub(long_body_token_count)
+            {
+                TableColumnKind::TokenHeavy
             } else if avg_words_per_cell >= 4.0 || avg_cell_width >= 28.0 {
                 TableColumnKind::Narrative
             } else {
-                TableColumnKind::Structured
+                TableColumnKind::Compact
             };
 
             metrics.push(TableColumnMetrics {
                 max_width,
                 header_token_width,
                 body_token_width,
-                avg_words_per_cell,
-                avg_cell_width,
                 kind,
             });
         }
@@ -1235,13 +1232,13 @@ where
     /// Compute the preferred minimum width for a column before the shrink loop
     /// starts reducing it further.
     ///
-    /// Narrative columns floor at the header's longest token (capped at 10).
-    /// Structured columns floor at the larger of the header and body token widths
+    /// Narrative and token-heavy columns retain a readable 16-cell soft floor.
+    /// Compact columns floor at the larger of the header and body token widths
     /// (body capped at 16). The result is clamped to `[min_column_width, max_width]`.
     fn preferred_column_floor(metrics: &TableColumnMetrics, min_column_width: usize) -> usize {
         let token_target = match metrics.kind {
-            TableColumnKind::Narrative => metrics.header_token_width.min(10),
-            TableColumnKind::Structured => metrics
+            TableColumnKind::Narrative | TableColumnKind::TokenHeavy => 16,
+            TableColumnKind::Compact => metrics
                 .header_token_width
                 .max(metrics.body_token_width.min(16)),
         };
@@ -1250,10 +1247,9 @@ where
 
     /// Pick the next column to shrink by one character during width allocation.
     ///
-    /// Priority: Narrative columns are shrunk before Structured. Within the same
-    /// kind, the column with the most slack above its floor is chosen. A guard
-    /// cost is added when the width would fall below the header's longest token
-    /// (to avoid truncating column headers).
+    /// Priority: TokenHeavy columns are shrunk before Narrative, then Compact.
+    /// Within the same kind, the column with the most slack above its floor is
+    /// chosen so similarly-shaped columns stay balanced.
     fn next_column_to_shrink(
         widths: &[usize],
         floors: &[usize],
@@ -1265,28 +1261,20 @@ where
             .filter(|(idx, width)| **width > floors[*idx])
             .min_by_key(|(idx, width)| {
                 let slack = width.saturating_sub(floors[*idx]);
-                let kind_cost = match metrics[*idx].kind {
-                    TableColumnKind::Narrative => 0i32,
-                    TableColumnKind::Structured => 2i32,
-                };
-                let header_guard = if **width <= metrics[*idx].header_token_width {
-                    3i32
-                } else {
-                    0i32
-                };
-                let density_guard = if metrics[*idx].avg_words_per_cell >= 4.0
-                    || metrics[*idx].avg_cell_width >= 24.0
-                {
-                    0i32
-                } else {
-                    1i32
-                };
                 (
-                    kind_cost + header_guard + density_guard,
+                    Self::column_shrink_priority(metrics[*idx].kind),
                     usize::MAX.saturating_sub(slack),
                 )
             })
             .map(|(idx, _)| idx)
+    }
+
+    fn column_shrink_priority(kind: TableColumnKind) -> usize {
+        match kind {
+            TableColumnKind::TokenHeavy => 0,
+            TableColumnKind::Narrative => 1,
+            TableColumnKind::Compact => 2,
+        }
     }
 
     fn render_border_line(
@@ -2203,7 +2191,7 @@ mod tests {
 
     #[test]
     fn column_classification_narrative_by_word_count() {
-        // Col 0: short tokens (1-2 words each) → Structured
+        // Col 0: short tokens (1-2 words each) -> Compact
         // Col 1: prose (≥4 words per cell) → Narrative
         let header = vec![make_cell("ID"), make_cell("Description")];
         let rows = vec![
@@ -2211,72 +2199,87 @@ mod tests {
             vec![make_cell("2"), make_cell("another verbose body cell here")],
         ];
         let metrics = W::collect_table_column_metrics(&header, &rows, /*column_count*/ 2);
-        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
+        assert_eq!(metrics[0].kind, TableColumnKind::Compact);
         assert_eq!(metrics[1].kind, TableColumnKind::Narrative);
     }
 
     #[test]
-    fn column_classification_structured_by_url_like_token() {
-        // Col with short word count but ≥28 avg char width and long tokens → Structured
-        // (URL-like/token-heavy columns resist collapse)
+    fn column_classification_token_heavy_by_url_like_tokens() {
         let header = vec![make_cell("URL")];
         let rows = vec![
             vec![make_cell("https://example.com/very/long/path")],
             vec![make_cell("https://another.example.org/deep")],
         ];
         let metrics = W::collect_table_column_metrics(&header, &rows, /*column_count*/ 1);
-        assert!(metrics[0].avg_cell_width >= 28.0);
-        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
+        assert_eq!(metrics[0].kind, TableColumnKind::TokenHeavy);
     }
 
     #[test]
-    fn column_classification_structured_all_short() {
-        // Both columns short tokens → both Structured
+    fn column_classification_token_heavy_for_local_path_lists() {
+        let header = vec![make_cell("Files")];
+        let rows = vec![
+            vec![make_cell(
+                "codex-rs/core/src/next_prompt_suggestion.rs:1, codex-rs/core/src/next_prompt_suggestion_tests.rs:1",
+            )],
+            vec![make_cell(
+                "codex-rs/core/src/context/next_prompt_suggestion.rs:1, codex-rs/core/src/context/contextual_user_message_tests.rs:1",
+            )],
+        ];
+        let metrics = W::collect_table_column_metrics(&header, &rows, /*column_count*/ 1);
+        assert_eq!(metrics[0].kind, TableColumnKind::TokenHeavy);
+    }
+
+    #[test]
+    fn column_classification_compact_all_short() {
+        // Both columns short tokens -> both Compact
         let header = vec![make_cell("Status"), make_cell("Count")];
         let rows = vec![
             vec![make_cell("ok"), make_cell("42")],
             vec![make_cell("err"), make_cell("7")],
         ];
         let metrics = W::collect_table_column_metrics(&header, &rows, /*column_count*/ 2);
-        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
-        assert_eq!(metrics[1].kind, TableColumnKind::Structured);
+        assert_eq!(metrics[0].kind, TableColumnKind::Compact);
+        assert_eq!(metrics[1].kind, TableColumnKind::Compact);
     }
 
     #[test]
-    fn preferred_floor_narrative_caps_header_at_10() {
-        // Narrative col: header_token_width 15 → floors at 10
+    fn preferred_floor_narrative_retains_readable_width() {
         let m = TableColumnMetrics {
             max_width: 40,
             header_token_width: 15,
             body_token_width: 8,
-            avg_words_per_cell: 5.0,
-            avg_cell_width: 30.0,
             kind: TableColumnKind::Narrative,
         };
-        assert_eq!(W::preferred_column_floor(&m, /*min_column_width*/ 3), 10);
+        assert_eq!(W::preferred_column_floor(&m, /*min_column_width*/ 3), 16);
 
-        // Narrative col: header_token_width 6 → floors at 6 (below cap)
         let m2 = TableColumnMetrics {
-            max_width: 40,
+            max_width: 12,
             header_token_width: 6,
             body_token_width: 8,
-            avg_words_per_cell: 5.0,
-            avg_cell_width: 30.0,
             kind: TableColumnKind::Narrative,
         };
-        assert_eq!(W::preferred_column_floor(&m2, /*min_column_width*/ 3), 6);
+        assert_eq!(W::preferred_column_floor(&m2, /*min_column_width*/ 3), 12);
     }
 
     #[test]
-    fn preferred_floor_structured_uses_body_token() {
-        // Structured: max(header_token_width, body_token_width.min(16))
+    fn preferred_floor_token_heavy_retains_readable_width() {
+        let m = TableColumnMetrics {
+            max_width: 80,
+            header_token_width: 5,
+            body_token_width: 60,
+            kind: TableColumnKind::TokenHeavy,
+        };
+        assert_eq!(W::preferred_column_floor(&m, /*min_column_width*/ 3), 16);
+    }
+
+    #[test]
+    fn preferred_floor_compact_uses_body_token() {
+        // Compact: max(header_token_width, body_token_width.min(16))
         let m = TableColumnMetrics {
             max_width: 30,
             header_token_width: 5,
             body_token_width: 12,
-            avg_words_per_cell: 1.0,
-            avg_cell_width: 10.0,
-            kind: TableColumnKind::Structured,
+            kind: TableColumnKind::Compact,
         };
         // max(5, min(12, 16)) = max(5, 12) = 12
         assert_eq!(W::preferred_column_floor(&m, /*min_column_width*/ 3), 12);
@@ -2286,40 +2289,46 @@ mod tests {
             max_width: 30,
             header_token_width: 5,
             body_token_width: 20,
-            avg_words_per_cell: 1.0,
-            avg_cell_width: 10.0,
-            kind: TableColumnKind::Structured,
+            kind: TableColumnKind::Compact,
         };
         // max(5, min(20, 16)) = max(5, 16) = 16
         assert_eq!(W::preferred_column_floor(&m2, /*min_column_width*/ 3), 16);
     }
 
     #[test]
-    fn next_column_to_shrink_prefers_narrative() {
-        // Two columns: Narrative (col 0) and Structured (col 1), both with slack.
-        // Narrative should be shrunk first.
-        let widths = [20usize, 20];
-        let floors = [8usize, 8];
+    fn next_column_to_shrink_prefers_token_heavy_then_narrative() {
+        let widths = [20usize, 20, 20];
+        let floors = [8usize, 8, 8];
         let metrics = [
             TableColumnMetrics {
                 max_width: 30,
                 header_token_width: 8,
                 body_token_width: 6,
-                avg_words_per_cell: 5.0,
-                avg_cell_width: 30.0,
                 kind: TableColumnKind::Narrative,
             },
             TableColumnMetrics {
                 max_width: 30,
                 header_token_width: 8,
+                body_token_width: 28,
+                kind: TableColumnKind::TokenHeavy,
+            },
+            TableColumnMetrics {
+                max_width: 30,
+                header_token_width: 8,
                 body_token_width: 6,
-                avg_words_per_cell: 1.0,
-                avg_cell_width: 10.0,
-                kind: TableColumnKind::Structured,
+                kind: TableColumnKind::Compact,
             },
         ];
         let idx = W::next_column_to_shrink(&widths, &floors, &metrics);
-        assert_eq!(idx, Some(0), "Narrative column should be shrunk first");
+        assert_eq!(idx, Some(1), "token-heavy column should shrink first");
+
+        let widths = [20usize, 8, 20];
+        let idx = W::next_column_to_shrink(&widths, &floors, &metrics);
+        assert_eq!(
+            idx,
+            Some(0),
+            "narrative column should shrink before compact"
+        );
     }
 
     // ===== Spillover-detection unit tests =====

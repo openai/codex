@@ -8,7 +8,8 @@ use crate::logging::debug_log;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
-use crate::setup::effective_write_roots_for_setup;
+use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+use crate::setup::effective_write_roots_for_permissions;
 use crate::token::LocalSid;
 use crate::token::world_sid;
 use anyhow::Result;
@@ -224,14 +225,32 @@ pub fn apply_world_writable_scan_and_denies(
     sandbox_policy: &SandboxPolicy,
     logs_base_dir: Option<&Path>,
 ) -> Result<()> {
+    let permissions =
+        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(sandbox_policy, cwd);
+    apply_world_writable_scan_and_denies_for_permissions(
+        codex_home,
+        cwd,
+        env_map,
+        &permissions,
+        logs_base_dir,
+    )
+}
+
+pub fn apply_world_writable_scan_and_denies_for_permissions(
+    codex_home: &Path,
+    cwd: &Path,
+    env_map: &std::collections::HashMap<String, String>,
+    permissions: &ResolvedWindowsSandboxPermissions,
+    logs_base_dir: Option<&Path>,
+) -> Result<()> {
     let flagged = audit_everyone_writable(cwd, env_map, logs_base_dir)?;
     if flagged.is_empty() {
         return Ok(());
     }
-    if let Err(err) = apply_capability_denies_for_world_writable(
+    if let Err(err) = apply_capability_denies_for_world_writable_for_permissions(
         codex_home,
         &flagged,
-        sandbox_policy,
+        permissions,
         cwd,
         env_map,
         logs_base_dir,
@@ -244,10 +263,10 @@ pub fn apply_world_writable_scan_and_denies(
     Ok(())
 }
 
-pub fn apply_capability_denies_for_world_writable(
+fn apply_capability_denies_for_world_writable_for_permissions(
     codex_home: &Path,
     flagged: &[PathBuf],
-    sandbox_policy: &SandboxPolicy,
+    permissions: &ResolvedWindowsSandboxPermissions,
     cwd: &Path,
     env_map: &std::collections::HashMap<String, String>,
     logs_base_dir: Option<&Path>,
@@ -259,11 +278,13 @@ pub fn apply_capability_denies_for_world_writable(
     let cap_path = cap_sid_file(codex_home);
     let caps = load_or_create_cap_sids(codex_home)?;
     std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
-    let (active_sids, workspace_roots): (Vec<LocalSid>, Vec<PathBuf>) = match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite { .. } => {
-            let roots = effective_write_roots_for_setup(
-                sandbox_policy,
-                cwd,
+    if !permissions.is_enforceable_by_windows_sandbox() {
+        return Ok(());
+    }
+    let (active_sids, workspace_roots): (Vec<LocalSid>, Vec<PathBuf>) =
+        if permissions.uses_write_capabilities_for_cwd(cwd, env_map) {
+            let roots = effective_write_roots_for_permissions(
+                permissions,
                 cwd,
                 env_map,
                 codex_home,
@@ -277,14 +298,9 @@ pub fn apply_capability_denies_for_world_writable(
                 })
                 .collect::<Result<Vec<_>>>()?;
             (active_sids, roots)
-        }
-        SandboxPolicy::ReadOnly { .. } => {
+        } else {
             (vec![LocalSid::from_string(&caps.readonly)?], Vec::new())
-        }
-        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-            return Ok(());
-        }
-    };
+        };
     for path in flagged {
         if workspace_roots
             .iter()

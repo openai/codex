@@ -1,6 +1,7 @@
 use crate::mcp::CallToolResult;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ContentItem;
+use crate::models::ImageDetail;
 use crate::models::MessagePhase;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
@@ -178,6 +179,9 @@ pub struct McpToolCallItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
     pub status: McpToolCallStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -243,7 +247,9 @@ impl UserMessageItem {
         EventMsg::UserMessage(UserMessageEvent {
             message: self.message(),
             images: Some(self.image_urls()),
+            image_details: self.image_details(),
             local_images: self.local_image_paths(),
+            local_image_details: self.local_image_details(),
             text_elements: self.text_elements(),
         })
     }
@@ -290,21 +296,54 @@ impl UserMessageItem {
         self.content
             .iter()
             .filter_map(|c| match c {
-                UserInput::Image { image_url } => Some(image_url.clone()),
+                UserInput::Image { image_url, .. } => Some(image_url.clone()),
                 _ => None,
             })
             .collect()
+    }
+
+    pub fn image_details(&self) -> Vec<Option<ImageDetail>> {
+        trim_trailing_default_image_details(
+            self.content
+                .iter()
+                .filter_map(|c| match c {
+                    UserInput::Image { detail, .. } => Some(*detail),
+                    _ => None,
+                })
+                .collect(),
+        )
     }
 
     pub fn local_image_paths(&self) -> Vec<std::path::PathBuf> {
         self.content
             .iter()
             .filter_map(|c| match c {
-                UserInput::LocalImage { path } => Some(path.clone()),
+                UserInput::LocalImage { path, .. } => Some(path.clone()),
                 _ => None,
             })
             .collect()
     }
+
+    pub fn local_image_details(&self) -> Vec<Option<ImageDetail>> {
+        trim_trailing_default_image_details(
+            self.content
+                .iter()
+                .filter_map(|c| match c {
+                    UserInput::LocalImage { detail, .. } => Some(*detail),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+}
+
+fn trim_trailing_default_image_details(
+    mut details: Vec<Option<ImageDetail>>,
+) -> Vec<Option<ImageDetail>> {
+    while matches!(details.last(), Some(None)) {
+        details.pop();
+    }
+    details
 }
 
 impl HookPromptItem {
@@ -494,6 +533,7 @@ impl McpToolCallItem {
                 arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
             },
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            plugin_id: self.plugin_id.clone(),
         })
     }
 
@@ -512,6 +552,7 @@ impl McpToolCallItem {
                 arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
             },
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            plugin_id: self.plugin_id.clone(),
             duration: self.duration?,
             result,
         }))

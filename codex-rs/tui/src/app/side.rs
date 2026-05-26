@@ -369,15 +369,15 @@ impl App {
             self.chat_widget.add_error_message(message);
             return false;
         }
-        self.discard_side_thread_local(thread_id).await;
+        self.discard_thread_local_state(thread_id).await;
         true
     }
 
     pub(super) async fn discard_closed_side_thread(&mut self, thread_id: ThreadId) {
-        self.discard_side_thread_local(thread_id).await;
+        self.discard_thread_local_state(thread_id).await;
     }
 
-    async fn discard_side_thread_local(&mut self, thread_id: ThreadId) {
+    pub(super) async fn discard_thread_local_state(&mut self, thread_id: ThreadId) {
         self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
         self.side_threads.remove(&thread_id);
@@ -464,7 +464,6 @@ impl App {
         }
         fork_config.model_reasoning_effort = self.chat_widget.current_reasoning_effort();
         fork_config.service_tier = self.chat_widget.configured_service_tier();
-        fork_config.notices.fast_default_opt_out = self.chat_widget.fast_default_opt_out();
         fork_config.ephemeral = true;
         fork_config.developer_instructions = Some(Self::side_developer_instructions(
             fork_config.developer_instructions.as_deref(),

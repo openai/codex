@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: status_line_popup_snapshot(&mut chat)
+---
+  Configure Status Line
+  Select which items to display in the status line.
+
+  Type to search
+  >
+› [x] Use theme colors      Apply colors from the active /theme
+  ───────────────────────
+  [x] monthly-limit         Remaining usage on the monthly usage limit (omitted when unavailable)
+  [x] weekly-limit          Remaining usage on the weekly usage limit (omitted when unavailable)
+  [ ] model                 Current model name
+  [ ] model-with-reasoning  Current model name with reasoning level
+  [ ] current-dir           Current working directory
+  [ ] project-name          Project name (omitted when unavailable)
+
+  monthly 65% left · weekly 50% left
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

@@ -192,6 +192,50 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
 }
 
 #[tokio::test]
+async fn mitm_policy_blocks_matching_hooked_write_in_limited_mode() {
+    let mut hook = github_write_hook();
+    hook.actions.inject_request_headers.clear();
+    let mut network = NetworkProxySettings {
+        mitm: true,
+        mitm_hooks: vec![hook],
+        mode: NetworkMode::Limited,
+        ..NetworkProxySettings::default()
+    };
+    network.set_allowed_domains(vec!["api.github.com".to_string()]);
+    let app_state = Arc::new(network_proxy_state_for_policy(network));
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Limited,
+        "api.github.com",
+        /*target_port*/ 443,
+    );
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/repos/openai/codex/issues")
+        .header(HOST, "api.github.com")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = mitm_blocking_response(&req, &ctx)
+        .await
+        .unwrap()
+        .expect("matching POST hook should still be blocked in limited mode");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        response.headers().get("x-proxy-error").unwrap(),
+        "blocked-by-method-policy"
+    );
+
+    let blocked = app_state.drain_blocked().await.unwrap();
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].reason, REASON_METHOD_NOT_ALLOWED);
+    assert_eq!(blocked[0].method.as_deref(), Some("POST"));
+    assert_eq!(blocked[0].host, "api.github.com");
+    assert_eq!(blocked[0].port, Some(443));
+}
+
+#[tokio::test]
 async fn mitm_policy_blocks_hook_miss_for_hooked_host_and_records_telemetry_in_full_mode() {
     let secret_file = NamedTempFile::new().unwrap();
     std::fs::write(secret_file.path(), "ghp-secret\n").unwrap();

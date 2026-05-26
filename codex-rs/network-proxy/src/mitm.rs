@@ -16,6 +16,7 @@ use crate::upstream::UpstreamClient;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::bytes::Bytes;
@@ -97,6 +98,8 @@ impl std::fmt::Debug for MitmState {
 
 impl MitmState {
     pub(crate) fn new(config: MitmUpstreamConfig) -> Result<Self> {
+        ensure_rustls_crypto_provider();
+
         // MITM exists when HTTPS policy depends on the inner request: limited-mode method clamps
         // and host-specific hooks both need visibility after CONNECT is established. We
         // generate/load a local CA and issue per-host leaf certs so we can terminate TLS and
@@ -335,16 +338,12 @@ async fn evaluate_mitm_policy(
         return Ok(MitmPolicyDecision::Block(blocked_text_response(reason)));
     }
 
-    match policy
+    let hook_actions = match policy
         .app_state
         .evaluate_mitm_hook_request(&policy.target_host, req)
         .await?
     {
-        HookEvaluation::Matched { actions } => {
-            return Ok(MitmPolicyDecision::Allow {
-                hook_actions: Some(actions),
-            });
-        }
+        HookEvaluation::Matched { actions } => Some(actions),
         HookEvaluation::HookedHostNoMatch => {
             let _ = policy
                 .app_state
@@ -368,8 +367,8 @@ async fn evaluate_mitm_policy(
                 REASON_MITM_HOOK_DENIED,
             )));
         }
-        HookEvaluation::NoHooksForHost => {}
-    }
+        HookEvaluation::NoHooksForHost => None,
+    };
 
     if !policy.mode.allows_method(&method) {
         let _ = policy
@@ -395,7 +394,7 @@ async fn evaluate_mitm_policy(
         )));
     }
 
-    Ok(MitmPolicyDecision::Allow { hook_actions: None })
+    Ok(MitmPolicyDecision::Allow { hook_actions })
 }
 
 fn apply_mitm_hook_actions(headers: &mut HeaderMap, actions: Option<&MitmHookActions>) {
