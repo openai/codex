@@ -243,7 +243,10 @@ async fn review_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -
         mcp.read_stream_until_response_message(RequestId::Integer(review_req)),
     )
     .await??;
-    let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
+    let ReviewStartResponse {
+        review_thread_id, ..
+    } = to_response::<ReviewStartResponse>(review_resp)?;
+    assert_eq!(review_thread_id, thread.id);
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -258,11 +261,25 @@ async fn review_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -
         .map(parse_json_header)
         .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
     assert_eq!(
-        metadata["forked_from_thread_id"].as_str(),
-        Some(thread.id.as_str())
+        request.header("x-openai-subagent").as_deref(),
+        Some("review")
     );
-    assert_eq!(metadata["thread_id"].as_str(), Some(thread.id.as_str()));
-    assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
+    assert_eq!(
+        metadata["forked_from_thread_id"].as_str(),
+        Some(review_thread_id.as_str())
+    );
+    let review_request_thread_id = metadata["thread_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("missing review request thread_id"));
+    assert!(review_request_thread_id != review_thread_id.as_str());
+    assert_eq!(
+        request
+            .header("x-codex-window-id")
+            .as_deref()
+            .and_then(|window_id| window_id.split_once(':').map(|(thread_id, _)| thread_id)),
+        Some(review_request_thread_id)
+    );
+    assert!(metadata["turn_id"].as_str().is_some());
 
     Ok(())
 }
