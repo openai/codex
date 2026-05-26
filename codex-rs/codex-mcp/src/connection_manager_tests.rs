@@ -416,45 +416,6 @@ fn test_normalize_tools_keeps_hyphenated_mcp_tools_callable() {
 }
 
 #[test]
-fn test_normalize_tools_disambiguates_reserved_unprefixed_namespaces() {
-    let tools = vec![
-        create_test_tool("tools", "list"),
-        create_test_tool("web", "search"),
-    ];
-
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ false);
-
-    assert_eq!(model_tools.len(), 2);
-    let namespaces = model_tools
-        .iter()
-        .map(|tool| tool.callable_namespace.as_str())
-        .collect::<HashSet<_>>();
-    assert_eq!(namespaces.len(), 2);
-    assert!(
-        namespaces
-            .iter()
-            .all(|namespace| !matches!(*namespace, "tools" | "web")),
-        "reserved namespaces should be disambiguated: {namespaces:?}"
-    );
-    assert!(
-        namespaces
-            .iter()
-            .any(|namespace| namespace.starts_with("tools_"))
-    );
-    assert!(
-        namespaces
-            .iter()
-            .any(|namespace| namespace.starts_with("web_"))
-    );
-    let model_names = model_tool_names(&model_tools);
-    assert!(
-        model_names.iter().all(is_code_mode_compatible_tool_name),
-        "model-visible names must be code-mode compatible: {model_names:?}"
-    );
-}
-
-#[test]
 fn test_normalize_tools_disambiguates_sanitized_namespace_collisions() {
     let tools = vec![
         create_test_tool("basic-server", "lookup"),

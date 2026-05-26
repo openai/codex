@@ -171,16 +171,10 @@ where
             continue;
         }
 
-        let mut callable_namespace = callable_namespace_with_prefix(
+        let callable_namespace = callable_namespace_with_prefix(
             &sanitize_responses_api_tool_name(&tool.callable_namespace),
             prefix_mcp_tool_names,
         );
-        if !prefix_mcp_tool_names
-            && RESERVED_UNPREFIXED_MCP_NAMESPACES.contains(&callable_namespace.as_str())
-        {
-            callable_namespace =
-                append_namespace_hash_suffix(&callable_namespace, &raw_namespace_identity);
-        }
 
         candidates.push(CallableToolCandidate {
             callable_namespace,
@@ -267,7 +261,6 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
-const RESERVED_UNPREFIXED_MCP_NAMESPACES: &[&str] = &["tools", "web"];
 
 fn callable_namespace_with_prefix(namespace: &str, prefix_mcp_tool_names: bool) -> String {
     if !prefix_mcp_tool_names || namespace.starts_with(LEGACY_MCP_TOOL_NAME_PREFIX) {
