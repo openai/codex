@@ -6,6 +6,7 @@ use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LinkedMention {
+    pub(crate) sigil: char,
     pub(crate) mention: String,
     pub(crate) path: String,
 }
@@ -22,10 +23,16 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
         return text.to_string();
     }
 
-    let mut mentions_by_name: HashMap<&str, VecDeque<&str>> = HashMap::new();
+    let mut mentions_by_token: HashMap<(char, &str), VecDeque<&str>> = HashMap::new();
     for mention in mentions {
-        mentions_by_name
-            .entry(mention.mention.as_str())
+        if !matches!(
+            mention.sigil,
+            TOOL_MENTION_SIGIL | PLUGIN_TEXT_MENTION_SIGIL
+        ) {
+            continue;
+        }
+        mentions_by_token
+            .entry((mention.sigil, mention.mention.as_str()))
             .or_default()
             .push_back(mention.path.as_str());
     }
@@ -38,7 +45,7 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
         if matches!(
             bytes[index],
             byte if byte == TOOL_MENTION_SIGIL as u8 || byte == PLUGIN_TEXT_MENTION_SIGIL as u8
-        ) && starts_plaintext_mention(bytes, index)
+        ) && starts_plaintext_mention(text, index)
         {
             let sigil = bytes[index] as char;
             let name_start = index + 1;
@@ -54,7 +61,9 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
 
                 let name = &text[name_start..name_end];
                 if ends_plaintext_mention(bytes, name_end)
-                    && let Some(path) = mentions_by_name.get_mut(name).and_then(VecDeque::pop_front)
+                    && let Some(path) = mentions_by_token
+                        .get_mut(&(sigil, name))
+                        .and_then(VecDeque::pop_front)
                 {
                     out.push('[');
                     out.push(sigil);
@@ -92,6 +101,7 @@ pub(crate) fn decode_history_mentions(text: &str) -> DecodedHistoryText {
             out.push(sigil);
             out.push_str(name);
             mentions.push(LinkedMention {
+                sigil,
                 mention: name.to_string(),
                 path: path.to_string(),
             });
@@ -199,11 +209,16 @@ fn is_mention_name_char(byte: u8) -> bool {
     matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
 }
 
-fn starts_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
-    index == 0
-        || text_bytes
-            .get(index.saturating_sub(1))
-            .is_none_or(u8::is_ascii_whitespace)
+fn starts_plaintext_mention(text: &str, index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+
+    // Fix for restored `@` mentions: keep history encoding on the same Unicode whitespace
+    // boundary that composer rebinding uses when deciding which visible token owns a link.
+    text.get(..index)
+        .and_then(|prefix| prefix.chars().next_back())
+        .is_some_and(char::is_whitespace)
 }
 
 fn ends_plaintext_mention(text_bytes: &[u8], index: usize) -> bool {
@@ -265,14 +280,17 @@ mod tests {
             decoded.mentions,
             vec![
                 LinkedMention {
+                    sigil: '$',
                     mention: "figma".to_string(),
                     path: "app://figma-1".to_string(),
                 },
                 LinkedMention {
+                    sigil: '$',
                     mention: "sample".to_string(),
                     path: "plugin://sample@test".to_string(),
                 },
                 LinkedMention {
+                    sigil: '$',
                     mention: "figma".to_string(),
                     path: "/tmp/figma/SKILL.md".to_string(),
                 },
@@ -290,10 +308,12 @@ mod tests {
             decoded.mentions,
             vec![
                 LinkedMention {
+                    sigil: '@',
                     mention: "sample".to_string(),
                     path: "plugin://sample@test".to_string(),
                 },
                 LinkedMention {
+                    sigil: '$',
                     mention: "figma".to_string(),
                     path: "app://figma-1".to_string(),
                 },
@@ -309,6 +329,7 @@ mod tests {
         assert_eq!(
             decoded.mentions,
             vec![LinkedMention {
+                sigil: '@',
                 mention: "figma".to_string(),
                 path: "app://figma-1".to_string(),
             }]
@@ -322,14 +343,17 @@ mod tests {
             text,
             &[
                 LinkedMention {
+                    sigil: '$',
                     mention: "figma".to_string(),
                     path: "app://figma-app".to_string(),
                 },
                 LinkedMention {
+                    sigil: '$',
                     mention: "sample".to_string(),
                     path: "plugin://sample@test".to_string(),
                 },
                 LinkedMention {
+                    sigil: '$',
                     mention: "figma".to_string(),
                     path: "/tmp/figma/SKILL.md".to_string(),
                 },
@@ -348,10 +372,12 @@ mod tests {
             text,
             &[
                 LinkedMention {
+                    sigil: '@',
                     mention: "figma".to_string(),
                     path: "/tmp/figma/SKILL.md".to_string(),
                 },
                 LinkedMention {
+                    sigil: '@',
                     mention: "sample".to_string(),
                     path: "plugin://sample@test".to_string(),
                 },
@@ -364,11 +390,65 @@ mod tests {
     }
 
     #[test]
+    fn encode_history_mentions_links_both_sigils_for_same_name() {
+        let text = "@figma then $figma";
+        let encoded = encode_history_mentions(
+            text,
+            &[
+                LinkedMention {
+                    sigil: '@',
+                    mention: "figma".to_string(),
+                    path: "plugin://figma@test".to_string(),
+                },
+                LinkedMention {
+                    sigil: '$',
+                    mention: "figma".to_string(),
+                    path: "app://figma".to_string(),
+                },
+            ],
+        );
+        assert_eq!(
+            encoded,
+            "[@figma](plugin://figma@test) then [$figma](app://figma)"
+        );
+    }
+
+    #[test]
+    fn encode_history_mentions_does_not_let_at_token_steal_later_tool_binding() {
+        let text = "@figma then $figma";
+        let encoded = encode_history_mentions(
+            text,
+            &[LinkedMention {
+                sigil: '$',
+                mention: "figma".to_string(),
+                path: "app://figma-app".to_string(),
+            }],
+        );
+        assert_eq!(encoded, "@figma then [$figma](app://figma-app)");
+    }
+
+    #[test]
+    fn encode_history_mentions_links_at_mentions_after_unicode_whitespace() {
+        // Fix coverage: full-width space should remain a valid plaintext boundary for `@` links.
+        let text = "foo　@sample";
+        let encoded = encode_history_mentions(
+            text,
+            &[LinkedMention {
+                sigil: '@',
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        );
+        assert_eq!(encoded, "foo　[@sample](plugin://sample@test)");
+    }
+
+    #[test]
     fn encode_history_mentions_links_sentence_ending_at_mentions() {
         let text = "Please ask @figma.";
         let encoded = encode_history_mentions(
             text,
             &[LinkedMention {
+                sigil: '@',
                 mention: "figma".to_string(),
                 path: "/tmp/figma/SKILL.md".to_string(),
             }],
@@ -382,6 +462,7 @@ mod tests {
         let encoded = encode_history_mentions(
             text,
             &[LinkedMention {
+                sigil: '@',
                 mention: "sample".to_string(),
                 path: "plugin://sample@test".to_string(),
             }],

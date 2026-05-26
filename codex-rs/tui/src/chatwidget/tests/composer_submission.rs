@@ -570,6 +570,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         Vec::new(),
         Vec::new(),
         vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: user_skill_path.to_string_lossy().into_owned(),
         }],
@@ -605,6 +606,7 @@ async fn blocked_image_restore_preserves_mention_bindings() {
         path: PathBuf::from("/tmp/blocked.png"),
     }];
     let mention_bindings = vec![MentionBinding {
+        sigil: '$',
         mention: "file".to_string(),
         path: "/tmp/skills/file/SKILL.md".to_string(),
     }];

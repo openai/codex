@@ -656,6 +656,7 @@ async fn goal_slash_command_uses_plain_text_for_mentions() {
         Vec::new(),
         Vec::new(),
         vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: "app://figma".to_string(),
         }],
@@ -917,6 +918,7 @@ fn merged_history_record_preserves_raw_text_and_rebased_elements() {
         remote_image_urls: Vec::new(),
         text_elements: vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
         mention_bindings: vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: "app://figma".to_string(),
         }],
@@ -1034,6 +1036,7 @@ async fn interrupted_merged_message_history_encodes_mentions_once() {
         Vec::new(),
         Vec::new(),
         vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: "app://figma".to_string(),
         }],

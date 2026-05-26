@@ -603,11 +603,13 @@ impl ChatComposer {
     pub(crate) fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
         let elements = self.current_mention_elements();
         let mut ordered = Vec::new();
-        for (id, mention) in elements {
+        for (id, sigil, mention) in elements {
             if let Some(binding) = self.draft.mention_bindings.remove(&id)
+                && binding.sigil == sigil
                 && binding.mention == mention
             {
                 ordered.push(MentionBinding {
+                    sigil: binding.sigil,
                     mention: binding.mention,
                     path: binding.path,
                 });
@@ -1188,7 +1190,7 @@ impl ChatComposer {
     ///
     /// This is the "fresh draft" path: it clears pending paste payloads and
     /// mention link targets. Callers restoring a previously submitted draft
-    /// that must keep `$name -> path` resolution should use
+    /// that must keep sigiled mention target resolution should use
     /// [`Self::set_text_content_with_mention_bindings`] instead.
     pub(crate) fn set_text_content(
         &mut self,
@@ -2334,12 +2336,13 @@ impl ChatComposer {
         self.draft.textarea.set_cursor(start_idx);
         let id = self.draft.textarea.insert_element(insert_text);
 
-        if let (Some(path), Some(mention)) =
-            (path, Self::mention_name_from_insert_text(insert_text))
+        if let (Some(path), Some((sigil, mention))) =
+            (path, Self::mention_token_from_insert_text(insert_text))
         {
             self.draft.mention_bindings.insert(
                 id,
                 ComposerMentionBinding {
+                    sigil,
                     mention,
                     path: path.to_string(),
                 },
@@ -2353,10 +2356,12 @@ impl ChatComposer {
         self.draft.textarea.set_cursor(new_cursor);
     }
 
-    fn mention_name_from_insert_text(insert_text: &str) -> Option<String> {
-        let name = insert_text
-            .strip_prefix('$')
-            .or_else(|| insert_text.strip_prefix('@'))?;
+    fn mention_token_from_insert_text(insert_text: &str) -> Option<(char, String)> {
+        let sigil = insert_text.chars().next()?;
+        if !matches!(sigil, '$' | '@') {
+            return None;
+        }
+        let name = &insert_text[sigil.len_utf8()..];
         if name.is_empty() {
             return None;
         }
@@ -2365,31 +2370,33 @@ impl ChatComposer {
             .iter()
             .all(|byte| is_mention_name_char(*byte))
         {
-            Some(name.to_string())
+            Some((sigil, name.to_string()))
         } else {
             None
         }
     }
 
-    fn current_mention_elements(&self) -> Vec<(u64, String)> {
+    fn current_mention_elements(&self) -> Vec<(u64, char, String)> {
         self.draft
             .textarea
             .text_element_snapshots()
             .into_iter()
             .filter_map(|snapshot| {
-                Self::mention_name_from_insert_text(snapshot.text.as_str())
-                    .map(|mention| (snapshot.id, mention))
+                Self::mention_token_from_insert_text(snapshot.text.as_str())
+                    .map(|(sigil, mention)| (snapshot.id, sigil, mention))
             })
             .collect()
     }
 
     fn snapshot_mention_bindings(&self) -> Vec<MentionBinding> {
         let mut ordered = Vec::new();
-        for (id, mention) in self.current_mention_elements() {
+        for (id, sigil, mention) in self.current_mention_elements() {
             if let Some(binding) = self.draft.mention_bindings.get(&id)
+                && binding.sigil == sigil
                 && binding.mention == mention
             {
                 ordered.push(MentionBinding {
+                    sigil: binding.sigil,
                     mention: binding.mention.clone(),
                     path: binding.path.clone(),
                 });
@@ -2407,11 +2414,10 @@ impl ChatComposer {
         let text = self.draft.textarea.text().to_string();
         let mut scan_from = 0usize;
         for binding in mention_bindings {
-            let Some(range) = find_next_bound_mention_token_range(
-                text.as_str(),
-                binding.mention.as_str(),
-                scan_from,
-            ) else {
+            let token = format!("{}{}", binding.sigil, binding.mention);
+            let Some(range) =
+                find_next_mention_token_range(text.as_str(), token.as_str(), scan_from)
+            else {
                 continue;
             };
 
@@ -2427,6 +2433,7 @@ impl ChatComposer {
                 self.draft.mention_bindings.insert(
                     id,
                     ComposerMentionBinding {
+                        sigil: binding.sigil,
                         mention: binding.mention,
                         path: binding.path,
                     },
@@ -3772,10 +3779,41 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
             continue;
         }
 
-        if bytes
-            .get(end)
-            .is_none_or(|byte| !is_mention_name_char(*byte))
-        {
+        // Fix for restored `@` mentions: rebinding must not attach to embedded substrings such
+        // as email addresses, while preserving the existing `$` mention matching behavior.
+        let starts_plaintext_mention = if sigil == b'@' {
+            index == 0 || {
+                // Fix for restored `@` mentions: use the same Unicode whitespace boundary as
+                // history encoding so rebinding does not drift from the stored-link rules.
+                text.get(..index)
+                    .and_then(|prefix| prefix.chars().next_back())
+                    .is_some_and(char::is_whitespace)
+            }
+        } else {
+            true
+        };
+        // Fix for restored `@` mentions: mirror history encoding's trailing boundary so path-like
+        // text such as `@sample/pkg` is not rebound as the plain `@sample` mention.
+        let ends_plaintext_mention = if sigil == b'@' {
+            bytes.get(end).is_none_or(|byte| {
+                byte.is_ascii_whitespace()
+                    || *byte == b'.'
+                        && bytes.get(end + 1).is_none_or(|next| {
+                            next.is_ascii_whitespace()
+                                || !next.is_ascii_alphanumeric() && *next != b'_' && *next != b'-'
+                        })
+                    || !matches!(*byte, b'.' | b'/' | b'\\')
+                        && !byte.is_ascii_alphanumeric()
+                        && *byte != b'_'
+                        && *byte != b'-'
+            })
+        } else {
+            bytes
+                .get(end)
+                .is_none_or(|byte| !is_mention_name_char(*byte))
+        };
+
+        if starts_plaintext_mention && ends_plaintext_mention {
             return Some(index..end);
         }
 
@@ -3783,31 +3821,6 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
     }
 
     None
-}
-
-fn find_next_bound_mention_token_range(
-    text: &str,
-    mention: &str,
-    from: usize,
-) -> Option<Range<usize>> {
-    let dollar_token = format!("${mention}");
-    let at_token = format!("@{mention}");
-
-    let dollar_range = find_next_mention_token_range(text, dollar_token.as_str(), from);
-    let at_range = find_next_mention_token_range(text, at_token.as_str(), from);
-
-    match (dollar_range, at_range) {
-        (Some(dollar_range), Some(at_range)) => {
-            if dollar_range.start <= at_range.start {
-                Some(dollar_range)
-            } else {
-                Some(at_range)
-            }
-        }
-        (Some(dollar_range), None) => Some(dollar_range),
-        (None, Some(at_range)) => Some(at_range),
-        (None, None) => None,
-    }
 }
 
 impl Renderable for ChatComposer {
@@ -4622,6 +4635,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             vec![MentionBinding {
+                sigil: '@',
                 mention: "sample".to_string(),
                 path: "plugin://sample@test".to_string(),
             }],
@@ -4666,6 +4680,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             vec![MentionBinding {
+                sigil: '@',
                 mention: "sample".to_string(),
                 path: "plugin://sample@test".to_string(),
             }],
@@ -6425,6 +6440,7 @@ mod tests {
         );
 
         let mention_bindings = vec![MentionBinding {
+            sigil: '@',
             mention: "figma".to_string(),
             path: "/tmp/user/figma/SKILL.md".to_string(),
         }];
@@ -6435,6 +6451,123 @@ mod tests {
             mention_bindings.clone(),
         );
 
+        assert_eq!(composer.mention_bindings(), mention_bindings);
+    }
+
+    #[test]
+    fn set_text_content_rebinds_matching_sigil_only() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let mention_bindings = vec![MentionBinding {
+            sigil: '$',
+            mention: "figma".to_string(),
+            path: "app://figma".to_string(),
+        }];
+        composer.set_text_content_with_mention_bindings(
+            "@figma then $figma".to_string(),
+            Vec::new(),
+            Vec::new(),
+            mention_bindings.clone(),
+        );
+
+        let bound_tokens = composer
+            .current_mention_elements()
+            .into_iter()
+            .map(|(_, sigil, mention)| (sigil, mention))
+            .collect::<Vec<_>>();
+        assert_eq!(bound_tokens, vec![('$', "figma".to_string())]);
+        assert_eq!(composer.mention_bindings(), mention_bindings);
+    }
+
+    #[test]
+    fn set_text_content_rebinds_both_sigil_forms() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let mention_bindings = vec![
+            MentionBinding {
+                sigil: '@',
+                mention: "figma".to_string(),
+                path: "plugin://figma@test".to_string(),
+            },
+            MentionBinding {
+                sigil: '$',
+                mention: "figma".to_string(),
+                path: "app://figma".to_string(),
+            },
+        ];
+        composer.set_text_content_with_mention_bindings(
+            "@figma then $figma".to_string(),
+            Vec::new(),
+            Vec::new(),
+            mention_bindings.clone(),
+        );
+
+        let bound_tokens = composer
+            .current_mention_elements()
+            .into_iter()
+            .map(|(_, sigil, mention)| (sigil, mention))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bound_tokens,
+            vec![('@', "figma".to_string()), ('$', "figma".to_string())]
+        );
+        assert_eq!(composer.mention_bindings(), mention_bindings);
+    }
+
+    #[test]
+    fn set_text_content_rebinds_at_mentions_after_email_substrings() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let text = "foo@sample.com then @sample".to_string();
+        let mention_start = text.rfind("@sample").expect("expected bound mention token");
+        let mention_range = mention_start..mention_start + "@sample".len();
+        let mention_bindings = vec![MentionBinding {
+            sigil: '@',
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }];
+        composer.set_text_content_with_mention_bindings(
+            text,
+            Vec::new(),
+            Vec::new(),
+            mention_bindings.clone(),
+        );
+
+        // Fix coverage: only the plaintext `@sample` should be atomic; the email substring stays editable.
+        assert_eq!(
+            composer
+                .draft
+                .textarea
+                .text_element_snapshots()
+                .into_iter()
+                .map(|snapshot| snapshot.range)
+                .collect::<Vec<_>>(),
+            vec![mention_range]
+        );
         assert_eq!(composer.mention_bindings(), mention_bindings);
     }
 
@@ -6459,6 +6592,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             vec![MentionBinding {
+                sigil: '@',
                 mention: "figma".to_string(),
                 path: "plugin://figma@debug".to_string(),
             }],
@@ -6511,6 +6645,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             vec![MentionBinding {
+                sigil: '@',
                 mention: "sample".to_string(),
                 path: "plugin://sample@test".to_string(),
             }],
@@ -8864,6 +8999,7 @@ mod tests {
         );
 
         let mention_bindings = vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: "/tmp/user/figma/SKILL.md".to_string(),
         }];
