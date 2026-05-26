@@ -53,6 +53,7 @@ struct RunExecLikeArgs {
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
     shell_runtime_backend: ShellRuntimeBackend,
+    snapshot_restore_env_keys: Vec<String>,
 }
 
 async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, FunctionCallError> {
@@ -68,6 +69,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         tracker,
         call_id,
         shell_runtime_backend,
+        snapshot_restore_env_keys,
     } = args;
 
     let Some(turn_environment) = turn.environments.primary() else {
@@ -77,7 +79,12 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     };
     let fs = turn_environment.environment.get_filesystem();
 
-    let explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
+    let mut explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
+    for key in snapshot_restore_env_keys {
+        // The snapshot wrapper restores the live values for keys listed here after sourcing a
+        // shell snapshot. Include hook env-file keys so persisted updates survive the snapshot.
+        explicit_env_overrides.entry(key).or_default();
+    }
     let exec_permission_approvals_enabled =
         session.features().enabled(Feature::ExecPermissionApprovals);
     let requested_additional_permissions = additional_permissions.clone();

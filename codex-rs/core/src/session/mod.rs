@@ -3244,8 +3244,8 @@ impl Session {
         self.services.hooks.load_full()
     }
 
-    pub(crate) fn apply_hook_env_file(&self, env: &mut HashMap<String, String>) {
-        self.services.hook_env_file.apply_to_env(env);
+    pub(crate) fn apply_hook_env_file(&self, env: &mut HashMap<String, String>) -> Vec<String> {
+        self.services.hook_env_file.apply_to_env(env)
     }
 
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {

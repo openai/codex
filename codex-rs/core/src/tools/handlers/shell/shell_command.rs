@@ -42,6 +42,11 @@ pub struct ShellCommandHandler {
     options: ShellCommandHandlerOptions,
 }
 
+pub(super) struct ShellCommandExecParams {
+    pub(super) exec_params: ExecParams,
+    pub(super) snapshot_restore_env_keys: Vec<String>,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ShellCommandHandlerOptions {
     pub(crate) backend_config: ShellCommandBackendConfig,
@@ -88,7 +93,7 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
         thread_id: ThreadId,
         allow_login_shell: bool,
-    ) -> Result<ExecParams, FunctionCallError> {
+    ) -> Result<ShellCommandExecParams, FunctionCallError> {
         let shell = session.user_shell();
         let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
         let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
@@ -96,23 +101,26 @@ impl ShellCommandHandler {
         let cwd = turn_context.resolve_path(params.workdir.clone());
 
         let mut env = create_env(&turn_context.shell_environment_policy, Some(thread_id));
-        session.apply_hook_env_file(&mut env);
+        let snapshot_restore_env_keys = session.apply_hook_env_file(&mut env);
 
-        Ok(ExecParams {
-            command,
-            cwd,
-            expiration: params.timeout_ms.into(),
-            capture_policy: ExecCapturePolicy::ShellTool,
-            env,
-            network: turn_context.network.clone(),
-            sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
-            windows_sandbox_level: turn_context.windows_sandbox_level,
-            windows_sandbox_private_desktop: turn_context
-                .config
-                .permissions
-                .windows_sandbox_private_desktop,
-            justification: params.justification.clone(),
-            arg0: None,
+        Ok(ShellCommandExecParams {
+            exec_params: ExecParams {
+                command,
+                cwd,
+                expiration: params.timeout_ms.into(),
+                capture_policy: ExecCapturePolicy::ShellTool,
+                env,
+                network: turn_context.network.clone(),
+                sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
+                windows_sandbox_level: turn_context.windows_sandbox_level,
+                windows_sandbox_private_desktop: turn_context
+                    .config
+                    .permissions
+                    .windows_sandbox_private_desktop,
+                justification: params.justification.clone(),
+                arg0: None,
+            },
+            snapshot_restore_env_keys,
         })
     }
 }
@@ -177,7 +185,7 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         )
         .await;
         let prefix_rule = params.prefix_rule.clone();
-        let exec_params = Self::to_exec_params(
+        let shell_exec_params = Self::to_exec_params(
             &params,
             session.as_ref(),
             turn.as_ref(),
@@ -187,7 +195,7 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         let shell_type = Some(session.user_shell().shell_type.clone());
         run_exec_like(RunExecLikeArgs {
             tool_name,
-            exec_params,
+            exec_params: shell_exec_params.exec_params,
             hook_command: params.command,
             shell_type,
             additional_permissions: params.additional_permissions.clone(),
@@ -197,6 +205,7 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
             tracker,
             call_id,
             shell_runtime_backend: self.shell_runtime_backend(),
+            snapshot_restore_env_keys: shell_exec_params.snapshot_restore_env_keys,
         })
         .await
         .map(boxed_tool_output)

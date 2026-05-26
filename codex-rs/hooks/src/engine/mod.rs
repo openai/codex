@@ -132,11 +132,26 @@ impl ClaudeHooksEngine {
         );
         let mut handlers = discovered.handlers;
         if let Some(env_file_path) = env_file_path {
-            let env_file_path = env_file_path.display().to_string();
+            let mut env_file_path_for_handlers: Option<String> = None;
             for handler in handlers
                 .iter_mut()
                 .filter(|handler| handler.event_name == HookEventName::SessionStart)
             {
+                let env_file_path = env_file_path_for_handlers
+                    .get_or_insert_with(|| {
+                        // Hook scripts append to CODEX_ENV_FILE directly, so create the parent
+                        // directory only when the path is actually exposed to a SessionStart hook.
+                        if let Some(parent) = env_file_path.as_path().parent()
+                            && let Err(err) = std::fs::create_dir_all(parent)
+                        {
+                            tracing::warn!(
+                                path = %parent.display(),
+                                "failed to create hook env file directory: {err}"
+                            );
+                        }
+                        env_file_path.display().to_string()
+                    })
+                    .clone();
                 handler.env.insert(
                     crate::CODEX_ENV_FILE_ENV_VAR.to_string(),
                     env_file_path.clone(),

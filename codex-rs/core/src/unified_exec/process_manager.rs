@@ -1011,7 +1011,7 @@ impl UnifiedExecProcessManager {
                 "CODEX_ENV_FILE overlays are local-only; skipping persisted hook env for remote exec",
             );
         } else {
-            context.session.apply_hook_env_file(&mut env);
+            let _ = context.session.apply_hook_env_file(&mut env);
         }
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),

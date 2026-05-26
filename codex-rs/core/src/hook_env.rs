@@ -13,15 +13,17 @@ pub(crate) struct HookEnvFile {
 }
 
 impl HookEnvFile {
-    /// Creates the per-thread env file handle and makes its parent directory appendable for hooks.
+    /// Creates the per-thread env file handle without touching the filesystem.
+    ///
+    /// The hook runtime creates the parent directory only when it exposes this path to a
+    /// SessionStart hook. Later tool executions can still call `apply_to_env` safely when the
+    /// file was never created.
     pub(crate) fn new(codex_home: &AbsolutePathBuf, thread_id: ThreadId) -> Self {
-        let env_file = Self {
+        Self {
             path: codex_home
                 .join(HOOK_ENV_DIR)
                 .join(format!("{thread_id}.sh")),
-        };
-        env_file.ensure_parent();
-        env_file
+        }
     }
 
     /// Returns the path exposed to hook commands via CODEX_ENV_FILE and CLAUDE_ENV_FILE.
@@ -29,33 +31,30 @@ impl HookEnvFile {
         &self.path
     }
 
-    /// Best-effort directory setup so a hook can append to the advertised env file path.
-    fn ensure_parent(&self) {
-        let Some(parent) = self.path.as_path().parent() else {
-            return;
-        };
-        if let Err(err) = fs::create_dir_all(parent) {
-            warn!(
-                path = %parent.display(),
-                "failed to create hook env file directory: {err}"
-            );
-        }
-    }
-
-    /// Applies persisted hook env updates to the command environment used by later local tools.
-    pub(crate) fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+    /// Applies persisted hook env updates to later local tool environments.
+    ///
+    /// The returned names are the variables touched by the file. Shell-like tools use that list
+    /// to keep a shell snapshot from undoing hook updates such as `PATH` prepends.
+    pub(crate) fn apply_to_env(&self, env: &mut HashMap<String, String>) -> Vec<String> {
         match fs::read_to_string(self.path.as_path()) {
             Ok(contents) => {
+                let mut applied_names = Vec::new();
                 for line in contents.lines() {
-                    apply_env_file_line(env, line);
+                    if let Some(name) = apply_env_file_line(env, line)
+                        && !applied_names.contains(&name)
+                    {
+                        applied_names.push(name);
+                    }
                 }
+                applied_names
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(err) => {
                 warn!(
                     path = %self.path.display(),
                     "failed to read hook env file: {err}"
                 );
+                Vec::new()
             }
         }
     }
@@ -66,28 +65,24 @@ impl HookEnvFile {
 /// We intentionally support the common hook outputs here rather than sourcing
 /// the file in a hidden shell wrapper: `export NAME=value`, plus Bash's
 /// `declare -x NAME=value` form emitted by `export -p`.
-fn apply_env_file_line(env: &mut HashMap<String, String>, line: &str) {
+fn apply_env_file_line(env: &mut HashMap<String, String>, line: &str) -> Option<String> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
-        return;
+        return None;
     }
 
-    let Some(assignment) = line
+    let assignment = line
         .strip_prefix("export ")
-        .or_else(|| line.strip_prefix("declare -x "))
-    else {
-        return;
-    };
+        .or_else(|| line.strip_prefix("declare -x "))?;
     let assignment = assignment.trim_start();
-    let Some((name, value)) = assignment.split_once('=') else {
-        return;
-    };
+    let (name, value) = assignment.split_once('=')?;
     let name = name.trim();
     if !is_env_name(name) {
-        return;
+        return None;
     }
     let value = parse_env_value(value.trim_start(), env);
     env.insert(name.to_string(), value);
+    Some(name.to_string())
 }
 
 /// Parses the value side of an env assignment, preserving single-quoted values literally.
@@ -198,17 +193,21 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn apply_env_file_lines(env: &mut HashMap<String, String>, contents: &str) {
+    fn apply_env_file_lines(env: &mut HashMap<String, String>, contents: &str) -> Vec<String> {
+        let mut applied_names = Vec::new();
         for line in contents.lines() {
-            apply_env_file_line(env, line);
+            if let Some(name) = apply_env_file_line(env, line) {
+                applied_names.push(name);
+            }
         }
+        applied_names
     }
 
     #[test]
     fn env_file_applies_exports_and_expands_path() {
         let mut env = HashMap::from([("PATH".to_string(), "/usr/bin".to_string())]);
 
-        apply_env_file_lines(
+        let applied_names = apply_env_file_lines(
             &mut env,
             r#"
 # ignored
@@ -226,13 +225,17 @@ export LITERAL='$FOO'
                 ("PATH".to_string(), "/plugin/bin:/usr/bin".to_string()),
             ])
         );
+        assert_eq!(
+            applied_names,
+            vec!["FOO".to_string(), "PATH".to_string(), "LITERAL".to_string()]
+        );
     }
 
     #[test]
     fn env_file_supports_braced_references_and_declare_exports() {
         let mut env = HashMap::from([("BASE".to_string(), "base".to_string())]);
 
-        apply_env_file_lines(
+        let applied_names = apply_env_file_lines(
             &mut env,
             r#"
 declare -x FROM_DECLARE="${BASE}/declare"
@@ -247,6 +250,10 @@ export FROM_BRACES=${FROM_DECLARE}/braces
                 ("FROM_DECLARE".to_string(), "base/declare".to_string()),
                 ("FROM_BRACES".to_string(), "base/declare/braces".to_string()),
             ])
+        );
+        assert_eq!(
+            applied_names,
+            vec!["FROM_DECLARE".to_string(), "FROM_BRACES".to_string()]
         );
     }
 }
