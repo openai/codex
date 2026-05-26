@@ -291,7 +291,12 @@ impl StateRuntime {
         }
 
         let memories_migrator = runtime_memories_migrator();
-        let pool = open_memories_sqlite(&memories_path, &memories_migrator, None).await?;
+        let pool = open_memories_sqlite(
+            &memories_path,
+            &memories_migrator,
+            /*telemetry_override*/ None,
+        )
+        .await?;
         memories::clear_memory_data_in_pool(&pool).await?;
         pool.close().await;
         Ok(true)
