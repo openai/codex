@@ -2319,9 +2319,10 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
     )
     .await??;
 
-    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &thread_id);
+    let stale_thread_id = Uuid::new_v4().to_string();
+    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &stale_thread_id);
     std::fs::create_dir_all(stale_path.parent().expect("stale path parent"))?;
-    let thread_uuid = Uuid::parse_str(&thread_id)?;
+    let thread_uuid = Uuid::parse_str(&stale_thread_id)?;
     let mut stale_file = std::fs::File::create(&stale_path)?;
     let stale_meta = json!({
         "timestamp": "2025-01-01T00:00:00Z",
