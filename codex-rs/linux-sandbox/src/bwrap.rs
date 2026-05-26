@@ -12,12 +12,17 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::ffi::CString;
 use std::ffi::OsString;
 use std::fs;
 use std::fs::File;
 use std::fs::Metadata;
 use std::io;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::os::fd::AsRawFd;
+use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -78,8 +83,8 @@ pub(crate) struct BwrapOptions {
     /// Keep this uncapped by default so existing nested deny-read matches are
     /// masked before the sandboxed command starts.
     pub glob_scan_max_depth: Option<usize>,
-    /// Managed MITM CA bundle to materialize at common Linux trust-store paths.
-    pub mitm_ca_trust_bundle_path: Option<PathBuf>,
+    /// Managed MITM CA cert to append to common Linux trust-store paths.
+    pub mitm_ca_cert_path: Option<PathBuf>,
 }
 
 impl Default for BwrapOptions {
@@ -88,7 +93,7 @@ impl Default for BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
             glob_scan_max_depth: None,
-            mitm_ca_trust_bundle_path: None,
+            mitm_ca_cert_path: None,
         }
     }
 }
@@ -255,7 +260,7 @@ pub(crate) fn create_bwrap_command_args(
     // need concrete bwrap masks for the matches expanded below.
     if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
         return if options.network_mode == BwrapNetworkMode::FullAccess
-            && options.mitm_ca_trust_bundle_path.is_none()
+            && options.mitm_ca_cert_path.is_none()
         {
             Ok(BwrapArgs {
                 args: command,
@@ -298,10 +303,7 @@ fn create_bwrap_flags_full_filesystem(
         synthetic_mount_targets: Vec::new(),
         protected_create_targets: Vec::new(),
     };
-    append_mitm_ca_trust_bundle_args(
-        &mut bwrap_args,
-        options.mitm_ca_trust_bundle_path.as_deref(),
-    )?;
+    append_mitm_ca_trust_bundle_args(&mut bwrap_args, options.mitm_ca_cert_path.as_deref())?;
     if options.network_mode.should_unshare_network() {
         bwrap_args.args.push("--unshare-net".to_string());
     }
@@ -345,10 +347,7 @@ fn create_bwrap_flags(
         synthetic_mount_targets,
         protected_create_targets,
     };
-    append_mitm_ca_trust_bundle_args(
-        &mut bwrap_args,
-        options.mitm_ca_trust_bundle_path.as_deref(),
-    )?;
+    append_mitm_ca_trust_bundle_args(&mut bwrap_args, options.mitm_ca_cert_path.as_deref())?;
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     bwrap_args.args.push("--unshare-user".to_string());
@@ -378,29 +377,87 @@ fn create_bwrap_flags(
 
 fn append_mitm_ca_trust_bundle_args(
     bwrap_args: &mut BwrapArgs,
-    mitm_ca_trust_bundle_path: Option<&Path>,
+    mitm_ca_cert_path: Option<&Path>,
 ) -> Result<()> {
-    let Some(mitm_ca_trust_bundle_path) = mitm_ca_trust_bundle_path else {
+    let bundle_paths = LINUX_CA_BUNDLE_PATHS.map(Path::new);
+    append_mitm_ca_trust_bundle_args_for_paths(bwrap_args, mitm_ca_cert_path, &bundle_paths)
+}
+
+fn append_mitm_ca_trust_bundle_args_for_paths(
+    bwrap_args: &mut BwrapArgs,
+    mitm_ca_cert_path: Option<&Path>,
+    bundle_paths: &[&Path],
+) -> Result<()> {
+    let Some(mitm_ca_cert_path) = mitm_ca_cert_path else {
         return Ok(());
     };
+    let managed_ca_cert = fs::read(mitm_ca_cert_path).map_err(|err| {
+        CodexErr::Fatal(format!(
+            "failed to read managed MITM CA cert {}: {err}",
+            mitm_ca_cert_path.display()
+        ))
+    })?;
 
-    for bundle_path in LINUX_CA_BUNDLE_PATHS {
-        let bundle_file = File::open(mitm_ca_trust_bundle_path).map_err(|err| {
-            CodexErr::Fatal(format!(
-                "failed to open managed MITM CA trust bundle {}: {err}",
-                mitm_ca_trust_bundle_path.display()
-            ))
-        })?;
+    for bundle_path in bundle_paths {
+        // Only overlay trust-store files the sandbox would already have seen.
+        let Ok(system_bundle) = fs::read(bundle_path) else {
+            continue;
+        };
+        let bundle_file = preserved_file_from_bytes(build_mitm_ca_bundle_overlay(
+            system_bundle,
+            &managed_ca_cert,
+        ))?;
         let bundle_fd = bundle_file.as_raw_fd().to_string();
         bwrap_args.preserved_files.push(bundle_file);
         bwrap_args.args.push("--perms".to_string());
         bwrap_args.args.push("444".to_string());
         bwrap_args.args.push("--ro-bind-data".to_string());
         bwrap_args.args.push(bundle_fd);
-        bwrap_args.args.push(bundle_path.to_string());
+        bwrap_args.args.push(path_to_string(bundle_path));
     }
 
     Ok(())
+}
+
+fn build_mitm_ca_bundle_overlay(mut system_bundle: Vec<u8>, managed_ca_cert: &[u8]) -> Vec<u8> {
+    append_pem_bytes(&mut system_bundle, managed_ca_cert);
+    system_bundle
+}
+
+fn append_pem_bytes(bundle: &mut Vec<u8>, pem: &[u8]) {
+    if !bundle.is_empty() && !bundle.ends_with(b"\n") {
+        bundle.push(b'\n');
+    }
+    bundle.extend_from_slice(pem);
+    if !bundle.ends_with(b"\n") {
+        bundle.push(b'\n');
+    }
+}
+
+fn preserved_file_from_bytes(contents: Vec<u8>) -> Result<File> {
+    let memfd_name = CString::new("codex-mitm-ca-bundle").expect("static memfd name");
+    // SAFETY: `memfd_name` is a valid NUL-terminated C string and the flags are valid.
+    let fd = unsafe { libc::memfd_create(memfd_name.as_ptr(), libc::MFD_CLOEXEC) };
+    if fd < 0 {
+        return Err(CodexErr::Fatal(format!(
+            "failed to create managed MITM CA bundle memfd: {}",
+            io::Error::last_os_error()
+        )));
+    }
+
+    // SAFETY: `fd` is a newly created owned file descriptor from `memfd_create`.
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    file.write_all(&contents).map_err(|err| {
+        CodexErr::Fatal(format!(
+            "failed to write managed MITM CA bundle memfd: {err}"
+        ))
+    })?;
+    file.seek(SeekFrom::Start(0)).map_err(|err| {
+        CodexErr::Fatal(format!(
+            "failed to rewind managed MITM CA bundle memfd: {err}"
+        ))
+    })?;
+    Ok(file)
 }
 
 /// Build the bubblewrap filesystem mounts for a given filesystem policy.
@@ -1400,8 +1457,8 @@ mod tests {
     }
 
     #[test]
-    fn default_mitm_ca_trust_bundle_path_is_unset() {
-        assert_eq!(BwrapOptions::default().mitm_ca_trust_bundle_path, None);
+    fn default_mitm_ca_cert_path_is_unset() {
+        assert_eq!(BwrapOptions::default().mitm_ca_cert_path, None);
     }
 
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
@@ -1472,32 +1529,39 @@ mod tests {
     }
 
     #[test]
-    fn mitm_ca_trust_bundle_overlays_common_linux_bundle_paths() {
+    fn mitm_ca_cert_appends_to_existing_linux_bundle_paths() {
         let temp_dir = TempDir::new().expect("tempdir");
-        let mitm_ca_trust_bundle_path = temp_dir.path().join("ca-bundle.pem");
-        fs::write(&mitm_ca_trust_bundle_path, "managed bundle").expect("write bundle");
+        let mitm_ca_cert_path = temp_dir.path().join("ca.pem");
+        fs::write(&mitm_ca_cert_path, "managed ca").expect("write managed CA");
+        let system_bundle_path = temp_dir.path().join("ca-certificates.crt");
+        fs::write(&system_bundle_path, "system bundle").expect("write system bundle");
+        let missing_bundle_path = temp_dir.path().join("missing-bundle.crt");
+        let mut args = BwrapArgs {
+            args: Vec::new(),
+            preserved_files: Vec::new(),
+            synthetic_mount_targets: Vec::new(),
+            protected_create_targets: Vec::new(),
+        };
 
-        let args = create_bwrap_command_args(
-            vec!["/bin/true".to_string()],
-            &FileSystemSandboxPolicy::unrestricted(),
-            Path::new("/"),
-            Path::new("/"),
-            BwrapOptions {
-                mitm_ca_trust_bundle_path: Some(mitm_ca_trust_bundle_path),
-                ..Default::default()
-            },
+        append_mitm_ca_trust_bundle_args_for_paths(
+            &mut args,
+            Some(&mitm_ca_cert_path),
+            &[&system_bundle_path, &missing_bundle_path],
         )
-        .expect("create bwrap args");
+        .expect("append MITM CA trust bundle args");
 
-        assert_eq!(args.preserved_files.len(), LINUX_CA_BUNDLE_PATHS.len());
-        for bundle_path in LINUX_CA_BUNDLE_PATHS {
-            assert!(args.args.windows(5).any(|window| {
-                window[0] == "--perms"
-                    && window[1] == "444"
-                    && window[2] == "--ro-bind-data"
-                    && window[4] == bundle_path
-            }));
-        }
+        assert_eq!(args.preserved_files.len(), 1);
+        let system_bundle_path = path_to_string(&system_bundle_path);
+        assert!(args.args.windows(5).any(|window| {
+            window[0] == "--perms"
+                && window[1] == "444"
+                && window[2] == "--ro-bind-data"
+                && window[4] == system_bundle_path
+        }));
+        let mut overlay_contents = String::new();
+        std::io::Read::read_to_string(&mut args.preserved_files[0], &mut overlay_contents)
+            .expect("read overlay contents");
+        assert_eq!(overlay_contents, "system bundle\nmanaged ca\n");
     }
 
     #[test]
