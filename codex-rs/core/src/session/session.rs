@@ -936,7 +936,6 @@ impl Session {
                 };
 
             let hook_env_file = crate::hook_env::HookEnvFile::new(&config.codex_home, thread_id);
-            hook_env_file.ensure_parent_dir();
             let hooks =
                 build_hooks_for_config(&config, plugins_manager.as_ref(), &default_shell).await;
             for warning in hooks.startup_warnings() {

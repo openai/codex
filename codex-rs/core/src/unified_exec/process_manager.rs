@@ -1039,6 +1039,14 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
+        let env_file_path = if request.environment.is_remote() {
+            None
+        } else {
+            let hook_env_file = context.session.hook_env_file();
+            hook_env_file.ensure_parent_dir();
+            Some(hook_env_file.path().clone())
+        };
+
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             shell_type: request.shell_type.clone(),
@@ -1050,11 +1058,7 @@ impl UnifiedExecProcessManager {
             env,
             exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
-            env_file_path: if request.environment.is_remote() {
-                None
-            } else {
-                Some(context.session.hook_env_file().path().clone())
-            },
+            env_file_path,
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
