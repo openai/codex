@@ -14,6 +14,11 @@ impl ChatWidget {
 
     /// Open a popup to choose the permissions mode.
     pub(crate) fn open_permissions_popup(&mut self) {
+        if self.config.explicit_permission_profile_mode {
+            self.open_permission_profiles_popup();
+            return;
+        }
+
         let include_read_only = cfg!(target_os = "windows");
         let current_approval =
             AskForApproval::from(self.config.permissions.approval_policy.value());

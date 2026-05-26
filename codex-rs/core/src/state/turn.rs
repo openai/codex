@@ -1,7 +1,6 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
-use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -28,7 +27,7 @@ use codex_protocol::protocol::TokenUsage;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
-    pub(crate) tasks: IndexMap<String, RunningTask>,
+    pub(crate) task: Option<RunningTask>,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
 }
 
@@ -56,7 +55,7 @@ pub(crate) enum MailboxDeliveryPhase {
 impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
-            tasks: IndexMap::new(),
+            task: None,
             turn_state: Arc::new(Mutex::new(TurnState::default())),
         }
     }
@@ -79,32 +78,6 @@ pub(crate) struct RunningTask {
     pub(crate) turn_extension_data: Arc<ExtensionData>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
-}
-
-pub(crate) struct RemovedTask {
-    pub(crate) records_turn_token_usage_on_span: bool,
-    pub(crate) active_turn_is_empty: bool,
-}
-
-impl ActiveTurn {
-    pub(crate) fn add_task(&mut self, task: RunningTask) {
-        let sub_id = task.turn_context.sub_id.clone();
-        self.tasks.insert(sub_id, task);
-    }
-
-    pub(crate) fn remove_task(&mut self, sub_id: &str) -> Option<RemovedTask> {
-        let task = self.tasks.swap_remove(sub_id)?;
-        let records_turn_token_usage_on_span = task.task.records_turn_token_usage_on_span();
-        task.handle.detach();
-        Some(RemovedTask {
-            records_turn_token_usage_on_span,
-            active_turn_is_empty: self.tasks.is_empty(),
-        })
-    }
-
-    pub(crate) fn drain_tasks(&mut self) -> Vec<RunningTask> {
-        self.tasks.drain(..).map(|(_, task)| task).collect()
-    }
 }
 
 /// Mutable state for a single turn.

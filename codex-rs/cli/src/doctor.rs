@@ -71,6 +71,7 @@ mod output;
 mod progress;
 mod runtime;
 mod system;
+mod thread_inventory;
 mod title;
 mod updates;
 
@@ -84,6 +85,7 @@ use progress::doctor_progress;
 use runtime::runtime_check;
 use runtime::search_check;
 use system::system_check;
+use thread_inventory::thread_inventory_check;
 use title::terminal_title_check;
 use updates::updates_check;
 
@@ -362,6 +364,7 @@ async fn build_report(
                 git_check,
                 terminal_title_check,
                 state_check,
+                thread_inventory_check,
                 background_server_check,
                 reachability_check,
             ) = tokio::join!(
@@ -392,11 +395,16 @@ async fn build_report(
                     })
                 },
                 run_async_check("state", progress.clone(), state_check(config)),
-                async {
-                    run_sync_check("app-server", progress.clone(), || {
-                        background_server_check(config)
-                    })
-                },
+                run_async_check(
+                    "thread inventory",
+                    progress.clone(),
+                    thread_inventory_check(config),
+                ),
+                run_async_check(
+                    "app-server",
+                    progress.clone(),
+                    background_server_check(config)
+                ),
                 run_async_check(
                     "provider reachability",
                     progress.clone(),
@@ -415,6 +423,7 @@ async fn build_report(
                 git_check,
                 terminal_title_check,
                 state_check,
+                thread_inventory_check,
                 background_server_check,
                 reachability_check,
             ]);

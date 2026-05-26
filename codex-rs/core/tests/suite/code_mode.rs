@@ -200,7 +200,11 @@ async fn run_code_mode_turn_with_rmcp_model(
     code: &str,
     model: &'static str,
 ) -> Result<(TestCodex, ResponseMock)> {
-    run_code_mode_turn_with_rmcp_config(server, prompt, code, model, /*code_mode_only*/ false).await
+    run_code_mode_turn_with_rmcp_config(
+        server, prompt, code, model, /*code_mode_only*/ false,
+        /*non_prefixed_mcp_tool_names*/ false,
+    )
+    .await
 }
 
 async fn run_code_mode_turn_with_rmcp_mode(
@@ -209,8 +213,15 @@ async fn run_code_mode_turn_with_rmcp_mode(
     code: &str,
     code_mode_only: bool,
 ) -> Result<(TestCodex, ResponseMock)> {
-    run_code_mode_turn_with_rmcp_config(server, prompt, code, "test-gpt-5.1-codex", code_mode_only)
-        .await
+    run_code_mode_turn_with_rmcp_config(
+        server,
+        prompt,
+        code,
+        "test-gpt-5.1-codex",
+        code_mode_only,
+        /*non_prefixed_mcp_tool_names*/ false,
+    )
+    .await
 }
 
 async fn run_code_mode_turn_with_rmcp_config(
@@ -219,6 +230,7 @@ async fn run_code_mode_turn_with_rmcp_config(
     code: &str,
     model: &'static str,
     code_mode_only: bool,
+    non_prefixed_mcp_tool_names: bool,
 ) -> Result<(TestCodex, ResponseMock)> {
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder = test_codex().with_model(model).with_config(move |config| {
@@ -227,6 +239,9 @@ async fn run_code_mode_turn_with_rmcp_config(
         } else {
             config.features.enable(Feature::CodeMode)
         };
+        if non_prefixed_mcp_tool_names {
+            let _ = config.features.enable(Feature::NonPrefixedMcpToolNames);
+        }
 
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
@@ -2593,6 +2608,50 @@ echoType=function
 echo=ECHOING: ping
 isError=false
 contentLength=0"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_uses_non_prefixed_mcp_tool_names_when_feature_enabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+const result = await tools.rmcp__echo({ message: "ping" });
+text(JSON.stringify({
+  hasNonPrefixedEcho: typeof tools.rmcp__echo === "function",
+  hasPrefixedEcho: typeof tools.mcp__rmcp__echo === "function",
+  echo: result.structuredContent?.echo ?? "missing",
+}));
+"#;
+
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp_config(
+        &server,
+        "use exec to inspect non-prefixed MCP names",
+        code,
+        "test-gpt-5.1-codex",
+        /*code_mode_only*/ false,
+        /*non_prefixed_mcp_tool_names*/ true,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec non-prefixed rmcp access failed unexpectedly: {output}"
+    );
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "hasNonPrefixedEcho": true,
+            "hasPrefixedEcho": false,
+            "echo": "ECHOING: ping",
+        })
     );
 
     Ok(())

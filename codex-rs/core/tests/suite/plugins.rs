@@ -340,7 +340,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
         "expected plugin app tools to become visible for this turn: {request_tools:?}"
     );
     let echo_tool = request
-        .tool_by_name("mcp__sample__", "echo")
+        .tool_by_name("mcp__sample", "echo")
         .expect("plugin MCP tool should be present");
     let echo_description = echo_tool
         .get("description")

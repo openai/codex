@@ -1,5 +1,4 @@
 use crate::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT;
-use crate::memory_root;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
@@ -21,14 +20,14 @@ fn parse_embedded_template(source: &'static str, template_name: &str) -> Templat
     }
 }
 
-/// Build the read-path prompt that is added to developer instructions.
+/// Build the memory read-path prompt that is added to developer instructions.
 ///
 /// Large `memory_summary.md` files are truncated at
 /// [MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT].
-pub async fn build_memory_tool_developer_instructions(
+pub(crate) async fn build_memory_tool_developer_instructions(
     codex_home: &AbsolutePathBuf,
 ) -> Option<String> {
-    let base_path = memory_root(codex_home);
+    let base_path = codex_home.join("memories");
     let memory_summary_path = base_path.join("memory_summary.md");
     let memory_summary = fs::read_to_string(&memory_summary_path)
         .await

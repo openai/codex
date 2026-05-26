@@ -58,7 +58,6 @@ members = [
     "login",
     "codex-mcp",
     "mcp-server",
-    "memories/mcp",
     "memories/read",
     "memories/write",
     "model-provider-info",

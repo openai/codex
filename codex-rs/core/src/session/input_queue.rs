@@ -103,8 +103,9 @@ impl InputQueue {
         let active = active_turn.lock().await;
         active.as_ref().and_then(|active_turn| {
             active_turn
-                .tasks
-                .contains_key(sub_id)
+                .task
+                .as_ref()
+                .is_some_and(|task| task.turn_context.sub_id == sub_id)
                 .then(|| Arc::clone(&active_turn.turn_state))
         })
     }

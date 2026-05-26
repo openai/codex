@@ -1143,6 +1143,12 @@
             "integer",
             "null"
           ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
