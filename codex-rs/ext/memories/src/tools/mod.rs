@@ -19,6 +19,7 @@ use crate::backend::MemoriesBackend;
 use crate::backend::MemoriesBackendError;
 use crate::schema;
 
+mod ad_hoc_note;
 mod list;
 mod read;
 mod search;
@@ -28,6 +29,9 @@ where
     B: MemoriesBackend,
 {
     vec![
+        Arc::new(ad_hoc_note::AddAdHocNoteTool {
+            backend: backend.clone(),
+        }),
         Arc::new(list::ListTool {
             backend: backend.clone(),
         }),
@@ -82,12 +86,15 @@ fn backend_error_to_function_call(err: MemoriesBackendError) -> FunctionCallErro
     match err {
         MemoriesBackendError::InvalidPath { .. }
         | MemoriesBackendError::InvalidCursor { .. }
+        | MemoriesBackendError::InvalidFilename { .. }
         | MemoriesBackendError::NotFound { .. }
         | MemoriesBackendError::InvalidLineOffset
         | MemoriesBackendError::InvalidMaxLines
         | MemoriesBackendError::LineOffsetExceedsFileLength
         | MemoriesBackendError::NotFile { .. }
         | MemoriesBackendError::EmptyQuery
+        | MemoriesBackendError::EmptyAdHocNote
+        | MemoriesBackendError::AdHocNoteAlreadyExists { .. }
         | MemoriesBackendError::InvalidMatchWindow => {
             FunctionCallError::RespondToModel(err.to_string())
         }
