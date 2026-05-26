@@ -1468,8 +1468,10 @@ impl ChatWidget {
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
-        self.app_event_tx
-            .send(AppEvent::FetchMcpInventory { detail });
+        self.app_event_tx.send(AppEvent::FetchMcpInventory {
+            detail,
+            thread_id: self.thread_id(),
+        });
     }
 
     /// Remove the MCP loading spinner if it is still the active cell.

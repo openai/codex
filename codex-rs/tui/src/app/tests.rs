@@ -137,7 +137,7 @@ async fn next_thread_settings_updated(
 }
 
 #[tokio::test]
-async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
+async fn handle_mcp_inventory_result_respects_origin_thread() {
     let mut app = make_test_app().await;
     app.transcript_cells
         .push(Arc::new(history_cell::new_mcp_inventory_loading(
@@ -153,9 +153,24 @@ async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
             auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
         }]),
         McpServerStatusDetail::ToolsAndAuthOnly,
+        /*thread_id*/ None,
     );
 
     assert_eq!(app.transcript_cells.len(), 0);
+
+    app.active_thread_id = Some(ThreadId::new());
+    app.transcript_cells
+        .push(Arc::new(history_cell::new_mcp_inventory_loading(
+            /*animations_enabled*/ false,
+        )));
+
+    app.handle_mcp_inventory_result(
+        Ok(Vec::new()),
+        McpServerStatusDetail::ToolsAndAuthOnly,
+        Some(ThreadId::new()),
+    );
+
+    assert_eq!(app.transcript_cells.len(), 1);
 }
 
 #[test]

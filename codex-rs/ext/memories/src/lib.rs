@@ -1,6 +1,7 @@
 mod backend;
 mod extension;
 mod local;
+mod metrics;
 mod prompts;
 mod schema;
 mod tools;
