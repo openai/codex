@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::context::AdditionalContextDeveloperFragment;
 use crate::context::AdditionalContextUserFragment;
+use crate::context::ContextualUserFragment;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
@@ -22,11 +23,11 @@ impl AdditionalContextStore {
             .map(|(key, entry)| match entry.kind {
                 AdditionalContextKind::Untrusted => {
                     AdditionalContextUserFragment::new(key.clone(), entry.value.clone())
-                        .into_input_item()
+                        .into_response_input_item()
                 }
                 AdditionalContextKind::Application => {
                     AdditionalContextDeveloperFragment::new(key.clone(), entry.value.clone())
-                        .into_input_item()
+                        .into_response_input_item()
                 }
             })
             .collect();

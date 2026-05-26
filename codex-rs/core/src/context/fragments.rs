@@ -1,6 +1,4 @@
 use super::ContextualUserFragment;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_utils_string::truncate_middle_with_token_budget;
 
 const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 1_000;
@@ -16,10 +14,6 @@ pub(crate) struct AdditionalContextUserFragment {
 impl AdditionalContextUserFragment {
     pub(crate) fn new(key: String, value: String) -> Self {
         Self { key, value }
-    }
-
-    pub(crate) fn into_input_item(self) -> ResponseInputItem {
-        additional_context_input_item(self)
     }
 }
 
@@ -67,10 +61,6 @@ impl AdditionalContextDeveloperFragment {
     pub(crate) fn new(key: String, value: String) -> Self {
         Self { key, value }
     }
-
-    pub(crate) fn into_input_item(self) -> ResponseInputItem {
-        additional_context_input_item(self)
-    }
 }
 
 impl ContextualUserFragment for AdditionalContextDeveloperFragment {
@@ -88,16 +78,6 @@ impl ContextualUserFragment for AdditionalContextDeveloperFragment {
 
     fn body(&self) -> String {
         additional_context_developer_body(&self.key, &self.value)
-    }
-}
-
-fn additional_context_input_item<T: ContextualUserFragment>(fragment: T) -> ResponseInputItem {
-    ResponseInputItem::Message {
-        role: T::role().to_string(),
-        content: vec![ContentItem::InputText {
-            text: fragment.render(),
-        }],
-        phase: None,
     }
 }
 

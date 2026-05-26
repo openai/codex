@@ -5,6 +5,7 @@
 //! events, and owns helper hooks used by goal lifecycle behavior.
 
 use crate::StateDbHandle;
+use crate::context::ContextualUserFragment;
 use crate::context::GoalContext;
 use crate::session::TurnInput;
 use crate::session::session::Session;

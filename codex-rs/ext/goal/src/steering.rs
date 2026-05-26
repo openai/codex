@@ -1,3 +1,4 @@
+use codex_core::context::ContextualUserFragment;
 use codex_core::context::GoalContext;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
