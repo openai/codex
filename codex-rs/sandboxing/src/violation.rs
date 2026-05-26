@@ -3,6 +3,7 @@ use codex_network_proxy::BlockedRequest;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use tracing::warn;
 
+#[cfg(unix)]
 const EXIT_CODE_SIGNAL_BASE: i32 = 128;
 const OUTPUT_SNIPPET_MAX_CHARS: usize = 512;
 
