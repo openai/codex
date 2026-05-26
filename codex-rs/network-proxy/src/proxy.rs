@@ -378,7 +378,7 @@ const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
 const NODE_USE_ENV_PROXY_ENV_KEY: &str = "NODE_USE_ENV_PROXY";
 #[cfg(any(target_os = "macos", test))]
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
-const BASE_PROXY_ENV_KEYS: [&str; 35] = [
+pub const PROXY_ENV_KEYS: &[&str] = &[
     PROXY_ACTIVE_ENV_KEY,
     ALLOW_LOCAL_BINDING_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
@@ -415,7 +415,6 @@ const BASE_PROXY_ENV_KEYS: [&str; 35] = [
     "FTP_PROXY",
     "ftp_proxy",
 ];
-pub const PROXY_ENV_KEYS: &[&str] = &concat_proxy_env_keys();
 
 #[cfg(target_os = "macos")]
 pub const PROXY_GIT_SSH_COMMAND_ENV_KEY: &str = GIT_SSH_COMMAND_ENV_KEY;
@@ -468,24 +467,6 @@ fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
     for key in keys {
         env.insert((*key).to_string(), value.to_string());
     }
-}
-
-const fn concat_proxy_env_keys()
--> [&'static str; BASE_PROXY_ENV_KEYS.len() + crate::certs::CUSTOM_CA_ENV_KEYS.len()] {
-    let mut keys = [""; BASE_PROXY_ENV_KEYS.len() + crate::certs::CUSTOM_CA_ENV_KEYS.len()];
-    let mut index = 0;
-    while index < BASE_PROXY_ENV_KEYS.len() {
-        keys[index] = BASE_PROXY_ENV_KEYS[index];
-        index += 1;
-    }
-
-    let mut custom_ca_index = 0;
-    while custom_ca_index < crate::certs::CUSTOM_CA_ENV_KEYS.len() {
-        keys[index + custom_ca_index] = crate::certs::CUSTOM_CA_ENV_KEYS[custom_ca_index];
-        custom_ca_index += 1;
-    }
-
-    keys
 }
 
 #[cfg(target_os = "macos")]
@@ -1113,6 +1094,13 @@ mod tests {
                 env.get(key),
                 Some(&mitm_ca_trust_bundle_path.display().to_string())
             );
+        }
+    }
+
+    #[test]
+    fn custom_ca_env_keys_are_not_generic_proxy_env_keys() {
+        for key in crate::certs::CUSTOM_CA_ENV_KEYS {
+            assert!(!PROXY_ENV_KEYS.contains(&key));
         }
     }
 
