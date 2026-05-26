@@ -126,7 +126,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
     )
     .expect("review request turn metadata json");
     assert_eq!(
-        turn_metadata["forked-from-thread-id"].as_str(),
+        turn_metadata["forked_from_thread_id"].as_str(),
         Some(parent_thread_id.as_str())
     );
 
