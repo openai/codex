@@ -23,7 +23,7 @@ fn make_exec_output(
 }
 
 #[test]
-fn preserves_legacy_boolean_denial_keywords() {
+fn classifies_legacy_denial_keywords() {
     for keyword in [
         "operation not permitted",
         "permission denied",
@@ -35,16 +35,15 @@ fn preserves_legacy_boolean_denial_keywords() {
     ] {
         let output = make_exec_output(/*exit_code*/ 1, "", keyword, "");
 
-        assert_eq!(
-            is_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output),
-            true,
+        assert!(
+            classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output).is_some(),
             "{keyword}"
         );
     }
 }
 
 #[test]
-fn preserves_legacy_boolean_denial_ordering() {
+fn preserves_legacy_denial_ordering() {
     let quick_reject_without_keyword =
         make_exec_output(/*exit_code*/ 127, "", "command not found", "");
     let quick_reject_with_keyword =
@@ -54,22 +53,28 @@ fn preserves_legacy_boolean_denial_ordering() {
     let non_sandbox_with_keyword =
         make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
 
-    assert!(!is_filesystem_sandbox_violation(
-        SandboxType::LinuxSeccomp,
-        &quick_reject_without_keyword
-    ));
-    assert!(is_filesystem_sandbox_violation(
-        SandboxType::LinuxSeccomp,
-        &quick_reject_with_keyword
-    ));
-    assert!(!is_filesystem_sandbox_violation(
-        SandboxType::LinuxSeccomp,
-        &zero_exit_with_keyword
-    ));
-    assert!(!is_filesystem_sandbox_violation(
-        SandboxType::None,
-        &non_sandbox_with_keyword
-    ));
+    assert!(
+        classify_filesystem_sandbox_violation(
+            SandboxType::LinuxSeccomp,
+            &quick_reject_without_keyword
+        )
+        .is_none()
+    );
+    assert!(
+        classify_filesystem_sandbox_violation(
+            SandboxType::LinuxSeccomp,
+            &quick_reject_with_keyword
+        )
+        .is_some()
+    );
+    assert!(
+        classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &zero_exit_with_keyword)
+            .is_none()
+    );
+    assert!(
+        classify_filesystem_sandbox_violation(SandboxType::None, &non_sandbox_with_keyword)
+            .is_none()
+    );
 }
 
 #[test]
@@ -134,10 +139,10 @@ fn classifies_linux_sigsys_exit() {
 }
 
 #[test]
-fn preserves_boolean_denial_semantics_for_non_sandbox_mode() {
+fn does_not_classify_non_sandbox_mode() {
     let output = make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
 
-    assert!(!is_filesystem_sandbox_violation(SandboxType::None, &output));
+    assert!(classify_filesystem_sandbox_violation(SandboxType::None, &output).is_none());
 }
 
 #[test]

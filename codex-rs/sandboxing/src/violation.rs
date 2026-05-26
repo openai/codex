@@ -110,7 +110,7 @@ impl NetworkSandboxViolation {
 }
 
 /// Classify a sandboxed process result as a filesystem sandbox violation.
-pub fn classify_filesystem_sandbox_violation(
+fn classify_filesystem_sandbox_violation(
     sandbox_type: SandboxType,
     exec_output: &ExecToolCallOutput,
 ) -> Option<FileSystemSandboxViolation> {
@@ -146,14 +146,6 @@ pub fn classify_filesystem_sandbox_violation(
     }
 
     None
-}
-
-/// Return whether a sandboxed process result represents a filesystem sandbox violation.
-pub fn is_filesystem_sandbox_violation(
-    sandbox_type: SandboxType,
-    exec_output: &ExecToolCallOutput,
-) -> bool {
-    classify_filesystem_sandbox_violation(sandbox_type, exec_output).is_some()
 }
 
 /// Record a filesystem sandbox violation, returning the classified event when one was found.

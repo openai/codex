@@ -48,7 +48,6 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::is_filesystem_sandbox_violation;
 use codex_sandboxing::record_filesystem_sandbox_violation;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
@@ -1114,8 +1113,7 @@ fn map_exec_result(
         })));
     }
 
-    if is_filesystem_sandbox_violation(sandbox, &output) {
-        record_filesystem_sandbox_violation(sandbox, &output);
+    if record_filesystem_sandbox_violation(sandbox, &output).is_some() {
         return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
             network_policy_decision: None,
