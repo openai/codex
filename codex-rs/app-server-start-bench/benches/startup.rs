@@ -30,12 +30,14 @@ fn main() {
 // Process startup is slow enough that 30 samples keep runs practical, and
 // sample size 1 lets each measured server be reaped before the next starts.
 #[divan::bench(sample_count = 30, sample_size = 1, skip_ext_time)]
+// E2E benchmarks have inter-Cargo dependencies, such as a built Codex binary.
+// `just bench-e2e` prepares those dependencies and selects these with `--ignored`.
 #[ignore]
 #[allow(clippy::expect_used)]
 fn initialize_response(bencher: Bencher) {
     let codex_bin = std::env::var_os("CODEX_BIN")
         .map(PathBuf::from)
-        .expect("CODEX_BIN must point to the codex binary; run `just bench-app-server-start`");
+        .expect("CODEX_BIN must point to the codex binary; run `just bench-e2e`");
 
     bencher
         .with_inputs(|| tempfile::tempdir().expect("benchmark CODEX_HOME should be created"))

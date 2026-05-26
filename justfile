@@ -30,10 +30,10 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
-# Benchmark app-server process startup through its initialize response.
-bench-app-server-start *args:
+# Run end-to-end performance benchmarks that require a built Codex binary.
+bench-e2e *args:
     cargo build --release -p codex-cli --bin codex
-    CODEX_BIN="$PWD/target/release/codex" cargo bench -p codex-app-server-start-bench --bench startup -- --ignored "$@"
+    CODEX_BIN="$PWD/target/release/codex" cargo bench -p codex-app-server-start-bench --bench startup -- "$@" --ignored
 
 # Format Rust and Python SDK code.
 fmt:
@@ -60,14 +60,14 @@ test *args:
     RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast "$@"
     just bench-smoke
 
-# Run explicit workspace benchmark targets.
-bench *args:
+# Run unit-test-style benchmark targets managed entirely by Cargo.
+bench-unit *args:
     cargo bench --workspace --bench '*' "$@"
-    just bench-app-server-start "$@"
 
 # Run benchmark targets once to ensure they start successfully.
 bench-smoke:
-    just bench -- --test
+    just bench-unit -- --test
+    just bench-e2e --test
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
