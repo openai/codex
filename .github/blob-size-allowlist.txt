@@ -8,7 +8,3 @@ codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.js
 codex-rs/tui/tests/fixtures/oss-story.jsonl
 codex-rs/tui_app_server/tests/fixtures/oss-story.jsonl
 codex-rs/tui/src/app.rs
-third_party/libsqlite3-sys/sqlcipher/sqlite3.c
-third_party/libsqlite3-sys/sqlcipher/sqlite3.h
-third_party/libsqlite3-sys/sqlite3/sqlite3.c
-third_party/libsqlite3-sys/sqlite3/sqlite3.h
