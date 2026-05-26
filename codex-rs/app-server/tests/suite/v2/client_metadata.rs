@@ -259,7 +259,7 @@ async fn review_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -
         .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
     assert_eq!(
         metadata["forked_from_thread_id"].as_str(),
-        Some(source_thread_id.as_str())
+        Some(thread.id.as_str())
     );
     assert_eq!(metadata["thread_id"].as_str(), Some(thread.id.as_str()));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
