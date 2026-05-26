@@ -124,6 +124,9 @@ pub(crate) async fn run_pending_session_start_hooks(
                 source: session_start_source,
             },
         };
+        if matches!(target, StartHookTarget::SessionStart { .. }) {
+            sess.reset_hook_env_file();
+        }
         let request = codex_hooks::SessionStartRequest {
             session_id: sess.session_id().into(),
             #[allow(deprecated)]
