@@ -1,11 +1,19 @@
 param(
-    [string]$Release = "latest",
+    [string]$Release = $env:CODEX_RELEASE,
     [switch]$NonInteractive
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+if ([string]::IsNullOrWhiteSpace($Release)) {
+    $Release = "latest"
+}
+
+if (-not $PSBoundParameters.ContainsKey("NonInteractive") -and $env:CODEX_NON_INTERACTIVE -match "^(?i:1|true|yes)$") {
+    $NonInteractive = $true
+}
 
 function Write-Step {
     param(

@@ -2,8 +2,8 @@
 
 set -eu
 
-RELEASE="latest"
-NON_INTERACTIVE=false
+RELEASE="${CODEX_RELEASE:-latest}"
+NON_INTERACTIVE="${CODEX_NON_INTERACTIVE:-false}"
 
 BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_PATH="$BIN_DIR/codex"
@@ -64,6 +64,10 @@ parse_args() {
       --help | -h)
         cat <<EOF
 Usage: install.sh [--release VERSION] [--non-interactive]
+
+Environment:
+  CODEX_RELEASE          Version to install; overridden by --release.
+  CODEX_NON_INTERACTIVE  Set to 1, true, or yes to skip prompts.
 EOF
         exit 0
         ;;
@@ -548,9 +552,11 @@ classify_existing_codex() {
 prompt_yes_no() {
   prompt="$1"
 
-  if [ "$NON_INTERACTIVE" = true ]; then
-    return 1
-  fi
+  case "$NON_INTERACTIVE" in
+    1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss])
+      return 1
+      ;;
+  esac
 
   if ( : </dev/tty ) 2>/dev/null; then
     printf '%s [y/N] ' "$prompt" >/dev/tty
