@@ -1003,19 +1003,20 @@ impl Session {
             return;
         }
 
-        match Self::start_managed_network_proxy(
-            &spec,
-            current_exec_policy.as_ref(),
-            &session_configuration.permission_profile(),
-            /*network_policy_decider*/ None,
-            self.services
-                .managed_network_requirements_configured
-                .then(|| {
-                    build_blocked_request_observer(Arc::clone(&self.services.network_approval))
-                }),
-            self.services.managed_network_requirements_configured,
-            self.services.network_proxy_audit_metadata.clone(),
-        )
+        match Self::start_managed_network_proxy(ManagedNetworkProxyStartParams {
+            spec: &spec,
+            credentialed_routes: &[],
+            exec_policy: current_exec_policy.as_ref(),
+            permission_profile: &session_configuration.permission_profile(),
+            network_policy_decider: None,
+            blocked_request_observer: self.services.managed_network_requirements_configured.then(
+                || build_blocked_request_observer(Arc::clone(&self.services.network_approval)),
+            ),
+            managed_network_requirements_enabled: self
+                .services
+                .managed_network_requirements_configured,
+            audit_metadata: self.services.network_proxy_audit_metadata.clone(),
+        })
         .await
         {
             Ok((started_proxy, _session_network_proxy)) => {
