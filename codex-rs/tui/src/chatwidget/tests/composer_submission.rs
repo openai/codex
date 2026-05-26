@@ -1212,6 +1212,7 @@ async fn submit_user_message_ignores_inaccessible_app_mentions_from_bindings() {
         remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
         mention_bindings: vec![MentionBinding {
+            sigil: '$',
             mention: "arabica-uae".to_string(),
             path: "app://arabica_uae".to_string(),
         }],
