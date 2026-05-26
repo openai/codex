@@ -1,13 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-goal-extension"
+name = "codex-web-search-extension"
 version.workspace = true
 
 [lib]
-name = "codex_goal_extension"
+name = "codex_web_search_extension"
 path = "src/lib.rs"
-test = false
 doctest = false
 
 [lints]
@@ -15,19 +14,18 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+codex-api = { workspace = true }
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
-codex-otel = { workspace = true }
+codex-features = { workspace = true }
+codex-login = { workspace = true }
+codex-model-provider = { workspace = true }
+codex-model-provider-info = { workspace = true }
 codex-protocol = { workspace = true }
-codex-state = { workspace = true }
 codex-tools = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+http = { workspace = true }
+schemars = { workspace = true }
 serde_json = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
-anyhow = { workspace = true }
-chrono = { workspace = true }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
