@@ -66,6 +66,7 @@ pub struct UnifiedExecRequest {
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub snapshot_restore_env_keys: Vec<String>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
@@ -270,6 +271,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 session_shell.as_ref(),
                 &req.cwd,
                 &req.explicit_env_overrides,
+                &req.snapshot_restore_env_keys,
                 &env,
             )
         };
@@ -418,6 +420,7 @@ mod tests {
             env: HashMap::new(),
             exec_server_env_config: None,
             explicit_env_overrides: HashMap::new(),
+            snapshot_restore_env_keys: Vec::new(),
             network: None,
             tty: false,
             sandbox_permissions: SandboxPermissions::UseDefault,

@@ -53,13 +53,12 @@ struct RunExecLikeArgs {
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
     shell_runtime_backend: ShellRuntimeBackend,
-    snapshot_restore_env_keys: Vec<String>,
 }
 
 async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, FunctionCallError> {
     let RunExecLikeArgs {
         tool_name,
-        exec_params,
+        mut exec_params,
         hook_command,
         shell_type,
         additional_permissions,
@@ -69,7 +68,6 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         tracker,
         call_id,
         shell_runtime_backend,
-        snapshot_restore_env_keys,
     } = args;
 
     let Some(turn_environment) = turn.environments.primary() else {
@@ -79,12 +77,6 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     };
     let fs = turn_environment.environment.get_filesystem();
 
-    let mut explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
-    for key in snapshot_restore_env_keys {
-        // The snapshot wrapper restores the live values for keys listed here after sourcing a
-        // shell snapshot. Include hook env-file keys so persisted updates survive the snapshot.
-        explicit_env_overrides.entry(key).or_default();
-    }
     let exec_permission_approvals_enabled =
         session.features().enabled(Feature::ExecPermissionApprovals);
     let requested_additional_permissions = additional_permissions.clone();
@@ -164,6 +156,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     );
     emitter.begin(event_ctx).await;
 
+    let snapshot_restore_env_keys = session.apply_hook_env_file(&mut exec_params.env);
     let file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let exec_approval_requirement = session
         .services
@@ -191,7 +184,8 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         cwd: exec_params.cwd.clone(),
         timeout_ms: exec_params.expiration.timeout_ms(),
         env: exec_params.env.clone(),
-        explicit_env_overrides,
+        explicit_env_overrides: turn.shell_environment_policy.r#set.clone(),
+        snapshot_restore_env_keys,
         network: exec_params.network.clone(),
         sandbox_permissions: effective_additional_permissions.sandbox_permissions,
         additional_permissions: normalized_additional_permissions,

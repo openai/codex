@@ -106,7 +106,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         justification: justification.clone(),
     };
 
-    let shell_exec_params = ShellCommandHandler::to_exec_params(
+    let exec_params = ShellCommandHandler::to_exec_params(
         &params,
         &session,
         &turn_context,
@@ -114,7 +114,6 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         /*allow_login_shell*/ true,
     )
     .expect("login shells should be allowed");
-    let exec_params = shell_exec_params.exec_params;
 
     // ExecParams cannot derive Eq due to the CancellationToken field, so we manually compare the fields.
     assert_eq!(exec_params.command, expected_command);
@@ -125,10 +124,6 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     assert_eq!(exec_params.sandbox_permissions, sandbox_permissions);
     assert_eq!(exec_params.justification, justification);
     assert_eq!(exec_params.arg0, None);
-    assert_eq!(
-        shell_exec_params.snapshot_restore_env_keys,
-        Vec::<String>::new()
-    );
 }
 
 #[test]
@@ -178,7 +173,7 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         justification: None,
     };
 
-    let shell_exec_params = ShellCommandHandler::to_exec_params(
+    let exec_params = ShellCommandHandler::to_exec_params(
         &params,
         &session,
         &turn_context,
@@ -188,7 +183,7 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
     .expect("non-login shells should still be allowed");
 
     assert_eq!(
-        shell_exec_params.exec_params.command,
+        exec_params.command,
         session
             .user_shell()
             .derive_exec_args("echo hello", /*use_login_shell*/ false)

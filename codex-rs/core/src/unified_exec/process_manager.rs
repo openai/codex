@@ -1006,13 +1006,14 @@ impl UnifiedExecProcessManager {
             /*thread_id*/ None,
         );
         let mut env = local_policy_env.clone();
-        if request.environment.is_remote() {
+        let snapshot_restore_env_keys = if request.environment.is_remote() {
             tracing::debug!(
                 "CODEX_ENV_FILE overlays are local-only; skipping persisted hook env for remote exec",
             );
+            Vec::new()
         } else {
-            let _ = context.session.apply_hook_env_file(&mut env);
-        }
+            context.session.apply_hook_env_file(&mut env)
+        };
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.conversation_id.to_string(),
@@ -1057,6 +1058,7 @@ impl UnifiedExecProcessManager {
             env,
             exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            snapshot_restore_env_keys,
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,

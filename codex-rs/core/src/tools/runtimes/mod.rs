@@ -116,13 +116,17 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 /// `explicit_env_overrides` contains policy-driven shell env overrides that
 /// should win after the snapshot is sourced, while `env` is the full live exec
 /// environment. We need access to both so snapshot restore logic can preserve
-/// runtime-only vars like `CODEX_THREAD_ID` without pretending they came from
-/// the explicit override policy.
+/// runtime-only vars like `CODEX_THREAD_ID`.
+///
+/// `snapshot_restore_env_keys` covers additional live env values, such as
+/// `CODEX_ENV_FILE` updates, that should survive snapshot sourcing without
+/// pretending they came from the explicit override policy.
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
     cwd: &AbsolutePathBuf,
     explicit_env_overrides: &HashMap<String, String>,
+    snapshot_restore_env_keys: &[String],
     env: &HashMap<String, String>,
 ) -> Vec<String> {
     if cfg!(windows) {
@@ -159,11 +163,8 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .iter()
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
-    let mut override_env = explicit_env_overrides.clone();
-    if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
-        override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
-    }
-    let (override_captures, override_exports) = build_override_exports(&override_env);
+    let (override_captures, override_exports) =
+        build_override_exports(explicit_env_overrides, snapshot_restore_env_keys, env);
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
     let override_captures = join_shell_blocks([override_captures, proxy_captures]);
     let override_exports = join_shell_blocks([override_exports, proxy_exports]);
@@ -180,13 +181,22 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
 }
 
-fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {
+fn build_override_exports(
+    explicit_env_overrides: &HashMap<String, String>,
+    snapshot_restore_env_keys: &[String],
+    env: &HashMap<String, String>,
+) -> (String, String) {
     let mut keys = explicit_env_overrides
         .keys()
         .map(String::as_str)
+        .chain(snapshot_restore_env_keys.iter().map(String::as_str))
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
+    if env.contains_key(CODEX_THREAD_ID_ENV_VAR) {
+        keys.push(CODEX_THREAD_ID_ENV_VAR);
+    }
     keys.sort_unstable();
+    keys.dedup();
 
     build_override_exports_for_keys("__CODEX_SNAPSHOT_OVERRIDE", &keys)
 }

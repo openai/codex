@@ -54,6 +54,7 @@ pub struct ShellRequest {
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub snapshot_restore_env_keys: Vec<String>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
@@ -237,6 +238,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
+            &req.snapshot_restore_env_keys,
             &env,
         );
         let command = disable_powershell_profile_for_elevated_windows_sandbox(

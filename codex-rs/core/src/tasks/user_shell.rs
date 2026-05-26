@@ -152,6 +152,7 @@ pub(crate) async fn execute_user_shell_command(
         #[allow(deprecated)]
         &turn_context.cwd,
         &turn_context.shell_environment_policy.r#set,
+        &[],
         &exec_env_map,
     );
 
