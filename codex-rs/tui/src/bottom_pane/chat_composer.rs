@@ -2249,11 +2249,34 @@ impl ChatComposer {
             '@',
             /*allow_empty*/ false,
         )?;
-        self.draft
+        if self
+            .draft
             .textarea
-            .element_id_for_exact_range(range)
-            .is_none()
-            .then_some(token)
+            .element_id_for_exact_range(range.clone())
+            .is_some()
+        {
+            return None;
+        }
+
+        let name_len = token
+            .as_bytes()
+            .iter()
+            .take_while(|byte| is_mention_name_char(**byte))
+            .count();
+        let mention_end = range.start + '@'.len_utf8() + name_len;
+        if name_len > 0
+            && mention_end < range.end
+            && ends_plaintext_at_mention(self.draft.textarea.text().as_bytes(), mention_end)
+            && self
+                .draft
+                .textarea
+                .element_id_for_exact_range(range.start..mention_end)
+                .is_some()
+        {
+            return None;
+        }
+
+        Some(token)
     }
 
     fn current_mention_token(&self) -> Option<String> {
@@ -3755,6 +3778,21 @@ fn is_mention_name_char(byte: u8) -> bool {
     matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
 }
 
+fn ends_plaintext_at_mention(bytes: &[u8], index: usize) -> bool {
+    bytes.get(index).is_none_or(|byte| {
+        byte.is_ascii_whitespace()
+            || *byte == b'.'
+                && bytes.get(index + 1).is_none_or(|next| {
+                    next.is_ascii_whitespace()
+                        || !next.is_ascii_alphanumeric() && *next != b'_' && *next != b'-'
+                })
+            || !matches!(*byte, b'.' | b'/' | b'\\')
+                && !byte.is_ascii_alphanumeric()
+                && *byte != b'_'
+                && *byte != b'-'
+    })
+}
+
 fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option<Range<usize>> {
     if token.is_empty() || from >= text.len() {
         return None;
@@ -3795,18 +3833,7 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
         // Fix for restored `@` mentions: mirror history encoding's trailing boundary so path-like
         // text such as `@sample/pkg` is not rebound as the plain `@sample` mention.
         let ends_plaintext_mention = if sigil == b'@' {
-            bytes.get(end).is_none_or(|byte| {
-                byte.is_ascii_whitespace()
-                    || *byte == b'.'
-                        && bytes.get(end + 1).is_none_or(|next| {
-                            next.is_ascii_whitespace()
-                                || !next.is_ascii_alphanumeric() && *next != b'_' && *next != b'-'
-                        })
-                    || !matches!(*byte, b'.' | b'/' | b'\\')
-                        && !byte.is_ascii_alphanumeric()
-                        && *byte != b'_'
-                        && *byte != b'-'
-            })
+            ends_plaintext_at_mention(bytes, end)
         } else {
             bytes
                 .get(end)
@@ -6658,6 +6685,56 @@ mod tests {
         assert!(consumed);
         match result {
             InputResult::Submitted { text, .. } => assert_eq!(text, "@sample"),
+            _ => panic!("expected restored bound mention to submit"),
+        }
+    }
+
+    #[test]
+    fn restored_bound_punctuated_at_mentions_do_not_open_mention_popup() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "sample".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: vec!["sample".to_string()],
+            app_connector_ids: Vec::new(),
+        }]));
+
+        let text = "Please ask @sample.".to_string();
+        composer.set_text_content_with_mention_bindings(
+            text.clone(),
+            Vec::new(),
+            Vec::new(),
+            vec![MentionBinding {
+                sigil: '@',
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        );
+        composer.move_cursor_to_end();
+
+        assert!(matches!(composer.popups.active, ActivePopup::None));
+
+        let (result, consumed) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(consumed);
+        match result {
+            InputResult::Submitted {
+                text: submitted, ..
+            } => assert_eq!(submitted, text),
             _ => panic!("expected restored bound mention to submit"),
         }
     }

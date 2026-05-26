@@ -45,34 +45,35 @@ pub(crate) fn encode_history_mentions(text: &str, mentions: &[LinkedMention]) ->
         if matches!(
             bytes[index],
             byte if byte == TOOL_MENTION_SIGIL as u8 || byte == PLUGIN_TEXT_MENTION_SIGIL as u8
-        ) && starts_plaintext_mention(text, index)
-        {
+        ) {
             let sigil = bytes[index] as char;
-            let name_start = index + 1;
-            if let Some(first) = bytes.get(name_start)
-                && is_mention_name_char(*first)
-            {
-                let mut name_end = name_start + 1;
-                while let Some(next) = bytes.get(name_end)
-                    && is_mention_name_char(*next)
+            if sigil == TOOL_MENTION_SIGIL || starts_plaintext_mention(text, index) {
+                let name_start = index + 1;
+                if let Some(first) = bytes.get(name_start)
+                    && is_mention_name_char(*first)
                 {
-                    name_end += 1;
-                }
+                    let mut name_end = name_start + 1;
+                    while let Some(next) = bytes.get(name_end)
+                        && is_mention_name_char(*next)
+                    {
+                        name_end += 1;
+                    }
 
-                let name = &text[name_start..name_end];
-                if ends_plaintext_mention(bytes, name_end)
-                    && let Some(path) = mentions_by_token
-                        .get_mut(&(sigil, name))
-                        .and_then(VecDeque::pop_front)
-                {
-                    out.push('[');
-                    out.push(sigil);
-                    out.push_str(name);
-                    out.push_str("](");
-                    out.push_str(path);
-                    out.push(')');
-                    index = name_end;
-                    continue;
+                    let name = &text[name_start..name_end];
+                    if ends_plaintext_mention(bytes, name_end)
+                        && let Some(path) = mentions_by_token
+                            .get_mut(&(sigil, name))
+                            .and_then(VecDeque::pop_front)
+                    {
+                        out.push('[');
+                        out.push(sigil);
+                        out.push_str(name);
+                        out.push_str("](");
+                        out.push_str(path);
+                        out.push(')');
+                        index = name_end;
+                        continue;
+                    }
                 }
             }
         }
@@ -363,6 +364,19 @@ mod tests {
             encoded,
             "[$figma](app://figma-app) then [$sample](plugin://sample@test) then [$figma](/tmp/figma/SKILL.md) then $other"
         );
+    }
+
+    #[test]
+    fn encode_history_mentions_links_dollar_mentions_after_punctuation() {
+        let encoded = encode_history_mentions(
+            "($figma)",
+            &[LinkedMention {
+                sigil: '$',
+                mention: "figma".to_string(),
+                path: "app://figma".to_string(),
+            }],
+        );
+        assert_eq!(encoded, "([$figma](app://figma))");
     }
 
     #[test]
