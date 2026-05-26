@@ -36,7 +36,11 @@ impl App {
             let result = fetch_all_mcp_server_statuses(request_handle, detail, thread_id)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::McpInventoryLoaded { result, detail });
+            app_event_tx.send(AppEvent::McpInventoryLoaded {
+                result,
+                detail,
+                thread_id,
+            });
         });
     }
 
@@ -536,7 +540,12 @@ impl App {
         &mut self,
         result: Result<Vec<McpServerStatus>, String>,
         detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
     ) {
+        if thread_id.is_some() && thread_id != self.current_displayed_thread_id() {
+            return;
+        }
+
         self.chat_widget.clear_mcp_inventory_loading();
         self.clear_committed_mcp_inventory_loading();
 
