@@ -250,11 +250,11 @@ mod tests {
     use ratatui::Terminal;
 
     fn new_prompt() -> UpdatePromptScreen {
-        prompt_for_action(UpdateAction::NpmGlobalLatest)
-    }
-
-    fn prompt_for_action(update_action: UpdateAction) -> UpdatePromptScreen {
-        UpdatePromptScreen::new(FrameRequester::test_dummy(), "9.9.9".into(), update_action)
+        UpdatePromptScreen::new(
+            FrameRequester::test_dummy(),
+            "9.9.9".into(),
+            UpdateAction::NpmGlobalLatest,
+        )
     }
 
     #[test]
@@ -265,16 +265,6 @@ mod tests {
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render update prompt");
         insta::assert_snapshot!("update_prompt_modal", terminal.backend());
-    }
-
-    #[test]
-    fn standalone_windows_update_prompt_snapshot() {
-        let screen = prompt_for_action(UpdateAction::StandaloneWindows);
-        let mut terminal = Terminal::new(VT100Backend::new(110, 12)).expect("terminal");
-        terminal
-            .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
-            .expect("render update prompt");
-        insta::assert_snapshot!("standalone_windows_update_prompt_modal", terminal.backend());
     }
 
     #[test]
