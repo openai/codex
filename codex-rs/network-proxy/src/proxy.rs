@@ -301,20 +301,26 @@ struct NetworkProxyRuntimeSettings {
     allow_local_binding: bool,
     allow_unix_sockets: Arc<[String]>,
     dangerously_allow_all_unix_sockets: bool,
+    mitm_ca_cert_path: Option<PathBuf>,
     mitm_ca_trust_bundle_path: Option<PathBuf>,
 }
 
 impl NetworkProxyRuntimeSettings {
     fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
-        let mitm_ca_trust_bundle_path = config
-            .network
-            .mitm
-            .then(|| crate::certs::managed_ca_trust_bundle_path(&std::env::vars().collect()))
-            .transpose()?;
+        let (mitm_ca_cert_path, mitm_ca_trust_bundle_path) = if config.network.mitm {
+            let env = std::env::vars().collect();
+            (
+                Some(crate::certs::managed_ca_cert_path()?),
+                Some(crate::certs::managed_ca_trust_bundle_path(&env)?),
+            )
+        } else {
+            (None, None)
+        };
         Ok(Self {
             allow_local_binding: config.network.allow_local_binding,
             allow_unix_sockets: config.network.allow_unix_sockets().into(),
             dangerously_allow_all_unix_sockets: config.network.dangerously_allow_all_unix_sockets,
+            mitm_ca_cert_path,
             mitm_ca_trust_bundle_path,
         })
     }
@@ -614,9 +620,9 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
-    /// Returns the managed CA bundle child sandboxes should trust while MITM is active.
-    pub fn mitm_ca_trust_bundle_path(&self) -> Option<PathBuf> {
-        self.runtime_settings().mitm_ca_trust_bundle_path
+    /// Returns the managed CA cert child sandboxes should add to native trust paths.
+    pub fn mitm_ca_cert_path(&self) -> Option<PathBuf> {
+        self.runtime_settings().mitm_ca_cert_path
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
