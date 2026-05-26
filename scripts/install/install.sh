@@ -63,20 +63,12 @@ validate_version() {
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --release)
-        if [ "$#" -lt 2 ]; then
-          echo "--release requires a value." >&2
-          exit 1
-        fi
-        RELEASE="$2"
-        shift
-        ;;
       --help | -h)
         cat <<EOF
-Usage: install.sh [--release VERSION]
+Usage: install.sh
 
 Environment:
-  CODEX_RELEASE          Version to install; overridden by --release.
+  CODEX_RELEASE          Version to install, or latest.
   CODEX_NON_INTERACTIVE  Set to 1, true, or yes to skip prompts.
 EOF
         exit 0

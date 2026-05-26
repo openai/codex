@@ -1,11 +1,11 @@
 [CmdletBinding()]
-param(
-    [string]$Release = $env:CODEX_RELEASE
-)
+param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+$Release = $env:CODEX_RELEASE
 
 if ([string]::IsNullOrWhiteSpace($Release)) {
     $Release = "latest"
