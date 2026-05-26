@@ -19,6 +19,7 @@ use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
 use std::ffi::OsString;
+use std::fs::File;
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -250,6 +251,209 @@ async fn auth_skips_access_token_outside_refresh_window() -> Result<()> {
     assert_eq!(ctx.load_auth()?, initial_auth);
     let requests = server.received_requests().await.unwrap_or_default();
     assert!(requests.is_empty(), "expected no refresh token requests");
+
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn auth_waits_while_chatgpt_token_refresh_lock_is_held() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_last_refresh = Utc::now();
+    let expired_access_token = access_token_with_expiration(Utc::now() - Duration::minutes(1));
+    let initial_tokens = build_tokens(&expired_access_token, INITIAL_REFRESH_TOKEN);
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(initial_last_refresh),
+        agent_identity: None,
+    };
+    ctx.write_auth(&initial_auth).await?;
+
+    let lock_file = ctx.hold_chatgpt_token_refresh_lock()?;
+
+    let auth_manager = Arc::clone(&ctx.auth_manager);
+    let refresh_task = tokio::spawn(async move { auth_manager.auth().await });
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !refresh_task.is_finished(),
+        "auth should wait while another process holds the proactive refresh lock"
+    );
+    assert_eq!(ctx.load_auth()?, initial_auth);
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(
+        requests.is_empty(),
+        "expected no refresh token requests before the proactive refresh lock is released"
+    );
+
+    drop(lock_file);
+    let cached_auth = refresh_task
+        .await
+        .context("proactive refresh task should join")?
+        .context("auth should stay cached after the lock is released")?;
+
+    let cached = cached_auth
+        .get_token_data()
+        .context("token data should refresh")?;
+    assert_eq!(cached.access_token, "new-access-token");
+    assert_eq!(cached.refresh_token, "new-refresh-token");
+    let stored = ctx.load_auth()?;
+    let tokens = stored.tokens.as_ref().context("tokens should exist")?;
+    assert_eq!(tokens.access_token, "new-access-token");
+    assert_eq!(tokens.refresh_token, "new-refresh-token");
+    server.verify().await;
+
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn concurrent_auth_requests_share_one_proactive_refresh() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let near_expiry_access_token = access_token_with_expiration(Utc::now() + Duration::minutes(4));
+    let initial_tokens = build_tokens(&near_expiry_access_token, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens.clone()),
+        last_refresh: Some(Utc::now()),
+        agent_identity: None,
+    })
+    .await?;
+
+    let lock_file = ctx.hold_chatgpt_token_refresh_lock()?;
+    let first_manager = Arc::clone(&ctx.auth_manager);
+    let first = tokio::spawn(async move { first_manager.auth().await });
+    let second_manager = Arc::clone(&ctx.auth_manager);
+    let second = tokio::spawn(async move { second_manager.auth().await });
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!first.is_finished());
+    assert!(!second.is_finished());
+    drop(lock_file);
+
+    let (first_auth, second_auth) = tokio::join!(first, second);
+    let refreshed_tokens = TokenData {
+        access_token: "new-access-token".to_string(),
+        refresh_token: "new-refresh-token".to_string(),
+        ..initial_tokens
+    };
+    for auth in [first_auth, second_auth] {
+        let auth = auth
+            .context("proactive refresh task should join")?
+            .context("auth should stay cached after the lock is released")?;
+        assert_eq!(
+            auth.get_token_data().context("token data should refresh")?,
+            refreshed_tokens
+        );
+    }
+    assert_eq!(
+        ctx.load_auth()?.tokens.context("tokens should exist")?,
+        refreshed_tokens
+    );
+    server.verify().await;
+
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn refresh_token_reloads_managed_auth_after_waiting_for_token_refresh_lock() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "unexpected-access-token",
+            "refresh_token": "unexpected-refresh-token"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_last_refresh = Utc::now();
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial_tokens),
+        last_refresh: Some(initial_last_refresh),
+        agent_identity: None,
+    })
+    .await?;
+
+    let lock_file = ctx.hold_chatgpt_token_refresh_lock()?;
+
+    let auth_manager = Arc::clone(&ctx.auth_manager);
+    let refresh_task =
+        tokio::spawn(async move { auth_manager.refresh_token_from_authority().await });
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !refresh_task.is_finished(),
+        "managed refresh should wait while another process holds the token refresh lock"
+    );
+
+    let disk_tokens = build_tokens("disk-access-token", "disk-refresh-token");
+    let disk_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(disk_tokens.clone()),
+        last_refresh: Some(initial_last_refresh),
+        agent_identity: None,
+    };
+    save_auth(
+        ctx.codex_home.path(),
+        &disk_auth,
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    drop(lock_file);
+    refresh_task
+        .await
+        .context("managed refresh task should join")?
+        .context("managed refresh should use newly persisted auth")?;
+
+    let stored = ctx.load_auth()?;
+    assert_eq!(stored, disk_auth);
+    let cached = ctx
+        .auth_manager
+        .auth_cached()
+        .context("auth should be cached")?
+        .get_token_data()
+        .context("token data should reload")?;
+    assert_eq!(cached, disk_tokens);
+    server.verify().await;
 
     Ok(())
 }
@@ -1105,6 +1309,18 @@ impl RefreshTokenTestContext {
         )?;
         self.auth_manager.reload().await;
         Ok(())
+    }
+
+    fn hold_chatgpt_token_refresh_lock(&self) -> Result<File> {
+        let lock_path = self.codex_home.path().join("chatgpt-token-refresh.lock");
+        let lock_file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)?;
+        lock_file.try_lock()?;
+        Ok(lock_file)
     }
 }
 
