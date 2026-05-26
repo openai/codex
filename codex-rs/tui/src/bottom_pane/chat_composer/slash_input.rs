@@ -388,7 +388,16 @@ impl ChatComposer {
             return false;
         };
         let cmd = *cmd;
-        if !matches!(cmd, SlashCommand::Review | SlashCommand::Goal) {
+        if !matches!(
+            cmd,
+            SlashCommand::Review
+                | SlashCommand::Rename
+                | SlashCommand::Plan
+                | SlashCommand::Goal
+                | SlashCommand::Side
+                | SlashCommand::Btw
+                | SlashCommand::Resume
+        ) {
             return false;
         }
 
