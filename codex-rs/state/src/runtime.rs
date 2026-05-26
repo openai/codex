@@ -309,7 +309,7 @@ async fn open_sqlite(
     );
     let pool = pool_result?;
     let started = Instant::now();
-    let migrate_result = migrator.run(&pool).await.map_err(anyhow::Error::from);
+    let migrate_result = run_migrations_in_transaction(&pool, migrator).await;
     crate::telemetry::record_init_result(
         telemetry_override,
         spec.kind,
@@ -319,6 +319,31 @@ async fn open_sqlite(
     );
     migrate_result?;
     Ok(pool)
+}
+
+async fn run_migrations_in_transaction(
+    pool: &SqlitePool,
+    migrator: &Migrator,
+) -> anyhow::Result<()> {
+    // SQLx wraps each SQLite migration in its own transaction. The outer
+    // transaction keeps a Ctrl-C between migration files from leaving the DB at
+    // an intermediate schema version.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let migrate_result = migrator.run(&mut tx).await.map_err(anyhow::Error::from);
+    match migrate_result {
+        Ok(()) => {
+            tx.commit().await?;
+            Ok(())
+        }
+        Err(err) => {
+            if let Err(rollback_err) = tx.rollback().await {
+                return Err(err.context(format!(
+                    "failed to roll back migration transaction: {rollback_err}"
+                )));
+            }
+            Err(err)
+        }
+    }
 }
 
 pub(super) async fn ensure_backfill_state_row_in_pool(
@@ -395,6 +420,7 @@ pub async fn sqlite_integrity_check(path: &Path) -> anyhow::Result<Vec<String>> 
 mod tests {
     use super::StateRuntime;
     use super::open_state_sqlite;
+    use super::run_migrations_in_transaction;
     use super::runtime_state_migrator;
     use super::sqlite_integrity_check;
     use super::state_db_path;
@@ -405,7 +431,11 @@ mod tests {
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
     use sqlx::migrate::MigrateError;
+    use sqlx::migrate::Migration;
+    use sqlx::migrate::MigrationType;
+    use sqlx::migrate::Migrator;
     use sqlx::sqlite::SqliteConnectOptions;
+    use std::borrow::Cow;
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::path::Path;
@@ -497,6 +527,56 @@ mod tests {
             .expect("integrity check should run");
 
         assert_eq!(result, vec!["ok".to_string()]);
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn migration_batch_rolls_back_all_pending_migrations_on_failure() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let state_path = state_db_path(codex_home.as_path());
+        let pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&state_path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("open state db");
+        let migrator = Migrator {
+            migrations: Cow::Owned(vec![
+                Migration::new(
+                    1,
+                    Cow::Borrowed("create sample table"),
+                    MigrationType::Simple,
+                    Cow::Borrowed("CREATE TABLE sample (id INTEGER PRIMARY KEY);"),
+                    /*no_tx*/ false,
+                ),
+                Migration::new(
+                    2,
+                    Cow::Borrowed("fail after sample table"),
+                    MigrationType::Simple,
+                    Cow::Borrowed("INSERT INTO missing_table (id) VALUES (1);"),
+                    /*no_tx*/ false,
+                ),
+            ]),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        };
+
+        let result = run_migrations_in_transaction(&pool, &migrator).await;
+
+        assert!(result.is_err());
+        let tables = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("query sqlite tables");
+        assert_eq!(tables, Vec::<String>::new());
+        pool.close().await;
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
