@@ -82,7 +82,7 @@ fn credentialed_routes_add_runtime_allowlist_and_mitm_hooks() {
     let spec = NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
         /*requirements*/ None,
-        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
+        &PermissionProfile::workspace_write(),
     )
     .expect("config should load");
     let credentialed_routes = crate::credentialed_routes::CredentialedRoutesSessionConfig {
