@@ -591,13 +591,12 @@ impl ThreadManager {
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
-        let session_source = options
-            .session_source
-            .or_else(|| options.initial_history.get_resumed_session_source())
-            .unwrap_or_else(|| self.state.session_source.clone());
-        let thread_source = options
-            .thread_source
-            .or_else(|| options.initial_history.get_resumed_thread_source());
+        let (resumed_session_source, resumed_thread_source) = options
+            .initial_history
+            .get_resumed_session_sources()
+            .unwrap_or_else(|| (self.state.session_source.clone(), None));
+        let session_source = options.session_source.unwrap_or(resumed_session_source);
+        let thread_source = options.thread_source.or(resumed_thread_source);
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
@@ -679,10 +678,9 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
-        let session_source = initial_history
-            .get_resumed_session_source()
-            .unwrap_or_else(|| self.state.session_source.clone());
-        let thread_source = initial_history.get_resumed_thread_source();
+        let (session_source, thread_source) = initial_history
+            .get_resumed_session_sources()
+            .unwrap_or_else(|| (self.state.session_source.clone(), None));
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,
@@ -741,10 +739,9 @@ impl ThreadManager {
             self.state.environment_manager.as_ref(),
             &config.cwd,
         );
-        let session_source = initial_history
-            .get_resumed_session_source()
-            .unwrap_or_else(|| self.state.session_source.clone());
-        let thread_source = initial_history.get_resumed_thread_source();
+        let (session_source, thread_source) = initial_history
+            .get_resumed_session_sources()
+            .unwrap_or_else(|| (self.state.session_source.clone(), None));
         Box::pin(self.state.spawn_thread_with_source(
             config,
             initial_history,

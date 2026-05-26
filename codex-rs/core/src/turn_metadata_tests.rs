@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -22,10 +23,9 @@ fn test_mcp_turn_metadata_context() -> McpTurnMetadataContext<'static> {
     }
 }
 
-#[tokio::test]
-async fn build_turn_metadata_header_marks_detached_memory_without_turn_identity() {
+async fn create_clean_git_repo(repo_name: &str) -> (TempDir, AbsolutePathBuf) {
     let temp_dir = TempDir::new().expect("temp dir");
-    let repo_path = temp_dir.path().join("repo-東京").abs();
+    let repo_path = temp_dir.path().join(repo_name).abs();
     std::fs::create_dir_all(&repo_path).expect("create repo");
 
     Command::new("git")
@@ -46,7 +46,6 @@ async fn build_turn_metadata_header_marks_detached_memory_without_turn_identity(
         .output()
         .await
         .expect("git config user.email");
-
     std::fs::write(repo_path.join("README.md"), "hello").expect("write file");
     Command::new("git")
         .args(["add", "."])
@@ -60,6 +59,13 @@ async fn build_turn_metadata_header_marks_detached_memory_without_turn_identity(
         .output()
         .await
         .expect("git commit");
+
+    (temp_dir, repo_path)
+}
+
+#[tokio::test]
+async fn build_turn_metadata_header_marks_detached_memory_without_turn_identity() {
+    let (_temp_dir, repo_path) = create_clean_git_repo("repo-東京").await;
 
     let header = build_turn_metadata_header(&repo_path, Some("none"))
         .await
@@ -618,43 +624,10 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
     assert_eq!(regular_json[WINDOW_ID_KEY].as_str(), Some("thread-a:3"));
     assert!(regular_json.get("compaction").is_none());
 }
+
 #[tokio::test]
 async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let repo_path = temp_dir.path().join("repo").abs();
-    std::fs::create_dir_all(&repo_path).expect("create repo");
-
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .await
-        .expect("git init");
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .await
-        .expect("git config user.name");
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(&repo_path)
-        .output()
-        .await
-        .expect("git config user.email");
-    std::fs::write(repo_path.join("README.md"), "hello").expect("write file");
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .await
-        .expect("git add");
-    Command::new("git")
-        .args(["commit", "-m", "initial"])
-        .current_dir(&repo_path)
-        .output()
-        .await
-        .expect("git commit");
+    let (_temp_dir, repo_path) = create_clean_git_repo("repo").await;
 
     let permission_profile = PermissionProfile::read_only();
     let parent_thread_id =

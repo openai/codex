@@ -2435,24 +2435,22 @@ impl InitialHistory {
         }
     }
 
-    pub fn get_resumed_thread_source(&self) -> Option<ThreadSource> {
-        match self {
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
-            InitialHistory::Resumed(resumed) => {
-                resumed.history.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.thread_source,
-                    _ => None,
-                })
-            }
-        }
+    pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
+        let meta = self.get_resumed_session_meta()?;
+        Some((meta.source.clone(), meta.thread_source))
     }
 
-    pub fn get_resumed_session_source(&self) -> Option<SessionSource> {
+    pub fn get_resumed_thread_source(&self) -> Option<ThreadSource> {
+        self.get_resumed_session_meta()
+            .and_then(|meta| meta.thread_source)
+    }
+
+    fn get_resumed_session_meta(&self) -> Option<&SessionMeta> {
         match self {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.source.clone()),
+                    RolloutItem::SessionMeta(meta_line) => Some(&meta_line.meta),
                     _ => None,
                 })
             }
@@ -2548,6 +2546,17 @@ pub enum SubAgentSource {
     Other(String),
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SubAgentSourceKind {
+    Review,
+    Compact,
+    ThreadSpawn,
+    MemoryConsolidation,
+    Other,
+}
+
 impl fmt::Display for SessionSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2637,6 +2646,28 @@ impl SessionSource {
                 .restriction_product()
                 .is_some_and(|product| product.matches_product_restriction(products))
     }
+
+    pub fn subagent_kind(&self) -> Option<SubAgentSourceKind> {
+        self.subagent_source().map(SubAgentSource::kind)
+    }
+
+    pub fn parent_thread_id(&self) -> Option<ThreadId> {
+        self.subagent_source()
+            .and_then(SubAgentSource::parent_thread_id)
+    }
+
+    fn subagent_source(&self) -> Option<&SubAgentSource> {
+        match self {
+            SessionSource::SubAgent(subagent_source) => Some(subagent_source),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Custom(_)
+            | SessionSource::Internal(_)
+            | SessionSource::Unknown => None,
+        }
+    }
 }
 
 impl fmt::Display for SubAgentSource {
@@ -2653,6 +2684,30 @@ impl fmt::Display for SubAgentSource {
                 write!(f, "thread_spawn_{parent_thread_id}_d{depth}")
             }
             SubAgentSource::Other(other) => f.write_str(other),
+        }
+    }
+}
+
+impl SubAgentSource {
+    pub fn kind(&self) -> SubAgentSourceKind {
+        match self {
+            SubAgentSource::Review => SubAgentSourceKind::Review,
+            SubAgentSource::Compact => SubAgentSourceKind::Compact,
+            SubAgentSource::ThreadSpawn { .. } => SubAgentSourceKind::ThreadSpawn,
+            SubAgentSource::MemoryConsolidation => SubAgentSourceKind::MemoryConsolidation,
+            SubAgentSource::Other(_) => SubAgentSourceKind::Other,
+        }
+    }
+
+    pub fn parent_thread_id(&self) -> Option<ThreadId> {
+        match self {
+            SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            } => Some(*parent_thread_id),
+            SubAgentSource::Review
+            | SubAgentSource::Compact
+            | SubAgentSource::MemoryConsolidation
+            | SubAgentSource::Other(_) => None,
         }
     }
 }
