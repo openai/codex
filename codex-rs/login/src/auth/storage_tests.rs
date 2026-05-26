@@ -4,6 +4,7 @@ use anyhow::Context;
 use base64::Engine;
 use codex_secrets::LocalSecretsBackend;
 use codex_secrets::SecretScope;
+use codex_secrets::compute_keyring_account;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::tempdir;
@@ -241,7 +242,7 @@ fn assert_keyring_saved_auth_and_removed_fallback(
         mock_keyring.saved_value(&old_key).is_none(),
         "legacy keyring auth entry should not be used"
     );
-    let secrets_key = compute_secrets_keyring_account(codex_home)?;
+    let secrets_key = compute_keyring_account(codex_home);
     assert!(
         mock_keyring.saved_value(&secrets_key).is_some(),
         "secrets backend should persist an encryption passphrase in the keyring"
@@ -257,10 +258,6 @@ fn assert_keyring_saved_auth_and_removed_fallback(
 
 fn encrypted_auth_file(codex_home: &Path) -> PathBuf {
     codex_home.join("secrets").join("local.age")
-}
-
-fn compute_secrets_keyring_account(codex_home: &Path) -> anyhow::Result<String> {
-    Ok(compute_store_key(codex_home)?.replacen("cli|", "secrets|", 1))
 }
 
 fn id_token_with_prefix(prefix: &str) -> IdTokenInfo {
@@ -436,7 +433,7 @@ fn factory_uses_secrets_backend_only_when_requested() -> anyhow::Result<()> {
     secrets_storage.save(&secrets_auth)?;
     assert!(
         secrets_keyring
-            .saved_value(&compute_secrets_keyring_account(secrets_home.path())?)
+            .saved_value(&compute_keyring_account(secrets_home.path()))
             .is_some()
     );
     assert!(encrypted_auth_file(secrets_home.path()).exists());
@@ -546,7 +543,7 @@ fn auto_auth_storage_load_falls_back_when_keyring_errors() -> anyhow::Result<()>
         Arc::new(mock_keyring.clone()),
         CliAuthKeyringBackendKind::Secrets,
     );
-    let key = compute_secrets_keyring_account(codex_home.path())?;
+    let key = compute_keyring_account(codex_home.path());
 
     let encrypted = auth_with_prefix("encrypted");
     seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &encrypted)?;
@@ -588,7 +585,7 @@ fn auto_auth_storage_save_falls_back_when_keyring_errors() -> anyhow::Result<()>
         Arc::new(mock_keyring.clone()),
         CliAuthKeyringBackendKind::Secrets,
     );
-    let key = compute_secrets_keyring_account(codex_home.path())?;
+    let key = compute_keyring_account(codex_home.path());
     mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
 
     let auth = auth_with_prefix("fallback");
