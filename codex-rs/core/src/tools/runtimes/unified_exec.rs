@@ -20,6 +20,7 @@ use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
+use crate::tools::runtimes::maybe_source_hook_env_file;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
@@ -269,12 +270,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let command = if environment_is_remote {
             base_command.to_vec()
         } else {
+            let command = maybe_source_hook_env_file(base_command, req.env_file_path.as_ref());
             maybe_wrap_shell_lc_with_snapshot(
-                base_command,
+                &command,
                 session_shell.as_ref(),
                 &req.cwd,
                 &req.explicit_env_overrides,
-                req.env_file_path.as_ref(),
                 &env,
             )
         };

@@ -23,6 +23,7 @@ use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
+use crate::tools::runtimes::maybe_source_hook_env_file;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -236,12 +237,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         if let Some(env_file_path) = &req.env_file_path {
             crate::hook_env::add_env_file_vars(&mut env, env_file_path);
         }
+        let command = maybe_source_hook_env_file(&req.command, req.env_file_path.as_ref());
         let command = maybe_wrap_shell_lc_with_snapshot(
-            &req.command,
+            &command,
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
-            req.env_file_path.as_ref(),
             &env,
         );
         let command = disable_powershell_profile_for_elevated_windows_sandbox(

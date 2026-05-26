@@ -100,42 +100,24 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 }
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
-/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
-/// when a snapshot is configured on the session shell, rewrite the argv
-/// to a single non-login shell that can source runtime shell state before
-/// running the original script:
+/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]` or
+/// `[shell_path, "-c", "<script>"]`, prepend the hook env file source to the
+/// script itself.
 ///
-///   shell -lc "<script>"
-///   => user_shell -c ". SNAPSHOT (best effort); . CODEX_ENV_FILE; exec shell -c <script>"
-///
-/// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
-/// be run by Bash/Zsh/sh. On non-matching commands, or when neither a matching
-/// snapshot nor an env file is available, this is a no-op.
-///
-/// `explicit_env_overrides` and `env` are intentionally separate inputs.
-/// `explicit_env_overrides` contains policy-driven shell env overrides that
-/// should win after the snapshot is sourced and before the env file is sourced,
-/// while `env` is the full live exec environment. We need access to both so
-/// snapshot restore logic can preserve runtime-only vars like `CODEX_THREAD_ID`
-/// without pretending they came from the explicit override policy.
-pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
+/// The hook env file is explicit shell script authored by hooks, so it stays
+/// part of the command's own shell script instead of being folded into shell
+/// snapshot restore logic.
+pub(crate) fn maybe_source_hook_env_file(
     command: &[String],
-    session_shell: &Shell,
-    cwd: &AbsolutePathBuf,
-    explicit_env_overrides: &HashMap<String, String>,
     env_file_path: Option<&AbsolutePathBuf>,
-    env: &HashMap<String, String>,
 ) -> Vec<String> {
     if cfg!(windows) {
         return command.to_vec();
     }
 
-    let snapshot_path = session_shell
-        .shell_snapshot()
-        .filter(|snapshot| snapshot.path.exists())
-        .filter(|snapshot| path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd))
-        .map(|snapshot| snapshot.path.clone());
-
+    let Some(env_file_path) = env_file_path else {
+        return command.to_vec();
+    };
     if command.len() < 3 {
         return command.to_vec();
     }
@@ -144,57 +126,98 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     if flag != "-lc" && flag != "-c" {
         return command.to_vec();
     }
-    if snapshot_path.is_none() && env_file_path.is_none() {
+
+    let env_file_path = shell_single_quote(env_file_path.to_string_lossy().as_ref());
+    let mut command = command.to_vec();
+    command[2] = format!(
+        "if [ -f '{env_file_path}' ]; then . '{env_file_path}'; fi\n\n{}",
+        command[2]
+    );
+    command
+}
+
+/// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
+/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
+/// when a snapshot is configured on the session shell, rewrite the argv
+/// to a single non-login shell that sources the snapshot before running
+/// the original script:
+///
+///   shell -lc "<script>"
+///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
+///
+/// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
+/// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
+/// not match the snapshot cwd, this is a no-op.
+///
+/// `explicit_env_overrides` and `env` are intentionally separate inputs.
+/// `explicit_env_overrides` contains policy-driven shell env overrides that
+/// should win after the snapshot is sourced, while `env` is the full live exec
+/// environment. We need access to both so snapshot restore logic can preserve
+/// runtime-only vars like `CODEX_THREAD_ID` without pretending they came from
+/// the explicit override policy.
+pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
+    command: &[String],
+    session_shell: &Shell,
+    cwd: &AbsolutePathBuf,
+    explicit_env_overrides: &HashMap<String, String>,
+    env: &HashMap<String, String>,
+) -> Vec<String> {
+    if cfg!(windows) {
         return command.to_vec();
     }
 
+    let Some(snapshot) = session_shell.shell_snapshot() else {
+        return command.to_vec();
+    };
+
+    if !snapshot.path.exists() {
+        return command.to_vec();
+    }
+
+    if !path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd) {
+        return command.to_vec();
+    }
+
+    if command.len() < 3 {
+        return command.to_vec();
+    }
+
+    let flag = command[1].as_str();
+    if flag != "-lc" {
+        return command.to_vec();
+    }
+
+    let snapshot_path = snapshot.path.to_string_lossy();
     let shell_path = session_shell.shell_path.to_string_lossy();
     let original_shell = shell_single_quote(&command[0]);
     let original_script = shell_single_quote(&command[2]);
+    let snapshot_path = shell_single_quote(snapshot_path.as_ref());
     let trailing_args = command[3..]
         .iter()
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
-    let (explicit_captures, explicit_exports) =
-        build_override_exports("__CODEX_SNAPSHOT_OVERRIDE", explicit_env_overrides);
-    let mut runtime_env = HashMap::new();
+    let mut override_env = explicit_env_overrides.clone();
     if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
-        runtime_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+        override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
     }
-    let (runtime_captures, runtime_exports) =
-        build_override_exports("__CODEX_SNAPSHOT_RUNTIME_OVERRIDE", &runtime_env);
+    let (override_captures, override_exports) = build_override_exports(&override_env);
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
-    let captures = join_shell_blocks([explicit_captures, runtime_captures, proxy_captures]);
-    let source_snapshot = snapshot_path
-        .as_ref()
-        .map(|snapshot_path| {
-            let snapshot_path = shell_single_quote(snapshot_path.to_string_lossy().as_ref());
-            format!("if . '{snapshot_path}' >/dev/null 2>&1; then :; fi")
-        })
-        .unwrap_or_default();
-    let source_env_file = env_file_path
-        .map(|env_file_path| {
-            let env_file_path = shell_single_quote(env_file_path.to_string_lossy().as_ref());
-            format!("if [ -f '{env_file_path}' ]; then . '{env_file_path}'; fi")
-        })
-        .unwrap_or_default();
-    let runtime_exports = join_shell_blocks([runtime_exports, proxy_exports]);
-    let body = join_shell_blocks([
-        source_snapshot,
-        explicit_exports,
-        source_env_file,
-        runtime_exports,
-        format!("exec '{original_shell}' -c '{original_script}'{trailing_args}"),
-    ]);
-    let rewritten_script = join_shell_blocks([captures, body]);
+    let override_captures = join_shell_blocks([override_captures, proxy_captures]);
+    let override_exports = join_shell_blocks([override_exports, proxy_exports]);
+    let rewritten_script = if override_exports.is_empty() {
+        format!(
+            "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+        )
+    } else {
+        format!(
+            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+        )
+    };
 
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
 }
 
-fn build_override_exports(
-    variable_prefix: &str,
-    explicit_env_overrides: &HashMap<String, String>,
-) -> (String, String) {
+fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {
     let mut keys = explicit_env_overrides
         .keys()
         .map(String::as_str)
@@ -202,7 +225,7 @@ fn build_override_exports(
         .collect::<Vec<_>>();
     keys.sort_unstable();
 
-    build_override_exports_for_keys(variable_prefix, &keys)
+    build_override_exports_for_keys("__CODEX_SNAPSHOT_OVERRIDE", &keys)
 }
 
 fn build_proxy_env_exports() -> (String, String) {
