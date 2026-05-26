@@ -180,9 +180,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let env_file_path = if turn_environment.environment.is_remote() {
         None
     } else {
-        let hook_env_file = session.hook_env_file();
-        hook_env_file.ensure_parent_dir();
-        Some(hook_env_file.path().clone())
+        Some(session.hook_env_file().prepare_path().clone())
     };
 
     let req = ShellRequest {

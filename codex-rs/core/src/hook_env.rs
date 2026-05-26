@@ -27,15 +27,13 @@ impl HookEnvFile {
         }
     }
 
-    pub(crate) fn path(&self) -> &AbsolutePathBuf {
+    /// Returns the path after best-effort creation of its parent directory.
+    pub(crate) fn prepare_path(&self) -> &AbsolutePathBuf {
+        self.create_parent_dir();
         &self.path
     }
 
-    pub(crate) fn add_to_env(&self, env: &mut HashMap<String, String>) {
-        add_env_file_vars(env, &self.path);
-    }
-
-    pub(crate) fn ensure_parent_dir(&self) {
+    fn create_parent_dir(&self) {
         let Some(parent) = self.path.as_path().parent() else {
             return;
         };

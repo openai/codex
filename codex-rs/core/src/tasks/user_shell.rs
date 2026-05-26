@@ -15,6 +15,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
+use crate::hook_env::add_env_file_vars;
 use crate::sandboxing::ExecRequest;
 use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
@@ -133,8 +134,8 @@ pub(crate) async fn execute_user_shell_command(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
-    let env_file_path = session.hook_env_file().path();
-    session.hook_env_file().add_to_env(&mut exec_env_map);
+    let env_file_path = session.hook_env_file().prepare_path();
+    add_env_file_vars(&mut exec_env_map, env_file_path);
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
         for key in PROXY_ENV_KEYS {
             exec_env_map.remove(*key);

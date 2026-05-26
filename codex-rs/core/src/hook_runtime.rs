@@ -125,24 +125,20 @@ pub(crate) async fn run_pending_session_start_hooks(
             },
         };
         let is_session_start = matches!(&target, StartHookTarget::SessionStart { .. });
-        let env_file_path = is_session_start.then(|| sess.hook_env_file().path().clone());
-        let request = codex_hooks::SessionStartRequest {
+        let mut request = codex_hooks::SessionStartRequest {
             session_id: sess.session_id().into(),
             #[allow(deprecated)]
             cwd: turn_context.cwd.clone(),
             transcript_path: sess.hook_transcript_path().await,
             model: turn_context.model_info.slug.clone(),
             permission_mode: hook_permission_mode(turn_context),
-            env_file_path,
+            env_file_path: None,
             target,
         };
         let hooks = sess.hooks();
         let preview_runs = hooks.preview_session_start(&request);
-        // The default env file path lives under codex_home/tmp. Create that
-        // directory only when a real SessionStart handler will receive it, so a
-        // no-hook startup does not leave local artifacts behind.
         if is_session_start && !preview_runs.is_empty() {
-            sess.hook_env_file().ensure_parent_dir();
+            request.env_file_path = Some(sess.hook_env_file().prepare_path().clone());
         }
         if run_context_injecting_hook(
             sess,

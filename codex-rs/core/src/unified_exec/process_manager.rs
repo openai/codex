@@ -1042,9 +1042,7 @@ impl UnifiedExecProcessManager {
         let env_file_path = if request.environment.is_remote() {
             None
         } else {
-            let hook_env_file = context.session.hook_env_file();
-            hook_env_file.ensure_parent_dir();
-            Some(hook_env_file.path().clone())
+            Some(context.session.hook_env_file().prepare_path().clone())
         };
 
         let req = UnifiedExecToolRequest {
