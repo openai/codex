@@ -842,7 +842,8 @@ impl Session {
             // Create the mutable state for the Session.
             let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
                 if let Some(snapshot) = session_configuration.inherited_shell_snapshot.clone() {
-                    let (tx, rx) = watch::channel(Some(snapshot));
+                    let (tx, rx) =
+                        watch::channel(crate::shell_snapshot::ShellSnapshotState::Ready(snapshot));
                     default_shell.shell_snapshot = rx;
                     tx
                 } else {
@@ -856,7 +857,8 @@ impl Session {
                     )
                 }
             } else {
-                let (tx, rx) = watch::channel(None);
+                let (tx, rx) =
+                    watch::channel(crate::shell_snapshot::ShellSnapshotState::Disabled);
                 default_shell.shell_snapshot = rx;
                 tx
             };

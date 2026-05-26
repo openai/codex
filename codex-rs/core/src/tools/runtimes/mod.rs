@@ -9,6 +9,7 @@ use crate::path_utils;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
+use crate::shell_snapshot::ShellSnapshotFailure;
 use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
@@ -97,6 +98,24 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
     let mut command = command.to_vec();
     command.insert(1, "-NoProfile".to_string());
     command
+}
+
+pub(crate) async fn await_shell_snapshot_for_command(
+    command: &[String],
+    session_shell: &Shell,
+    cwd: &AbsolutePathBuf,
+) -> Result<(), ShellSnapshotFailure> {
+    if cfg!(windows) || command.get(1).map(String::as_str) != Some("-lc") {
+        return Ok(());
+    }
+
+    session_shell.wait_for_shell_snapshot(cwd).await.map(|_| ())
+}
+
+pub(crate) fn shell_snapshot_failure_message(failure_reason: ShellSnapshotFailure) -> String {
+    format!(
+        "failed to initialize the shell snapshot: {failure_reason}; refusing to execute without the expected shell environment"
+    )
 }
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`

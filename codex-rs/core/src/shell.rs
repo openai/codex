@@ -1,5 +1,9 @@
+use crate::path_utils;
 use crate::shell_detect::detect_shell_type;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::shell_snapshot::ShellSnapshotFailure;
+use crate::shell_snapshot::ShellSnapshotState;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -24,7 +28,7 @@ pub struct Shell {
         skip_deserializing,
         default = "empty_shell_snapshot_receiver"
     )]
-    pub(crate) shell_snapshot: watch::Receiver<Option<Arc<ShellSnapshot>>>,
+    pub(crate) shell_snapshot: watch::Receiver<ShellSnapshotState>,
 }
 
 impl Shell {
@@ -71,12 +75,65 @@ impl Shell {
 
     /// Return the shell snapshot if existing.
     pub fn shell_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
-        self.shell_snapshot.borrow().clone()
+        match self.shell_snapshot.borrow().clone() {
+            ShellSnapshotState::Ready(snapshot) => Some(snapshot),
+            ShellSnapshotState::Disabled
+            | ShellSnapshotState::Pending { .. }
+            | ShellSnapshotState::Failed { .. } => None,
+        }
+    }
+
+    pub(crate) async fn wait_for_shell_snapshot(
+        &self,
+        cwd: &AbsolutePathBuf,
+    ) -> Result<Option<Arc<ShellSnapshot>>, ShellSnapshotFailure> {
+        let mut receiver = self.shell_snapshot.clone();
+        loop {
+            match receiver.borrow().clone() {
+                ShellSnapshotState::Disabled => return Ok(None),
+                ShellSnapshotState::Pending { cwd: snapshot_cwd } => {
+                    if !path_utils::paths_match_after_normalization(
+                        snapshot_cwd.as_path(),
+                        cwd.as_path(),
+                    ) {
+                        return Ok(None);
+                    }
+                }
+                ShellSnapshotState::Ready(snapshot) => {
+                    return if path_utils::paths_match_after_normalization(
+                        snapshot.cwd.as_path(),
+                        cwd.as_path(),
+                    ) {
+                        Ok(Some(snapshot))
+                    } else {
+                        Ok(None)
+                    };
+                }
+                ShellSnapshotState::Failed {
+                    cwd: snapshot_cwd,
+                    failure_reason,
+                } => {
+                    return if path_utils::paths_match_after_normalization(
+                        snapshot_cwd.as_path(),
+                        cwd.as_path(),
+                    ) {
+                        Err(failure_reason)
+                    } else {
+                        Ok(None)
+                    };
+                }
+            }
+
+            receiver
+                .changed()
+                .await
+                .map_err(|_| ShellSnapshotFailure::TaskEnded)?;
+        }
     }
 }
 
-pub(crate) fn empty_shell_snapshot_receiver() -> watch::Receiver<Option<Arc<ShellSnapshot>>> {
-    let (_tx, rx) = watch::channel(None);
+pub(crate) fn empty_shell_snapshot_receiver() -> watch::Receiver<ShellSnapshotState> {
+    let (_tx, rx) = watch::channel(ShellSnapshotState::Disabled);
     rx
 }
 

@@ -4,6 +4,8 @@ use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecOptions;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::shell_snapshot::ShellSnapshotFailure;
+use crate::shell_snapshot::ShellSnapshotState;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 #[cfg(target_os = "macos")]
@@ -55,15 +57,110 @@ fn shell_with_snapshot(
     snapshot_path: AbsolutePathBuf,
     snapshot_cwd: AbsolutePathBuf,
 ) -> Shell {
-    let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
-        path: snapshot_path,
-        cwd: snapshot_cwd,
-    })));
+    let (_tx, shell_snapshot) =
+        watch::channel(ShellSnapshotState::Ready(Arc::new(ShellSnapshot {
+            path: snapshot_path,
+            cwd: snapshot_cwd,
+        })));
     Shell {
         shell_type,
         shell_path: PathBuf::from(shell_path),
         shell_snapshot,
     }
+}
+
+#[tokio::test]
+async fn await_shell_snapshot_for_command_waits_for_pending_snapshot() {
+    let dir = tempdir().expect("create temp dir");
+    let cwd = dir.path().abs();
+    let (sender, shell_snapshot) = watch::channel(ShellSnapshotState::Pending { cwd: cwd.clone() });
+    let session_shell = Shell {
+        shell_type: ShellType::Bash,
+        shell_path: PathBuf::from("/bin/bash"),
+        shell_snapshot,
+    };
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf ready".to_string(),
+    ];
+
+    let waiter = tokio::spawn(async move {
+        await_shell_snapshot_for_command(&command, &session_shell, &cwd).await
+    });
+    tokio::task::yield_now().await;
+    assert_eq!(waiter.is_finished(), false);
+
+    sender
+        .send(ShellSnapshotState::Ready(Arc::new(ShellSnapshot {
+            path: dir.path().join("snapshot.sh").abs(),
+            cwd: dir.path().abs(),
+        })))
+        .expect("publish snapshot");
+
+    assert_eq!(waiter.await.expect("join snapshot waiter"), Ok(()));
+}
+
+#[tokio::test]
+async fn await_shell_snapshot_for_command_reports_failed_snapshot() {
+    let dir = tempdir().expect("create temp dir");
+    let cwd = dir.path().abs();
+    let (_sender, shell_snapshot) = watch::channel(ShellSnapshotState::Failed {
+        cwd: cwd.clone(),
+        failure_reason: ShellSnapshotFailure::WriteFailed,
+    });
+    let session_shell = Shell {
+        shell_type: ShellType::Bash,
+        shell_path: PathBuf::from("/bin/bash"),
+        shell_snapshot,
+    };
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf never-runs".to_string(),
+    ];
+
+    assert_eq!(
+        await_shell_snapshot_for_command(&command, &session_shell, &cwd).await,
+        Err(ShellSnapshotFailure::WriteFailed)
+    );
+}
+
+#[tokio::test]
+async fn await_shell_snapshot_for_command_ignores_snapshot_for_other_cwd() {
+    let snapshot_dir = tempdir().expect("create snapshot temp dir");
+    let command_dir = tempdir().expect("create command temp dir");
+    let snapshot_cwd = snapshot_dir.path().abs();
+    let command_cwd = command_dir.path().abs();
+    let (sender, shell_snapshot) = watch::channel(ShellSnapshotState::Pending {
+        cwd: snapshot_cwd.clone(),
+    });
+    let session_shell = Shell {
+        shell_type: ShellType::Bash,
+        shell_path: PathBuf::from("/bin/bash"),
+        shell_snapshot,
+    };
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf without-snapshot".to_string(),
+    ];
+
+    assert_eq!(
+        await_shell_snapshot_for_command(&command, &session_shell, &command_cwd).await,
+        Ok(())
+    );
+
+    sender
+        .send(ShellSnapshotState::Failed {
+            cwd: snapshot_cwd,
+            failure_reason: ShellSnapshotFailure::WriteFailed,
+        })
+        .expect("publish unrelated snapshot failure");
+    assert_eq!(
+        await_shell_snapshot_for_command(&command, &session_shell, &command_cwd).await,
+        Ok(())
+    );
 }
 
 async fn test_network_proxy() -> anyhow::Result<NetworkProxy> {

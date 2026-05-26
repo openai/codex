@@ -30,21 +30,65 @@ pub struct ShellSnapshot {
     pub cwd: AbsolutePathBuf,
 }
 
-const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Why a snapshot for a specific shell working directory could not be produced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShellSnapshotFailure {
+    WriteFailed,
+    ValidationFailed,
+    TaskEnded,
+}
+
+impl ShellSnapshotFailure {
+    fn telemetry_value(self) -> &'static str {
+        match self {
+            Self::WriteFailed => "write_failed",
+            Self::ValidationFailed => "validation_failed",
+            Self::TaskEnded => "task_ended",
+        }
+    }
+}
+
+impl std::fmt::Display for ShellSnapshotFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WriteFailed => formatter.write_str("shell environment capture failed"),
+            Self::ValidationFailed => formatter.write_str("captured shell environment was invalid"),
+            Self::TaskEnded => formatter.write_str("shell environment capture task ended"),
+        }
+    }
+}
+
+/// Snapshot readiness for the session shell, scoped to the working directory it captures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ShellSnapshotState {
+    Disabled,
+    Pending {
+        cwd: AbsolutePathBuf,
+    },
+    Ready(Arc<ShellSnapshot>),
+    Failed {
+        cwd: AbsolutePathBuf,
+        failure_reason: ShellSnapshotFailure,
+    },
+}
+
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(60);
 const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3); // 3 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
 impl ShellSnapshot {
-    pub fn start_snapshotting(
+    pub(crate) fn start_snapshotting(
         codex_home: AbsolutePathBuf,
         session_id: ThreadId,
         session_cwd: AbsolutePathBuf,
         shell: &mut Shell,
         session_telemetry: SessionTelemetry,
         state_db: Option<StateDbHandle>,
-    ) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
-        let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
+    ) -> watch::Sender<ShellSnapshotState> {
+        let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(ShellSnapshotState::Pending {
+            cwd: session_cwd.clone(),
+        });
         shell.shell_snapshot = shell_snapshot_rx;
 
         Self::spawn_snapshot_task(
@@ -60,15 +104,18 @@ impl ShellSnapshot {
         shell_snapshot_tx
     }
 
-    pub fn refresh_snapshot(
+    pub(crate) fn refresh_snapshot(
         codex_home: AbsolutePathBuf,
         session_id: ThreadId,
         session_cwd: AbsolutePathBuf,
         shell: Shell,
-        shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
+        shell_snapshot_tx: watch::Sender<ShellSnapshotState>,
         session_telemetry: SessionTelemetry,
         state_db: Option<StateDbHandle>,
     ) {
+        let _ = shell_snapshot_tx.send_replace(ShellSnapshotState::Pending {
+            cwd: session_cwd.clone(),
+        });
         Self::spawn_snapshot_task(
             codex_home,
             session_id,
@@ -85,7 +132,7 @@ impl ShellSnapshot {
         session_id: ThreadId,
         session_cwd: AbsolutePathBuf,
         snapshot_shell: Shell,
-        shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
+        shell_snapshot_tx: watch::Sender<ShellSnapshotState>,
         session_telemetry: SessionTelemetry,
         state_db: Option<StateDbHandle>,
     ) {
@@ -107,10 +154,27 @@ impl ShellSnapshot {
                 let _ = timer.map(|timer| timer.record(&[("success", success_tag)]));
                 let mut counter_tags = vec![("success", success_tag)];
                 if let Some(failure_reason) = snapshot.as_ref().err() {
-                    counter_tags.push(("failure_reason", *failure_reason));
+                    counter_tags.push(("failure_reason", failure_reason.telemetry_value()));
                 }
                 session_telemetry.counter("codex.shell_snapshot", /*inc*/ 1, &counter_tags);
-                let _ = shell_snapshot_tx.send(snapshot.ok());
+                let completed_state = match snapshot {
+                    Ok(snapshot) => ShellSnapshotState::Ready(snapshot),
+                    Err(failure_reason) => ShellSnapshotState::Failed {
+                        cwd: session_cwd.clone(),
+                        failure_reason,
+                    },
+                };
+                let _ = shell_snapshot_tx.send_if_modified(|state| {
+                    if matches!(
+                        state,
+                        ShellSnapshotState::Pending { cwd } if cwd == &session_cwd
+                    ) {
+                        *state = completed_state;
+                        true
+                    } else {
+                        false
+                    }
+                });
             }
             .instrument(snapshot_span),
         );
@@ -122,7 +186,7 @@ impl ShellSnapshot {
         session_cwd: &AbsolutePathBuf,
         shell: &Shell,
         state_db: Option<StateDbHandle>,
-    ) -> std::result::Result<Self, &'static str> {
+    ) -> std::result::Result<Self, ShellSnapshotFailure> {
         // File to store the snapshot
         let extension = match shell.shell_type {
             ShellType::PowerShell => "ps1",
@@ -158,7 +222,7 @@ impl ShellSnapshot {
                 "Failed to create shell snapshot for {}: {err:?}",
                 shell.name()
             );
-            return Err("write_failed");
+            return Err(ShellSnapshotFailure::WriteFailed);
         }
         tracing::info!(
             "Shell snapshot successfully created: {}",
@@ -168,13 +232,13 @@ impl ShellSnapshot {
         if let Err(err) = validate_snapshot(shell, &temp_path, session_cwd).await {
             tracing::error!("Shell snapshot validation failed: {err:?}");
             remove_snapshot_file(&temp_path).await;
-            return Err("validation_failed");
+            return Err(ShellSnapshotFailure::ValidationFailed);
         }
 
         if let Err(err) = fs::rename(&temp_path, &path).await {
             tracing::warn!("Failed to finalize shell snapshot: {err:?}");
             remove_snapshot_file(&temp_path).await;
-            return Err("write_failed");
+            return Err(ShellSnapshotFailure::WriteFailed);
         }
 
         Ok(Self {

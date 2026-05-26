@@ -20,9 +20,12 @@ use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
+use crate::tools::runtimes::await_shell_snapshot_for_command;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::shell_snapshot_failure_message;
 use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
+use codex_protocol::error::CodexErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::protocol::EventMsg;
@@ -146,15 +149,6 @@ pub(crate) async fn execute_user_shell_command(
             exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
         }
     }
-    let exec_command = maybe_wrap_shell_lc_with_snapshot(
-        &display_command,
-        session_shell.as_ref(),
-        #[allow(deprecated)]
-        &turn_context.cwd,
-        &turn_context.shell_environment_policy.r#set,
-        &exec_env_map,
-    );
-
     let call_id = Uuid::new_v4().to_string();
     let raw_command = command;
     #[allow(deprecated)]
@@ -178,42 +172,61 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
-    let permission_profile = PermissionProfile::Disabled;
-    let exec_env = ExecRequest {
-        command: exec_command.clone(),
-        cwd: cwd.clone(),
-        env: exec_env_map,
-        exec_server_env_config: None,
-        // `/shell` is the explicit full-access escape hatch, so it must not
-        // inherit a managed proxy from the surrounding session or turn.
-        network: None,
-        // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
-        // should use that instead of an "arbitrarily large" timeout here.
-        expiration: USER_SHELL_TIMEOUT_MS.into(),
-        capture_policy: ExecCapturePolicy::ShellTool,
-        sandbox: SandboxType::None,
-        windows_sandbox_policy_cwd: cwd.clone(),
-        windows_sandbox_level: turn_context.windows_sandbox_level,
-        windows_sandbox_private_desktop: turn_context
-            .config
-            .permissions
-            .windows_sandbox_private_desktop,
-        permission_profile: permission_profile.clone(),
-        file_system_sandbox_policy: permission_profile.file_system_sandbox_policy(),
-        network_sandbox_policy: permission_profile.network_sandbox_policy(),
-        windows_sandbox_filesystem_overrides: None,
-        arg0: None,
-    };
+    let exec_result =
+        match await_shell_snapshot_for_command(&display_command, session_shell.as_ref(), &cwd)
+            .or_cancel(&cancellation_token)
+            .await
+        {
+            Ok(Ok(())) => {
+                let exec_command = maybe_wrap_shell_lc_with_snapshot(
+                    &display_command,
+                    session_shell.as_ref(),
+                    #[allow(deprecated)]
+                    &turn_context.cwd,
+                    &turn_context.shell_environment_policy.r#set,
+                    &exec_env_map,
+                );
+                let permission_profile = PermissionProfile::Disabled;
+                let exec_env = ExecRequest {
+                    command: exec_command,
+                    cwd: cwd.clone(),
+                    env: exec_env_map,
+                    exec_server_env_config: None,
+                    // `/shell` is the explicit full-access escape hatch, so it must not
+                    // inherit a managed proxy from the surrounding session or turn.
+                    network: None,
+                    // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
+                    // should use that instead of an "arbitrarily large" timeout here.
+                    expiration: USER_SHELL_TIMEOUT_MS.into(),
+                    capture_policy: ExecCapturePolicy::ShellTool,
+                    sandbox: SandboxType::None,
+                    windows_sandbox_policy_cwd: cwd.clone(),
+                    windows_sandbox_level: turn_context.windows_sandbox_level,
+                    windows_sandbox_private_desktop: turn_context
+                        .config
+                        .permissions
+                        .windows_sandbox_private_desktop,
+                    permission_profile: permission_profile.clone(),
+                    file_system_sandbox_policy: permission_profile.file_system_sandbox_policy(),
+                    network_sandbox_policy: permission_profile.network_sandbox_policy(),
+                    windows_sandbox_filesystem_overrides: None,
+                    arg0: None,
+                };
+                let stdout_stream = Some(StdoutStream {
+                    sub_id: turn_context.sub_id.clone(),
+                    call_id: call_id.clone(),
+                    tx_event: session.get_tx_event(),
+                });
 
-    let stdout_stream = Some(StdoutStream {
-        sub_id: turn_context.sub_id.clone(),
-        call_id: call_id.clone(),
-        tx_event: session.get_tx_event(),
-    });
-
-    let exec_result = execute_exec_request(exec_env, stdout_stream, /*after_spawn*/ None)
-        .or_cancel(&cancellation_token)
-        .await;
+                execute_exec_request(exec_env, stdout_stream, /*after_spawn*/ None)
+                    .or_cancel(&cancellation_token)
+                    .await
+            }
+            Ok(Err(failure_reason)) => Ok(Err(CodexErr::Io(std::io::Error::other(
+                shell_snapshot_failure_message(failure_reason),
+            )))),
+            Err(CancelErr::Cancelled) => Err(CancelErr::Cancelled),
+        };
 
     match exec_result {
         Err(CancelErr::Cancelled) => {

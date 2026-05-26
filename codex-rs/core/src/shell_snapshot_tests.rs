@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -214,6 +215,50 @@ async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
 
     assert!(!path.exists());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_snapshot_marks_new_cwd_pending_before_recapture() -> Result<()> {
+    let dir = tempdir()?;
+    let previous_cwd = dir.path().join("previous").abs();
+    let next_cwd = dir.path().join("next").abs();
+    let (shell_snapshot_tx, shell_snapshot_rx) =
+        watch::channel(ShellSnapshotState::Ready(Arc::new(ShellSnapshot {
+            path: dir.path().join("previous.sh").abs(),
+            cwd: previous_cwd,
+        })));
+    let shell = Shell {
+        shell_type: ShellType::Bash,
+        shell_path: PathBuf::from("/bin/bash"),
+        shell_snapshot: shell_snapshot_rx.clone(),
+    };
+
+    ShellSnapshot::refresh_snapshot(
+        dir.path().abs(),
+        ThreadId::new(),
+        next_cwd.clone(),
+        shell,
+        shell_snapshot_tx,
+        SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-test",
+            "gpt-test",
+            /*account_id*/ None,
+            /*account_email*/ None,
+            /*auth_mode*/ None,
+            "test-originator".to_string(),
+            /*log_user_prompts*/ false,
+            "test-terminal".to_string(),
+            SessionSource::Cli,
+        ),
+        /*state_db*/ None,
+    );
+
+    assert_eq!(
+        shell_snapshot_rx.borrow().clone(),
+        ShellSnapshotState::Pending { cwd: next_cwd }
+    );
     Ok(())
 }
 

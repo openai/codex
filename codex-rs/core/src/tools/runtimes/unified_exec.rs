@@ -17,11 +17,13 @@ use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::runtimes::await_shell_snapshot_for_command;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
+use crate::tools::runtimes::shell_snapshot_failure_message;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -265,6 +267,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let command = if environment_is_remote {
             base_command.to_vec()
         } else {
+            await_shell_snapshot_for_command(base_command, session_shell.as_ref(), &req.cwd)
+                .await
+                .map_err(|failure_reason| {
+                    ToolError::Rejected(shell_snapshot_failure_message(failure_reason))
+                })?;
             maybe_wrap_shell_lc_with_snapshot(
                 base_command,
                 session_shell.as_ref(),

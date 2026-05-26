@@ -12,6 +12,7 @@ use crate::session::tests::make_session_and_context;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::shell_snapshot::ShellSnapshotState;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
@@ -128,10 +129,11 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
 
 #[test]
 fn shell_command_handler_respects_explicit_login_flag() {
-    let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
-        path: test_path_buf("/tmp/snapshot.sh").abs(),
-        cwd: test_path_buf("/tmp").abs(),
-    })));
+    let (_tx, shell_snapshot) =
+        watch::channel(ShellSnapshotState::Ready(Arc::new(ShellSnapshot {
+            path: test_path_buf("/tmp/snapshot.sh").abs(),
+            cwd: test_path_buf("/tmp").abs(),
+        })));
     let shell = Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
