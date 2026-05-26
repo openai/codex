@@ -17,6 +17,7 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 pub use feature_configs::AppsMcpPathOverrideConfigToml;
+pub use feature_configs::MemoriesFeatureConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
@@ -284,6 +285,7 @@ pub struct LegacyFeatureUsage {
 pub struct Features {
     enabled: BTreeSet<Feature>,
     legacy_usages: BTreeSet<LegacyFeatureUsage>,
+    memories_custom_tools: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -322,6 +324,7 @@ impl Features {
         Self {
             enabled: set,
             legacy_usages: BTreeSet::new(),
+            memories_custom_tools: false,
         }
     }
 
@@ -335,6 +338,10 @@ impl Features {
 
     pub fn use_legacy_landlock(&self) -> bool {
         self.enabled(Feature::UseLegacyLandlock)
+    }
+
+    pub fn memories_custom_tools(&self) -> bool {
+        self.memories_custom_tools
     }
 
     pub fn enable(&mut self, f: Feature) -> &mut Self {
@@ -587,6 +594,8 @@ pub fn is_known_feature_key(key: &str) -> bool {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memories: Option<FeatureToml<MemoriesFeatureConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apps_mcp_path_override: Option<FeatureToml<AppsMcpPathOverrideConfigToml>>,
@@ -600,12 +609,18 @@ impl Features {
     fn apply_toml(&mut self, features: &FeaturesToml) {
         let entries = features.entries();
         self.apply_map(&entries);
+        if let Some(custom_tools) = features.memories_custom_tools() {
+            self.memories_custom_tools = custom_tools;
+        }
     }
 }
 
 impl FeaturesToml {
     pub fn entries(&self) -> BTreeMap<String, bool> {
         let mut entries = self.entries.clone();
+        if let Some(enabled) = self.memories.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::MemoryTool.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
@@ -622,8 +637,16 @@ impl FeaturesToml {
         entries
     }
 
+    pub fn memories_custom_tools(&self) -> Option<bool> {
+        match self.memories.as_ref()? {
+            FeatureToml::Enabled(_) => None,
+            FeatureToml::Config(config) => config.custom_tools,
+        }
+    }
+
     pub fn materialize_resolved_enabled(&mut self, features: &Features) {
         let Self {
+            memories,
             multi_agent_v2,
             apps_mcp_path_override,
             network_proxy,
@@ -634,7 +657,9 @@ impl FeaturesToml {
         }
         for spec in FEATURES {
             let enabled = features.enabled(spec.id);
-            if spec.id == Feature::MultiAgentV2 {
+            if spec.id == Feature::MemoryTool {
+                materialize_resolved_memories_feature(memories, features, enabled);
+            } else if spec.id == Feature::MultiAgentV2 {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
             } else if spec.id == Feature::AppsMcpPathOverride {
                 materialize_resolved_feature_enabled(apps_mcp_path_override, enabled);
@@ -654,6 +679,30 @@ fn materialize_resolved_feature_enabled<T: FeatureConfig>(
     match feature {
         Some(feature) => feature.set_enabled(enabled),
         None => *feature = Some(FeatureToml::Enabled(enabled)),
+    }
+}
+
+fn materialize_resolved_memories_feature(
+    feature: &mut Option<FeatureToml<MemoriesFeatureConfigToml>>,
+    features: &Features,
+    enabled: bool,
+) {
+    if !features.memories_custom_tools {
+        materialize_resolved_feature_enabled(feature, enabled);
+        return;
+    }
+
+    match feature {
+        Some(FeatureToml::Config(config)) => {
+            config.set_enabled(enabled);
+            config.custom_tools = Some(true);
+        }
+        Some(FeatureToml::Enabled(_)) | None => {
+            *feature = Some(FeatureToml::Config(MemoriesFeatureConfigToml {
+                enabled: Some(enabled),
+                custom_tools: Some(true),
+            }));
+        }
     }
 }
 

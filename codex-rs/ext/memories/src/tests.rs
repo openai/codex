@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptSlot;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
@@ -20,6 +21,15 @@ use serde_json::json;
 use crate::extension::MemoriesExtension;
 use crate::extension::MemoriesExtensionConfig;
 use crate::local::LocalMemoriesBackend;
+
+#[test]
+fn install_registers_tool_contributor() {
+    let mut builder = ExtensionRegistryBuilder::<codex_core::config::Config>::new();
+    crate::install(&mut builder);
+    let registry = builder.build();
+
+    assert_eq!(registry.tool_contributors().len(), 1);
+}
 
 #[test]
 fn tools_are_not_contributed_without_thread_config() {
@@ -41,6 +51,7 @@ fn tools_are_not_contributed_when_disabled() {
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: false,
+        custom_tools_enabled: false,
         codex_home: test_path_buf("/tmp/codex-home").abs(),
     });
 
@@ -57,6 +68,7 @@ fn tools_are_contributed_when_enabled() {
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
+        custom_tools_enabled: true,
         codex_home: test_path_buf("/tmp/codex-home").abs(),
     });
 
@@ -74,6 +86,23 @@ fn tools_are_contributed_when_enabled() {
             memory_tool_name(crate::READ_TOOL_NAME),
             memory_tool_name(crate::SEARCH_TOOL_NAME),
         ]
+    );
+}
+
+#[test]
+fn tools_are_not_contributed_when_custom_tools_disabled() {
+    let extension = MemoriesExtension;
+    let thread_store = ExtensionData::new("thread");
+    thread_store.insert(MemoriesExtensionConfig {
+        enabled: true,
+        custom_tools_enabled: false,
+        codex_home: test_path_buf("/tmp/codex-home").abs(),
+    });
+
+    assert!(
+        extension
+            .tools(&ExtensionData::new("session"), &thread_store)
+            .is_empty()
     );
 }
 
@@ -115,6 +144,7 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
+        custom_tools_enabled: false,
         codex_home: tempdir.path().abs(),
     });
 

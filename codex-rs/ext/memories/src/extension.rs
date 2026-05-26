@@ -23,13 +23,16 @@ pub(crate) struct MemoriesExtension;
 #[derive(Clone, Debug)]
 pub(crate) struct MemoriesExtensionConfig {
     pub(crate) enabled: bool,
+    pub(crate) custom_tools_enabled: bool,
     pub(crate) codex_home: AbsolutePathBuf,
 }
 
 impl MemoriesExtensionConfig {
     fn from_config(config: &Config) -> Self {
+        let enabled = config.features.enabled(Feature::MemoryTool) && config.memories.use_memories;
         Self {
-            enabled: config.features.enabled(Feature::MemoryTool) && config.memories.use_memories,
+            enabled,
+            custom_tools_enabled: enabled && config.features.memories_custom_tools(),
             codex_home: config.codex_home.clone(),
         }
     }
@@ -88,7 +91,7 @@ impl ToolContributor for MemoriesExtension {
         let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.enabled {
+        if !config.custom_tools_enabled {
             return Vec::new();
         }
 
@@ -101,7 +104,6 @@ pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
     let extension = Arc::new(MemoriesExtension);
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
-    registry.prompt_contributor(extension);
-    // Keep the read/retrieval tools out of app-server until that rollout is intentional.
-    // registry.tool_contributor(extension);
+    registry.prompt_contributor(extension.clone());
+    registry.tool_contributor(extension);
 }

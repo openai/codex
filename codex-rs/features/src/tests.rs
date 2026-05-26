@@ -533,6 +533,56 @@ multi_agent_v2 = true
 }
 
 #[test]
+fn memories_feature_config_deserializes_table() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+[memories]
+enabled = true
+custom_tools = true
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("memories".to_string(), true)])
+    );
+    assert_eq!(features.memories_custom_tools(), Some(true));
+    assert_eq!(
+        features.memories,
+        Some(crate::FeatureToml::Config(
+            crate::MemoriesFeatureConfigToml {
+                enabled: Some(true),
+                custom_tools: Some(true),
+            }
+        ))
+    );
+}
+
+#[test]
+fn memories_custom_tools_config_does_not_enable_feature() {
+    let features_toml: FeaturesToml = toml::from_str(
+        r#"
+[memories]
+custom_tools = true
+"#,
+    )
+    .expect("features table should deserialize");
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert!(!features.enabled(Feature::MemoryTool));
+    assert!(features.memories_custom_tools());
+    assert_eq!(features_toml.entries(), BTreeMap::new());
+}
+
+#[test]
 fn multi_agent_v2_feature_config_deserializes_table() {
     let features: FeaturesToml = toml::from_str(
         r#"

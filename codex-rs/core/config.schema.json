@@ -483,7 +483,7 @@
               "type": "boolean"
             },
             "memories": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_MemoriesFeatureConfigToml"
             },
             "memory_tool": {
               "type": "boolean"
@@ -794,6 +794,16 @@
         },
         {
           "$ref": "#/definitions/AppsMcpPathOverrideConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_MemoriesFeatureConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/MemoriesFeatureConfigToml"
         }
       ]
     },
@@ -1268,6 +1278,18 @@
             }
           ],
           "description": "Approval mode for this tool."
+        }
+      },
+      "type": "object"
+    },
+    "MemoriesFeatureConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "custom_tools": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -4406,7 +4428,7 @@
           "type": "boolean"
         },
         "memories": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_MemoriesFeatureConfigToml"
         },
         "memory_tool": {
           "type": "boolean"
