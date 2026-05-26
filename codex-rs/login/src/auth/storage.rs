@@ -216,34 +216,47 @@ impl DirectKeyringAuthStorage {
         }
     }
 
-    fn account(&self) -> std::io::Result<String> {
-        compute_store_key(&self.codex_home)
+    fn load_from_keyring(&self, key: &str) -> std::io::Result<Option<AuthDotJson>> {
+        match self.keyring_store.load(KEYRING_SERVICE, key) {
+            Ok(Some(serialized)) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
+                std::io::Error::other(format!(
+                    "failed to deserialize CLI auth from keyring: {err}"
+                ))
+            }),
+            Ok(None) => Ok(None),
+            Err(error) => Err(std::io::Error::other(format!(
+                "failed to load CLI auth from keyring: {}",
+                error.message()
+            ))),
+        }
+    }
+
+    fn save_to_keyring(&self, key: &str, value: &str) -> std::io::Result<()> {
+        match self.keyring_store.save(KEYRING_SERVICE, key, value) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let message = format!(
+                    "failed to write OAuth tokens to keyring: {}",
+                    error.message()
+                );
+                warn!("{message}");
+                Err(std::io::Error::other(message))
+            }
+        }
     }
 }
 
 impl AuthStorageBackend for DirectKeyringAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        let account = self.account()?;
-        match self
-            .keyring_store
-            .load(KEYRING_SERVICE, &account)
-            .map_err(|err| std::io::Error::other(err.message()))?
-        {
-            Some(serialized) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
-                std::io::Error::other(format!(
-                    "failed to deserialize CLI auth from keyring: {err}"
-                ))
-            }),
-            None => Ok(None),
-        }
+        let key = compute_store_key(&self.codex_home)?;
+        self.load_from_keyring(&key)
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        let account = self.account()?;
+        let key = compute_store_key(&self.codex_home)?;
+        // Simpler error mapping per style: prefer method reference over closure
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
-        self.keyring_store
-            .save(KEYRING_SERVICE, &account, &serialized)
-            .map_err(|err| std::io::Error::other(err.message()))?;
+        self.save_to_keyring(&key, &serialized)?;
         if let Err(err) = delete_file_if_exists(&self.codex_home) {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
@@ -251,11 +264,13 @@ impl AuthStorageBackend for DirectKeyringAuthStorage {
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        let account = self.account()?;
+        let key = compute_store_key(&self.codex_home)?;
         let keyring_removed = self
             .keyring_store
-            .delete(KEYRING_SERVICE, &account)
-            .map_err(|err| std::io::Error::other(err.message()))?;
+            .delete(KEYRING_SERVICE, &key)
+            .map_err(|err| {
+                std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
+            })?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
         Ok(keyring_removed || file_removed)
     }
@@ -282,8 +297,11 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         match self
             .secrets_backend
             .get(&SecretScope::Global, &CLI_AUTH_SECRET_NAME)
-            .map_err(std::io::Error::other)?
-        {
+            .map_err(|err| {
+                std::io::Error::other(format!(
+                    "failed to load CLI auth from encrypted auth storage: {err}"
+                ))
+            })? {
             Some(serialized) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
                 std::io::Error::other(format!(
                     "failed to deserialize CLI auth from encrypted auth storage: {err}"
@@ -297,7 +315,12 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
         self.secrets_backend
             .set(&SecretScope::Global, &CLI_AUTH_SECRET_NAME, &serialized)
-            .map_err(std::io::Error::other)?;
+            .map_err(|err| {
+                let message =
+                    format!("failed to write OAuth tokens to encrypted auth storage: {err}");
+                warn!("{message}");
+                std::io::Error::other(message)
+            })?;
         if let Err(err) = delete_file_if_exists(&self.codex_home) {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
@@ -308,7 +331,11 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         let keyring_removed = self
             .secrets_backend
             .delete(&SecretScope::Global, &CLI_AUTH_SECRET_NAME)
-            .map_err(std::io::Error::other)?;
+            .map_err(|err| {
+                std::io::Error::other(format!(
+                    "failed to delete auth from encrypted auth storage: {err}"
+                ))
+            })?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
         Ok(keyring_removed || file_removed)
     }

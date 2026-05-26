@@ -19,7 +19,7 @@ mod sanitizer;
 pub use local::LocalSecretsBackend;
 pub use sanitizer::redact_secrets;
 
-const KEYRING_SERVICE: &str = "Codex Auth";
+const KEYRING_SERVICE: &str = "codex";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SecretName(String);

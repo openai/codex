@@ -375,6 +375,37 @@ fn direct_keyring_auth_storage_saves_legacy_keyring_entry() -> anyhow::Result<()
 }
 
 #[test]
+fn direct_keyring_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let mock_keyring = MockKeyringStore::default();
+    let storage = DirectKeyringAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+    );
+    let auth = auth_with_prefix("direct-delete");
+    storage.save(&auth)?;
+    let auth_file = get_auth_file(codex_home.path());
+    std::fs::write(&auth_file, "stale")?;
+
+    let removed = storage.delete()?;
+
+    assert!(removed, "delete should report removal");
+    assert_eq!(storage.load()?, None, "keyring auth should be removed");
+    assert!(
+        mock_keyring
+            .saved_value(&compute_store_key(codex_home.path())?)
+            .is_none(),
+        "legacy keyring auth entry should be removed"
+    );
+    assert!(
+        !auth_file.exists(),
+        "fallback auth.json should be removed after keyring delete"
+    );
+    assert!(!encrypted_auth_file(codex_home.path()).exists());
+    Ok(())
+}
+
+#[test]
 fn factory_uses_secrets_backend_only_when_requested() -> anyhow::Result<()> {
     let direct_home = tempdir()?;
     let direct_keyring = MockKeyringStore::default();
