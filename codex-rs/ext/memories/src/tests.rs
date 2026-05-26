@@ -33,7 +33,7 @@ fn install_registers_tool_contributor() {
 
 #[test]
 fn tools_are_not_contributed_without_thread_config() {
-    let extension = MemoriesExtension;
+    let extension = MemoriesExtension::default();
 
     assert!(
         extension
@@ -47,7 +47,7 @@ fn tools_are_not_contributed_without_thread_config() {
 
 #[test]
 fn tools_are_not_contributed_when_disabled() {
-    let extension = MemoriesExtension;
+    let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: false,
@@ -64,7 +64,7 @@ fn tools_are_not_contributed_when_disabled() {
 
 #[test]
 fn tools_are_contributed_when_enabled() {
-    let extension = MemoriesExtension;
+    let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
@@ -140,7 +140,7 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
     .await
     .expect("write memory summary");
 
-    let extension = MemoriesExtension;
+    let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
