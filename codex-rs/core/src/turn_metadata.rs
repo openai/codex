@@ -181,45 +181,6 @@ impl TurnMetadataBag {
     }
 }
 
-pub async fn build_turn_metadata_header(
-    cwd: &AbsolutePathBuf,
-    sandbox: Option<&str>,
-) -> Option<String> {
-    let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
-
-    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
-        get_head_commit_hash(cwd),
-        get_git_remote_urls_assume_git_repo(cwd),
-        get_has_changes(cwd),
-    );
-    let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
-    if latest_git_commit_hash.is_none()
-        && associated_remote_urls.is_none()
-        && has_changes.is_none()
-        && sandbox.is_none()
-    {
-        return None;
-    }
-
-    TurnMetadataBag::new(
-        TurnMetadataRequestKind::Memory,
-        /*session_id*/ None,
-        /*thread_id*/ None,
-        /*thread_source*/ None,
-        /*turn_id*/ None,
-        sandbox.map(ToString::to_string),
-    )
-    .with_workspace_git_metadata(
-        repo_root,
-        Some(WorkspaceGitMetadata {
-            associated_remote_urls,
-            latest_git_commit_hash,
-            has_changes,
-        }),
-    )
-    .to_header_value()
-}
-
 fn merge_turn_metadata(
     header: &str,
     turn_started_at_unix_ms: Option<i64>,
