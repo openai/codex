@@ -41,6 +41,7 @@ pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::insert_history::HistoryLineWrapPolicy;
+use crate::insert_history::InsertHistoryMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
@@ -500,6 +501,8 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
+    // Raw terminal-wrapped history needs a non-scroll-region insertion path in Zellij.
+    is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
     // Keeps unmanaged process stderr writes out of the inline viewport.
@@ -535,6 +538,7 @@ impl Tui {
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
+        let is_zellij = codex_terminal_detection::terminal_info().is_zellij();
 
         Self {
             frame_requester,
@@ -552,6 +556,7 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
+            is_zellij,
             alt_screen_enabled: true,
             _stderr_guard: stderr_guard,
         }
@@ -797,15 +802,22 @@ impl Tui {
     fn flush_pending_history_lines(
         terminal: &mut Terminal,
         pending_history_lines: &mut Vec<PendingHistoryLines>,
+        is_zellij: bool,
     ) -> Result<()> {
         if pending_history_lines.is_empty() {
             return Ok(());
         }
 
         for batch in pending_history_lines.iter() {
-            crate::insert_history::insert_history_lines_with_wrap_policy(
+            let mode = if is_zellij && batch.wrap_policy == HistoryLineWrapPolicy::Terminal {
+                InsertHistoryMode::ZellijRaw
+            } else {
+                InsertHistoryMode::Standard
+            };
+            crate::insert_history::insert_history_lines_with_mode_and_wrap_policy(
                 terminal,
                 batch.lines.clone(),
+                mode,
                 batch.wrap_policy,
             )?;
         }
@@ -862,7 +874,11 @@ impl Tui {
                 terminal.set_viewport_area(area);
             }
 
-            Self::flush_pending_history_lines(terminal, &mut self.pending_history_lines)?;
+            Self::flush_pending_history_lines(
+                terminal,
+                &mut self.pending_history_lines,
+                self.is_zellij,
+            )?;
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
@@ -968,7 +984,11 @@ impl Tui {
             let terminal = &mut self.terminal;
             let needs_full_repaint =
                 Self::update_inline_viewport_for_resize_reflow(terminal, height)?;
-            Self::flush_pending_history_lines(terminal, &mut self.pending_history_lines)?;
+            Self::flush_pending_history_lines(
+                terminal,
+                &mut self.pending_history_lines,
+                self.is_zellij,
+            )?;
 
             if needs_full_repaint {
                 terminal.invalidate_viewport();

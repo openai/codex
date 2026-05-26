@@ -103,6 +103,8 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
+    /// Expose the extension-backed standalone web search tool.
+    StandaloneWebSearch,
     /// Use the legacy Landlock Linux sandbox fallback instead of the default
     /// bubblewrap pipeline.
     UseLegacyLandlock,
@@ -785,6 +787,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchCached,
         key: "web_search_cached",
         stage: Stage::Deprecated,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::StandaloneWebSearch,
+        key: "standalone_web_search",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

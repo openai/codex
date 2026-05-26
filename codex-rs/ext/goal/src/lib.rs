@@ -7,6 +7,7 @@
 mod accounting;
 mod events;
 mod extension;
+mod metrics;
 mod runtime;
 mod spec;
 mod steering;

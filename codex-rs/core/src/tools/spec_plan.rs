@@ -238,11 +238,12 @@ fn spec_for_model_request(
     }
 }
 
-pub(crate) fn hosted_model_tool_specs(turn_context: &TurnContext) -> Vec<ToolSpec> {
+fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
+    let turn_context = context.turn_context;
     let mut specs = Vec::new();
     let provider_capabilities = turn_context.provider.capabilities();
-    let web_search_mode = provider_capabilities
-        .web_search
+    let web_search_mode = (!standalone_web_run_available(context.extension_tool_executors)
+        && provider_capabilities.web_search)
         .then_some(turn_context.config.web_search_mode.value());
     let web_search_config = if provider_capabilities.web_search {
         turn_context.config.web_search_config.as_ref()
@@ -504,9 +505,18 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_mcp_runtime_tools(context, planned_tools);
     add_dynamic_tools(context, planned_tools);
     add_extension_tools(context, planned_tools);
-    for spec in hosted_model_tool_specs(context.turn_context) {
+    for spec in hosted_model_tool_specs(context) {
         planned_tools.add_hosted_spec(spec);
     }
+}
+
+fn standalone_web_run_available(
+    extension_tools: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
+) -> bool {
+    let web_run = ToolName::namespaced("web", "run");
+    extension_tools
+        .iter()
+        .any(|executor| executor.tool_name() == web_run)
 }
 
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
