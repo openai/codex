@@ -233,6 +233,14 @@ impl NetworkProxyBuilder {
 fn reserve_loopback_ephemeral_listeners(
     reserve_socks_listener: bool,
 ) -> Result<ReservedListenerSet> {
+    #[cfg(target_os = "macos")]
+    let http_listener = {
+        // Some clients, including gRPC, use an IPv4-mapped IPv6 socket for an IPv4 proxy
+        // endpoint. Seatbelt does not classify that representation as localhost.
+        StdTcpListener::bind(SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, 0)))
+            .context("reserve HTTP proxy listener on IPv6 loopback")?
+    };
+    #[cfg(not(target_os = "macos"))]
     let http_listener =
         reserve_loopback_ephemeral_listener().context("reserve HTTP proxy listener")?;
     let socks_listener = if reserve_socks_listener {
@@ -791,6 +799,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
+    #[cfg(target_os = "macos")]
+    use std::net::Ipv6Addr;
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ports() {
@@ -821,6 +831,18 @@ mod tests {
 
         assert!(proxy.http_addr.ip().is_loopback());
         assert!(proxy.socks_addr.ip().is_loopback());
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(proxy.http_addr.ip(), IpAddr::V6(Ipv6Addr::LOCALHOST));
+            assert_eq!(proxy.socks_addr.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+            let mut env = HashMap::new();
+            proxy.apply_to_env(&mut env);
+            assert_eq!(
+                env.get("HTTPS_PROXY"),
+                Some(&format!("http://[::1]:{}", proxy.http_addr.port()))
+            );
+        }
         #[cfg(target_os = "windows")]
         {
             assert_eq!(proxy.http_addr, http_addr);
