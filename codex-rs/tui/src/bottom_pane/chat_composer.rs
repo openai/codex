@@ -111,7 +111,6 @@
 //! composer flushes/clears any in-flight burst state so it cannot leak into subsequent input.
 //!
 //! For the detailed burst state machine, see `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
-//! For a narrative overview of the combined state machine, see `docs/tui-chat-composer.md`.
 //!
 //! # PasteBurst Integration Points
 //!
