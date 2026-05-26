@@ -3528,11 +3528,11 @@ impl ChatComposer {
                 }
             }
             _ => {
-                if is_editing_slash_command_name {
-                    if let Some(command_filter_text) = command_filter_text.as_deref() {
-                        let command_popup = self.slash_input().command_popup(command_filter_text);
-                        self.popups.active = ActivePopup::Command(command_popup);
-                    }
+                if is_editing_slash_command_name
+                    && let Some(command_filter_text) = command_filter_text.as_deref()
+                {
+                    let command_popup = self.slash_input().command_popup(command_filter_text);
+                    self.popups.active = ActivePopup::Command(command_popup);
                 }
             }
         }
