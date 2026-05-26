@@ -20,14 +20,12 @@ use crate::tools;
 /// Contributes Codex memory read-path prompt context and memory read tools.
 #[derive(Clone, Default)]
 pub(crate) struct MemoriesExtension {
-    _metrics_client: Option<MetricsClient>,
+    metrics_client: Option<MetricsClient>,
 }
 
 impl MemoriesExtension {
     fn new(metrics_client: Option<MetricsClient>) -> Self {
-        Self {
-            _metrics_client: metrics_client,
-        }
+        Self { metrics_client }
     }
 }
 
@@ -103,7 +101,10 @@ impl ToolContributor for MemoriesExtension {
             return Vec::new();
         }
 
-        tools::memory_tools(LocalMemoriesBackend::from_codex_home(&config.codex_home))
+        tools::memory_tools(
+            LocalMemoriesBackend::from_codex_home(&config.codex_home),
+            self.metrics_client.clone(),
+        )
     }
 }
 
