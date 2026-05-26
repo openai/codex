@@ -2619,6 +2619,8 @@ impl Config {
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
             None => WindowsSandboxLevel::from_features(&features),
         };
+        let memories_root = codex_home.join("memories");
+        std::fs::create_dir_all(&memories_root)?;
         let profiles_are_active = effective_permission_selection.profiles_are_active(
             default_permissions_override.as_deref(),
             permission_config_syntax,
@@ -3232,11 +3234,12 @@ impl Config {
             network_requirements,
             &network_permission_profile,
         )?;
-        let helper_readable_roots = get_readable_roots_required_for_codex_runtime(
+        let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
             zsh_path.as_ref(),
             main_execve_wrapper_exe.as_ref(),
         );
+        helper_readable_roots.push(memories_root.clone());
         let effective_permission_profile = constrained_permission_profile.value.get().clone();
         let (mut effective_file_system_sandbox_policy, effective_network_sandbox_policy) =
             effective_permission_profile.to_runtime_permissions();
@@ -3254,6 +3257,10 @@ impl Config {
                 filesystem_requirements,
             );
         }
+        effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
+            .with_additional_legacy_workspace_writable_roots(std::slice::from_ref(
+                &memories_root,
+            ));
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(

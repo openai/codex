@@ -1551,6 +1551,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     .await?;
 
     let cwd_root = cwd.path().abs();
+    let memories_root = codex_home.abs().join("memories");
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![
@@ -1572,12 +1573,18 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 },
                 access: FileSystemAccessMode::Read,
             },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: memories_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
         ]),
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
+            writable_roots: vec![memories_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1839,16 +1846,23 @@ async fn permission_profile_override_keeps_workspace_roots_out_of_legacy_project
     )
     .await?;
 
+    let memories_root = codex_home.abs().join("memories");
     assert!(
         config
             .permissions
             .file_system_sandbox_policy()
             .can_write_path_with_cwd(cwd.path(), cwd.path())
     );
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(memories_root.as_path(), cwd.path())
+    );
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
+            writable_roots: vec![memories_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -2743,6 +2757,9 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
         config.custom_permission_profile_ids,
         vec!["dev".to_string()]
     );
+    let legacy_memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
+        codex_home.path().join("memories"),
+    )?)?;
     assert!(
         config
             .permissions
@@ -2752,7 +2769,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![external_write_path],
+            writable_roots: vec![external_write_path, legacy_memories_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -2813,12 +2830,13 @@ async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() ->
 
 async fn load_workspace_permission_profile(
     profile: PermissionProfileToml,
-) -> std::io::Result<Config> {
+) -> std::io::Result<(Config, AbsolutePathBuf, AbsolutePathBuf)> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+    let memories_root = codex_home.abs().join("memories");
 
-    Config::load_from_base_config_with_overrides(
+    let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
@@ -2832,42 +2850,59 @@ async fn load_workspace_permission_profile(
         },
         codex_home.abs(),
     )
-    .await
+    .await?;
+    let legacy_memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
+        codex_home.path().join("memories"),
+    )?)?;
+
+    Ok((config, memories_root, legacy_memories_root))
 }
 
 #[tokio::test]
 async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
-    let config = load_workspace_permission_profile(PermissionProfileToml {
-        description: None,
-        extends: None,
-        workspace_roots: None,
-        filesystem: Some(FilesystemPermissionsToml {
-            glob_scan_max_depth: None,
-            entries: BTreeMap::from([(
-                ":future_special_path".to_string(),
-                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
-            )]),
-        }),
-        network: None,
-    })
-    .await?;
+    let (config, memories_root, legacy_memories_root) =
+        load_workspace_permission_profile(PermissionProfileToml {
+            description: None,
+            extends: None,
+            workspace_roots: None,
+            filesystem: Some(FilesystemPermissionsToml {
+                glob_scan_max_depth: None,
+                entries: BTreeMap::from([(
+                    ":future_special_path".to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                )]),
+            }),
+            network: None,
+        })
+        .await?;
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::unknown(
-                    ":future_special_path",
-                    /*subpath*/ None
-                ),
+        FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::unknown(
+                        ":future_special_path",
+                        /*subpath*/ None
+                    ),
+                },
+                access: FileSystemAccessMode::Read,
             },
-            access: FileSystemAccessMode::Read,
-        }]),
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: memories_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]),
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
-        &SandboxPolicy::ReadOnly {
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![legacy_memories_root],
             network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         }
     );
     assert!(
@@ -2883,7 +2918,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
 #[tokio::test]
 async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 -> std::io::Result<()> {
-    let config = load_workspace_permission_profile(PermissionProfileToml {
+    let (config, memories_root, _) = load_workspace_permission_profile(PermissionProfileToml {
         description: None,
         extends: None,
         workspace_roots: None,
@@ -2903,12 +2938,23 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::unknown(":future_special_path", Some("docs".into())),
+        FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::unknown(
+                        ":future_special_path",
+                        Some("docs".into())
+                    ),
+                },
+                access: FileSystemAccessMode::Read,
             },
-            access: FileSystemAccessMode::Read,
-        }]),
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: memories_root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]),
     );
     assert!(
         config.startup_warnings.iter().any(|warning| warning.contains(
@@ -2922,23 +2968,32 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 
 #[tokio::test]
 async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io::Result<()> {
-    let config = load_workspace_permission_profile(PermissionProfileToml {
-        description: None,
-        extends: None,
-        workspace_roots: None,
-        filesystem: None,
-        network: None,
-    })
-    .await?;
+    let (config, memories_root, legacy_memories_root) =
+        load_workspace_permission_profile(PermissionProfileToml {
+            description: None,
+            extends: None,
+            workspace_roots: None,
+            filesystem: None,
+            network: None,
+        })
+        .await?;
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(Vec::new())
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: memories_root.clone(),
+            },
+            access: FileSystemAccessMode::Write,
+        }])
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
-        &SandboxPolicy::ReadOnly {
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![legacy_memories_root],
             network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         }
     );
     assert!(
@@ -2953,7 +3008,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
 
 #[tokio::test]
 async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result<()> {
-    let config = load_workspace_permission_profile(PermissionProfileToml {
+    let (config, memories_root, _) = load_workspace_permission_profile(PermissionProfileToml {
         description: None,
         extends: None,
         workspace_roots: None,
@@ -2967,7 +3022,12 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
 
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
-        FileSystemSandboxPolicy::restricted(Vec::new())
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: memories_root,
+            },
+            access: FileSystemAccessMode::Write,
+        }])
     );
     assert!(
         config.startup_warnings.iter().any(|warning| warning.contains(
