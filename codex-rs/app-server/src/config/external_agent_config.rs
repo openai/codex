@@ -1494,7 +1494,6 @@ fn json_object_to_env_toml_table(
     for (key, value) in object
         .iter()
         .filter_map(|(key, value)| json_env_value_to_string(value).map(|value| (key, value)))
-        .collect::<BTreeMap<_, _>>()
     {
         table.insert(key.clone(), TomlValue::String(value));
     }
