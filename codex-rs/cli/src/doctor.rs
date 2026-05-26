@@ -1199,7 +1199,7 @@ fn auth_check(config: &Config) -> DoctorCheck {
     match load_auth_dot_json(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     ) {
         Ok(Some(auth)) => {
             details.push(format!("stored auth mode: {}", stored_auth_mode(&auth)));
@@ -2526,7 +2526,7 @@ fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
     let stored_auth = load_auth_dot_json(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     )
     .ok()
     .flatten();

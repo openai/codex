@@ -4,7 +4,7 @@ use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_login::CliAuthKeyringBackendKind;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
 use codex_login::run_device_code_login;
@@ -111,7 +111,7 @@ fn server_opts(
         "client-id".to_string(),
         /*forced_chatgpt_workspace_id*/ None,
         cli_auth_credentials_store_mode,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     );
     opts.issuer = issuer;
     opts.open_browser = false;
@@ -152,7 +152,7 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     let auth = load_auth_dot_json(
         codex_home.path(),
         AuthCredentialsStoreMode::File,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )
     .context("auth.json should load after login succeeds")?
     .context("auth.json written")?;
@@ -202,7 +202,7 @@ async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
     let auth = load_auth_dot_json(
         codex_home.path(),
         AuthCredentialsStoreMode::File,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )
     .context("auth.json should load after login fails")?;
     assert!(
@@ -237,7 +237,7 @@ async fn device_code_login_integration_handles_usercode_http_failure() -> anyhow
     let auth = load_auth_dot_json(
         codex_home.path(),
         AuthCredentialsStoreMode::File,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )
     .context("auth.json should load after login fails")?;
     assert!(
@@ -276,7 +276,7 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
         "client-id".to_string(),
         /*forced_chatgpt_workspace_id*/ None,
         AuthCredentialsStoreMode::File,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     );
     opts.issuer = issuer;
     opts.open_browser = false;
@@ -288,7 +288,7 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
     let auth = load_auth_dot_json(
         codex_home.path(),
         AuthCredentialsStoreMode::File,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )
     .context("auth.json should load after login succeeds")?
     .context("auth.json written")?;
@@ -331,7 +331,7 @@ async fn device_code_login_integration_handles_error_payload() -> anyhow::Result
         "client-id".to_string(),
         /*forced_chatgpt_workspace_id*/ None,
         AuthCredentialsStoreMode::File,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     );
     opts.issuer = issuer;
     opts.open_browser = false;
@@ -349,7 +349,7 @@ async fn device_code_login_integration_handles_error_payload() -> anyhow::Result
     let auth = load_auth_dot_json(
         codex_home.path(),
         AuthCredentialsStoreMode::File,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )
     .context("auth.json should load after login fails")?;
     assert!(

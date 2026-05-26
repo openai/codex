@@ -23,6 +23,7 @@ use codex_agent_identity::AgentIdentityJwtClaims;
 use codex_agent_identity::decode_agent_identity_jwt;
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
+pub use codex_config::types::AuthKeyringBackendKind;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -104,25 +105,6 @@ pub(super) trait AuthStorageBackend: Debug + Send + Sync {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>>;
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()>;
     fn delete(&self) -> std::io::Result<bool>;
-}
-
-/// Backend used when CLI auth storage is configured for keyring-backed persistence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CliAuthKeyringBackendKind {
-    /// Store the serialized auth payload directly in the OS keyring.
-    Direct,
-    /// Store auth in the local encrypted secrets file, with the file key in the OS keyring.
-    Secrets,
-}
-
-impl Default for CliAuthKeyringBackendKind {
-    fn default() -> Self {
-        if cfg!(windows) {
-            Self::Secrets
-        } else {
-            Self::Direct
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -351,7 +333,7 @@ impl AutoAuthStorage {
     fn new(
         codex_home: PathBuf,
         keyring_store: Arc<dyn KeyringStore>,
-        keyring_backend_kind: CliAuthKeyringBackendKind,
+        keyring_backend_kind: AuthKeyringBackendKind,
     ) -> Self {
         Self {
             keyring_storage: create_keyring_auth_storage(
@@ -438,7 +420,7 @@ impl AuthStorageBackend for EphemeralAuthStorage {
 pub(super) fn create_auth_storage(
     codex_home: PathBuf,
     mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Arc<dyn AuthStorageBackend> {
     let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
     create_auth_storage_with_store(codex_home, mode, keyring_store, keyring_backend_kind)
@@ -448,7 +430,7 @@ fn create_auth_storage_with_store(
     codex_home: PathBuf,
     mode: AuthCredentialsStoreMode,
     keyring_store: Arc<dyn KeyringStore>,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Arc<dyn AuthStorageBackend> {
     match mode {
         AuthCredentialsStoreMode::File => Arc::new(FileAuthStorage::new(codex_home)),
@@ -467,13 +449,13 @@ fn create_auth_storage_with_store(
 fn create_keyring_auth_storage(
     codex_home: PathBuf,
     keyring_store: Arc<dyn KeyringStore>,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Arc<dyn AuthStorageBackend> {
     match keyring_backend_kind {
-        CliAuthKeyringBackendKind::Direct => {
+        AuthKeyringBackendKind::Direct => {
             Arc::new(DirectKeyringAuthStorage::new(codex_home, keyring_store))
         }
-        CliAuthKeyringBackendKind::Secrets => {
+        AuthKeyringBackendKind::Secrets => {
             Arc::new(SecretsKeyringAuthStorage::new(codex_home, keyring_store))
         }
     }

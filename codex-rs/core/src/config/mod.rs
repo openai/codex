@@ -38,6 +38,7 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
@@ -70,7 +71,6 @@ use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
-use codex_login::CliAuthKeyringBackendKind;
 use codex_mcp::McpConfig;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -1104,8 +1104,8 @@ impl AuthManagerConfig for Config {
         self.cli_auth_credentials_store_mode
     }
 
-    fn cli_auth_keyring_backend_kind(&self) -> CliAuthKeyringBackendKind {
-        Config::cli_auth_keyring_backend_kind(self)
+    fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
+        Config::auth_keyring_backend_kind(self)
     }
 
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
@@ -1356,13 +1356,11 @@ impl Config {
         workspace_roots
     }
 
-    pub fn cli_auth_keyring_backend_kind(&self) -> CliAuthKeyringBackendKind {
-        // TODO: Migrate all keyring-backed CLI auth storage to the secrets
-        // backend after validating this path on Windows.
+    pub fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
         if self.features.enabled(Feature::SecretAuthStorage) {
-            CliAuthKeyringBackendKind::Secrets
+            AuthKeyringBackendKind::Secrets
         } else {
-            CliAuthKeyringBackendKind::Direct
+            AuthKeyringBackendKind::Direct
         }
     }
 
@@ -1429,6 +1427,7 @@ impl Config {
             apps_mcp_product_sku: self.apps_mcp_product_sku.clone(),
             codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
+            auth_keyring_backend_kind: self.auth_keyring_backend_kind(),
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
             mcp_oauth_callback_url: self.mcp_oauth_callback_url.clone(),
             skill_mcp_dependency_install_enabled: self

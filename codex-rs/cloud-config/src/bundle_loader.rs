@@ -5,8 +5,8 @@ use codex_config::CloudConfigBundleLoadError;
 use codex_config::CloudConfigBundleLoadErrorCode;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
-use codex_login::CliAuthKeyringBackendKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -63,7 +63,7 @@ pub async fn cloud_config_bundle_loader_for_storage(
         enable_codex_api_key_env,
         credentials_store_mode,
         Some(chatgpt_base_url.clone()),
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )
     .await;
     cloud_config_bundle_loader(auth_manager, chatgpt_base_url, codex_home)

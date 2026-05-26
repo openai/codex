@@ -10,8 +10,8 @@
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::CLIENT_ID;
-use codex_login::CliAuthKeyringBackendKind;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
 use codex_login::login_with_access_token;
@@ -118,14 +118,14 @@ pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
-    cli_auth_keyring_backend_kind: CliAuthKeyringBackendKind,
+    auth_keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
     let opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
-        cli_auth_keyring_backend_kind,
+        auth_keyring_backend_kind,
     );
     let server = run_login_server(opts)?;
 
@@ -150,7 +150,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
         config.codex_home.to_path_buf(),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -182,7 +182,7 @@ pub async fn run_login_with_api_key(
         &config.codex_home,
         &api_key,
         config.cli_auth_credentials_store_mode,
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     ) {
         Ok(_) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
@@ -213,7 +213,7 @@ pub async fn run_login_with_access_token(
         &access_token,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -288,7 +288,7 @@ pub async fn run_login_with_device_code(
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -328,7 +328,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -377,7 +377,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {
@@ -422,7 +422,7 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     match logout_with_revoke(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
-        config.cli_auth_keyring_backend_kind(),
+        config.auth_keyring_backend_kind(),
     )
     .await
     {

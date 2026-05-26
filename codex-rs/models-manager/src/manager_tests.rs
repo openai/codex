@@ -3,8 +3,8 @@ use crate::ModelsManagerConfig;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
-use codex_login::CliAuthKeyringBackendKind;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
 use codex_login::ExternalAuthRefreshContext;
@@ -225,7 +225,7 @@ c2ln",
         codex_home,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )
     .await
     .expect("auth should load")

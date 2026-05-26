@@ -303,8 +303,14 @@ impl Session {
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
         let host_owned_codex_apps_enabled =
             host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
-        let auth_statuses =
-            compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
+        let keyring_backend_kind = config.auth_keyring_backend_kind();
+        let auth_statuses = compute_auth_statuses(
+            mcp_servers.iter(),
+            store_mode,
+            keyring_backend_kind,
+            auth.as_ref(),
+        )
+        .await;
         let mcp_runtime_context = match turn_context.environments.primary() {
             Some(turn_environment) => McpRuntimeContext::new(
                 Arc::clone(&self.services.environment_manager),
@@ -326,6 +332,7 @@ impl Session {
         let refreshed_manager = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
+            keyring_backend_kind,
             auth_statuses,
             &turn_context.approval_policy,
             turn_context.sub_id.clone(),

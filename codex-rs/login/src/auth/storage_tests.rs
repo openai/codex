@@ -153,7 +153,7 @@ fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
     let storage = create_auth_storage(
         dir.path().to_path_buf(),
         AuthCredentialsStoreMode::File,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     );
     storage.save(&auth_dot_json)?;
     assert!(dir.path().join("auth.json").exists());
@@ -170,7 +170,7 @@ fn ephemeral_storage_save_load_delete_is_in_memory_only() -> anyhow::Result<()> 
     let storage = create_auth_storage(
         dir.path().to_path_buf(),
         AuthCredentialsStoreMode::Ephemeral,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     );
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
@@ -410,7 +410,7 @@ fn factory_uses_secrets_backend_only_when_requested() -> anyhow::Result<()> {
         direct_home.path().to_path_buf(),
         AuthCredentialsStoreMode::Keyring,
         Arc::new(direct_keyring.clone()),
-        CliAuthKeyringBackendKind::Direct,
+        AuthKeyringBackendKind::Direct,
     );
     let direct_auth = auth_with_prefix("factory-direct");
     direct_storage.save(&direct_auth)?;
@@ -427,7 +427,7 @@ fn factory_uses_secrets_backend_only_when_requested() -> anyhow::Result<()> {
         secrets_home.path().to_path_buf(),
         AuthCredentialsStoreMode::Keyring,
         Arc::new(secrets_keyring.clone()),
-        CliAuthKeyringBackendKind::Secrets,
+        AuthKeyringBackendKind::Secrets,
     );
     let secrets_auth = auth_with_prefix("factory-secrets");
     secrets_storage.save(&secrets_auth)?;
@@ -503,7 +503,7 @@ fn auto_auth_storage_load_prefers_keyring_value() -> anyhow::Result<()> {
     let storage = AutoAuthStorage::new(
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring.clone()),
-        CliAuthKeyringBackendKind::Secrets,
+        AuthKeyringBackendKind::Secrets,
     );
     let keyring_auth = auth_with_prefix("keyring");
     seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &keyring_auth)?;
@@ -523,7 +523,7 @@ fn auto_auth_storage_load_uses_file_when_keyring_empty() -> anyhow::Result<()> {
     let storage = AutoAuthStorage::new(
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring),
-        CliAuthKeyringBackendKind::Secrets,
+        AuthKeyringBackendKind::Secrets,
     );
 
     let expected = auth_with_prefix("file-only");
@@ -541,7 +541,7 @@ fn auto_auth_storage_load_falls_back_when_keyring_errors() -> anyhow::Result<()>
     let storage = AutoAuthStorage::new(
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring.clone()),
-        CliAuthKeyringBackendKind::Secrets,
+        AuthKeyringBackendKind::Secrets,
     );
     let key = compute_keyring_account(codex_home.path());
 
@@ -564,7 +564,7 @@ fn auto_auth_storage_save_prefers_keyring() -> anyhow::Result<()> {
     let storage = AutoAuthStorage::new(
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring.clone()),
-        CliAuthKeyringBackendKind::Secrets,
+        AuthKeyringBackendKind::Secrets,
     );
     let stale = auth_with_prefix("stale");
     storage.file_storage.save(&stale)?;
@@ -583,7 +583,7 @@ fn auto_auth_storage_save_falls_back_when_keyring_errors() -> anyhow::Result<()>
     let storage = AutoAuthStorage::new(
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring.clone()),
-        CliAuthKeyringBackendKind::Secrets,
+        AuthKeyringBackendKind::Secrets,
     );
     let key = compute_keyring_account(codex_home.path());
     mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
@@ -615,7 +615,7 @@ fn auto_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
     let storage = AutoAuthStorage::new(
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring.clone()),
-        CliAuthKeyringBackendKind::Secrets,
+        AuthKeyringBackendKind::Secrets,
     );
     let auth = auth_with_prefix("to-delete");
     let auth_file = seed_secrets_backend_and_fallback_auth_file_for_delete(

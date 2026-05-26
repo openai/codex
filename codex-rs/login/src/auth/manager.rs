@@ -32,8 +32,8 @@ pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::personal_access_token::PersonalAccessTokenAuth;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
 pub use crate::auth::storage::AuthDotJson;
+pub use crate::auth::storage::AuthKeyringBackendKind;
 use crate::auth::storage::AuthStorageBackend;
-pub use crate::auth::storage::CliAuthKeyringBackendKind;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::build_reqwest_client;
@@ -211,7 +211,7 @@ impl CodexAuth {
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
-        keyring_backend_kind: CliAuthKeyringBackendKind,
+        keyring_backend_kind: AuthKeyringBackendKind,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
         let client = create_client();
@@ -268,7 +268,7 @@ impl CodexAuth {
         codex_home: &Path,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
-        keyring_backend_kind: CliAuthKeyringBackendKind,
+        keyring_backend_kind: AuthKeyringBackendKind,
     ) -> std::io::Result<Option<Self>> {
         load_auth(
             codex_home,
@@ -491,7 +491,7 @@ impl CodexAuth {
         let storage = create_auth_storage(
             PathBuf::from(format!("dummy-chatgpt-auth-{dummy_auth_id}")),
             AuthCredentialsStoreMode::Ephemeral,
-            CliAuthKeyringBackendKind::default(),
+            AuthKeyringBackendKind::default(),
         );
         Self::Chatgpt(ChatgptAuth { state, storage })
     }
@@ -565,7 +565,7 @@ async fn verified_agent_identity_record(
 pub fn logout(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<bool> {
     let storage = create_auth_storage(
         codex_home.to_path_buf(),
@@ -578,7 +578,7 @@ pub fn logout(
 pub async fn logout_with_revoke(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<bool> {
     AuthManager::new(
         codex_home.to_path_buf(),
@@ -597,7 +597,7 @@ pub fn login_with_api_key(
     codex_home: &Path,
     api_key: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
@@ -621,7 +621,7 @@ pub async fn login_with_access_token(
     access_token: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: Option<&str>,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
     let auth_dot_json = match classify_codex_access_token(access_token) {
         CodexAccessToken::PersonalAccessToken(access_token) => {
@@ -677,7 +677,7 @@ pub fn login_with_chatgpt_auth_tokens(
         codex_home,
         &auth_dot_json,
         AuthCredentialsStoreMode::Ephemeral,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )
 }
 
@@ -686,7 +686,7 @@ pub fn save_auth(
     codex_home: &Path,
     auth: &AuthDotJson,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
     let storage = create_auth_storage(
         codex_home.to_path_buf(),
@@ -704,7 +704,7 @@ pub fn save_auth(
 pub fn load_auth_dot_json(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<Option<AuthDotJson>> {
     let storage = create_auth_storage(
         codex_home.to_path_buf(),
@@ -718,7 +718,7 @@ pub fn load_auth_dot_json(
 pub struct AuthConfig {
     pub codex_home: PathBuf,
     pub auth_credentials_store_mode: AuthCredentialsStoreMode,
-    pub keyring_backend_kind: CliAuthKeyringBackendKind,
+    pub keyring_backend_kind: AuthKeyringBackendKind,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub chatgpt_base_url: Option<String>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
@@ -821,7 +821,7 @@ fn logout_with_message(
     codex_home: &Path,
     message: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
     // External auth tokens live in the ephemeral store, but persistent auth may still exist
     // from earlier logins. Clear both so a forced logout truly removes all active auth.
@@ -840,19 +840,19 @@ fn logout_with_message(
 fn logout_all_stores(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<bool> {
     if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
         return logout(
             codex_home,
             AuthCredentialsStoreMode::Ephemeral,
-            CliAuthKeyringBackendKind::default(),
+            AuthKeyringBackendKind::default(),
         );
     }
     let removed_ephemeral = logout(
         codex_home,
         AuthCredentialsStoreMode::Ephemeral,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     )?;
     let removed_managed = logout(
         codex_home,
@@ -867,7 +867,7 @@ async fn load_auth(
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: Option<&str>,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<Option<CodexAuth>> {
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
@@ -879,7 +879,7 @@ async fn load_auth(
     let ephemeral_storage = create_auth_storage(
         codex_home.to_path_buf(),
         AuthCredentialsStoreMode::Ephemeral,
-        CliAuthKeyringBackendKind::default(),
+        AuthKeyringBackendKind::default(),
     );
     if let Some(auth_dot_json) = ephemeral_storage.load()? {
         let auth = CodexAuth::from_auth_dot_json(
@@ -1419,7 +1419,7 @@ pub struct AuthManager {
     auth_change_tx: watch::Sender<u64>,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: CliAuthKeyringBackendKind,
+    keyring_backend_kind: AuthKeyringBackendKind,
     forced_chatgpt_workspace_id: RwLock<Option<Vec<String>>>,
     chatgpt_base_url: Option<String>,
     refresh_lock: Semaphore,
@@ -1440,7 +1440,7 @@ pub trait AuthManagerConfig {
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode;
 
     /// Returns the backend to use when CLI auth keyring storage is selected.
-    fn cli_auth_keyring_backend_kind(&self) -> CliAuthKeyringBackendKind;
+    fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind;
 
     /// Returns the workspace IDs that ChatGPT auth should be restricted to, if any.
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>>;
@@ -1480,7 +1480,7 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
-        keyring_backend_kind: CliAuthKeyringBackendKind,
+        keyring_backend_kind: AuthKeyringBackendKind,
     ) -> Self {
         let managed_auth = load_auth(
             &codex_home,
@@ -1524,7 +1524,7 @@ impl AuthManager {
             auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-            keyring_backend_kind: CliAuthKeyringBackendKind::default(),
+            keyring_backend_kind: AuthKeyringBackendKind::default(),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -1545,7 +1545,7 @@ impl AuthManager {
             auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-            keyring_backend_kind: CliAuthKeyringBackendKind::default(),
+            keyring_backend_kind: AuthKeyringBackendKind::default(),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -1564,7 +1564,7 @@ impl AuthManager {
             auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-            keyring_backend_kind: CliAuthKeyringBackendKind::default(),
+            keyring_backend_kind: AuthKeyringBackendKind::default(),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -1784,7 +1784,7 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
-        keyring_backend_kind: CliAuthKeyringBackendKind,
+        keyring_backend_kind: AuthKeyringBackendKind,
     ) -> Arc<Self> {
         Arc::new(
             Self::new(
@@ -1808,7 +1808,7 @@ impl AuthManager {
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode(),
             Some(config.chatgpt_base_url()),
-            config.cli_auth_keyring_backend_kind(),
+            config.auth_keyring_backend_kind(),
         )
         .await;
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
@@ -2073,7 +2073,7 @@ impl AuthManager {
             &self.codex_home,
             &auth_dot_json,
             AuthCredentialsStoreMode::Ephemeral,
-            CliAuthKeyringBackendKind::default(),
+            AuthKeyringBackendKind::default(),
         )
         .map_err(RefreshTokenError::Transient)?;
         self.reload().await;
