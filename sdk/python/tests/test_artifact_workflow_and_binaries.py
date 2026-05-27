@@ -158,7 +158,6 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
         "AuthMode",
         "InputModality",
         "ExperimentalFeatureStage",
-        "CommandExecOutputStream",
         "ProcessOutputStream",
     ]
 
@@ -284,19 +283,26 @@ def test_release_metadata_retries_without_invalid_auth(
     assert authorizations == ["Bearer invalid-token", None]
 
 
-def test_runtime_setup_uses_pep440_package_version_and_codex_release_tags() -> None:
-    """The SDK uses PEP 440 package pins and converts only when fetching releases."""
+def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
+    """Runtime package pins remain independent of the SDK beta version."""
     runtime_setup = _load_runtime_setup_module()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
-    assert runtime_setup.PACKAGE_NAME == "openai-codex-cli-bin"
-    assert runtime_setup.pinned_runtime_version() == pyproject["project"]["version"]
-    assert (
-        f"{runtime_setup.PACKAGE_NAME}=={pyproject['project']['version']}"
-        in pyproject["project"]["dependencies"]
-    )
-    assert runtime_setup._normalized_package_version("rust-v0.116.0-alpha.1") == "0.116.0a1"
-    assert runtime_setup._release_tag("0.116.0a1") == "rust-v0.116.0-alpha.1"
+    assert {
+        "package_name": runtime_setup.PACKAGE_NAME,
+        "sdk_version": pyproject["project"]["version"],
+        "runtime_pin": runtime_setup.pinned_runtime_version(),
+        "normalized_release_version": runtime_setup._normalized_package_version(
+            "rust-v0.116.0-alpha.1"
+        ),
+        "release_tag": runtime_setup._release_tag("0.116.0a1"),
+    } == {
+        "package_name": "openai-codex-cli-bin",
+        "sdk_version": "0.1.0b1",
+        "runtime_pin": "0.132.0",
+        "normalized_release_version": "0.116.0a1",
+        "release_tag": "rust-v0.116.0-alpha.1",
+    }
 
 
 @pytest.mark.parametrize(
