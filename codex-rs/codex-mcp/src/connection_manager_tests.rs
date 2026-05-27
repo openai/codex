@@ -602,8 +602,8 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
     assert_eq!(read_user_1[0].callable_name, "one");
     assert_eq!(read_user_2[0].callable_name, "two");
     assert_ne!(
-        cache_context_user_1.cache_path(),
-        cache_context_user_2.cache_path(),
+        cache_context_user_1.tools_cache_path(),
+        cache_context_user_2.tools_cache_path(),
         "each user should get an isolated cache file"
     );
 }
@@ -647,7 +647,7 @@ fn codex_apps_tools_cache_is_ignored_when_schema_version_mismatches() {
         Some("account-one"),
         Some("user-one"),
     );
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).expect("create parent");
     }
@@ -669,7 +669,7 @@ fn codex_apps_tools_cache_is_ignored_when_json_is_invalid() {
         Some("account-one"),
         Some("user-one"),
     );
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).expect("create parent");
     }
@@ -722,7 +722,7 @@ fn startup_cached_codex_apps_tools_loads_without_server_info_cache() {
         Some("account-one"),
         Some("user-one"),
     );
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).expect("create parent");
     }
@@ -767,7 +767,7 @@ fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
         )],
     );
 
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).expect("create parent");
     }

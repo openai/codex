@@ -45,7 +45,7 @@ pub(crate) struct CodexAppsToolsCacheContext {
 }
 
 impl CodexAppsToolsCacheContext {
-    pub(crate) fn cache_path(&self) -> PathBuf {
+    pub(crate) fn tools_cache_path(&self) -> PathBuf {
         self.cache_path_in(CODEX_APPS_TOOLS_CACHE_DIR)
     }
 
@@ -204,7 +204,7 @@ pub(crate) fn read_cached_codex_apps_tools(
 pub(crate) fn load_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> CachedCodexAppsToolsLoad {
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     let bytes = match std::fs::read(cache_path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -226,7 +226,7 @@ pub(crate) fn write_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
     tools: &[ToolInfo],
 ) {
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     if let Some(parent) = cache_path.parent()
         && std::fs::create_dir_all(parent).is_err()
     {
