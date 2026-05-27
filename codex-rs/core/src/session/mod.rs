@@ -72,6 +72,7 @@ use codex_network_proxy::normalize_host;
 use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -3302,6 +3303,7 @@ impl Session {
 pub(crate) fn emit_subagent_session_started(
     analytics_events_client: &AnalyticsEventsClient,
     client_metadata: AppServerClientMetadata,
+    session_id: SessionId,
     thread_id: ThreadId,
     parent_thread_id: Option<ThreadId>,
     thread_config: ThreadConfigSnapshot,
@@ -3320,6 +3322,7 @@ pub(crate) fn emit_subagent_session_started(
         .unwrap_or_default()
         .as_secs();
     analytics_events_client.track_subagent_thread_started(SubAgentThreadStartedInput {
+        session_id: session_id.to_string(),
         thread_id: thread_id.to_string(),
         parent_thread_id: parent_thread_id.map(|thread_id| thread_id.to_string()),
         product_client_id: client_name.clone(),

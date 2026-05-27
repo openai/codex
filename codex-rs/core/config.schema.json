@@ -2834,6 +2834,7 @@
               "append_after_cursor": null,
               "append_line_end": null,
               "cancel_operator": null,
+              "change_to_line_end": null,
               "delete_char": null,
               "delete_to_line_end": null,
               "enter_insert": null,
@@ -3500,6 +3501,7 @@
             "append_after_cursor": null,
             "append_line_end": null,
             "cancel_operator": null,
+            "change_to_line_end": null,
             "delete_char": null,
             "delete_to_line_end": null,
             "enter_insert": null,
@@ -3764,6 +3766,14 @@
             }
           ],
           "description": "Cancel a pending operator and return to normal mode."
+        },
+        "change_to_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Change from cursor to end of line and enter insert mode (`C`)."
         },
         "delete_char": {
           "allOf": [

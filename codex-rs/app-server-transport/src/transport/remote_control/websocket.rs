@@ -1390,14 +1390,13 @@ pub(super) async fn connect_remote_control_websocket(
                     status_publisher.publish_environment_id(/*environment_id*/ None);
                 }
                 tungstenite::Error::Http(response)
-                    if matches!(response.status().as_u16(), 401 | 403) =>
+                    if matches!(response.status().as_u16(), 401 | 403)
+                        && recover_remote_control_auth(auth_recovery, auth_change_rx).await =>
                 {
-                    if recover_remote_control_auth(auth_recovery, auth_change_rx).await {
-                        return Err(io::Error::other(format!(
-                            "remote control websocket auth failed with HTTP {}; retrying after auth recovery",
-                            response.status()
-                        )));
-                    }
+                    return Err(io::Error::other(format!(
+                        "remote control websocket auth failed with HTTP {}; retrying after auth recovery",
+                        response.status()
+                    )));
                 }
                 _ => {}
             }

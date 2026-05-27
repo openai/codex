@@ -306,6 +306,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
     let event =
         wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_steer_event").await?;
     assert_eq!(event["event_params"]["thread_id"], thread.id);
+    assert_eq!(event["event_params"]["session_id"], thread.session_id);
     assert_eq!(event["event_params"]["result"], "accepted");
     assert_eq!(event["event_params"]["num_input_images"], 0);
     assert_eq!(event["event_params"]["expected_turn_id"], turn.id);

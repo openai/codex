@@ -862,6 +862,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
 
     let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
     assert_eq!(event["event_params"]["thread_id"], thread.id);
+    assert_eq!(event["event_params"]["session_id"], thread.session_id);
     assert_eq!(event["event_params"]["turn_id"], turn.id);
     assert_eq!(
         event["event_params"]["app_server_client"]["product_client_id"],

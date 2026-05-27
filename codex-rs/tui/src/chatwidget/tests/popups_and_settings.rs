@@ -2621,6 +2621,7 @@ async fn feedback_upload_consent_popup_snapshot() {
         crate::app_event::FeedbackCategory::Bug,
         chat.current_rollout_path.clone(),
         Some("auto-review-rollout-thread-1.jsonl".to_string()),
+        /*include_windows_sandbox_log*/ true,
         &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
             headline: "Proxy environment variables are set and may affect connectivity."
                 .to_string(),
@@ -2641,6 +2642,7 @@ async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_fi
         crate::app_event::FeedbackCategory::GoodResult,
         chat.current_rollout_path.clone(),
         Some("auto-review-rollout-thread-1.jsonl".to_string()),
+        /*include_windows_sandbox_log*/ false,
         &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
             headline: "Proxy environment variables are set and may affect connectivity."
                 .to_string(),

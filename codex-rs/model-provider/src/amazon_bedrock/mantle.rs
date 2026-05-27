@@ -7,11 +7,10 @@ use super::auth::BedrockAuthMethod;
 use super::auth::resolve_auth_method;
 
 const BEDROCK_MANTLE_SERVICE_NAME: &str = "bedrock-mantle";
-const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 13] = [
+const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 12] = [
     "us-east-2",
     "us-east-1",
     "us-west-2",
-    "us-gov-west-1",
     "ap-southeast-3",
     "ap-south-1",
     "ap-northeast-1",
@@ -72,10 +71,6 @@ mod tests {
         assert_eq!(
             base_url("ap-northeast-1").expect("supported region"),
             "https://bedrock-mantle.ap-northeast-1.api.aws/openai/v1"
-        );
-        assert_eq!(
-            base_url("us-gov-west-1").expect("supported region"),
-            "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1"
         );
     }
 
