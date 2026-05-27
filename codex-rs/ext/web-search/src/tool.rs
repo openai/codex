@@ -100,14 +100,18 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
                 u64::try_from(call.truncation_policy.token_budget()).unwrap_or(u64::MAX),
             ),
         };
-        let _activity = self.thread_id.map(|thread_id| {
+        if let Some(thread_id) = self.thread_id {
             self.event_emitter
-                .start(thread_id, &call.turn_id, &call.call_id, command_action)
-        });
+                .start(thread_id, &call.turn_id, &call.call_id);
+        }
         let response = client
             .search(&request, HeaderMap::new())
             .await
             .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+        if let Some(thread_id) = self.thread_id {
+            self.event_emitter
+                .complete(thread_id, &call.turn_id, &call.call_id, command_action);
+        }
 
         Ok(Box::new(EncryptedSearchOutput::new(
             response.encrypted_output,

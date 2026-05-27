@@ -23,13 +23,7 @@ impl WebSearchEventEmitter {
         Self { sink }
     }
 
-    pub(crate) fn start(
-        &self,
-        thread_id: ThreadId,
-        turn_id: &str,
-        call_id: &str,
-        completed_action: WebSearchAction,
-    ) -> WebSearchActivity {
+    pub(crate) fn start(&self, thread_id: ThreadId, turn_id: &str, call_id: &str) {
         self.sink.emit(Event {
             id: turn_id.to_string(),
             msg: EventMsg::ItemStarted(ItemStartedEvent {
@@ -39,16 +33,9 @@ impl WebSearchEventEmitter {
                 started_at_ms: now_unix_timestamp_ms(),
             }),
         });
-        WebSearchActivity {
-            emitter: self.clone(),
-            thread_id,
-            turn_id: turn_id.to_string(),
-            call_id: call_id.to_string(),
-            completed_action,
-        }
     }
 
-    fn completed(
+    pub(crate) fn complete(
         &self,
         thread_id: ThreadId,
         turn_id: &str,
@@ -64,25 +51,6 @@ impl WebSearchEventEmitter {
                 completed_at_ms: now_unix_timestamp_ms(),
             }),
         });
-    }
-}
-
-pub(crate) struct WebSearchActivity {
-    emitter: WebSearchEventEmitter,
-    thread_id: ThreadId,
-    turn_id: String,
-    call_id: String,
-    completed_action: WebSearchAction,
-}
-
-impl Drop for WebSearchActivity {
-    fn drop(&mut self) {
-        self.emitter.completed(
-            self.thread_id,
-            &self.turn_id,
-            &self.call_id,
-            self.completed_action.clone(),
-        );
     }
 }
 
