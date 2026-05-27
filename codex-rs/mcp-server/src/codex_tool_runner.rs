@@ -44,12 +44,10 @@ pub(crate) fn create_call_tool_result_with_thread_id(
         "threadId": thread_id,
         "content": content_text,
     });
-    CallToolResult {
-        content,
-        is_error,
-        structured_content: Some(structured_content),
-        meta: None,
-    }
+    let mut result = CallToolResult::success(content);
+    result.is_error = is_error;
+    result.structured_content = Some(structured_content);
+    result
 }
 
 /// Run a complete Codex session and stream events back to the client.
@@ -71,12 +69,9 @@ pub async fn run_codex_tool_session(
     } = match thread_manager.start_thread(config.clone()).await {
         Ok(res) => res,
         Err(e) => {
-            let result = CallToolResult {
-                content: vec![Content::text(format!("Failed to start Codex session: {e}"))],
-                is_error: Some(true),
-                structured_content: None,
-                meta: None,
-            };
+            let result = CallToolResult::error(vec![Content::text(format!(
+                "Failed to start Codex session: {e}"
+            ))]);
             outgoing.send_response(id.clone(), result).await;
             return;
         }

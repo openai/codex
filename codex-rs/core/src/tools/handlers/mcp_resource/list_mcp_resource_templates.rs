@@ -82,10 +82,9 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourceTemplatesHandler {
 
         let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
             if let Some(server_name) = server.clone() {
-                let params = cursor.clone().map(|value| PaginatedRequestParams {
-                    meta: None,
-                    cursor: Some(value),
-                });
+                let params = cursor
+                    .clone()
+                    .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
                 let result = session
                     .list_resource_templates(&server_name, params)
                     .await
