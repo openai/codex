@@ -375,8 +375,8 @@ impl NetworkApprovalService {
         let active_turn = session.active_turn.lock().await;
         active_turn
             .as_ref()
-            .and_then(|turn| turn.tasks.first())
-            .map(|(_, task)| Arc::clone(&task.turn_context))
+            .and_then(|turn| turn.task.as_ref())
+            .map(|task| Arc::clone(&task.turn_context))
     }
 
     fn format_network_target(protocol: &str, host: &str, port: u16) -> String {

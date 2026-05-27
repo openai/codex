@@ -160,8 +160,6 @@ use super::chat_composer_history::ChatComposerHistory;
 use super::chat_composer_history::HistoryEntry;
 use super::chat_composer_history::HistoryEntryResponse;
 use super::command_popup::CommandItem;
-use super::command_popup::CommandPopup;
-use super::command_popup::CommandPopupFlags;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterKeyHints;
@@ -197,10 +195,7 @@ use super::skill_popup::SkillPopup;
 use super::slash_commands::BuiltinCommandFlags;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
-use super::slash_commands::find_slash_command;
-use super::slash_commands::has_slash_command_prefix;
 use crate::bottom_pane::paste_burst::FlushResult;
-use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::EditorKeymap;
 use crate::keymap::RuntimeKeymap;
@@ -222,6 +217,7 @@ mod draft_state;
 mod footer_state;
 mod history_search;
 mod popup_state;
+mod slash_input;
 
 use self::attachment_state::AttachmentState;
 use self::draft_state::ComposerMentionBinding;
@@ -230,6 +226,9 @@ use self::footer_state::FooterState;
 use self::history_search::HistorySearchSession;
 use self::popup_state::ActivePopup;
 use self::popup_state::PopupState;
+use self::slash_input::SlashInput;
+use self::slash_input::SlashValidation;
+use self::slash_input::SubmissionValidation;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
@@ -411,12 +410,6 @@ pub(crate) struct ComposerDraftSnapshot {
     pub(crate) pending_pastes: Vec<(String, String)>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SlashValidation {
-    Immediate,
-    Deferred,
-}
-
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 /// Builds the one-line nudge that replaces the ambient footer without adding layout height.
@@ -433,6 +426,15 @@ fn plan_mode_nudge_line() -> Line<'static> {
 }
 
 impl ChatComposer {
+    fn slash_input(&self) -> SlashInput<'_> {
+        SlashInput::new(
+            self.slash_commands_enabled(),
+            self.draft.is_bash_mode,
+            self.builtin_command_flags(),
+            &self.service_tier_commands,
+        )
+    }
+
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled,
@@ -1653,145 +1655,6 @@ impl ChatComposer {
         self.history_search.is_some() || self.popups.active()
     }
 
-    /// Handle key event when the slash-command popup is visible.
-    fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if self.handle_shortcut_overlay_key(&key_event) {
-            return (InputResult::None, true);
-        }
-        if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer.mode, self.is_task_running);
-            if next_mode != self.footer.mode {
-                self.footer.mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
-            self.footer.mode = reset_mode_after_activity(self.footer.mode);
-        }
-        let ActivePopup::Command(popup) = &mut self.popups.active else {
-            unreachable!();
-        };
-
-        match key_event {
-            KeyEvent {
-                code: KeyCode::Up, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                popup.move_up();
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                popup.move_down();
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
-                // Dismiss the slash popup; keep the current input untouched.
-                self.popups.active = ActivePopup::None;
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            } => {
-                // Ensure popup filtering/selection reflects the latest composer text
-                // before applying completion.
-                let first_line = self.draft.textarea.text().lines().next().unwrap_or("");
-                popup.on_composer_text_change(first_line.to_string());
-                if let Some(selected_cmd) = popup.selected_item() {
-                    let selected_command_text = format!("/{}", selected_cmd.command());
-                    if let CommandItem::Builtin(cmd) = selected_cmd
-                        && cmd == SlashCommand::Skills
-                    {
-                        self.stage_selected_slash_command_history(&CommandItem::Builtin(cmd));
-                        self.draft.textarea.set_text_clearing_elements("");
-                        self.draft.is_bash_mode = false;
-                        return (InputResult::Command(cmd), true);
-                    }
-
-                    let starts_with_cmd =
-                        first_line.trim_start().starts_with(&selected_command_text);
-                    if !starts_with_cmd {
-                        self.draft
-                            .textarea
-                            .set_text_clearing_elements(&format!("{selected_command_text} "));
-                        if !self.draft.textarea.text().is_empty() {
-                            self.draft
-                                .textarea
-                                .set_cursor(self.draft.textarea.text().len());
-                        }
-                        return (InputResult::None, true);
-                    }
-                }
-                if self.is_task_running {
-                    return self.handle_submission(/*should_queue*/ true);
-                }
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Char('/'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                // Treat "/" as accepting the highlighted command as text completion
-                // while the slash-command popup is active.
-                let first_line = self.draft.textarea.text().lines().next().unwrap_or("");
-                popup.on_composer_text_change(first_line.to_string());
-                if let Some(selected_cmd) = popup.selected_item() {
-                    let selected_command_text = format!("/{}", selected_cmd.command());
-                    let starts_with_cmd =
-                        first_line.trim_start().starts_with(&selected_command_text);
-                    if !starts_with_cmd {
-                        self.draft
-                            .textarea
-                            .set_text_clearing_elements(&format!("{selected_command_text} "));
-                        self.draft.is_bash_mode = false;
-                    }
-                    if !self.draft.textarea.text().is_empty() {
-                        self.draft
-                            .textarea
-                            .set_cursor(self.draft.textarea.text().len());
-                    }
-                }
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                if let Some(sel) = popup.selected_item() {
-                    self.stage_selected_slash_command_history(&sel);
-                    self.draft.textarea.set_text_clearing_elements("");
-                    self.draft.is_bash_mode = false;
-                    return (
-                        match sel {
-                            CommandItem::Builtin(cmd) => InputResult::Command(cmd),
-                            CommandItem::ServiceTier(command) => {
-                                InputResult::ServiceTierCommand(command)
-                            }
-                        },
-                        true,
-                    );
-                }
-                // Fallback to default newline handling if no command selected.
-                self.handle_key_event_without_popup(key_event)
-            }
-            input => self.handle_input_basic(input),
-        }
-    }
-
     #[inline]
     fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
         let mut p = pos.min(text.len());
@@ -2721,37 +2584,27 @@ impl ChatComposer {
         text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
         if slash_validation == SlashValidation::Immediate
-            && self.slash_commands_enabled()
-            && let Some((name, _rest, _rest_offset)) = parse_slash_name(&text)
+            && let SubmissionValidation::UnknownCommand(name) = self
+                .slash_input()
+                .validate_submission(&text, input_starts_with_space)
         {
-            let treat_as_plain_text = input_starts_with_space || name.contains('/');
-            if !treat_as_plain_text {
-                let is_known = find_slash_command(
-                    name,
-                    self.builtin_command_flags(),
-                    &self.service_tier_commands,
-                )
-                .is_some();
-                if !is_known {
-                    let message = format!(
-                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                    );
-                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(message, /*hint*/ None),
-                    )));
-                    self.set_text_content_with_mention_bindings(
-                        original_input.clone(),
-                        original_text_elements,
-                        original_local_image_paths,
-                        original_mention_bindings,
-                    );
-                    self.draft
-                        .pending_pastes
-                        .clone_from(&original_pending_pastes);
-                    self.draft.textarea.set_cursor(original_input.len());
-                    return None;
-                }
-            }
+            let message = format!(
+                r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+            );
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(message, /*hint*/ None),
+            )));
+            self.set_text_content_with_mention_bindings(
+                original_input.clone(),
+                original_text_elements,
+                original_local_image_paths,
+                original_mention_bindings,
+            );
+            self.draft
+                .pending_pastes
+                .clone_from(&original_pending_pastes);
+            self.draft.textarea.set_cursor(original_input.len());
+            return None;
         }
 
         let actual_chars = text.chars().count();
@@ -2823,8 +2676,7 @@ impl ChatComposer {
                 self.handle_paste(pasted);
             }
             let raw_text = self.draft.textarea.text();
-            let defer_slash_validation =
-                self.should_parse_as_slash_on_dequeue_from_raw_text(raw_text);
+            let defer_slash_validation = self.slash_input().should_parse_on_dequeue(raw_text);
             if let Some((text, text_elements)) = self.prepare_submission_text_with_options(
                 /*record_history*/ true,
                 if defer_slash_validation {
@@ -2833,7 +2685,7 @@ impl ChatComposer {
                     SlashValidation::Immediate
                 },
             ) {
-                let action = self.queued_input_action(&text, defer_slash_validation);
+                let action = slash_input::queued_input_action(&text, defer_slash_validation);
                 return (
                     InputResult::Queued {
                         text,
@@ -2940,25 +2792,9 @@ impl ChatComposer {
     /// Check if the first line is a bare slash command (no args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
-        if !self.slash_commands_enabled() || self.draft.is_bash_mode {
-            return None;
-        }
-        let text = self.draft.textarea.text();
-        let first_line = text.lines().next().unwrap_or("");
-        let (name, rest, _rest_offset) = parse_slash_name(first_line)?;
-        if !rest.is_empty() {
-            return None;
-        }
-        let command = find_slash_command(
-            name,
-            self.builtin_command_flags(),
-            &self.service_tier_commands,
-        )?;
-        if command.supports_inline_args()
-            && parse_slash_name(text).is_some_and(|(_, full_rest, _)| !full_rest.is_empty())
-        {
-            return None;
-        }
+        let command = self
+            .slash_input()
+            .bare_command(self.draft.textarea.text())?;
         if self.reject_slash_command_if_unavailable(&command) {
             self.stage_slash_command_history(&command);
             self.record_pending_slash_command_history();
@@ -2976,28 +2812,9 @@ impl ChatComposer {
     /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_slash_command_with_args(&mut self) -> Option<InputResult> {
-        if !self.slash_commands_enabled() || self.draft.is_bash_mode {
-            return None;
-        }
         let text = self.draft.textarea.text().to_string();
-        if text.starts_with(' ') {
-            return None;
-        }
-
-        let (name, rest, rest_offset) = parse_slash_name(&text)?;
-        if rest.is_empty() || name.contains('/') {
-            return None;
-        }
-
-        let command = find_slash_command(
-            name,
-            self.builtin_command_flags(),
-            &self.service_tier_commands,
-        )?;
-
-        if !command.supports_inline_args() {
-            return None;
-        }
+        let inline_command = self.slash_input().inline_command(&text)?;
+        let command = inline_command.command;
         if self.reject_slash_command_if_unavailable(&command) {
             self.stage_slash_command_history(&command);
             self.record_pending_slash_command_history();
@@ -3006,13 +2823,13 @@ impl ChatComposer {
 
         self.stage_slash_command_history(&command);
 
-        let mut args_elements = Self::slash_command_args_elements(
-            rest,
-            rest_offset,
+        let mut args_elements = slash_input::args_elements(
+            inline_command.rest,
+            inline_command.rest_offset,
             &self.draft.textarea.text_elements(),
         );
-        let trimmed_rest = rest.trim();
-        args_elements = Self::trim_text_elements(rest, trimmed_rest, args_elements);
+        let trimmed_rest = inline_command.rest.trim();
+        args_elements = Self::trim_text_elements(inline_command.rest, trimmed_rest, args_elements);
         let SlashCommandItem::Builtin(cmd) = command else {
             return None;
         };
@@ -3038,12 +2855,9 @@ impl ChatComposer {
         record_history: bool,
     ) -> Option<(String, Vec<TextElement>)> {
         let (prepared_text, prepared_elements) = self.prepare_submission_text(record_history)?;
-        let (_, prepared_rest, prepared_rest_offset) = parse_slash_name(&prepared_text)?;
-        let mut args_elements = Self::slash_command_args_elements(
-            prepared_rest,
-            prepared_rest_offset,
-            &prepared_elements,
-        );
+        let (prepared_rest, prepared_rest_offset) = slash_input::prepared_args(&prepared_text)?;
+        let mut args_elements =
+            slash_input::args_elements(prepared_rest, prepared_rest_offset, &prepared_elements);
         let trimmed_rest = prepared_rest.trim();
         args_elements = Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
         Some((trimmed_rest.to_string(), args_elements))
@@ -3061,24 +2875,6 @@ impl ChatComposer {
             history_cell::new_error_event(message),
         )));
         true
-    }
-
-    fn should_parse_as_slash_on_dequeue_from_raw_text(&self, text: &str) -> bool {
-        self.slash_commands_enabled() && !text.starts_with(' ') && text.trim().starts_with('/')
-    }
-
-    fn queued_input_action(
-        &self,
-        prepared_text: &str,
-        defer_slash_validation: bool,
-    ) -> QueuedInputAction {
-        if defer_slash_validation && prepared_text.starts_with('/') {
-            QueuedInputAction::ParseSlash
-        } else if prepared_text.starts_with('!') {
-            QueuedInputAction::RunShell
-        } else {
-            QueuedInputAction::Plain
-        }
     }
 
     /// Stage the current slash-command text for later local recall.
@@ -3118,34 +2914,6 @@ impl ChatComposer {
             mention_bindings: self.snapshot_mention_bindings(),
             pending_pastes: self.draft.pending_pastes.clone(),
         });
-    }
-
-    /// Translate full-text element ranges into command-argument ranges.
-    ///
-    /// `rest_offset` is the byte offset where `rest` begins in the full text.
-    fn slash_command_args_elements(
-        rest: &str,
-        rest_offset: usize,
-        text_elements: &[TextElement],
-    ) -> Vec<TextElement> {
-        if rest.is_empty() || text_elements.is_empty() {
-            return Vec::new();
-        }
-        text_elements
-            .iter()
-            .filter_map(|elem| {
-                if elem.byte_range.end <= rest_offset {
-                    return None;
-                }
-                let start = elem.byte_range.start.saturating_sub(rest_offset);
-                let mut end = elem.byte_range.end.saturating_sub(rest_offset);
-                if start >= rest.len() {
-                    return None;
-                }
-                end = end.min(rest.len());
-                (start < end).then_some(elem.map_range(|_| ByteRange { start, end }))
-            })
-            .collect()
     }
 
     fn handle_remote_image_selection_key(
@@ -3715,123 +3483,6 @@ impl ChatComposer {
         }
     }
 
-    /// Keep slash command elements aligned with the current first line.
-    fn sync_slash_command_elements(&mut self) {
-        if !self.slash_commands_enabled() {
-            return;
-        }
-        let text = self.draft.textarea.text();
-        let first_line_end = text.find('\n').unwrap_or(text.len());
-        let first_line = &text[..first_line_end];
-        let desired_range = self.slash_command_element_range(first_line);
-        // Slash commands are only valid at byte 0 of the first line.
-        // Any slash-shaped element not matching the current desired prefix is stale.
-        let mut has_desired = false;
-        let mut stale_ranges = Vec::new();
-        for elem in self.draft.textarea.text_elements() {
-            let Some(payload) = elem.placeholder(text) else {
-                continue;
-            };
-            if payload.strip_prefix('/').is_none() {
-                continue;
-            }
-            let range = elem.byte_range.start..elem.byte_range.end;
-            if desired_range.as_ref() == Some(&range) {
-                has_desired = true;
-            } else {
-                stale_ranges.push(range);
-            }
-        }
-
-        for range in stale_ranges {
-            self.draft.textarea.remove_element_range(range);
-        }
-
-        if let Some(range) = desired_range
-            && !has_desired
-        {
-            self.draft.textarea.add_element_range(range);
-        }
-    }
-
-    fn slash_command_element_range(&self, first_line: &str) -> Option<Range<usize>> {
-        if self.draft.is_bash_mode {
-            return None;
-        }
-        let (name, _rest, _rest_offset) = parse_slash_name(first_line)?;
-        if name.contains('/') {
-            return None;
-        }
-        let element_end = 1 + name.len();
-        let has_space_after = first_line
-            .get(element_end..)
-            .and_then(|tail| tail.chars().next())
-            .is_some_and(char::is_whitespace);
-        if !has_space_after {
-            return None;
-        }
-        if self.is_known_slash_name(name) {
-            Some(0..element_end)
-        } else {
-            None
-        }
-    }
-
-    fn is_known_slash_name(&self, name: &str) -> bool {
-        find_slash_command(
-            name,
-            self.builtin_command_flags(),
-            &self.service_tier_commands,
-        )
-        .is_some()
-    }
-
-    /// If the cursor is currently within a slash command on the first line,
-    /// extract the command name and the rest of the line after it.
-    /// Returns None if the cursor is outside a slash command.
-    fn slash_command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)> {
-        if !first_line.starts_with('/') {
-            return None;
-        }
-
-        let name_start = 1usize;
-        let name_end = first_line[name_start..]
-            .find(char::is_whitespace)
-            .map(|idx| name_start + idx)
-            .unwrap_or_else(|| first_line.len());
-
-        if cursor > name_end {
-            return None;
-        }
-
-        let name = &first_line[name_start..name_end];
-        let rest_start = first_line[name_end..]
-            .find(|c: char| !c.is_whitespace())
-            .map(|idx| name_end + idx)
-            .unwrap_or(name_end);
-        let rest = &first_line[rest_start..];
-
-        Some((name, rest))
-    }
-
-    /// Heuristic for whether the typed slash command looks like a valid
-    /// prefix for any known built-in command.
-    /// Empty names only count when there is no extra content after the '/'.
-    fn looks_like_slash_prefix(&self, name: &str, rest_after_name: &str) -> bool {
-        if !self.slash_commands_enabled() {
-            return false;
-        }
-        if name.is_empty() {
-            return rest_after_name.is_empty();
-        }
-
-        has_slash_command_prefix(
-            name,
-            self.builtin_command_flags(),
-            &self.service_tier_commands,
-        )
-    }
-
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -3850,8 +3501,9 @@ impl ChatComposer {
         let caret_on_first_line = cursor <= first_line_end;
 
         let is_editing_slash_command_name = caret_on_first_line
-            && Self::slash_command_under_cursor(first_line, cursor)
-                .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
+            && self
+                .slash_input()
+                .is_editing_command_name(first_line, cursor);
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -3872,30 +3524,7 @@ impl ChatComposer {
             }
             _ => {
                 if is_editing_slash_command_name {
-                    let collaboration_modes_enabled = self.collaboration_modes_enabled;
-                    let connectors_enabled = self.connectors_enabled;
-                    let plugins_command_enabled = self.plugins_command_enabled;
-                    let service_tier_commands_enabled = self.service_tier_commands_enabled;
-                    let goal_command_enabled = self.goal_command_enabled;
-                    let personality_command_enabled = self.personality_command_enabled;
-                    let realtime_conversation_enabled = self.realtime_conversation_enabled;
-                    let audio_device_selection_enabled = self.audio_device_selection_enabled;
-                    let mut command_popup = CommandPopup::new(
-                        CommandPopupFlags {
-                            collaboration_modes_enabled,
-                            connectors_enabled,
-                            plugins_command_enabled,
-                            service_tier_commands_enabled,
-                            goal_command_enabled,
-                            personality_command_enabled,
-                            realtime_conversation_enabled,
-                            audio_device_selection_enabled,
-                            windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
-                            side_conversation_active: self.side_conversation_active,
-                        },
-                        self.service_tier_commands.clone(),
-                    );
-                    command_popup.on_composer_text_change(first_line.to_string());
+                    let command_popup = self.slash_input().command_popup(first_line);
                     self.popups.active = ActivePopup::Command(command_popup);
                 }
             }

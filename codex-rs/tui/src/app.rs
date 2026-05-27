@@ -754,6 +754,10 @@ impl App {
         let bootstrap_ms = bootstrap_started_at.elapsed().as_millis();
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
+        let remote_connection = crate::status::remote_connection::remote_connection_status_value(
+            &app_server_target,
+            app_server.server_version(),
+        );
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
             &mut config,
@@ -942,6 +946,7 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        chat_widget.remote_connection = remote_connection;
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
         if let Some(message) = external_agent_config_migration_message {
             chat_widget.add_info_message(message, /*hint*/ None);

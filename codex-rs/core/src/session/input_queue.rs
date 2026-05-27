@@ -103,8 +103,9 @@ impl InputQueue {
         let active = active_turn.lock().await;
         active.as_ref().and_then(|active_turn| {
             active_turn
-                .tasks
-                .contains_key(sub_id)
+                .task
+                .as_ref()
+                .is_some_and(|task| task.turn_context.sub_id == sub_id)
                 .then(|| Arc::clone(&active_turn.turn_state))
         })
     }
@@ -155,13 +156,13 @@ impl InputQueue {
             .accept_mailbox_delivery_for_current_turn();
     }
 
-    pub(super) async fn push_pending_input_and_accept_mailbox_delivery_for_turn_state(
+    pub(super) async fn extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
-        input: TurnInput,
+        input: Vec<TurnInput>,
     ) {
         let mut turn_state = turn_state.lock().await;
-        turn_state.pending_input.items.push(input);
+        turn_state.pending_input.items.extend(input);
         turn_state.accept_mailbox_delivery_for_current_turn();
     }
 

@@ -14,6 +14,10 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
+use codex_core::config::set_project_trust_level;
+use codex_protocol::config_types::TrustLevel;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::JsonObject;
@@ -70,6 +74,7 @@ url = "{mcp_server_url}/mcp"
             cursor: None,
             limit: None,
             detail: None,
+            thread_id: None,
         })
         .await?;
     let response = timeout(
@@ -93,6 +98,98 @@ url = "{mcp_server_url}/mcp"
             .get("look-up.raw")
             .map(|tool| tool.name.as_str()),
         Some("look-up.raw")
+    );
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server("project_lookup").await?;
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    std::fs::create_dir_all(workspace.path().join(".git"))?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        format!(
+            r#"
+[mcp_servers.project-server]
+url = "{mcp_server_url}/mcp"
+"#
+        ),
+    )?;
+
+    let threadless_request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+            thread_id: None,
+        })
+        .await?;
+    let threadless_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(threadless_request_id)),
+    )
+    .await??;
+    let threadless_response: ListMcpServerStatusResponse = to_response(threadless_response)?;
+    assert_eq!(threadless_response.data, Vec::new());
+
+    let thread_request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+            thread_id: Some(thread.id),
+        })
+        .await?;
+    let thread_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_request_id)),
+    )
+    .await??;
+    let thread_response: ListMcpServerStatusResponse = to_response(thread_response)?;
+
+    assert_eq!(thread_response.next_cursor, None);
+    assert_eq!(thread_response.data.len(), 1);
+    let status = &thread_response.data[0];
+    assert_eq!(status.name, "project-server");
+    assert_eq!(
+        status.tools.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["project_lookup".to_string()])
     );
 
     mcp_server_handle.abort();
@@ -241,6 +338,7 @@ url = "{mcp_server_url}/mcp"
             cursor: None,
             limit: None,
             detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+            thread_id: None,
         })
         .await?;
     let response = timeout(
@@ -305,6 +403,7 @@ url = "{underscore_server_url}/mcp"
             cursor: None,
             limit: None,
             detail: None,
+            thread_id: None,
         })
         .await?;
     let response = timeout(

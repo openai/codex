@@ -262,10 +262,12 @@ impl AgentControl {
                 .await?
             }
             (Some(session_source), None) => {
+                let forked_from_thread_id = thread_spawn_parent_thread_id(&session_source);
                 Box::pin(state.spawn_new_thread_with_source(
                     config.clone(),
                     self.clone(),
                     session_source,
+                    forked_from_thread_id,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*persist_extended_history*/ false,
                     /*metrics_service_name*/ None,
@@ -315,6 +317,7 @@ impl AgentControl {
                     .services
                     .analytics_events_client,
                 client_metadata,
+                new_thread.thread.codex.session.session_id(),
                 new_thread.thread_id,
                 /*parent_thread_id*/ None,
                 thread_config,
@@ -487,6 +490,7 @@ impl AgentControl {
                 self.clone(),
                 session_source,
                 /*thread_source*/ Some(ThreadSource::Subagent),
+                /*forked_from_thread_id*/ Some(parent_thread_id),
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,

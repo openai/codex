@@ -821,27 +821,6 @@ impl ConfigToml {
 
         None
     }
-
-    pub fn get_config_profile(
-        &self,
-        override_profile: Option<String>,
-    ) -> Result<ConfigProfile, std::io::Error> {
-        let profile = override_profile.or_else(|| self.profile.clone());
-
-        match profile {
-            Some(key) => {
-                if let Some(profile) = self.profiles.get(key.as_str()) {
-                    return Ok(profile.clone());
-                }
-
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("config profile `{key}` not found"),
-                ))
-            }
-            None => Ok(ConfigProfile::default()),
-        }
-    }
 }
 
 /// Canonicalize the path and convert it to a string to be used as a key in the

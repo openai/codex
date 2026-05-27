@@ -157,7 +157,8 @@ pub(super) fn store_callback(
         }
     };
     if let Some(state) = scope.get_slot_mut::<RuntimeState>() {
-        state.stored_values.insert(key, serialized);
+        state.stored_values.insert(key.clone(), serialized.clone());
+        state.stored_value_writes.insert(key, serialized);
     }
 }
 

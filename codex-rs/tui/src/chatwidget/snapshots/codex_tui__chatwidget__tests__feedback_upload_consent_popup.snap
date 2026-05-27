@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2562
 expression: popup
 ---
   Upload logs?
@@ -7,6 +8,7 @@ expression: popup
   The following files will be sent:
     • codex-logs.log
     • codex-doctor-report.json
+    • windows-sandbox.log
     • auto-review-rollout-thread-1.jsonl
     • codex-connectivity-diagnostics.txt
 
