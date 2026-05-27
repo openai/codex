@@ -18,4 +18,4 @@ expression: "render_lines(&view, 72)"
   [ ] pull-request-number   Open pull request number for the current …  
                                                                         
   gpt-5-codex · ~/codex-rs · jif/statusline-preview                     
-  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to

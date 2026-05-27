@@ -2,6 +2,8 @@ use super::*;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+// The override is intentionally available only in debug builds, matching the login path below.
+#[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 
 enum ActiveLogin {
@@ -168,7 +170,7 @@ impl AccountRequestProcessor {
         {
             Ok(config) => {
                 let refresh_thread_manager = Arc::clone(thread_manager);
-                let refresh_config = config.clone();
+                let refresh_config_manager = config_manager.clone();
                 thread_manager
                     .plugins_manager()
                     .maybe_start_remote_installed_plugins_cache_refresh(
@@ -177,7 +179,7 @@ impl AccountRequestProcessor {
                         Some(Arc::new(move || {
                             Self::spawn_effective_plugins_changed_task(
                                 Arc::clone(&refresh_thread_manager),
-                                refresh_config.clone(),
+                                refresh_config_manager.clone(),
                             );
                         })),
                     );
@@ -190,19 +192,17 @@ impl AccountRequestProcessor {
         }
     }
 
-    fn spawn_effective_plugins_changed_task(thread_manager: Arc<ThreadManager>, config: Config) {
+    fn spawn_effective_plugins_changed_task(
+        thread_manager: Arc<ThreadManager>,
+        config_manager: ConfigManager,
+    ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_manager().clear_cache();
             if thread_manager.list_thread_ids().await.is_empty() {
                 return;
             }
-            if let Err(err) =
-                McpRequestProcessor::queue_mcp_server_refresh_for_config(&thread_manager, &config)
-                    .await
-            {
-                warn!("failed to queue MCP refresh after effective plugins changed: {err:?}");
-            }
+            crate::mcp_refresh::queue_best_effort_refresh(&thread_manager, &config_manager).await;
         });
     }
 
@@ -570,11 +570,11 @@ impl AccountRequestProcessor {
             }
         }
 
-        if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
-            && chatgpt_account_id != expected_workspace
+        if let Some(expected_workspaces) = self.config.forced_chatgpt_workspace_id.as_deref()
+            && !expected_workspaces.contains(&chatgpt_account_id)
         {
             return Err(invalid_request(format!(
-                "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
+                "External auth must use one of workspace(s) {expected_workspaces:?}, but received {chatgpt_account_id:?}.",
             )));
         }
 

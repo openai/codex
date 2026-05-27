@@ -71,6 +71,10 @@ fn explicit_non_original_detail_is_preserved() {
     let model_info = model_info();
 
     assert_eq!(
+        normalize_output_image_detail(&model_info, Some(ImageDetail::Auto)),
+        Some(ImageDetail::Auto)
+    );
+    assert_eq!(
         normalize_output_image_detail(&model_info, Some(ImageDetail::Low)),
         Some(ImageDetail::Low)
     );

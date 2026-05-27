@@ -1,7 +1,10 @@
 use super::*;
 use crate::agent::status::is_final;
+use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
+use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::error::CodexErr;
+use codex_tools::ToolSpec;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -13,24 +16,31 @@ use tokio::time::Instant;
 
 use tokio::time::timeout_at;
 
-pub(crate) struct Handler;
+#[derive(Default)]
+pub(crate) struct Handler {
+    options: WaitAgentTimeoutOptions,
+}
 
-impl ToolHandler for Handler {
-    type Output = WaitAgentResult;
+impl Handler {
+    pub(crate) fn new(options: WaitAgentTimeoutOptions) -> Self {
+        Self { options }
+    }
+}
 
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("wait_agent")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "wait_agent")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        create_wait_agent_tool_v1(self.options)
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -188,7 +198,20 @@ impl ToolHandler for Handler {
             )
             .await;
 
-        Ok(result)
+        Ok(boxed_tool_output(result))
+    }
+}
+
+impl CoreToolRuntime for Handler {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "wait_agent wait agent subagent status final result complete timeout targets",
+            self.spec(),
+        )
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

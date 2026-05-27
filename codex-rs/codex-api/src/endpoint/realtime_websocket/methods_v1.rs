@@ -21,7 +21,7 @@ pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutbound
             r#type: ConversationItemType::Message,
             role: ConversationRole::User,
             content: vec![ConversationItemContent {
-                r#type: ConversationContentType::Text,
+                r#type: ConversationContentType::InputText,
                 text,
             }],
         }),

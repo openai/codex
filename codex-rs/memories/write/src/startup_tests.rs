@@ -190,7 +190,8 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
-    db.enqueue_global_consolidation(/*input_watermark*/ 1)
+    db.memories()
+        .enqueue_global_consolidation(/*input_watermark*/ 1)
         .await?;
 
     let now = chrono::Utc::now();
@@ -242,30 +243,26 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
     let test = build_test_codex(&server, home).await?;
     assert_eq!(test.config.service_tier, None);
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: Some(Some(ServiceTier::Fast)),
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
+            service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
+            ..Default::default()
+        },
+    )
+    .await?;
 
-    let config_snapshot = wait_for_service_tier(&test, Some(ServiceTier::Fast)).await?;
-    assert_eq!(config_snapshot.service_tier, Some(ServiceTier::Fast));
+    let config_snapshot =
+        wait_for_service_tier(&test, Some(ServiceTier::Fast.request_value().to_string())).await?;
+    assert_eq!(
+        config_snapshot.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
 
     let context = crate::runtime::MemoryStartupContext::new(
         Arc::clone(&test.thread_manager),
         test.thread_manager.auth_manager(),
-        test.session_configured.session_id,
+        test.session_configured.thread_id,
         Arc::clone(&test.codex),
         &test.config,
         config_snapshot.session_source.clone(),
@@ -277,7 +274,10 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
             ReasoningEffort::Low,
         )
         .await;
-    assert_eq!(request_context.service_tier, Some(ServiceTier::Fast));
+    assert_eq!(
+        request_context.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
 
     shutdown_test_codex(&test).await?;
     Ok(())
@@ -317,7 +317,7 @@ async fn trigger_memories_startup(test: &TestCodex) {
     start_memories_startup_task(
         Arc::clone(&test.thread_manager),
         test.thread_manager.auth_manager(),
-        test.session_configured.session_id,
+        test.session_configured.thread_id,
         Arc::clone(&test.codex),
         Arc::new(config),
         &config_snapshot.session_source,
@@ -394,7 +394,7 @@ async fn wait_for_request(mock: &ResponseMock, expected_count: usize) -> Vec<Res
 
 async fn wait_for_service_tier(
     test: &TestCodex,
-    expected_service_tier: Option<ServiceTier>,
+    expected_service_tier: Option<String>,
 ) -> anyhow::Result<codex_core::ThreadConfigSnapshot> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -446,6 +446,7 @@ async fn seed_stage1_output_for_existing_thread(
 ) -> anyhow::Result<()> {
     let owner = ThreadId::new();
     let claim = db
+        .memories()
         .try_claim_stage1_job(
             thread_id, owner, updated_at, /*lease_seconds*/ 3_600,
             /*max_running_jobs*/ 64,
@@ -457,15 +458,16 @@ async fn seed_stage1_output_for_existing_thread(
     };
 
     assert!(
-        db.mark_stage1_job_succeeded(
-            thread_id,
-            &ownership_token,
-            updated_at,
-            raw_memory,
-            rollout_summary,
-            rollout_slug,
-        )
-        .await?,
+        db.memories()
+            .mark_stage1_job_succeeded(
+                thread_id,
+                &ownership_token,
+                updated_at,
+                raw_memory,
+                rollout_summary,
+                rollout_slug,
+            )
+            .await?,
         "stage-1 success should enqueue global consolidation"
     );
 

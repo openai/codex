@@ -11,11 +11,11 @@ use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
-use codex_utils_absolute_path::test_support::test_path_buf;
 use codex_utils_plugins::PluginSkillRoot;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -55,6 +55,21 @@ fn write_plugin_skill(
     skill_path
 }
 
+fn plugin_skill_root_for_skill_path(skill_path: &Path, plugin_id: &str) -> PluginSkillRoot {
+    let skills_root = skill_path
+        .parent()
+        .and_then(Path::parent)
+        .expect("plugin skill should live under a skills root");
+    let plugin_root = skills_root
+        .parent()
+        .expect("plugin skills root should live under a plugin root");
+    PluginSkillRoot {
+        path: skills_root.abs(),
+        plugin_id: plugin_id.to_string(),
+        plugin_root: plugin_root.abs(),
+    }
+}
+
 fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
     SkillMetadata {
         name: name.to_string(),
@@ -88,7 +103,10 @@ fn user_config_layer(codex_home: &TempDir, config_toml: &str) -> ConfigLayerEntr
     let config_path = AbsolutePathBuf::try_from(codex_home.path().join(CONFIG_TOML_FILE))
         .expect("user config path should be absolute");
     ConfigLayerEntry::new(
-        ConfigLayerSource::User { file: config_path },
+        ConfigLayerSource::User {
+            file: config_path,
+            profile: None,
+        },
         toml::from_str(config_toml).expect("user layer toml"),
     )
 }
@@ -144,18 +162,11 @@ async fn skills_for_config_with_stack(
     skills_manager: &SkillsManager,
     cwd: &TempDir,
     config_layer_stack: &ConfigLayerStack,
-    effective_skill_roots: &[AbsolutePathBuf],
+    effective_skill_roots: &[PluginSkillRoot],
 ) -> SkillLoadOutcome {
     let skills_input = SkillsLoadInput::new(
         cwd.path().abs(),
-        effective_skill_roots
-            .iter()
-            .cloned()
-            .map(|path| PluginSkillRoot {
-                path,
-                plugin_id: "test-plugin@test".to_string(),
-            })
-            .collect(),
+        effective_skill_roots.to_vec(),
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(config_layer_stack),
     );
@@ -226,11 +237,7 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         &codex_home,
         &name_toggle_config("sample:sample-search", /*enabled*/ false),
     );
-    let plugin_skill_root = skill_path
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("plugin skill should live under a skills root")
-        .abs();
+    let plugin_skill_root = plugin_skill_root_for_skill_path(&skill_path, "test-plugin@test");
     let skills_manager = SkillsManager::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
@@ -263,75 +270,13 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
 }
 
 #[tokio::test]
-async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
+async fn skills_for_cwd_loads_repo_and_user_roots_with_local_fs() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
-    let extra_root = tempfile::tempdir().expect("tempdir");
-    let config_layer_stack = config_stack(&codex_home, "");
-    let skills_manager = SkillsManager::new(
-        codex_home.path().abs(),
-        /*bundled_skills_enabled*/ true,
-    );
-    let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
-
-    write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
-    let extra_root_path = extra_root.path().abs();
-    let base_input = SkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
-    let outcome_with_extra = skills_manager
-        .skills_for_cwd_with_extra_user_roots(
-            &base_input,
-            /*force_reload*/ true,
-            std::slice::from_ref(&extra_root_path),
-            Some(Arc::clone(&LOCAL_FS)),
-        )
-        .await;
-    assert!(
-        outcome_with_extra
-            .skills
-            .iter()
-            .any(|skill| skill.name == "extra-skill")
-    );
-    assert!(
-        outcome_with_extra
-            .skills
-            .iter()
-            .any(|skill| skill.scope == SkillScope::System)
-    );
-
-    // The cwd-only API returns the current cached entry for this cwd, even when that entry
-    // was produced with extra roots.
-    let base_input = SkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
-    let outcome_without_extra = skills_manager
-        .skills_for_cwd(
-            &base_input,
-            /*force_reload*/ false,
-            Some(Arc::clone(&LOCAL_FS)),
-        )
-        .await;
-    assert_eq!(outcome_without_extra.skills, outcome_with_extra.skills);
-    assert_eq!(outcome_without_extra.errors, outcome_with_extra.errors);
-}
-
-#[tokio::test]
-async fn skills_for_cwd_loads_repo_user_and_extra_roots_with_local_fs() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
-    let cwd = tempfile::tempdir().expect("tempdir");
-    let extra_root = tempfile::tempdir().expect("tempdir");
     let repo_dot_codex = cwd.path().join(".codex");
     fs::create_dir_all(&repo_dot_codex).expect("create repo config dir");
 
     write_user_skill(&codex_home, "user", "user-skill", "from local user root");
-    write_user_skill(&extra_root, "extra", "extra-skill", "from extra root");
     let repo_skill_dir = repo_dot_codex.join("skills/repo");
     fs::create_dir_all(&repo_skill_dir).expect("create repo skill dir");
     fs::write(
@@ -366,10 +311,9 @@ async fn skills_for_cwd_loads_repo_user_and_extra_roots_with_local_fs() {
     );
 
     let outcome = skills_manager
-        .skills_for_cwd_with_extra_user_roots(
+        .skills_for_cwd(
             &skills_input,
             /*force_reload*/ true,
-            &[extra_root.path().abs()],
             Some(Arc::clone(&LOCAL_FS)),
         )
         .await;
@@ -386,19 +330,16 @@ async fn skills_for_cwd_loads_repo_user_and_extra_roots_with_local_fs() {
         .collect::<HashSet<_>>();
     assert!(loaded_names.contains("user-skill"));
     assert!(loaded_names.contains("repo-skill"));
-    assert!(loaded_names.contains("extra-skill"));
 }
 
 #[tokio::test]
-async fn skills_for_cwd_without_fs_skips_repo_and_extra_roots() {
+async fn skills_for_cwd_without_fs_skips_repo_roots() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
-    let extra_root = tempfile::tempdir().expect("tempdir");
     let repo_dot_codex = cwd.path().join(".codex");
     fs::create_dir_all(&repo_dot_codex).expect("create repo config dir");
 
     write_user_skill(&codex_home, "user", "user-skill", "from local user root");
-    write_user_skill(&extra_root, "extra", "extra-skill", "from extra root");
     let repo_skill_dir = repo_dot_codex.join("skills/repo");
     fs::create_dir_all(&repo_skill_dir).expect("create repo skill dir");
     fs::write(
@@ -433,12 +374,7 @@ async fn skills_for_cwd_without_fs_skips_repo_and_extra_roots() {
     );
 
     let outcome = skills_manager
-        .skills_for_cwd_with_extra_user_roots(
-            &skills_input,
-            /*force_reload*/ true,
-            &[extra_root.path().abs()],
-            /*fs*/ None,
-        )
+        .skills_for_cwd(&skills_input, /*force_reload*/ true, /*fs*/ None)
         .await;
 
     assert!(
@@ -453,7 +389,6 @@ async fn skills_for_cwd_without_fs_skips_repo_and_extra_roots() {
         .collect::<HashSet<_>>();
     assert!(loaded_names.contains("user-skill"));
     assert!(!loaded_names.contains("repo-skill"));
-    assert!(!loaded_names.contains("extra-skill"));
 }
 
 #[tokio::test]
@@ -499,22 +434,15 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
 }
 
 #[tokio::test]
-async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
+async fn skills_for_cwd_uses_cached_result_until_force_reload() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
-    let extra_root_a = tempfile::tempdir().expect("tempdir");
-    let extra_root_b = tempfile::tempdir().expect("tempdir");
     let config_layer_stack = config_stack(&codex_home, "");
     let skills_manager = SkillsManager::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
     );
     let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
-
-    write_user_skill(&extra_root_a, "x", "extra-skill-a", "from extra root a");
-    write_user_skill(&extra_root_b, "x", "extra-skill-b", "from extra root b");
-
-    let extra_root_a_path = extra_root_a.path().abs();
     let base_input = SkillsLoadInput::new(
         cwd.path().abs(),
         Vec::new(),
@@ -522,32 +450,25 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
         bundled_skills_enabled_from_stack(&config_layer_stack),
     );
     let outcome_a = skills_manager
-        .skills_for_cwd_with_extra_user_roots(
-            &base_input,
-            /*force_reload*/ true,
-            std::slice::from_ref(&extra_root_a_path),
-            Some(Arc::clone(&LOCAL_FS)),
-        )
-        .await;
-    assert!(
-        outcome_a
-            .skills
-            .iter()
-            .any(|skill| skill.name == "extra-skill-a")
-    );
-    assert!(
-        outcome_a
-            .skills
-            .iter()
-            .all(|skill| skill.name != "extra-skill-b")
-    );
-
-    let extra_root_b_path = extra_root_b.path().abs();
-    let outcome_b = skills_manager
-        .skills_for_cwd_with_extra_user_roots(
+        .skills_for_cwd(
             &base_input,
             /*force_reload*/ false,
-            std::slice::from_ref(&extra_root_b_path),
+            Some(Arc::clone(&LOCAL_FS)),
+        )
+        .await;
+    assert!(
+        outcome_a
+            .skills
+            .iter()
+            .all(|skill| skill.name != "late-skill")
+    );
+
+    write_user_skill(&codex_home, "late", "late-skill", "added after cache");
+
+    let outcome_b = skills_manager
+        .skills_for_cwd(
+            &base_input,
+            /*force_reload*/ false,
             Some(Arc::clone(&LOCAL_FS)),
         )
         .await;
@@ -555,20 +476,13 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
         outcome_b
             .skills
             .iter()
-            .any(|skill| skill.name == "extra-skill-a")
-    );
-    assert!(
-        outcome_b
-            .skills
-            .iter()
-            .all(|skill| skill.name != "extra-skill-b")
+            .all(|skill| skill.name != "late-skill")
     );
 
     let outcome_reloaded = skills_manager
-        .skills_for_cwd_with_extra_user_roots(
+        .skills_for_cwd(
             &base_input,
             /*force_reload*/ true,
-            std::slice::from_ref(&extra_root_b_path),
             Some(Arc::clone(&LOCAL_FS)),
         )
         .await;
@@ -576,25 +490,8 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
         outcome_reloaded
             .skills
             .iter()
-            .any(|skill| skill.name == "extra-skill-b")
+            .any(|skill| skill.name == "late-skill")
     );
-    assert!(
-        outcome_reloaded
-            .skills
-            .iter()
-            .all(|skill| skill.name != "extra-skill-a")
-    );
-}
-
-#[test]
-fn normalize_extra_user_roots_is_stable_for_equivalent_inputs() {
-    let a = test_path_buf("/tmp/a").abs();
-    let b = test_path_buf("/tmp/b").abs();
-
-    let first = normalize_extra_user_roots(&[a.clone(), b.clone(), a.clone()]);
-    let second = normalize_extra_user_roots(&[b, a]);
-
-    assert_eq!(first, second);
 }
 
 #[cfg_attr(windows, ignore)]
@@ -606,7 +503,10 @@ fn disabled_paths_for_skills_allows_session_flags_to_override_user_layer() {
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
-        ConfigLayerSource::User { file: user_file },
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        },
         toml::from_str(&path_toggle_config(&skill_path, /*enabled*/ false))
             .expect("user layer toml"),
     );
@@ -638,7 +538,10 @@ fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill(
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
-        ConfigLayerSource::User { file: user_file },
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        },
         toml::from_str(&path_toggle_config(&skill_path, /*enabled*/ true))
             .expect("user layer toml"),
     );
@@ -673,7 +576,10 @@ fn disabled_paths_for_skills_disables_matching_name_selectors() {
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
-        ConfigLayerSource::User { file: user_file },
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        },
         toml::from_str(&name_toggle_config("github:yeet", /*enabled*/ false))
             .expect("user layer toml"),
     );
@@ -703,7 +609,10 @@ fn disabled_paths_for_skills_allows_name_selector_to_override_path_selector() {
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
-        ConfigLayerSource::User { file: user_file },
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        },
         toml::from_str(&path_toggle_config(&skill_path, /*enabled*/ false))
             .expect("user layer toml"),
     );

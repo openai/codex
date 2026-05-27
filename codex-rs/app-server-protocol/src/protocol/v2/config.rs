@@ -3,9 +3,9 @@ use super::AskForApproval;
 use super::SandboxMode;
 use super::shared::default_enabled;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -52,6 +52,10 @@ pub enum ConfigLayerSource {
         /// This is the path to the user's config.toml file, though it is not
         /// guaranteed to exist.
         file: AbsolutePathBuf,
+
+        /// Name of the selected profile-v2 config layered on top of the base
+        /// user config, when this layer represents one.
+        profile: Option<String>,
     },
 
     /// Path to a .codex/ folder within a project. There could be multiple of
@@ -85,7 +89,13 @@ impl ConfigLayerSource {
         match self {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
-            ConfigLayerSource::User { .. } => 20,
+            ConfigLayerSource::User { profile, .. } => {
+                if profile.is_some() {
+                    21
+                } else {
+                    20
+                }
+            }
             ConfigLayerSource::Project { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
@@ -121,31 +131,6 @@ pub struct SandboxWorkspaceWrite {
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
-    pub view_image: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "snake_case")]
-#[ts(export_to = "v2/")]
-pub struct ProfileV2 {
-    pub model: Option<String>,
-    pub model_provider: Option<String>,
-    #[experimental(nested)]
-    pub approval_policy: Option<AskForApproval>,
-    /// [UNSTABLE] Optional profile-level override for where approval requests
-    /// are routed for review. If omitted, the enclosing config default is
-    /// used.
-    #[experimental("config/read.approvalsReviewer")]
-    pub approvals_reviewer: Option<ApprovalsReviewer>,
-    pub service_tier: Option<ServiceTier>,
-    pub model_reasoning_effort: Option<ReasoningEffort>,
-    pub model_reasoning_summary: Option<ReasoningSummary>,
-    pub model_verbosity: Option<Verbosity>,
-    pub web_search: Option<WebSearchMode>,
-    pub tools: Option<ToolsV2>,
-    pub chatgpt_base_url: Option<String>,
-    #[serde(default, flatten)]
-    pub additional: HashMap<String, JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -217,6 +202,24 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
+/// Backward-compatible API shape for ChatGPT workspace login restrictions.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value],
+            Self::Multiple(values) => values,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
@@ -225,6 +228,7 @@ pub struct Config {
     pub review_model: Option<String>,
     pub model_context_window: Option<i64>,
     pub model_auto_compact_token_limit: Option<i64>,
+    pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
@@ -234,25 +238,22 @@ pub struct Config {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,
-    pub profile: Option<String>,
-    #[experimental(nested)]
-    #[serde(default)]
-    pub profiles: HashMap<String, ProfileV2>,
     pub instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub analytics: Option<AnalyticsConfig>,
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
+    pub desktop: Option<HashMap<String, JsonValue>>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
@@ -328,7 +329,7 @@ pub enum ConfigWriteErrorCode {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadParams {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_layers: bool,
     /// Optional working directory to resolve project config layers. If specified,
     /// return the effective config as seen from that directory (i.e., including any
@@ -357,13 +358,24 @@ pub struct ConfigRequirements {
     #[experimental("configRequirements/read.allowedApprovalsReviewers")]
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
+    pub allowed_permissions: Option<Vec<String>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
+    pub allow_managed_hooks_only: Option<bool>,
+    pub allow_appshots: Option<bool>,
+    pub computer_use: Option<ComputerUseRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ComputerUseRequirements {
+    pub allow_locked_computer_use: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -381,12 +393,24 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "PostToolUse")]
     #[ts(rename = "PostToolUse")]
     pub post_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PreCompact")]
+    #[ts(rename = "PreCompact")]
+    pub pre_compact: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PostCompact")]
+    #[ts(rename = "PostCompact")]
+    pub post_compact: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "SessionStart")]
     #[ts(rename = "SessionStart")]
     pub session_start: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "UserPromptSubmit")]
     #[ts(rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStart")]
+    #[ts(rename = "SubagentStart")]
+    pub subagent_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStop")]
+    #[ts(rename = "SubagentStop")]
+    pub subagent_stop: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "Stop")]
     #[ts(rename = "Stop")]
     pub stop: Vec<ConfiguredHookMatcherGroup>,
@@ -408,6 +432,9 @@ pub enum ConfiguredHookHandler {
     #[ts(rename = "command")]
     Command {
         command: String,
+        #[serde(rename = "commandWindows")]
+        #[ts(rename = "commandWindows")]
+        command_windows: Option<String>,
         #[serde(rename = "timeoutSec")]
         #[ts(rename = "timeoutSec")]
         timeout_sec: Option<u64>,

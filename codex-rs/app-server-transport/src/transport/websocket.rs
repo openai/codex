@@ -3,7 +3,7 @@ use super::ConnectionOrigin;
 use super::TransportEvent;
 use super::auth::WebsocketAuthPolicy;
 use super::auth::authorize_upgrade;
-use super::auth::should_warn_about_unauthenticated_non_loopback_listener;
+use super::auth::is_unauthenticated_non_loopback_listener;
 use super::forward_incoming_message;
 use super::next_connection_id;
 use super::serialize_outgoing_message;
@@ -72,9 +72,7 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
             "  {note_label} binds localhost only (use SSH port-forwarding for remote access)"
         );
     } else {
-        eprintln!(
-            "  {note_label} websocket auth is opt-in in this build; configure `--ws-auth ...` before real remote use"
-        );
+        eprintln!("  {note_label} websocket auth is required for non-localhost listeners");
     }
 }
 
@@ -134,11 +132,13 @@ pub async fn start_websocket_acceptor(
     shutdown_token: CancellationToken,
     auth_policy: WebsocketAuthPolicy,
 ) -> IoResult<JoinHandle<()>> {
-    if should_warn_about_unauthenticated_non_loopback_listener(bind_address, &auth_policy) {
-        warn!(
-            %bind_address,
-            "starting non-loopback websocket listener without auth; websocket auth is opt-in for now and will become the default in a future release"
-        );
+    if is_unauthenticated_non_loopback_listener(bind_address, &auth_policy) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to start non-loopback websocket listener {bind_address} without auth; configure `--ws-auth capability-token` or `--ws-auth signed-bearer-token`"
+            ),
+        ));
     }
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;

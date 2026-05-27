@@ -4,13 +4,13 @@ use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
+use crate::request_processors::thread_settings_from_core_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_state::resolve_server_request_on_thread_listener;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
-use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
@@ -50,7 +50,6 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
-use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -62,6 +61,7 @@ use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -137,7 +137,6 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
     thread_manager: Arc<ThreadManager>,
-    analytics_events_client: Option<AnalyticsEventsClient>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
@@ -175,10 +174,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn,
             };
-            if let Some(analytics_events_client) = analytics_events_client.as_ref() {
-                analytics_events_client
-                    .track_notification(ServerNotification::TurnStarted(notification.clone()));
-            }
             outgoing
                 .send_server_notification(ServerNotification::TurnStarted(notification))
                 .await;
@@ -195,18 +190,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 conversation_id,
                 event_turn_id,
                 turn_complete_event,
-                analytics_events_client.as_ref(),
                 &outgoing,
                 &thread_state,
             )
             .await;
-        }
-        EventMsg::SkillsUpdateAvailable => {
-            outgoing
-                .send_server_notification(ServerNotification::SkillsChanged(
-                    SkillsChangedNotification {},
-                ))
-                .await;
         }
         EventMsg::McpStartupUpdate(update) => {
             let (status, error) = match update.status {
@@ -237,10 +224,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: Some(conversation_id.to_string()),
                 message: warning_event.message,
             };
-            if let Some(analytics_events_client) = analytics_events_client.as_ref() {
-                analytics_events_client
-                    .track_notification(ServerNotification::Warning(notification.clone()));
-            }
             outgoing
                 .send_server_notification(ServerNotification::Warning(notification))
                 .await;
@@ -250,10 +233,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 message: warning_event.message,
             };
-            if let Some(analytics_events_client) = analytics_events_client.as_ref() {
-                analytics_events_client
-                    .track_notification(ServerNotification::GuardianWarning(notification.clone()));
-            }
             outgoing
                 .send_server_notification(ServerNotification::GuardianWarning(notification))
                 .await;
@@ -526,6 +505,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn_id: event.turn_id.clone(),
                 item_id: item_id.clone(),
+                started_at_ms: event.started_at_ms,
                 reason: event.reason.clone(),
                 grant_root: event.grant_root.clone(),
             };
@@ -557,6 +537,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 call_id,
                 approval_id,
                 turn_id,
+                started_at_ms,
                 command,
                 cwd,
                 reason,
@@ -630,6 +611,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn_id: turn_id.clone(),
                 item_id: call_id.clone(),
+                started_at_ms,
                 approval_id: approval_id.clone(),
                 reason,
                 network_approval_context,
@@ -779,6 +761,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn_id: request.turn_id.clone(),
                 item_id: request.call_id.clone(),
+                started_at_ms: request.started_at_ms,
                 cwd: request_cwd.clone(),
                 reason: request.reason,
                 permissions: request.permissions.into(),
@@ -791,6 +774,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 requested_permissions,
                 request_cwd,
                 pending_request_id,
+                outgoing,
                 receiver: rx,
                 request_permissions_guard: permission_guard,
             };
@@ -1138,7 +1122,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 conversation_id,
                 event_turn_id,
                 turn_aborted_event,
-                analytics_events_client.as_ref(),
                 &outgoing,
                 &thread_state,
             )
@@ -1190,6 +1173,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
                 let response = match thread_rollback_response_from_stored_thread(
                     stored_thread,
+                    conversation.session_configured().session_id.to_string(),
                     fallback_model_provider.as_str(),
                     &fallback_cwd,
                     loaded_status,
@@ -1217,6 +1201,24 @@ pub(crate) async fn apply_bespoke_event_handling(
                     notification,
                 ))
                 .await;
+        }
+        EventMsg::ThreadSettingsApplied(thread_settings_event) => {
+            let thread_settings =
+                thread_settings_from_core_snapshot(thread_settings_event.thread_settings);
+            let changed = {
+                let mut state = thread_state.lock().await;
+                state.note_thread_settings(thread_settings.clone())
+            };
+            if changed {
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadSettingsUpdated(
+                        ThreadSettingsUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            thread_settings,
+                        },
+                    ))
+                    .await;
+            }
         }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(conversation_id, &event_turn_id, turn_diff_event, &outgoing).await;
@@ -1290,7 +1292,6 @@ async fn emit_turn_completed_with_status(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_completion_metadata: TurnCompletionMetadata,
-    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let notification = TurnCompletedNotification {
@@ -1306,10 +1307,6 @@ async fn emit_turn_completed_with_status(
             duration_ms: turn_completion_metadata.duration_ms,
         },
     };
-    if let Some(analytics_events_client) = analytics_events_client {
-        analytics_events_client
-            .track_notification(ServerNotification::TurnCompleted(notification.clone()));
-    }
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
         .await;
@@ -1473,7 +1470,6 @@ async fn handle_turn_complete(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_complete_event: TurnCompleteEvent,
-    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
@@ -1494,7 +1490,6 @@ async fn handle_turn_complete(
             completed_at: turn_complete_event.completed_at,
             duration_ms: turn_complete_event.duration_ms,
         },
-        analytics_events_client,
         outgoing,
     )
     .await;
@@ -1504,7 +1499,6 @@ async fn handle_turn_interrupted(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_aborted_event: TurnAbortedEvent,
-    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
@@ -1520,7 +1514,6 @@ async fn handle_turn_interrupted(
             completed_at: turn_aborted_event.completed_at,
             duration_ms: turn_aborted_event.duration_ms,
         },
-        analytics_events_client,
         outgoing,
     )
     .await;
@@ -1543,6 +1536,7 @@ async fn handle_thread_rollback_failed(
 
 fn thread_rollback_response_from_stored_thread(
     stored_thread: codex_thread_store::StoredThread,
+    session_id: String,
     fallback_model_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
     loaded_status: ThreadStatus,
@@ -1550,6 +1544,7 @@ fn thread_rollback_response_from_stored_thread(
     let thread_id = stored_thread.thread_id;
     let (mut thread, history) =
         thread_from_stored_thread(stored_thread, fallback_model_provider, fallback_cwd);
+    thread.session_id = session_id;
     let Some(history) = history else {
         return Err(format!(
             "thread {thread_id} did not include persisted history after rollback"
@@ -1771,11 +1766,12 @@ async fn on_request_permissions_response(
         requested_permissions,
         request_cwd,
         pending_request_id,
+        outgoing,
         receiver,
         request_permissions_guard,
     } = pending_response;
     let response = receiver.await;
-    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id.clone()).await;
     drop(request_permissions_guard);
     let Some(response) = request_permissions_response_from_client_result(
         requested_permissions,
@@ -1784,6 +1780,7 @@ async fn on_request_permissions_response(
     ) else {
         return;
     };
+    outgoing.track_effective_permissions_approval_response(pending_request_id, response.clone());
 
     if let Err(err) = conversation
         .submit(Op::RequestPermissionsResponse {
@@ -1801,6 +1798,7 @@ struct PendingRequestPermissionsResponse {
     requested_permissions: CoreRequestPermissionProfile,
     request_cwd: AbsolutePathBuf,
     pending_request_id: RequestId,
+    outgoing: ThreadScopedOutgoingMessageSender,
     receiver: oneshot::Receiver<ClientRequestResult>,
     request_permissions_guard: ThreadWatchActiveGuard,
 }
@@ -2092,7 +2090,6 @@ mod tests {
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
-    use codex_login::AuthManager;
     use codex_login::CodexAuth;
     use codex_protocol::items::HookPromptFragment;
     use codex_protocol::items::build_hook_prompt_message;
@@ -2160,6 +2157,7 @@ mod tests {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             })),
             RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
                 message: "after rollback".to_string(),
@@ -2182,6 +2180,7 @@ mod tests {
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -2199,6 +2198,7 @@ mod tests {
 
         let response = thread_rollback_response_from_stored_thread(
             stored_thread,
+            thread_id.to_string(),
             "fallback-provider",
             &fallback_cwd,
             ThreadStatus::NotLoaded,
@@ -2207,7 +2207,7 @@ mod tests {
 
         assert_eq!(response.thread.id, thread_id.to_string());
         assert_eq!(response.thread.path, None);
-        assert_eq!(response.thread.preview, "before rollback");
+        assert_eq!(response.thread.preview, "fallback preview");
         assert_eq!(response.thread.name.as_deref(), Some("Rollback thread"));
         assert_eq!(response.thread.status, ThreadStatus::NotLoaded);
         assert_eq!(response.thread.turns.len(), 1);
@@ -2270,6 +2270,9 @@ mod tests {
             id: format!("review-{id}"),
             target_item_id: Some(id.to_string()),
             turn_id: turn_id.to_string(),
+            started_at_ms: 1_000,
+            completed_at_ms: (!matches!(status, GuardianAssessmentStatus::InProgress))
+                .then_some(1_042),
             status,
             risk_level,
             user_authorization,
@@ -2296,7 +2299,6 @@ mod tests {
         outgoing: ThreadScopedOutgoingMessageSender,
         thread_state: Arc<Mutex<ThreadState>>,
         thread_watch_manager: ThreadWatchManager,
-        analytics_events_client: AnalyticsEventsClient,
     }
 
     impl GuardianAssessmentTestContext {
@@ -2310,7 +2312,6 @@ mod tests {
                 self.conversation_id,
                 self.conversation.clone(),
                 self.thread_manager.clone(),
-                Some(self.analytics_events_client.clone()),
                 self.outgoing.clone(),
                 self.thread_state.clone(),
                 self.thread_watch_manager.clone(),
@@ -2336,6 +2337,8 @@ mod tests {
                 id: "review-1".to_string(),
                 target_item_id: Some("item-1".to_string()),
                 turn_id: String::new(),
+                started_at_ms: 1_000,
+                completed_at_ms: None,
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
@@ -2349,6 +2352,7 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
+                assert_eq!(payload.started_at_ms, 1_000);
                 assert_eq!(payload.review_id, "review-1");
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-1"));
                 assert_eq!(
@@ -2379,6 +2383,8 @@ mod tests {
                 id: "review-2".to_string(),
                 target_item_id: Some("item-2".to_string()),
                 turn_id: "turn-from-assessment".to_string(),
+                started_at_ms: 1_000,
+                completed_at_ms: Some(1_042),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
@@ -2394,6 +2400,8 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
+                assert_eq!(payload.started_at_ms, 1_000);
+                assert_eq!(payload.completed_at_ms, 1_042);
                 assert_eq!(payload.review_id, "review-2");
                 assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
                 assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
@@ -2429,6 +2437,8 @@ mod tests {
                 id: "review-3".to_string(),
                 target_item_id: None,
                 turn_id: "turn-from-assessment".to_string(),
+                started_at_ms: 1_000,
+                completed_at_ms: Some(1_042),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_level: None,
                 user_authorization: None,
@@ -2617,8 +2627,7 @@ mod tests {
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-            )
-            .await,
+            ),
         );
         let codex_core::NewThread {
             thread_id: conversation_id,
@@ -2644,13 +2653,6 @@ mod tests {
             outgoing: outgoing.clone(),
             thread_state: thread_state.clone(),
             thread_watch_manager: thread_watch_manager.clone(),
-            analytics_events_client: AnalyticsEventsClient::new(
-                AuthManager::from_auth_for_testing(
-                    CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-                ),
-                "http://localhost".to_string(),
-                Some(false),
-            ),
         };
 
         guardian_context
@@ -3203,8 +3205,7 @@ mod tests {
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-            )
-            .await,
+            ),
         );
         let codex_core::NewThread {
             thread_id: conversation_id,
@@ -3218,6 +3219,7 @@ mod tests {
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    trace_id: None,
                     started_at: Some(42),
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
@@ -3230,6 +3232,7 @@ mod tests {
                     images: None,
                     local_images: Vec::new(),
                     text_elements: Vec::new(),
+                    ..Default::default()
                 }),
             );
         }
@@ -3250,6 +3253,7 @@ mod tests {
                 id: "turn-1".to_string(),
                 msg: EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    trace_id: None,
                     started_at: Some(42),
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
@@ -3258,7 +3262,6 @@ mod tests {
             conversation_id,
             conversation,
             thread_manager,
-            /*analytics_events_client*/ None,
             outgoing,
             thread_state,
             thread_watch_manager,
@@ -3300,6 +3303,7 @@ mod tests {
                 &event_turn_id,
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: event_turn_id.clone(),
+                    trace_id: None,
                     started_at: Some(42),
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
@@ -3315,7 +3319,6 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_complete_event(&event_turn_id),
-            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3369,7 +3372,6 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_aborted_event(&event_turn_id),
-            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3420,7 +3422,6 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_complete_event(&event_turn_id),
-            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3655,7 +3656,6 @@ mod tests {
             conversation_a,
             a_turn1.clone(),
             turn_complete_event(&a_turn1),
-            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3677,7 +3677,6 @@ mod tests {
             conversation_b,
             b_turn1.clone(),
             turn_complete_event(&b_turn1),
-            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3689,7 +3688,6 @@ mod tests {
             conversation_a,
             a_turn2.clone(),
             turn_complete_event(&a_turn2),
-            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )

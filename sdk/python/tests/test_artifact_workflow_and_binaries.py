@@ -1,20 +1,21 @@
-from __future__ import annotations
-
 import ast
 import importlib.util
 import io
 import json
+import os
 import sys
-import tomllib
+import tarfile
 import urllib.error
 from pathlib import Path
 
 import pytest
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_update_script_module():
+    """Load the maintenance script as a module so tests exercise real helpers."""
     script_path = ROOT / "scripts" / "update_sdk_artifacts.py"
     spec = importlib.util.spec_from_file_location("update_sdk_artifacts", script_path)
     if spec is None or spec.loader is None:
@@ -26,24 +27,83 @@ def _load_update_script_module():
 
 
 def _load_runtime_setup_module():
+    """Load runtime setup without importing the SDK package under test."""
     runtime_setup_path = ROOT / "_runtime_setup.py"
     spec = importlib.util.spec_from_file_location("_runtime_setup", runtime_setup_path)
     if spec is None or spec.loader is None:
-        raise AssertionError(
-            f"Failed to load runtime setup module: {runtime_setup_path}"
-        )
+        raise AssertionError(f"Failed to load runtime setup module: {runtime_setup_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
+def _write_fake_codex_package(package_dir: Path, script) -> Path:
+    (package_dir / "bin").mkdir(parents=True)
+    (package_dir / "codex-resources").mkdir()
+    (package_dir / "codex-path").mkdir()
+    (package_dir / "codex-package.json").write_text('{"variant":"codex"}\n')
+    (package_dir / "bin" / script.runtime_binary_name()).write_text("fake codex\n")
+    (package_dir / "codex-resources" / "bwrap").write_text("fake bwrap\n")
+    (package_dir / "codex-path" / "rg").write_text("fake rg\n")
+    return package_dir
+
+
+def _write_fake_codex_package_archive(tmp_path: Path, script) -> Path:
+    package_dir = _write_fake_codex_package(tmp_path / "codex-package", script)
+    archive_path = tmp_path / "codex-package.tar.gz"
+    _write_package_archive(package_dir, archive_path)
+    return archive_path
+
+
+def _write_package_archive(package_dir: Path, archive_path: Path) -> None:
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for path in package_dir.rglob("*"):
+            archive.add(path, arcname=path.relative_to(package_dir))
+
+
 def test_generation_has_single_maintenance_entrypoint_script() -> None:
+    """Keep artifact workflows routed through one script instead of side entrypoints."""
     scripts = sorted(p.name for p in (ROOT / "scripts").glob("*.py"))
     assert scripts == ["update_sdk_artifacts.py"]
 
 
+def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
+    """The repo fmt command should work from Rust and Python SDK directories."""
+    justfile = ROOT.parents[1] / "justfile"
+    lines = justfile.read_text().splitlines()
+    fmt_index = lines.index("fmt:")
+    next_recipe_index = next(
+        index
+        for index in range(fmt_index + 1, len(lines))
+        if lines[index] and not lines[index].startswith((" ", "\t", "#"))
+    )
+    fmt_recipe = lines[fmt_index:next_recipe_index]
+    actual = {
+        "working_directory": lines[0],
+        "previous_attribute": lines[fmt_index - 1],
+        "commands": [line.strip() for line in fmt_recipe[1:] if line.strip()],
+    }
+    expected = {
+        "working_directory": 'set working-directory := "codex-rs"',
+        "previous_attribute": "# Format Rust and Python SDK code.",
+        "commands": [
+            "cargo fmt -- --config imports_granularity=Item 2>/dev/null",
+            "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
+            "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python",
+        ],
+    }
+
+    assert actual == expected, (
+        "The root `just fmt` recipe must run Rust fmt and Python SDK Ruff. "
+        "Fix the `fmt` recipe in `justfile`, then run `just fmt`.\n"
+        f"Expected: {json.dumps(expected, indent=2)}\n"
+        f"Actual: {json.dumps(actual, indent=2)}"
+    )
+
+
 def test_generate_types_wires_all_generation_steps() -> None:
+    """The type generation command should refresh every schema-derived artifact."""
     source = (ROOT / "scripts" / "update_sdk_artifacts.py").read_text()
     tree = ast.parse(source)
 
@@ -51,7 +111,7 @@ def test_generate_types_wires_all_generation_steps() -> None:
         (
             node
             for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "generate_types"
+            if isinstance(node, ast.FunctionDef) and node.name == "generate_types_from_schema_dir"
         ),
         None,
     )
@@ -71,49 +131,44 @@ def test_generate_types_wires_all_generation_steps() -> None:
     ]
 
 
-def test_schema_normalization_only_flattens_string_literal_oneofs() -> None:
+def _load_runtime_schema_bundle(tmp_path: Path) -> dict:
+    """Ask the pinned runtime package for a real schema bundle used by tests."""
     script = _load_update_script_module()
-    schema = json.loads(
-        (
-            ROOT.parent.parent
-            / "codex-rs"
-            / "app-server-protocol"
-            / "schema"
-            / "json"
-            / "codex_app_server_protocol.v2.schemas.json"
-        ).read_text()
-    )
+    schema_dir = script.generate_schema_from_pinned_runtime(tmp_path / "schema")
+    return json.loads(script.schema_bundle_path(schema_dir).read_text())
 
+
+def test_schema_normalization_only_flattens_string_literal_oneofs(
+    tmp_path: Path,
+) -> None:
+    """Schema normalization should only flatten the enum-shaped oneOf variants."""
+    script = _load_update_script_module()
+    schema = _load_runtime_schema_bundle(tmp_path)
     definitions = schema["definitions"]
     flattened = [
         name
         for name, definition in definitions.items()
-        if isinstance(definition, dict)
-        and script._flatten_string_enum_one_of(definition.copy())
+        if isinstance(definition, dict) and script._flatten_string_enum_one_of(definition.copy())
     ]
 
     assert flattened == [
-        "AuthMode",
-        "CommandExecOutputStream",
-        "ExperimentalFeatureStage",
-        "InputModality",
         "MessagePhase",
+        "TurnItemsView",
+        "PluginAvailability",
+        "AuthMode",
+        "InputModality",
+        "ExperimentalFeatureStage",
+        "CommandExecOutputStream",
+        "ProcessOutputStream",
     ]
 
 
-def test_python_codegen_schema_annotation_adds_stable_variant_titles() -> None:
+def test_python_codegen_schema_annotation_adds_stable_variant_titles(
+    tmp_path: Path,
+) -> None:
+    """Schema annotations should give generated protocol classes stable names."""
     script = _load_update_script_module()
-    schema = json.loads(
-        (
-            ROOT.parent.parent
-            / "codex-rs"
-            / "app-server-protocol"
-            / "schema"
-            / "json"
-            / "codex_app_server_protocol.v2.schemas.json"
-        ).read_text()
-    )
-
+    schema = _load_runtime_schema_bundle(tmp_path)
     script._annotate_schema(schema)
     definitions = schema["definitions"]
 
@@ -162,19 +217,19 @@ def test_runtime_package_template_has_no_checked_in_binaries() -> None:
 
 
 def test_examples_readme_points_to_runtime_version_source_of_truth() -> None:
+    """Document that examples should point at the dependency pin, not release lore."""
     readme = (ROOT / "examples" / "README.md").read_text()
-    assert "The pinned runtime version comes from the SDK package version." in readme
+    assert "The pinned runtime version comes from the SDK package dependency." in readme
 
 
 def test_runtime_distribution_name_is_consistent() -> None:
     script = _load_update_script_module()
     runtime_setup = _load_runtime_setup_module()
-    from codex_app_server import client as client_module
-    from codex_app_server import _version
+    from openai_codex import _version, client as client_module
 
-    assert script.SDK_DISTRIBUTION_NAME == "openai-codex-app-server-sdk"
-    assert runtime_setup.SDK_PACKAGE_NAME == "openai-codex-app-server-sdk"
-    assert _version.DISTRIBUTION_NAME == "openai-codex-app-server-sdk"
+    assert script.SDK_DISTRIBUTION_NAME == "openai-codex"
+    assert runtime_setup.SDK_PACKAGE_NAME == "openai-codex"
+    assert _version.DISTRIBUTION_NAME == "openai-codex"
     assert script.RUNTIME_DISTRIBUTION_NAME == "openai-codex-cli-bin"
     assert runtime_setup.PACKAGE_NAME == "openai-codex-cli-bin"
     assert client_module.RUNTIME_PKG_NAME == "openai-codex-cli-bin"
@@ -182,6 +237,25 @@ def test_runtime_distribution_name_is_consistent() -> None:
         "importlib.metadata.version('codex-cli-bin')"
         not in (ROOT / "_runtime_setup.py").read_text()
     )
+
+
+def test_source_sdk_package_pins_published_runtime() -> None:
+    """The source package metadata should pin the runtime wheel that ships schemas."""
+    script = _load_update_script_module()
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+
+    assert {
+        "sdk_version": pyproject["project"]["version"],
+        "runtime_pin": script.pinned_runtime_version(),
+        "dependencies": pyproject["project"]["dependencies"],
+    } == {
+        "sdk_version": "0.131.0a4",
+        "runtime_pin": "0.131.0a4",
+        "dependencies": [
+            "pydantic>=2.12",
+            "openai-codex-cli-bin==0.131.0a4",
+        ],
+    }
 
 
 def test_release_metadata_retries_without_invalid_auth(
@@ -211,22 +285,43 @@ def test_release_metadata_retries_without_invalid_auth(
 
 
 def test_runtime_setup_uses_pep440_package_version_and_codex_release_tags() -> None:
+    """The SDK uses PEP 440 package pins and converts only when fetching releases."""
     runtime_setup = _load_runtime_setup_module()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
     assert runtime_setup.PACKAGE_NAME == "openai-codex-cli-bin"
     assert runtime_setup.pinned_runtime_version() == pyproject["project"]["version"]
     assert (
-        runtime_setup._normalized_package_version("rust-v0.116.0-alpha.1")
-        == "0.116.0a1"
+        f"{runtime_setup.PACKAGE_NAME}=={pyproject['project']['version']}"
+        in pyproject["project"]["dependencies"]
     )
+    assert runtime_setup._normalized_package_version("rust-v0.116.0-alpha.1") == "0.116.0a1"
     assert runtime_setup._release_tag("0.116.0a1") == "rust-v0.116.0-alpha.1"
 
 
+@pytest.mark.parametrize(
+    ("system", "machine", "asset_name"),
+    [
+        ("Darwin", "arm64", "codex-package-aarch64-apple-darwin.tar.gz"),
+        ("Linux", "x86_64", "codex-package-x86_64-unknown-linux-musl.tar.gz"),
+        ("Windows", "AMD64", "codex-package-x86_64-pc-windows-msvc.tar.gz"),
+    ],
+)
+def test_runtime_setup_downloads_codex_package_archives(
+    monkeypatch: pytest.MonkeyPatch,
+    system: str,
+    machine: str,
+    asset_name: str,
+) -> None:
+    runtime_setup = _load_runtime_setup_module()
+    monkeypatch.setattr(runtime_setup.platform, "system", lambda: system)
+    monkeypatch.setattr(runtime_setup.platform, "machine", lambda: machine)
+
+    assert runtime_setup.platform_asset_name() == asset_name
+
+
 def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> None:
-    pyproject = tomllib.loads(
-        (ROOT.parent / "python-runtime" / "pyproject.toml").read_text()
-    )
+    pyproject = tomllib.loads((ROOT.parent / "python-runtime" / "pyproject.toml").read_text())
     hook_source = (ROOT.parent / "python-runtime" / "hatch_build.py").read_text()
     hook_tree = ast.parse(hook_source)
     initialize_fn = next(
@@ -273,7 +368,12 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
     assert pyproject["project"]["name"] == "openai-codex-cli-bin"
     assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"] == {
         "packages": ["src/codex_cli_bin"],
-        "include": ["src/codex_cli_bin/bin/**"],
+        "include": [
+            "src/codex_cli_bin/codex-package.json",
+            "src/codex_cli_bin/bin/**",
+            "src/codex_cli_bin/codex-resources/**",
+            "src/codex_cli_bin/codex-path/**",
+        ],
         "hooks": {"custom": {}},
     }
     assert pyproject["tool"]["hatch"]["build"]["targets"]["sdist"] == {
@@ -287,19 +387,30 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
     }
 
 
-def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) -> None:
+def test_stage_runtime_release_copies_package_layout_and_sets_version(
+    tmp_path: Path,
+) -> None:
     script = _load_update_script_module()
-    fake_binary = tmp_path / script.runtime_binary_name()
-    fake_binary.write_text("fake codex\n")
+    package_archive = _write_fake_codex_package_archive(tmp_path, script)
 
     staged = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
         "1.2.3",
-        fake_binary,
+        package_archive,
     )
+    package_root = script.staged_runtime_package_root(staged)
 
-    assert staged == tmp_path / "runtime-stage"
-    assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
+    assert {
+        "metadata": (package_root / "codex-package.json").read_text(),
+        "codex": (package_root / "bin" / script.runtime_binary_name()).read_text(),
+        "bwrap": (package_root / "codex-resources" / "bwrap").read_text(),
+        "rg": (package_root / "codex-path" / "rg").read_text(),
+    } == {
+        "metadata": '{"variant":"codex"}\n',
+        "codex": "fake codex\n",
+        "bwrap": "fake bwrap\n",
+        "rg": "fake rg\n",
+    }
     assert 'name = "openai-codex-cli-bin"' in (staged / "pyproject.toml").read_text()
     assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
 
@@ -319,35 +430,65 @@ def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> 
     old_file = staging_dir / "stale.txt"
     old_file.parent.mkdir(parents=True)
     old_file.write_text("stale")
-
-    fake_binary = tmp_path / script.runtime_binary_name()
-    fake_binary.write_text("fake codex\n")
+    package_archive = _write_fake_codex_package_archive(tmp_path, script)
 
     staged = script.stage_python_runtime_package(
         staging_dir,
         "1.2.3",
-        fake_binary,
+        package_archive,
     )
 
     assert staged == staging_dir
     assert not old_file.exists()
-    assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
+    package_root = script.staged_runtime_package_root(staged)
+    assert (package_root / "bin" / script.runtime_binary_name()).read_text() == "fake codex\n"
 
 
 def test_stage_runtime_release_can_pin_wheel_platform_tag(tmp_path: Path) -> None:
     script = _load_update_script_module()
-    fake_binary = tmp_path / script.runtime_binary_name()
-    fake_binary.write_text("fake codex\n")
+    package_archive = _write_fake_codex_package_archive(tmp_path, script)
 
     staged = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
         "0.116.0a1",
-        fake_binary,
+        package_archive,
         platform_tag="musllinux_1_1_x86_64",
     )
 
     pyproject = (staged / "pyproject.toml").read_text()
     assert 'platform-tag = "musllinux_1_1_x86_64"' in pyproject
+
+
+def test_stage_runtime_release_rejects_incomplete_package_layout(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    package_dir = tmp_path / "codex-package"
+    (package_dir / "bin").mkdir(parents=True)
+    package_archive = tmp_path / "codex-package.tar.gz"
+    _write_package_archive(package_dir, package_archive)
+
+    with pytest.raises(RuntimeError, match="Missing Codex package layout entries"):
+        script.stage_python_runtime_package(tmp_path / "runtime-stage", "1.2.3", package_archive)
+
+
+def test_runtime_package_layout_is_included_by_wheel_config(
+    tmp_path: Path,
+) -> None:
+    script = _load_update_script_module()
+    package_archive = _write_fake_codex_package_archive(tmp_path, script)
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        package_archive,
+    )
+
+    pyproject = tomllib.loads((staged / "pyproject.toml").read_text())
+    assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["include"] == [
+        "src/codex_cli_bin/codex-package.json",
+        "src/codex_cli_bin/bin/**",
+        "src/codex_cli_bin/codex-resources/**",
+        "src/codex_cli_bin/codex-path/**",
+    ]
 
 
 def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
@@ -358,18 +499,18 @@ def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
     )
 
     pyproject = (staged / "pyproject.toml").read_text()
-    assert 'name = "openai-codex-app-server-sdk"' in pyproject
+    assert 'name = "openai-codex"' in pyproject
     assert 'version = "0.116.0a1"' in pyproject
     assert '"openai-codex-cli-bin==0.116.0a1"' in pyproject
     assert (
         '__version__ = "0.116.0a1"'
-        not in (staged / "src" / "codex_app_server" / "__init__.py").read_text()
+        not in (staged / "src" / "openai_codex" / "__init__.py").read_text()
     )
     assert (
         'client_version: str = "0.116.0a1"'
-        not in (staged / "src" / "codex_app_server" / "client.py").read_text()
+        not in (staged / "src" / "openai_codex" / "client.py").read_text()
     )
-    assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
+    assert not any((staged / "src" / "openai_codex").glob("bin/**"))
 
 
 def test_stage_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
@@ -387,8 +528,7 @@ def test_stage_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None
 
 def test_staged_sdk_and_runtime_versions_match(tmp_path: Path) -> None:
     script = _load_update_script_module()
-    fake_binary = tmp_path / script.runtime_binary_name()
-    fake_binary.write_text("fake codex\n")
+    package_archive = _write_fake_codex_package_archive(tmp_path, script)
 
     sdk_stage = script.stage_python_sdk_package(
         tmp_path / "sdk-stage",
@@ -397,15 +537,13 @@ def test_staged_sdk_and_runtime_versions_match(tmp_path: Path) -> None:
     runtime_stage = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
         "rust-v0.116.0-alpha.1",
-        fake_binary,
+        package_archive,
     )
 
     sdk_pyproject = tomllib.loads((sdk_stage / "pyproject.toml").read_text())
     runtime_pyproject = tomllib.loads((runtime_stage / "pyproject.toml").read_text())
 
-    assert (
-        sdk_pyproject["project"]["version"] == runtime_pyproject["project"]["version"]
-    )
+    assert sdk_pyproject["project"]["version"] == runtime_pyproject["project"]["version"]
     assert sdk_pyproject["project"]["dependencies"] == [
         "pydantic>=2.12",
         "openai-codex-cli-bin==0.116.0a1",
@@ -434,7 +572,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     def fake_stage_runtime_package(
         _staging_dir: Path,
         _runtime_version: str,
-        _runtime_binary: Path,
+        _package_dir: Path,
         _platform_tag: str | None,
     ) -> Path:
         raise AssertionError("runtime staging should not run for stage-sdk")
@@ -473,16 +611,15 @@ def test_stage_sdk_rejects_mismatched_legacy_versions(tmp_path: Path) -> None:
         script.run_command(args, script.default_cli_ops())
 
 
-def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> None:
+def test_stage_runtime_stages_package_without_type_generation(tmp_path: Path) -> None:
     script = _load_update_script_module()
-    fake_binary = tmp_path / script.runtime_binary_name()
-    fake_binary.write_text("fake codex\n")
+    package_archive = _write_fake_codex_package_archive(tmp_path, script)
     calls: list[str] = []
     args = script.parse_args(
         [
             "stage-runtime",
             str(tmp_path / "runtime-stage"),
-            str(fake_binary),
+            str(package_archive),
             "--codex-version",
             "rust-v0.116.0-alpha.1",
             "--platform-tag",
@@ -499,10 +636,10 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     def fake_stage_runtime_package(
         _staging_dir: Path,
         codex_version: str,
-        _runtime_binary: Path,
+        package_archive: Path,
         platform_tag: str | None,
     ) -> Path:
-        calls.append(f"stage_runtime:{codex_version}:{platform_tag}")
+        calls.append(f"stage_runtime:{codex_version}:{platform_tag}:{package_archive.name}")
         return tmp_path / "runtime-stage"
 
     def fake_current_sdk_version() -> str:
@@ -517,13 +654,13 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
 
     script.run_command(args, ops)
 
-    assert calls == ["stage_runtime:0.116.0a1:musllinux_1_1_x86_64"]
+    assert calls == ["stage_runtime:0.116.0a1:musllinux_1_1_x86_64:codex-package.tar.gz"]
 
 
 def test_default_runtime_is_resolved_from_installed_runtime_package(
     tmp_path: Path,
 ) -> None:
-    from codex_app_server import client as client_module
+    from openai_codex import client as client_module
 
     fake_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
     fake_binary.write_text("")
@@ -537,8 +674,37 @@ def test_default_runtime_is_resolved_from_installed_runtime_package(
     assert client_module.resolve_codex_bin(config, ops) == fake_binary
 
 
+def test_runtime_path_dir_is_prepended_without_duplicates(tmp_path: Path) -> None:
+    from openai_codex import client as client_module
+
+    path_dir = tmp_path / "codex-path"
+    env = {"PATH": os.pathsep.join(["/usr/bin", str(path_dir), "/bin"])}
+
+    client_module._prepend_path_dirs(env, (path_dir,))
+
+    assert env["PATH"] == os.pathsep.join([str(path_dir), "/usr/bin", "/bin"])
+
+
+def test_runtime_path_dir_preserves_windows_path_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from openai_codex import client as client_module
+
+    path_dir = tmp_path / "codex-path"
+    monkeypatch.setattr(client_module.os, "name", "nt")
+    env = {
+        "PATH": "/usr/bin",
+        "Path": os.pathsep.join(["C\\Windows", str(path_dir)]),
+    }
+
+    client_module._prepend_path_dirs(env, (path_dir,))
+
+    assert env == {"Path": os.pathsep.join([str(path_dir), "C\\Windows"])}
+
+
 def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
-    from codex_app_server import client as client_module
+    from openai_codex import client as client_module
 
     explicit_binary = tmp_path / (
         "custom-codex.exe" if client_module.os.name == "nt" else "custom-codex"
@@ -556,7 +722,7 @@ def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
 
 
 def test_missing_runtime_package_requires_explicit_codex_bin() -> None:
-    from codex_app_server import client as client_module
+    from openai_codex import client as client_module
 
     ops = client_module.CodexBinResolverOps(
         installed_codex_path=lambda: (_ for _ in ()).throw(
@@ -570,7 +736,7 @@ def test_missing_runtime_package_requires_explicit_codex_bin() -> None:
 
 
 def test_broken_runtime_package_does_not_fall_back() -> None:
-    from codex_app_server import client as client_module
+    from openai_codex import client as client_module
 
     ops = client_module.CodexBinResolverOps(
         installed_codex_path=lambda: (_ for _ in ()).throw(

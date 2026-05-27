@@ -6,6 +6,41 @@ on:
   pull_request: {}
 
 jobs:
+  python-sdk:
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Test Python SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Run inside Alpine so dependency resolution exercises the pinned
+          # runtime wheel on the same Linux wheel family that CI installs.
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp/codex-python-sdk-home \
+            -e UV_LINK_MODE=copy \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -w "${GITHUB_WORKSPACE}/sdk/python" \
+            python:3.12-alpine \
+            sh -euxc '
+              python -m venv /tmp/uv
+              /tmp/uv/bin/python -m pip install uv==0.11.3
+              /tmp/uv/bin/uv sync --extra dev --frozen
+              /tmp/uv/bin/uv run --extra dev ruff check --output-format=github .
+              /tmp/uv/bin/uv run --extra dev ruff format --check .
+              /tmp/uv/bin/uv run --extra dev pytest
+            '
+
   sdks:
     runs-on:
       group: codex-runners
@@ -13,7 +48,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Install Linux bwrap build dependencies
         shell: bash
@@ -28,7 +66,7 @@ jobs:
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 22
           cache: pnpm
@@ -115,7 +153,7 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cache/bazel-repo-cache

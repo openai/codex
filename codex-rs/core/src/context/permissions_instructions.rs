@@ -8,7 +8,6 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_template::Template;
 use std::path::Path;
@@ -85,27 +84,6 @@ impl PermissionsInstructions {
         )
     }
 
-    /// Builds permissions instructions from a legacy sandbox policy.
-    pub fn from_policy(
-        sandbox_policy: &SandboxPolicy,
-        approval_policy: AskForApproval,
-        approvals_reviewer: ApprovalsReviewer,
-        exec_policy: &Policy,
-        cwd: &Path,
-        exec_permission_approvals_enabled: bool,
-        request_permissions_tool_enabled: bool,
-    ) -> Self {
-        Self::from_permission_profile(
-            &PermissionProfile::from_legacy_sandbox_policy(sandbox_policy),
-            approval_policy,
-            approvals_reviewer,
-            exec_policy,
-            cwd,
-            exec_permission_approvals_enabled,
-            request_permissions_tool_enabled,
-        )
-    }
-
     fn from_permissions_with_network(
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
@@ -167,9 +145,17 @@ fn network_access_from_policy(network_policy: NetworkSandboxPolicy) -> NetworkAc
 }
 
 impl ContextualUserFragment for PermissionsInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = "<permissions instructions>";
-    const END_MARKER: &'static str = "</permissions instructions>";
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<permissions instructions>", "</permissions instructions>")
+    }
 
     fn body(&self) -> String {
         self.text.clone()
@@ -251,10 +237,11 @@ fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> String {
 }
 
 fn writable_roots_text(writable_roots: Option<Vec<WritableRoot>>) -> Option<String> {
-    let roots = writable_roots?;
+    let mut roots = writable_roots?;
     if roots.is_empty() {
         return None;
     }
+    roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
 
     let roots_list: Vec<String> = roots
         .iter()

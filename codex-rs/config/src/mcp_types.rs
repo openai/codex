@@ -13,6 +13,9 @@ use serde::de::Error as SerdeError;
 
 use crate::RequirementSource;
 
+/// Effective MCP environment id when config omits `environment_id`.
+pub const DEFAULT_MCP_SERVER_ENVIRONMENT_ID: &str = "local";
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AppToolApproval {
@@ -114,14 +117,22 @@ impl AsRef<str> for McpServerEnvVar {
     }
 }
 
+/// OAuth client settings used when Codex launches an MCP OAuth flow.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct McpServerOAuthConfig {
+    /// Explicit OAuth client identifier to present during authorization and token exchange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
-    /// Experimental environment selector for where Codex should start this MCP server.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experimental_environment: Option<String>,
+    /// Effective environment id for where Codex should start this MCP server.
+    pub environment_id: String,
 
     /// When `false`, Codex skips initializing this MCP server.
     #[serde(default = "default_enabled")]
@@ -167,6 +178,10 @@ pub struct McpServerConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
 
+    /// Optional OAuth client settings for MCP login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<McpServerOAuthConfig>,
+
     /// Optional OAuth resource parameter to include during MCP login (RFC 8707).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_resource: Option<String>,
@@ -174,6 +189,18 @@ pub struct McpServerConfig {
     /// Per-tool approval settings keyed by tool name.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tools: HashMap<String, McpServerToolConfig>,
+}
+
+impl McpServerConfig {
+    pub fn is_local_environment(&self) -> bool {
+        self.environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+    }
+
+    pub fn oauth_client_id(&self) -> Option<&str> {
+        self.oauth
+            .as_ref()
+            .and_then(|oauth| oauth.client_id.as_deref())
+    }
 }
 
 /// Raw MCP config shape used for deserialization and supported-field JSON
@@ -210,7 +237,7 @@ pub struct RawMcpServerConfig {
 
     // shared
     #[serde(default)]
-    pub experimental_environment: Option<String>,
+    pub environment_id: Option<String>,
     #[serde(default)]
     pub startup_timeout_sec: Option<f64>,
     #[serde(default)]
@@ -232,6 +259,8 @@ pub struct RawMcpServerConfig {
     pub disabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
+    #[serde(default)]
+    pub oauth: Option<McpServerOAuthConfig>,
     #[serde(default)]
     pub oauth_resource: Option<String>,
     /// Legacy display-name field accepted for backward compatibility.
@@ -256,7 +285,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             url,
             bearer_token,
             bearer_token_env_var,
-            experimental_environment,
+            environment_id,
             startup_timeout_sec,
             startup_timeout_ms,
             tool_timeout_sec,
@@ -267,6 +296,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             enabled_tools,
             disabled_tools,
             scopes,
+            oauth,
             oauth_resource,
             _name: _,
             tools,
@@ -297,6 +327,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
             throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
             throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
+            throw_if_set("stdio", "oauth", oauth.as_ref())?;
             throw_if_set("stdio", "oauth_resource", oauth_resource.as_ref())?;
             let env_vars = env_vars.unwrap_or_default();
             for env_var in &env_vars {
@@ -325,9 +356,13 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             return Err("invalid transport".to_string());
         };
 
+        let environment_id =
+            environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
+        validate_remote_stdio_cwd(&transport, &environment_id)?;
+
         Ok(Self {
             transport,
-            experimental_environment,
+            environment_id,
             startup_timeout_sec,
             tool_timeout_sec,
             enabled: enabled.unwrap_or_else(default_enabled),
@@ -338,6 +373,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             enabled_tools,
             disabled_tools,
             scopes,
+            oauth,
             oauth_resource,
             tools: tools.unwrap_or_default(),
         })
@@ -357,6 +393,30 @@ impl<'de> Deserialize<'de> for McpServerConfig {
 
 const fn default_enabled() -> bool {
     true
+}
+
+fn validate_remote_stdio_cwd(
+    transport: &McpServerTransportConfig,
+    environment_id: &str,
+) -> Result<(), String> {
+    if environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID {
+        return Ok(());
+    }
+    let McpServerTransportConfig::Stdio { cwd, .. } = transport else {
+        return Ok(());
+    };
+    let Some(cwd) = cwd else {
+        return Err(format!(
+            "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`"
+        ));
+    };
+    if cwd.is_absolute() {
+        return Ok(());
+    }
+    Err(format!(
+        "remote stdio MCP servers require an absolute cwd when environment_id is `{environment_id}`, got `{}`",
+        cwd.display()
+    ))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

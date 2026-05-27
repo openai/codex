@@ -27,6 +27,7 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WebSearchAction as ApiWebSearchAction;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::WebSearchAction;
@@ -104,10 +105,13 @@ fn map_todo_items_preserves_text_and_completion_state() {
 
 #[test]
 fn session_configured_produces_thread_started_event() {
+    let thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")
+        .expect("thread id should parse");
     let session_configured = SessionConfiguredEvent {
-        session_id: ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")
-            .expect("thread id should parse"),
+        session_id: SessionId::from(thread_id),
+        thread_id,
         forked_from_id: None,
+        thread_source: None,
         thread_name: None,
         model: "codex-mini-latest".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -118,8 +122,6 @@ fn session_configured_produces_thread_started_event() {
         active_permission_profile: None,
         cwd: test_path_buf("/tmp/project").abs(),
         reasoning_effort: None,
-        history_log_id: 0,
-        history_entry_count: 0,
         initial_messages: None,
         network_proxy: None,
         rollout_path: None,
@@ -476,6 +478,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 status: ApiMcpToolCallStatus::InProgress,
                 arguments: json!({ "key": "value" }),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -493,6 +496,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 status: ApiMcpToolCallStatus::Completed,
                 arguments: json!({ "key": "value" }),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: Some(Box::new(McpToolCallResult {
                     content: Vec::new(),
                     structured_content: None,
@@ -538,6 +542,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                         arguments: json!({ "key": "value" }),
                         result: Some(McpToolCallItemResult {
                             content: Vec::new(),
+                            meta: None,
                             structured_content: None,
                         }),
                         error: None,
@@ -563,6 +568,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
                 status: ApiMcpToolCallStatus::Failed,
                 arguments: json!({ "param": 42 }),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: "tool exploded".to_string(),
@@ -611,6 +617,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                 status: ApiMcpToolCallStatus::InProgress,
                 arguments: serde_json::Value::Null,
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -628,6 +635,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                 status: ApiMcpToolCallStatus::Completed,
                 arguments: serde_json::Value::Null,
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![json!({
                         "type": "text",
@@ -679,6 +687,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                                 "type": "text",
                                 "text": "done",
                             })],
+                            meta: None,
                             structured_content: Some(json!({ "status": "ok" })),
                         }),
                         error: None,

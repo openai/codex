@@ -11,12 +11,14 @@ path = "src/main.rs"
 [lib]
 name = "codex_linux_sandbox"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 clap = { workspace = true, features = ["derive"] }
+codex-install-context = { workspace = true }
 codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }

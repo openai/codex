@@ -28,8 +28,10 @@ use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
-use crate::runtime::McpRuntimeEnvironment;
+use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
+use crate::server::EffectiveMcpServer;
+use crate::server::McpServerLaunch;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
@@ -133,17 +135,21 @@ impl AsyncManagedClient {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         server_name: String,
-        config: McpServerConfig,
+        server: EffectiveMcpServer,
         store_mode: OAuthCredentialsStoreMode,
         cancel_token: CancellationToken,
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
+        client_elicitation_capability: ElicitationCapability,
     ) -> Self {
-        let tool_filter = ToolFilter::from_config(&config);
+        let tool_filter = server
+            .configured_config()
+            .map(ToolFilter::from_config)
+            .unwrap_or_default();
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
@@ -162,9 +168,9 @@ impl AsyncManagedClient {
                 let client = Arc::new(
                     make_rmcp_client(
                         &server_name,
-                        config.clone(),
+                        server.clone(),
                         store_mode,
-                        runtime_environment,
+                        runtime_context,
                         runtime_auth_provider,
                     )
                     .await?,
@@ -173,14 +179,19 @@ impl AsyncManagedClient {
                     server_name,
                     client,
                     StartServerTaskParams {
-                        startup_timeout: config
-                            .startup_timeout_sec
+                        startup_timeout: server
+                            .configured_config()
+                            .and_then(|config| config.startup_timeout_sec)
                             .or(Some(DEFAULT_STARTUP_TIMEOUT)),
-                        tool_timeout: config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                        tool_timeout: server
+                            .configured_config()
+                            .and_then(|config| config.tool_timeout_sec)
+                            .unwrap_or(DEFAULT_TOOL_TIMEOUT),
                         tool_filter: startup_tool_filter,
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
+                        client_elicitation_capability,
                     },
                 )
                 .await
@@ -317,14 +328,6 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
-pub(crate) fn elicitation_capability_for_server(
-    _server_name: &str,
-) -> Option<ElicitationCapability> {
-    // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-    // indicates this should be an empty object.
-    Some(ElicitationCapability::default())
-}
-
 pub(crate) async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,
@@ -372,6 +375,8 @@ pub(crate) async fn list_tools_for_client_uncached(
             };
             ToolInfo {
                 server_name: server_name.to_owned(),
+                supports_parallel_tool_calls: false,
+                server_origin: None,
                 callable_name,
                 callable_namespace,
                 namespace_description,
@@ -463,8 +468,8 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        client_elicitation_capability,
     } = params;
-    let elicitation = elicitation_capability_for_server(&server_name);
     let params = InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
@@ -472,7 +477,7 @@ async fn start_server_task(
             extensions: None,
             roots: None,
             sampling: None,
-            elicitation,
+            elicitation: Some(client_elicitation_capability),
             tasks: None,
         },
         client_info: Implementation {
@@ -548,36 +553,24 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    client_elicitation_capability: ElicitationCapability,
 }
 
 async fn make_rmcp_client(
     server_name: &str,
-    config: McpServerConfig,
+    server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
-    runtime_environment: McpRuntimeEnvironment,
+    runtime_context: McpRuntimeContext,
     runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
-    let McpServerConfig {
-        transport,
-        experimental_environment,
-        ..
-    } = config;
-    let remote_environment = match experimental_environment.as_deref() {
-        None | Some("local") => false,
-        Some("remote") => {
-            if !runtime_environment.environment().is_remote() {
-                return Err(StartupOutcomeError::from(anyhow!(
-                    "remote MCP server `{server_name}` requires a remote environment"
-                )));
-            }
-            true
-        }
-        Some(environment) => {
-            return Err(StartupOutcomeError::from(anyhow!(
-                "unsupported experimental_environment `{environment}` for MCP server `{server_name}`"
-            )));
-        }
+    let config = match server.launch() {
+        McpServerLaunch::Configured(config) => config.as_ref().clone(),
     };
+    let resolved_environment = runtime_context
+        .resolve_server_environment(server_name, &config)
+        .map_err(|err| StartupOutcomeError::from(anyhow!(err)))?;
+    let is_local_environment = config.is_local_environment();
+    let McpServerConfig { transport, .. } = config;
 
     match transport {
         McpServerTransportConfig::Stdio {
@@ -594,20 +587,24 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            let launcher = if remote_environment {
-                Arc::new(ExecutorStdioServerLauncher::new(
-                    runtime_environment.environment().get_exec_backend(),
-                    runtime_environment.fallback_cwd(),
-                ))
-            } else {
+            let launcher = if is_local_environment {
+                // TODO(starr): Unify local stdio MCP launch with
+                // `ExecutorStdioServerLauncher` once the executor-backed path
+                // preserves `LocalStdioServerLauncher` semantics.
                 Arc::new(LocalStdioServerLauncher::new(
-                    runtime_environment.fallback_cwd(),
+                    runtime_context.local_stdio_fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
+            } else {
+                let Some(environment) = resolved_environment.as_ref() else {
+                    unreachable!(
+                        "non-local stdio MCP servers resolve an environment before launch"
+                    );
+                };
+                Arc::new(ExecutorStdioServerLauncher::new(
+                    environment.get_exec_backend(),
                 )) as Arc<dyn StdioServerLauncher>
             };
 
-            // `RmcpClient` always sees a launched MCP stdio server. The
-            // launcher hides whether that means a local child process or an
-            // executor process whose stdin/stdout bytes cross the process API.
             RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
@@ -618,11 +615,10 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
-            let http_client: Arc<dyn HttpClient> = if remote_environment {
-                runtime_environment.environment().get_http_client()
-            } else {
-                Arc::new(ReqwestHttpClient)
-            };
+            let http_client = resolved_environment.as_ref().map_or_else(
+                || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+                |environment| environment.get_http_client(),
+            );
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,

@@ -66,25 +66,15 @@ pub(super) fn emit_project_config_warnings(app_event_tx: &AppEventSender, config
 }
 
 pub(super) fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
-    let Some(message) = crate::legacy_core::config::system_bwrap_warning(
-        config.permissions.permission_profile.get(),
-    ) else {
+    let Some(message) =
+        codex_sandboxing::system_bwrap_warning(config.permissions.permission_profile())
+    else {
         return;
     };
 
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
         history_cell::new_warning_event(message),
     )));
-}
-
-pub(super) fn hooks_needing_review_warning(count: usize) -> Option<String> {
-    match count {
-        0 => None,
-        1 => Some("1 hook needs review before it can run. Open /hooks to review it.".to_string()),
-        count => Some(format!(
-            "{count} hooks need review before they can run. Open /hooks to review them."
-        )),
-    }
 }
 
 pub(super) fn should_show_model_migration_prompt(
@@ -219,7 +209,7 @@ pub(super) async fn prepare_startup_tooltip_override(
     let mut updated_shown_count = config.model_availability_nux.shown_count.clone();
     updated_shown_count.insert(tooltip_override.model_slug.clone(), next_count);
 
-    if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
+    if let Err(err) = ConfigEditsBuilder::for_config(config)
         .set_model_availability_nux_count(&updated_shown_count)
         .apply()
         .await

@@ -10,6 +10,7 @@ mod bundle;
 mod code_cell;
 mod compaction;
 mod inference;
+mod mcp;
 mod model;
 mod payload;
 mod protocol_event;
@@ -33,6 +34,8 @@ pub use compaction::CompactionTraceContext;
 pub use inference::InferenceTraceAttempt;
 /// Shared recorder context for inference attempts within one Codex turn.
 pub use inference::InferenceTraceContext;
+/// Trace-owned MCP execution correlation propagated to bridge request metadata.
+pub use mcp::McpCallTraceContext;
 /// Public reduced trace model returned by replay.
 pub use model::*;
 /// Stable identifier for one raw payload inside a rollout bundle.

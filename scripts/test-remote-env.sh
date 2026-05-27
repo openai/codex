@@ -5,7 +5,7 @@
 # Usage (source-only):
 #   source scripts/test-remote-env.sh
 #   cd codex-rs
-#   cargo test -p codex-core --test all remote_env_connects_creates_temp_dir_and_runs_sample_script
+#   just test -p codex-core --test all remote_test_env_can_connect_and_use_filesystem
 #   codex_remote_env_cleanup
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,7 +59,7 @@ setup_remote_env() {
     --privileged \
     --security-opt seccomp=unconfined \
     ubuntu:24.04 sleep infinity >/dev/null
-  if ! docker exec "${container_name}" sh -lc "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 zsh"; then
+  if ! docker exec "${container_name}" sh -lc "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 zsh bubblewrap"; then
     docker rm -f "${container_name}" >/dev/null 2>&1 || true
     return 1
   fi

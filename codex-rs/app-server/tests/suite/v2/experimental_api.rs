@@ -15,6 +15,7 @@ use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_protocol::protocol::RealtimeOutputModality;
@@ -36,6 +37,7 @@ async fn mock_experimental_method_requires_experimental_api_capability() -> Resu
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                request_attestation: false,
                 opt_out_notification_methods: None,
             }),
         )
@@ -66,6 +68,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                request_attestation: false,
                 opt_out_notification_methods: None,
             }),
         )
@@ -103,6 +106,7 @@ async fn thread_memory_mode_set_requires_experimental_api_capability() -> Result
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                request_attestation: false,
                 opt_out_notification_methods: None,
             }),
         )
@@ -127,6 +131,40 @@ async fn thread_memory_mode_set_requires_experimental_api_capability() -> Result
 }
 
 #[tokio::test]
+async fn thread_settings_update_requires_experimental_api_capability() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    let init = mcp
+        .initialize_with_capabilities(
+            default_client_info(),
+            Some(InitializeCapabilities {
+                experimental_api: false,
+                request_attestation: false,
+                opt_out_notification_methods: None,
+            }),
+        )
+        .await?;
+    let JSONRPCMessage::Response(_) = init else {
+        anyhow::bail!("expected initialize response, got {init:?}");
+    };
+
+    let request_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: "thr_123".to_string(),
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_experimental_capability_error(error, "thread/settings/update");
+    Ok(())
+}
+
+#[tokio::test]
 async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -136,6 +174,7 @@ async fn realtime_webrtc_start_requires_experimental_api_capability() -> Result<
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                request_attestation: false,
                 opt_out_notification_methods: None,
             }),
         )
@@ -177,6 +216,7 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                request_attestation: false,
                 opt_out_notification_methods: None,
             }),
         )
@@ -214,6 +254,7 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                request_attestation: false,
                 opt_out_notification_methods: None,
             }),
         )
@@ -250,6 +291,7 @@ async fn thread_start_granular_approval_policy_requires_experimental_api_capabil
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                request_attestation: false,
                 opt_out_notification_methods: None,
             }),
         )

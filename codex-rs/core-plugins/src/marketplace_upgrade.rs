@@ -6,6 +6,7 @@ use self::activation::installed_marketplace_metadata_matches;
 use self::activation::write_installed_marketplace_metadata;
 use self::git::clone_git_source;
 use self::git::git_remote_revision;
+use crate::marketplace::find_marketplace_manifest_path;
 use crate::marketplace::validate_marketplace_root;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerStack;
@@ -108,10 +109,10 @@ fn marketplace_install_root(codex_home: &Path) -> PathBuf {
 fn configured_git_marketplaces(
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<ConfiguredGitMarketplace> {
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return Vec::new();
     };
-    let Some(marketplaces_value) = user_layer.config.get("marketplaces") else {
+    let Some(marketplaces_value) = user_config.get("marketplaces") else {
         return Vec::new();
     };
     let marketplaces = match marketplaces_value
@@ -176,9 +177,7 @@ fn upgrade_configured_git_marketplace(
         MARKETPLACE_UPGRADE_GIT_TIMEOUT,
     )?;
     let destination = install_root.join(&marketplace.name);
-    if destination
-        .join(".agents/plugins/marketplace.json")
-        .is_file()
+    if find_marketplace_manifest_path(&destination).is_some()
         && marketplace.last_revision.as_deref() == Some(remote_revision.as_str())
         && installed_marketplace_metadata_matches(&destination, marketplace, &remote_revision)
     {

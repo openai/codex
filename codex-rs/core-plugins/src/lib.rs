@@ -6,6 +6,7 @@ pub mod marketplace;
 pub mod marketplace_add;
 pub mod marketplace_remove;
 pub mod marketplace_upgrade;
+mod plugin_bundle_archive;
 pub mod remote;
 pub mod remote_bundle;
 pub mod remote_legacy;
@@ -26,6 +27,7 @@ pub const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "gmail@openai-curated",
     "google-calendar@openai-curated",
     "google-drive@openai-curated",
+    "openai-developers@openai-curated",
     "canva@openai-curated",
     "teams@openai-curated",
     "sharepoint@openai-curated",

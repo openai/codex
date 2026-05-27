@@ -19,7 +19,7 @@ use tracing_test::internal::MockWriter;
 async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plugins() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, &["sample", "slack"]);
+    write_openai_curated_marketplace(&curated_root, &["sample", "slack", "openai-developers"]);
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
@@ -29,16 +29,28 @@ async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plug
 
     assert_eq!(
         discoverable_plugins,
-        vec![DiscoverablePluginInfo {
-            id: "slack@openai-curated".to_string(),
-            name: "slack".to_string(),
-            description: Some(
-                "Plugin that includes skills, MCP servers, and app connectors".to_string(),
-            ),
-            has_skills: true,
-            mcp_server_names: vec!["sample-docs".to_string()],
-            app_connector_ids: vec!["connector_calendar".to_string()],
-        }]
+        vec![
+            DiscoverablePluginInfo {
+                id: "openai-developers@openai-curated".to_string(),
+                name: "openai-developers".to_string(),
+                description: Some(
+                    "Plugin that includes skills, MCP servers, and app connectors".to_string(),
+                ),
+                has_skills: true,
+                mcp_server_names: vec!["sample-docs".to_string()],
+                app_connector_ids: vec!["connector_calendar".to_string()],
+            },
+            DiscoverablePluginInfo {
+                id: "slack@openai-curated".to_string(),
+                name: "slack".to_string(),
+                description: Some(
+                    "Plugin that includes skills, MCP servers, and app connectors".to_string(),
+                ),
+                has_skills: true,
+                mcp_server_names: vec!["sample-docs".to_string()],
+                app_connector_ids: vec!["connector_calendar".to_string()],
+            },
+        ]
     );
 }
 

@@ -4,7 +4,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::Utc;
-use codex_core::EventPersistenceMode;
 use codex_core::RolloutRecorder;
 use codex_core::RolloutRecorderParams;
 use codex_core::config::ConfigBuilder;
@@ -186,12 +185,10 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             thread_id,
             /*forked_from_id*/ None,
             SessionSource::Exec,
+            /*thread_source*/ None,
             BaseInstructions::default(),
             Vec::new(),
-            EventPersistenceMode::Limited,
         ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
     )
     .await?;
     recorder.persist().await?;

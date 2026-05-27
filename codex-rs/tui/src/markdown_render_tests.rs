@@ -8,6 +8,7 @@ use std::path::Path;
 use crate::markdown_render::COLON_LOCATION_SUFFIX_RE;
 use crate::markdown_render::HASH_LOCATION_SUFFIX_RE;
 use crate::markdown_render::render_markdown_text;
+use crate::markdown_render::render_markdown_text_with_width;
 use crate::markdown_render::render_markdown_text_with_width_and_cwd;
 use insta::assert_snapshot;
 
@@ -530,6 +531,7 @@ fn nested_unordered_in_ordered() {
         Line::from_iter(["1. ".light_blue(), "Outer".into()]),
         Line::from_iter(["    - ", "Inner A"]),
         Line::from_iter(["    - ", "Inner B"]),
+        Line::default(),
         Line::from_iter(["2. ".light_blue(), "Next".into()]),
     ]);
     assert_eq!(text, expected);
@@ -543,6 +545,7 @@ fn nested_ordered_in_unordered() {
         Line::from_iter(["- ", "Outer"]),
         Line::from_iter(["    1. ".light_blue(), "One".into()]),
         Line::from_iter(["    2. ".light_blue(), "Two".into()]),
+        Line::default(),
         Line::from_iter(["- ", "Last"]),
     ]);
     assert_eq!(text, expected);
@@ -556,6 +559,7 @@ fn loose_list_item_multiple_paragraphs() {
         Line::from_iter(["1. ".light_blue(), "First paragraph".into()]),
         Line::default(),
         Line::from_iter(["   ", "Second paragraph of same item"]),
+        Line::default(),
         Line::from_iter(["2. ".light_blue(), "Next item".into()]),
     ]);
     assert_eq!(text, expected);
@@ -580,6 +584,7 @@ fn deeply_nested_mixed_three_levels() {
         Line::from_iter(["1. ".light_blue(), "A".into()]),
         Line::from_iter(["    - ", "B"]),
         Line::from_iter(["        1. ".light_blue(), "C".into()]),
+        Line::default(),
         Line::from_iter(["2. ".light_blue(), "D".into()]),
     ]);
     assert_eq!(text, expected);
@@ -1181,6 +1186,49 @@ fn list_item_after_simple_item_stays_compact() {
 }
 
 #[test]
+fn multiline_finding_items_are_separated_snapshot() {
+    let md = r#"**Findings**
+
+1. **Correctness issue: server tool-search completions are always rejected.**
+
+   In `next_prompt_suggestion.rs`, the output is ignored, suppressing suggestions after completed searches.
+
+   Minimal correction: count matching outputs and suppress only missing ones.
+
+2. **High-confidence simplification: remove the unused error channel.**
+
+   The implementation resolves failures to `None`, so its contract can be narrower.
+
+3. **High-confidence churn reduction: consolidate table-driven filter tests.**
+"#;
+    let text = render_markdown_text(md);
+    assert_snapshot!(plain_lines(&text).join("\n"));
+}
+
+#[test]
+fn wrapped_list_item_is_separated_from_next_sibling() {
+    let md = "1. This item wraps onto another visible rendered line\n2. Next item\n";
+    let text = render_markdown_text_with_width(md, Some(/*width*/ 24));
+    assert_eq!(
+        plain_lines(&text),
+        vec![
+            "1. This item wraps onto",
+            "   another visible",
+            "   rendered line",
+            "",
+            "2. Next item",
+        ]
+    );
+}
+
+#[test]
+fn mixed_url_markdown_wraps_prose_without_splitting_words_snapshot() {
+    let md = "This paragraph keeps **strikethrough** intact near a [link](https://example.com/path) while enough surrounding prose forces wrapping.";
+    let text = render_markdown_text_with_width(md, Some(/*width*/ 48));
+    assert_snapshot!(plain_lines(&text).join("\n"));
+}
+
+#[test]
 fn markdown_render_complex_snapshot() {
     let md = r#"# H1: Markdown Streaming Test
 Intro paragraph with bold **text**, italic *text*, and inline code `x=1`.
@@ -1383,6 +1431,7 @@ fn nested_item_continuation_paragraph_is_indented() {
         Line::from_iter(["    - ", "B"]),
         Line::default(),
         Line::from_iter(["      ", "Continuation for B"]),
+        Line::default(),
         Line::from_iter(["2. ".light_blue(), "C".into()]),
     ]);
     assert_eq!(text, expected);
@@ -1419,4 +1468,117 @@ fn code_block_preserves_trailing_blank_lines() {
         content[code_start + 1], "",
         "trailing blank line inside code fence was lost: {content:?}"
     );
+}
+
+#[test]
+fn table_renders_unicode_box() {
+    let md = "| A | B |\n|---|---|\n| 1 | 2 |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert_eq!(
+        lines,
+        vec![
+            "┌─────┬─────┐".to_string(),
+            "│ A   │ B   │".to_string(),
+            "├─────┼─────┤".to_string(),
+            "│ 1   │ 2   │".to_string(),
+            "└─────┴─────┘".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn table_alignment_respects_markers() {
+    let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert_eq!(lines[1], "│ Left │ Center │ Right │");
+    assert_eq!(lines[3], "│ a    │   b    │     c │");
+}
+
+#[test]
+fn table_wraps_cell_content_when_width_is_narrow() {
+    let md = "| Key | Description |\n| --- | --- |\n| -v | Enable very verbose logging output for debugging |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(30));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(lines[0].starts_with('┌') && lines[0].ends_with('┐'));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Enable very verbose"))
+            && lines.iter().any(|line| line.contains("logging output")),
+        "expected wrapped row content: {lines:?}"
+    );
+}
+
+#[test]
+fn table_wraps_file_paths_before_collapsing_narrative_columns_snapshot() {
+    let md = r#"| Unit | Files | Adds | Removes | What It Adds |
+|---|---:|---:|---:|---|
+| Suggestion engine and unit coverage | [next_prompt_suggestion.rs](/Users/example/code/codex/codex-rs/core/src/next_prompt_suggestion.rs:1), [next_prompt_suggestion_tests.rs](/Users/example/code/codex/codex-rs/core/src/next_prompt_suggestion_tests.rs:1) | 704 | 0 | Sampling workflow, stable-history checks, tool-flow suppression, fast reasoning profile, filtering rules, cancellation and timeout. |
+| Model instruction fragment and contextual isolation | [next_prompt_suggestion.rs](/Users/example/code/codex/codex-rs/core/src/context/next_prompt_suggestion.rs:1), [contextual_user_message_tests.rs](/Users/example/code/codex/codex-rs/core/src/context/contextual_user_message_tests.rs:1) | 54 | 0 | Synthetic suggestion prompt and an isolation test for ordinary user text. |
+"#;
+    let text = render_markdown_text_with_width_and_cwd(
+        md,
+        Some(/*width*/ 120),
+        Some(Path::new("/Users/example/code/codex")),
+    );
+
+    assert_snapshot!(plain_lines(&text).join("\n"));
+}
+
+#[test]
+fn table_inside_blockquote_has_quote_prefix() {
+    let md = "> | A | B |\n> |---|---|\n> | 1 | 2 |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(lines.iter().all(|line| line.starts_with("> ")));
+    assert!(lines.iter().any(|line| line.contains("┌─────┬─────┐")));
+}
+
+#[test]
+fn escaped_pipes_render_in_table_cells() {
+    let md = "| Col |\n| --- |\n| a \\| b |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(lines.iter().any(|line| line.contains("a | b")));
+}
+
+#[test]
+fn table_falls_back_to_pipe_rendering_if_it_cannot_fit() {
+    let md = "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(20));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(lines.first().is_some_and(|line| line.starts_with('|')));
+    assert!(!lines.iter().any(|line| line.contains('┌')));
 }

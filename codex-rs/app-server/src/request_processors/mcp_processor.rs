@@ -77,8 +77,9 @@ impl McpRequestProcessor {
         &self,
         _params: Option<()>,
     ) -> Result<McpServerRefreshResponse, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        Self::queue_mcp_server_refresh_for_config(&self.thread_manager, &config).await?;
+        crate::mcp_refresh::queue_strict_refresh(&self.thread_manager, &self.config_manager)
+            .await
+            .map_err(|err| internal_error(format!("failed to refresh MCP servers: {err}")))?;
         Ok(McpServerRefreshResponse {})
     }
 
@@ -106,44 +107,6 @@ impl McpRequestProcessor {
             .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
-    }
-
-    pub(super) async fn queue_mcp_server_refresh_for_config(
-        thread_manager: &Arc<ThreadManager>,
-        config: &Config,
-    ) -> Result<(), JSONRPCErrorError> {
-        let configured_servers = thread_manager
-            .mcp_manager()
-            .configured_servers(config)
-            .await;
-        let mcp_servers = match serde_json::to_value(configured_servers) {
-            Ok(value) => value,
-            Err(err) => {
-                return Err(internal_error(format!(
-                    "failed to serialize MCP servers: {err}"
-                )));
-            }
-        };
-
-        let mcp_oauth_credentials_store_mode =
-            match serde_json::to_value(config.mcp_oauth_credentials_store_mode) {
-                Ok(value) => value,
-                Err(err) => {
-                    return Err(internal_error(format!(
-                        "failed to serialize MCP OAuth credentials store mode: {err}"
-                    )));
-                }
-            };
-
-        let refresh_config = McpServerRefreshConfig {
-            mcp_servers,
-            mcp_oauth_credentials_store_mode,
-        };
-
-        // Refresh requests are queued per thread; each thread rebuilds MCP connections on its next
-        // active turn to avoid work for threads that never resume.
-        thread_manager.refresh_mcp_servers(refresh_config).await;
-        Ok(())
     }
 
     async fn mcp_server_oauth_login_response(
@@ -197,6 +160,7 @@ impl McpRequestProcessor {
             http_headers,
             env_http_headers,
             &resolved_scopes.scopes,
+            server.oauth_client_id(),
             server.oauth_resource.as_deref(),
             timeout_secs,
             config.mcp_oauth_callback_port,
@@ -235,33 +199,36 @@ impl McpRequestProcessor {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let config = match params.thread_id.as_deref() {
+            Some(thread_id) => {
+                let (_, thread) = self.load_thread(thread_id).await?;
+                let thread_config = thread.config().await;
+                self.config_manager
+                    .load_latest_config_for_thread(thread_config.as_ref())
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?
+            }
+            None => self.load_latest_config(/*fallback_cwd*/ None).await?,
+        };
         let mcp_config = config
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
         let environment_manager = self.thread_manager.environment_manager();
-        let runtime_environment = match environment_manager.default_environment() {
-            Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            None => McpRuntimeEnvironment::new(
-                environment_manager.local_environment(),
-                config.cwd.to_path_buf(),
-            ),
-        };
+        // This status path has no turn-selected environment. Use config cwd
+        // as the local stdio fallback; named environment stdio MCPs must
+        // declare their own absolute cwd.
+        let runtime_context =
+            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
                 outgoing,
                 request,
                 params,
-                config,
                 mcp_config,
                 auth,
-                runtime_environment,
+                runtime_context,
             )
             .await;
         });
@@ -272,18 +239,16 @@ impl McpRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         request_id: ConnectionRequestId,
         params: ListMcpServerStatusParams,
-        config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
     ) {
         let result = Self::list_mcp_server_status_response(
             request_id.request_id.to_string(),
             params,
-            config,
             mcp_config,
             auth,
-            runtime_environment,
+            runtime_context,
         )
         .await;
         outgoing.send_result(request_id, result).await;
@@ -292,10 +257,9 @@ impl McpRequestProcessor {
     async fn list_mcp_server_status_response(
         request_id: String,
         params: ListMcpServerStatusParams,
-        config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
-        runtime_environment: McpRuntimeEnvironment,
+        runtime_context: McpRuntimeContext,
     ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
@@ -306,31 +270,25 @@ impl McpRequestProcessor {
             &mcp_config,
             auth.as_ref(),
             request_id,
-            runtime_environment,
+            runtime_context,
             detail,
         )
         .await;
 
-        let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
         let McpServerStatusSnapshot {
             tools_by_server,
             resources,
             resource_templates,
             auth_statuses,
+            mut server_names,
         } = snapshot;
-
-        let mut server_names: Vec<String> = config
-            .mcp_servers
-            .keys()
-            .cloned()
-            // Include built-in/plugin MCP servers that are present in the
-            // effective runtime config even when they are not user-declared in
-            // `config.mcp_servers`.
-            .chain(effective_servers.keys().cloned())
-            .chain(auth_statuses.keys().cloned())
-            .chain(resources.keys().cloned())
-            .chain(resource_templates.keys().cloned())
-            .collect();
+        server_names.extend(
+            auth_statuses
+                .keys()
+                .cloned()
+                .chain(resources.keys().cloned())
+                .chain(resource_templates.keys().cloned()),
+        );
         server_names.sort();
         server_names.dedup();
 
@@ -405,22 +363,19 @@ impl McpRequestProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = {
-            let environment_manager = self.thread_manager.environment_manager();
-            let environment = environment_manager
-                .default_environment()
-                .unwrap_or_else(|| environment_manager.local_environment());
-            // Resource reads without a thread have no turn cwd. This fallback
-            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-        };
+        let environment_manager = self.thread_manager.environment_manager();
+        // This threadless resource-read path has no turn cwd or turn-selected
+        // environment. Use config cwd only as the local stdio fallback; named
+        // environment stdio MCPs must declare their own absolute cwd.
+        let runtime_context =
+            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
             let result = read_mcp_resource_without_thread(
                 &mcp_config,
                 auth.as_ref(),
-                runtime_environment,
+                runtime_context,
                 &server,
                 &uri,
             )

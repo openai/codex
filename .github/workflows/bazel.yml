@@ -17,10 +17,10 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
-    # PRs use a fast Windows cross-compiled test leg for pre-merge signal.
-    # Post-merge pushes to main also run the native Windows test job below for
-    # broader Windows signal without putting PR latency back on the critical
-    # path. Cargo CI owns V8/code-mode test coverage for now.
+    # PRs use the sharded Windows cross-compiled test jobs below. Post-merge
+    # pushes to main also run the native Windows test job for broader Windows
+    # signal without putting PR latency back on the critical path. Cargo CI
+    # owns V8/code-mode test coverage for now.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -44,19 +44,16 @@ jobs:
           # - os: ubuntu-24.04-arm
           #   target: aarch64-unknown-linux-gnu
 
-          # Windows fast path: build the windows-gnullvm binaries with Linux
-          # RBE, then run the resulting Windows tests on the Windows runner.
-          # Cargo CI preserves V8/code-mode coverage while Bazel CI keeps broad
-          # non-code-mode signal.
-          - os: windows-latest
-            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
 
     # Configure a human readable name for each job
     name: Bazel test on ${{ matrix.os }} for ${{ matrix.target }}
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Check rusty_v8 MODULE.bazel checksums
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
@@ -105,13 +102,6 @@ jobs:
             --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            bazel_wrapper_args+=(
-              --windows-cross-compile
-              --remote-download-toplevel
-            )
-          fi
-
           ./.github/scripts/run-bazel-ci.sh \
             "${bazel_wrapper_args[@]}" \
             -- \
@@ -122,7 +112,7 @@ jobs:
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: bazel-execution-logs-test-${{ matrix.target }}
           path: ${{ runner.temp }}/bazel-execution-logs
@@ -133,10 +123,122 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
+
+  test-windows-shard:
+    # Split the Windows Bazel test leg across separate Windows
+    # hosts. Each shard still uses Linux RBE for build actions, but the test
+    # execution itself happens on its own Windows runner.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - 1
+          - 2
+          - 3
+          - 4
+    runs-on: windows-latest
+    name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm shard ${{ matrix.shard }}/4
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: x86_64-pc-windows-gnullvm
+          # Reuse the former monolithic Windows test cache for restores. Do
+          # not save it from every shard below; duplicate uploads would sit on
+          # the PR-blocking critical path after the useful test work is done.
+          cache-scope: bazel-test
+          install-test-prereqs: "true"
+
+      - name: bazel test shard
+        env:
+          BAZEL_TEST_SHARD: ${{ matrix.shard }}
+          BAZEL_TEST_SHARD_COUNT: 4
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bazel_test_query='tests(//...) except tests(//third_party/v8:all) except //codex-rs/code-mode:code-mode-unit-tests except //codex-rs/v8-poc:v8-poc-unit-tests except attr(tags, "manual", tests(//...))'
+          mapfile -t bazel_targets < <(
+            MSYS2_ARG_CONV_EXCL='*' bazel query --output=label "${bazel_test_query}" \
+              | LC_ALL=C sort
+          )
+
+          selected_targets=()
+          for bazel_target in "${bazel_targets[@]}"; do
+            target_bucket="$(
+              printf '%s\n' "${bazel_target}" \
+                | cksum \
+                | awk -v shard_count="${BAZEL_TEST_SHARD_COUNT}" '{ print ($1 % shard_count) + 1 }'
+            )"
+            if [[ "${target_bucket}" == "${BAZEL_TEST_SHARD}" ]]; then
+              selected_targets+=("${bazel_target}")
+            fi
+          done
+
+          if [[ ${#selected_targets[@]} -eq 0 ]]; then
+            echo "No Bazel test targets selected for Windows shard ${BAZEL_TEST_SHARD}/${BAZEL_TEST_SHARD_COUNT}." >&2
+            exit 1
+          fi
+
+          echo "Selected ${#selected_targets[@]} of ${#bazel_targets[@]} Bazel test targets for Windows shard ${BAZEL_TEST_SHARD}/${BAZEL_TEST_SHARD_COUNT}."
+
+          bazel_test_args=(
+            test
+            --skip_incompatible_explicit_targets
+            --test_tag_filters=-argument-comment-lint
+            --test_verbose_timeout_warnings
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
+            --build_metadata=TAG_windows_test_shard=${BAZEL_TEST_SHARD}
+          )
+
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            --print-failed-test-logs \
+            --windows-cross-compile \
+            --remote-download-toplevel \
+            -- \
+            "${bazel_test_args[@]}" \
+            -- \
+            "${selected_targets[@]}"
+
+      - name: Upload Bazel execution logs
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: bazel-execution-logs-test-x86_64-pc-windows-gnullvm-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: ignore
+
+  test-windows:
+    # Preserve the existing required-check surface while the real work happens
+    # in the sharded Windows jobs above.
+    if: always()
+    needs: test-windows-shard
+    runs-on: ubuntu-24.04
+    name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm
+
+    steps:
+      - name: Confirm Windows Bazel test shards passed
+        shell: bash
+        run: |
+          if [[ "${{ needs.test-windows-shard.result }}" != "success" ]]; then
+            echo "Windows Bazel test shards finished with result: ${{ needs.test-windows-shard.result }}" >&2
+            exit 1
+          fi
 
   test-windows-native-main:
     # Native Windows Bazel tests are slower and frequently approach the
@@ -148,7 +250,10 @@ jobs:
     name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm (native main)
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Prepare Bazel CI
         id: prepare_bazel
@@ -195,7 +300,7 @@ jobs:
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: bazel-execution-logs-test-windows-native-x86_64-pc-windows-gnullvm
           path: ${{ runner.temp }}/bazel-execution-logs
@@ -206,7 +311,7 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
@@ -231,7 +336,10 @@ jobs:
     name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Prepare Bazel CI
         id: prepare_bazel
@@ -286,7 +394,7 @@ jobs:
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: bazel-execution-logs-clippy-${{ matrix.target }}
           path: ${{ runner.temp }}/bazel-execution-logs
@@ -297,7 +405,7 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
@@ -318,7 +426,10 @@ jobs:
     name: Verify release build on ${{ matrix.os }} for ${{ matrix.target }}
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Prepare Bazel CI
         id: prepare_bazel
@@ -390,7 +501,7 @@ jobs:
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: bazel-execution-logs-verify-release-build-${{ matrix.target }}
           path: ${{ runner.temp }}/bazel-execution-logs
@@ -401,7 +512,7 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}

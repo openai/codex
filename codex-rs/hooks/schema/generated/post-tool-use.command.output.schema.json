@@ -13,8 +13,12 @@
         "PreToolUse",
         "PermissionRequest",
         "PostToolUse",
+        "PreCompact",
+        "PostCompact",
         "SessionStart",
         "UserPromptSubmit",
+        "SubagentStart",
+        "SubagentStop",
         "Stop"
       ],
       "type": "string"

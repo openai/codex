@@ -1,4 +1,6 @@
 use super::*;
+use codex_config::config_toml::ConfigToml;
+use futures::StreamExt;
 
 #[derive(Clone)]
 pub(crate) struct CatalogRequestProcessor {
@@ -8,6 +10,8 @@ pub(crate) struct CatalogRequestProcessor {
     pub(super) config_manager: ConfigManager,
     pub(super) workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
 }
+
+const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
@@ -152,6 +156,15 @@ impl CatalogRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn permission_profile_list(
+        &self,
+        params: PermissionProfileListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.permission_profile_list_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn collaboration_mode_list(
         &self,
         params: CollaborationModeListParams,
@@ -282,8 +295,28 @@ impl CatalogRequestProcessor {
         &self,
         params: ExperimentalFeatureListParams,
     ) -> Result<ExperimentalFeatureListResponse, JSONRPCErrorError> {
-        let ExperimentalFeatureListParams { cursor, limit } = params;
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let ExperimentalFeatureListParams {
+            cursor,
+            limit,
+            thread_id,
+        } = params;
+        let config = match thread_id.as_deref() {
+            Some(thread_id) => {
+                let thread_id = ThreadId::from_string(thread_id)
+                    .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+                let thread = self
+                    .thread_manager
+                    .get_thread(thread_id)
+                    .await
+                    .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
+                let thread_config = thread.config().await;
+                self.config_manager
+                    .load_latest_config_for_thread(thread_config.as_ref())
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?
+            }
+            None => self.load_latest_config(/*fallback_cwd*/ None).await?,
+        };
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
@@ -366,6 +399,78 @@ impl CatalogRequestProcessor {
         Ok(ExperimentalFeatureListResponse { data, next_cursor })
     }
 
+    async fn permission_profile_list_response(
+        &self,
+        params: PermissionProfileListParams,
+    ) -> Result<PermissionProfileListResponse, JSONRPCErrorError> {
+        let PermissionProfileListParams { cursor, limit, cwd } = params;
+        let config_layer_stack = match cwd {
+            Some(cwd) => {
+                let cwd = PathBuf::from(cwd);
+                let (_, config_layer_stack) = self
+                    .resolve_cwd_config(&cwd)
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                config_layer_stack
+            }
+            None => self
+                .config_manager
+                .load_config_layers(/*cwd*/ None)
+                .await
+                .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
+        };
+        let effective_config: ConfigToml = config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| internal_error(format!("failed to read effective config: {err}")))?;
+        let mut profiles = vec![
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
+                description: None,
+            },
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
+                description: None,
+            },
+            PermissionProfileSummary {
+                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
+                description: None,
+            },
+        ];
+        let mut configured_profiles = effective_config
+            .permissions
+            .into_iter()
+            .flat_map(|permissions| permissions.entries)
+            .map(|(id, profile)| PermissionProfileSummary {
+                id,
+                description: profile.description,
+            })
+            .collect::<Vec<_>>();
+        configured_profiles.sort_by(|left, right| left.id.cmp(&right.id));
+        profiles.extend(configured_profiles);
+        let total = profiles.len();
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = effective_limit.min(total);
+        let start = match cursor {
+            Some(cursor) => cursor
+                .parse::<usize>()
+                .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?,
+            None => 0,
+        };
+
+        if start > total {
+            return Err(invalid_request(format!(
+                "cursor {start} exceeds total permission profiles {total}"
+            )));
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = profiles[start..end].to_vec();
+        let next_cursor = (end < total).then_some(end.to_string());
+
+        Ok(PermissionProfileListResponse { data, next_cursor })
+    }
+
     async fn mock_experimental_method_inner(
         &self,
         params: MockExperimentalMethodParams,
@@ -379,44 +484,12 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams {
-            cwds,
-            force_reload,
-            per_cwd_extra_user_roots,
-        } = params;
+        let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
         } else {
             cwds
         };
-        let cwd_set: HashSet<PathBuf> = cwds.iter().cloned().collect();
-
-        let mut extra_roots_by_cwd: HashMap<PathBuf, Vec<AbsolutePathBuf>> = HashMap::new();
-        for entry in per_cwd_extra_user_roots.unwrap_or_default() {
-            if !cwd_set.contains(&entry.cwd) {
-                warn!(
-                    cwd = %entry.cwd.display(),
-                    "ignoring per-cwd extra roots for cwd not present in skills/list cwds"
-                );
-                continue;
-            }
-
-            let mut valid_extra_roots = Vec::new();
-            for root in entry.extra_user_roots {
-                let root =
-                    AbsolutePathBuf::from_absolute_path_checked(root.as_path()).map_err(|_| {
-                        invalid_request(format!(
-                            "skills/list perCwdExtraUserRoots extraUserRoots paths must be absolute: {}",
-                            root.display()
-                        ))
-                    })?;
-                valid_extra_roots.push(root);
-            }
-            extra_roots_by_cwd
-                .entry(entry.cwd)
-                .or_default()
-                .extend(valid_extra_roots);
-        }
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         let auth = self.auth_manager.auth().await;
@@ -430,56 +503,67 @@ impl CatalogRequestProcessor {
             .environment_manager()
             .default_environment()
             .map(|environment| environment.get_filesystem());
-        let mut data = Vec::new();
-        for cwd in cwds {
-            let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
-                Ok(resolved) => resolved,
-                Err(message) => {
-                    let error_path = cwd.clone();
-                    data.push(codex_app_server_protocol::SkillsListEntry {
-                        cwd,
-                        skills: Vec::new(),
-                        errors: vec![codex_app_server_protocol::SkillErrorInfo {
-                            path: error_path,
-                            message,
-                        }],
-                    });
-                    continue;
+        let mut data = futures::stream::iter(cwds.into_iter().enumerate())
+            .map(|(index, cwd)| {
+                let config = &config;
+                let fs = fs.clone();
+                let plugins_manager = &plugins_manager;
+                let skills_manager = &skills_manager;
+                async move {
+                    let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
+                        Ok(resolved) => resolved,
+                        Err(message) => {
+                            let error_path = cwd.clone();
+                            return (
+                                index,
+                                codex_app_server_protocol::SkillsListEntry {
+                                    cwd,
+                                    skills: Vec::new(),
+                                    errors: vec![codex_app_server_protocol::SkillErrorInfo {
+                                        path: error_path,
+                                        message,
+                                    }],
+                                },
+                            );
+                        }
+                    };
+                    let effective_skill_roots = if workspace_codex_plugins_enabled {
+                        let plugins_input = config.plugins_config_input();
+                        plugins_manager
+                            .effective_skill_roots_for_layer_stack(
+                                &config_layer_stack,
+                                &plugins_input,
+                            )
+                            .await
+                    } else {
+                        Vec::new()
+                    };
+                    let skills_input = codex_core::skills::SkillsLoadInput::new(
+                        cwd_abs.clone(),
+                        effective_skill_roots,
+                        config_layer_stack,
+                        config.bundled_skills_enabled(),
+                    );
+                    let outcome = skills_manager
+                        .skills_for_cwd(&skills_input, force_reload, fs)
+                        .await;
+                    let errors = errors_to_info(&outcome.errors);
+                    let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
+                    (
+                        index,
+                        codex_app_server_protocol::SkillsListEntry {
+                            cwd,
+                            skills,
+                            errors,
+                        },
+                    )
                 }
-            };
-            let extra_roots = extra_roots_by_cwd
-                .get(&cwd)
-                .map_or(&[][..], std::vec::Vec::as_slice);
-            let effective_skill_roots = if workspace_codex_plugins_enabled {
-                let plugins_input = config.plugins_config_input();
-                plugins_manager
-                    .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
-                    .await
-            } else {
-                Vec::new()
-            };
-            let skills_input = codex_core::skills::SkillsLoadInput::new(
-                cwd_abs.clone(),
-                effective_skill_roots,
-                config_layer_stack,
-                config.bundled_skills_enabled(),
-            );
-            let outcome = skills_manager
-                .skills_for_cwd_with_extra_user_roots(
-                    &skills_input,
-                    force_reload,
-                    extra_roots,
-                    fs.clone(),
-                )
-                .await;
-            let errors = errors_to_info(&outcome.errors);
-            let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
-            data.push(codex_app_server_protocol::SkillsListEntry {
-                cwd,
-                skills,
-                errors,
-            });
-        }
+            })
+            .buffer_unordered(SKILLS_LIST_CWD_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+        data.sort_unstable_by_key(|(index, _)| *index);
+        let data = data.into_iter().map(|(_, entry)| entry).collect();
         Ok(SkillsListResponse { data })
     }
 
@@ -528,21 +612,17 @@ impl CatalogRequestProcessor {
                 .await;
             let plugins_enabled =
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
-            let plugin_outcome = if plugins_enabled && config.features.enabled(Feature::PluginHooks)
-            {
+            let plugin_outcome = if plugins_enabled {
                 let plugins_input = config.plugins_config_input();
                 plugins_manager
-                    .plugins_for_layer_stack(
-                        &config.config_layer_stack,
-                        &plugins_input,
-                        /*plugin_hooks_feature_enabled*/ true,
-                    )
+                    .plugins_for_layer_stack(&config.config_layer_stack, &plugins_input)
                     .await
             } else {
                 PluginLoadOutcome::default()
             };
             let hooks = codex_hooks::list_hooks(codex_hooks::HooksConfig {
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
+                bypass_hook_trust: config.bypass_hook_trust,
                 config_layer_stack: Some(config.config_layer_stack),
                 plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
                 plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),

@@ -373,7 +373,6 @@ mod tests {
             "git diff --output codex_poc.txt",
             "git diff --ext-diff HEAD",
             "git log --textconv -1",
-            "git log --paginate -1",
             "git show --output=codex_poc.txt HEAD",
             "git cat-file --filters HEAD:a.txt",
         ]
@@ -396,12 +395,21 @@ mod tests {
                 ("git diff --output codex_poc.txt", false),
                 ("git diff --ext-diff HEAD", false),
                 ("git log --textconv -1", false),
-                ("git log --paginate -1", false),
                 ("git show --output=codex_poc.txt HEAD", false),
                 ("git cat-file --filters HEAD:a.txt", false),
             ],
             results
         );
+    }
+
+    #[test]
+    fn rejects_stop_parsing_git_forms() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "git log --% HEAD --output=codex_poc.txt",
+        ])));
     }
 
     #[test]

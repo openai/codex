@@ -1,17 +1,16 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
-use crate::file_watcher::WatchRegistration;
 use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
+use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -22,6 +21,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
@@ -30,7 +30,9 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::StoredThread;
@@ -40,6 +42,7 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,16 +55,21 @@ use codex_rollout::state_db::StateDbHandle;
 pub struct ThreadConfigSnapshot {
     pub model: String,
     pub model_provider_id: String,
-    pub service_tier: Option<ServiceTier>,
+    pub service_tier: Option<String>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub cwd: AbsolutePathBuf,
+    pub workspace_roots: Vec<AbsolutePathBuf>,
+    pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
     pub personality: Option<Personality>,
+    pub collaboration_mode: CollaborationMode,
     pub session_source: SessionSource,
+    pub thread_source: Option<ThreadSource>,
 }
 
 impl ThreadConfigSnapshot {
@@ -76,10 +84,12 @@ impl ThreadConfigSnapshot {
     }
 }
 
-/// Turn context overrides that app-server validates before starting a turn.
+/// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
-pub struct CodexThreadTurnContextOverrides {
+pub struct CodexThreadSettingsOverrides {
     pub cwd: Option<PathBuf>,
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_policy: Option<SandboxPolicy>,
@@ -89,7 +99,7 @@ pub struct CodexThreadTurnContextOverrides {
     pub model: Option<String>,
     pub effort: Option<Option<ReasoningEffort>>,
     pub summary: Option<ReasoningSummary>,
-    pub service_tier: Option<Option<ServiceTier>>,
+    pub service_tier: Option<Option<String>>,
     pub collaboration_mode: Option<CollaborationMode>,
     pub personality: Option<Personality>,
 }
@@ -100,7 +110,6 @@ pub struct CodexThread {
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitation_count: Mutex<u64>,
-    _watch_registration: WatchRegistration,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
@@ -111,7 +120,6 @@ impl CodexThread {
         session_configured: SessionConfiguredEvent,
         rollout_path: Option<PathBuf>,
         session_source: SessionSource,
-        watch_registration: WatchRegistration,
     ) -> Self {
         Self {
             codex,
@@ -119,12 +127,16 @@ impl CodexThread {
             session_configured,
             rollout_path,
             out_of_band_elicitation_count: Mutex::new(0),
-            _watch_registration: watch_registration,
         }
     }
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
+    }
+
+    /// Returns the session telemetry handle for thread-scoped production instrumentation.
+    pub fn session_telemetry(&self) -> SessionTelemetry {
+        self.codex.session.services.session_telemetry.clone()
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
@@ -134,6 +146,23 @@ impl CodexThread {
     /// Wait until the underlying session loop has terminated.
     pub async fn wait_until_terminated(&self) {
         self.codex.session_loop_termination.clone().await;
+    }
+
+    pub(crate) async fn emit_thread_resume_lifecycle(&self) {
+        for contributor in self
+            .codex
+            .session
+            .services
+            .extensions
+            .thread_lifecycle_contributors()
+        {
+            contributor
+                .on_thread_resume(codex_extension_api::ThreadResumeInput {
+                    session_store: &self.codex.session.services.session_extension_data,
+                    thread_store: &self.codex.session.services.thread_extension_data,
+                })
+                .await;
+        }
     }
 
     pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
@@ -209,12 +238,29 @@ impl CodexThread {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.codex
-            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .steer_input(
+                input,
+                additional_context,
+                expected_turn_id,
+                responsesapi_client_metadata,
+            )
             .await
+    }
+
+    /// Injects hidden model-visible items into the currently active turn.
+    ///
+    /// This is the runtime-owned counterpart to user-facing `steer_input`.
+    /// It returns the unchanged items when this thread has no active turn.
+    pub async fn inject_response_items_into_active_turn(
+        &self,
+        items: Vec<ResponseInputItem>,
+    ) -> Result<(), Vec<ResponseInputItem>> {
+        self.codex.session.inject_response_items(items).await
     }
 
     pub async fn set_app_server_client_info(
@@ -232,13 +278,23 @@ impl CodexThread {
             .await
     }
 
-    /// Validate persistent turn context overrides without committing them.
-    pub async fn validate_turn_context_overrides(
+    /// Preview persistent thread settings overrides without committing them.
+    pub async fn preview_thread_settings_overrides(
         &self,
-        overrides: CodexThreadTurnContextOverrides,
-    ) -> ConstraintResult<()> {
-        let CodexThreadTurnContextOverrides {
+        overrides: CodexThreadSettingsOverrides,
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
+        let updates = self.thread_settings_update(overrides).await;
+        self.codex.session.preview_settings(&updates).await
+    }
+
+    async fn thread_settings_update(
+        &self,
+        overrides: CodexThreadSettingsOverrides,
+    ) -> SessionSettingsUpdate {
+        let CodexThreadSettingsOverrides {
             cwd,
+            workspace_roots,
+            profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -262,8 +318,10 @@ impl CodexThread {
                 .with_updates(model, effort, /*developer_instructions*/ None)
         };
 
-        let updates = SessionSettingsUpdate {
+        SessionSettingsUpdate {
             cwd,
+            workspace_roots,
+            profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -275,8 +333,7 @@ impl CodexThread {
             service_tier,
             personality,
             ..Default::default()
-        };
-        self.codex.session.validate_settings(&updates).await
+        }
     }
 
     /// Use sparingly: this is intended to be removed soon.
@@ -354,6 +411,7 @@ impl CodexThread {
         {
             self.codex
                 .session
+                .input_queue
                 .queue_response_items_for_next_turn(items)
                 .await;
             self.codex.session.maybe_start_turn_for_pending_work().await;
@@ -389,7 +447,7 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
-    pub(crate) fn session_configured(&self) -> SessionConfiguredEvent {
+    pub fn session_configured(&self) -> SessionConfiguredEvent {
         self.session_configured.clone()
     }
 
@@ -461,6 +519,17 @@ impl CodexThread {
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
+    }
+
+    /// Refresh the thread's layer-backed user config state from a caller-supplied
+    /// config snapshot. Thread-scoped layers and session-static settings remain
+    /// unchanged.
+    pub async fn refresh_runtime_config(&self, next_config: crate::config::Config) {
+        self.codex.session.refresh_runtime_config(next_config).await;
+    }
+
+    pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
+        self.codex.thread_environment_selections().await
     }
 
     pub async fn read_mcp_resource(

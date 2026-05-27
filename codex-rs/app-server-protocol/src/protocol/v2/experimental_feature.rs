@@ -14,6 +14,11 @@ pub struct ExperimentalFeatureListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
+    /// Optional loaded thread id. Pass this when showing feature state for an
+    /// existing thread so enablement is computed from that thread's refreshed
+    /// config, including project-local config for the thread's cwd.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

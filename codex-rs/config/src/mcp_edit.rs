@@ -175,8 +175,8 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     if !config.enabled {
         entry["enabled"] = value(false);
     }
-    if let Some(environment) = &config.experimental_environment {
-        entry["experimental_environment"] = value(environment.clone());
+    if !config.is_local_environment() {
+        entry["environment_id"] = value(config.environment_id.clone());
     }
     if config.required {
         entry["required"] = value(true);
@@ -211,6 +211,15 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         && !scopes.is_empty()
     {
         entry["scopes"] = array_from_strings(scopes);
+    }
+    if let Some(oauth) = &config.oauth
+        && let Some(client_id) = &oauth.client_id
+        && !client_id.is_empty()
+    {
+        let mut oauth_table = TomlTable::new();
+        oauth_table.set_implicit(false);
+        oauth_table["client_id"] = value(client_id.clone());
+        entry["oauth"] = TomlItem::Table(oauth_table);
     }
     if let Some(resource) = &config.oauth_resource
         && !resource.is_empty()

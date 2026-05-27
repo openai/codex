@@ -16,12 +16,14 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::NullableString;
+use crate::schema::SubagentCommandInputFields;
 use crate::schema::UserPromptSubmitCommandInput;
 
 #[derive(Debug, Clone)]
 pub struct UserPromptSubmitRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
+    pub subagent: Option<common::SubagentHookContext>,
     pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
@@ -77,9 +79,12 @@ pub(crate) async fn run(
         };
     }
 
+    let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
     let input_json = match serde_json::to_string(&UserPromptSubmitCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
+        agent_id: subagent.agent_id,
+        agent_type: subagent.agent_type,
         transcript_path: NullableString::from_path(request.transcript_path.clone()),
         cwd: request.cwd.display().to_string(),
         hook_event_name: "UserPromptSubmit".to_string(),
@@ -194,7 +199,7 @@ fn parse_completed(
                             });
                         }
                     }
-                } else if trimmed_stdout.starts_with('{') || trimmed_stdout.starts_with('[') {
+                } else if output_parser::looks_like_json(&run_result.stdout) {
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
@@ -255,6 +260,7 @@ fn parse_completed(
             stop_reason,
             additional_contexts_for_model,
         },
+        completion_order: 0,
     }
 }
 

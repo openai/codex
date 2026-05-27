@@ -20,6 +20,7 @@ codex-config = { workspace = true }
 codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-git-utils = { workspace = true }
+codex-hooks = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-otel = { workspace = true }
@@ -31,6 +32,7 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 flate2 = { workspace = true }
 reqwest = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tar = { workspace = true }

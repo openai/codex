@@ -6,6 +6,7 @@ use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
 use crate::loader::load_plugin_apps;
+use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_mcp_servers;
 use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
@@ -21,6 +22,7 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
+use crate::marketplace::MarketplaceListOutcome;
 use crate::marketplace::MarketplacePluginAuthPolicy;
 use crate::marketplace::MarketplacePluginPolicy;
 use crate::marketplace::MarketplacePluginSource;
@@ -36,6 +38,7 @@ use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
+use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
@@ -54,6 +57,7 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
+use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -61,6 +65,7 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::prompt_safe_plugin_description;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
@@ -85,7 +90,6 @@ pub struct PluginsConfigInput {
     pub config_layer_stack: ConfigLayerStack,
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
-    pub plugin_hooks_enabled: bool,
     pub chatgpt_base_url: String,
 }
 
@@ -94,14 +98,12 @@ impl PluginsConfigInput {
         config_layer_stack: ConfigLayerStack,
         plugins_enabled: bool,
         remote_plugin_enabled: bool,
-        plugin_hooks_enabled: bool,
         chatgpt_base_url: String,
     ) -> Self {
         Self {
             config_layer_stack,
             plugins_enabled,
             remote_plugin_enabled,
-            plugin_hooks_enabled,
             chatgpt_base_url,
         }
     }
@@ -219,17 +221,26 @@ pub struct PluginReadOutcome {
 pub struct PluginDetail {
     pub id: String,
     pub name: String,
+    pub local_version: Option<String>,
     pub description: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
+    pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppConnectorId>,
     pub mcp_server_names: Vec<String>,
     pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginHookSummary {
+    pub key: String,
+    pub event_name: HookEventName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,9 +260,12 @@ pub struct ConfiguredMarketplace {
 pub struct ConfiguredMarketplacePlugin {
     pub id: String,
     pub name: String,
+    pub local_version: Option<String>,
+    pub installed_version: Option<String>,
     pub source: MarketplacePluginSource,
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
 }
@@ -398,7 +412,6 @@ pub struct PluginsManager {
 #[derive(Clone)]
 struct CachedPluginLoadOutcome {
     config_version: String,
-    plugin_hooks_enabled: bool,
     outcome: PluginLoadOutcome,
 }
 
@@ -469,21 +482,16 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
-        let plugin_hooks_enabled = config.plugin_hooks_enabled;
         let config_version = version_for_toml(&config.config_layer_stack.effective_config());
-        if !force_reload
-            && let Some(outcome) =
-                self.cached_enabled_outcome(&config_version, plugin_hooks_enabled)
-        {
+        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&config_version) {
             return outcome;
         }
 
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
-            plugin_hooks_enabled,
         )
         .await;
         log_plugin_load_errors(&outcome);
@@ -493,7 +501,6 @@ impl PluginsManager {
         };
         *cache = Some(CachedPluginLoadOutcome {
             config_version,
-            plugin_hooks_enabled,
             outcome: outcome.clone(),
         });
         outcome
@@ -521,17 +528,15 @@ impl PluginsManager {
         &self,
         config_layer_stack: &ConfigLayerStack,
         config: &PluginsConfigInput,
-        plugin_hooks_feature_enabled: bool,
     ) -> PluginLoadOutcome {
         if !config.plugins_enabled {
             return PluginLoadOutcome::default();
         }
         load_plugins_from_layer_stack(
             config_layer_stack,
-            self.remote_installed_plugin_configs(config),
+            self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
-            plugin_hooks_feature_enabled,
         )
         .await
     }
@@ -542,43 +547,26 @@ impl PluginsManager {
         config_layer_stack: &ConfigLayerStack,
         config: &PluginsConfigInput,
     ) -> Vec<PluginSkillRoot> {
-        self.plugins_for_layer_stack(config_layer_stack, config, config.plugin_hooks_enabled)
+        self.plugins_for_layer_stack(config_layer_stack, config)
             .await
             .effective_plugin_skill_roots()
     }
 
-    fn cached_enabled_outcome(
-        &self,
-        config_version: &str,
-        plugin_hooks_enabled: bool,
-    ) -> Option<PluginLoadOutcome> {
+    fn cached_enabled_outcome(&self, config_version: &str) -> Option<PluginLoadOutcome> {
         match self.cached_enabled_outcome.read() {
             Ok(cache) => cache
                 .as_ref()
-                .filter(|cached| {
-                    cached.config_version == config_version
-                        && cached.plugin_hooks_enabled == plugin_hooks_enabled
-                })
+                .filter(|cached| cached.config_version == config_version)
                 .map(|cached| cached.outcome.clone()),
             Err(err) => err
                 .into_inner()
                 .as_ref()
-                .filter(|cached| {
-                    cached.config_version == config_version
-                        && cached.plugin_hooks_enabled == plugin_hooks_enabled
-                })
+                .filter(|cached| cached.config_version == config_version)
                 .map(|cached| cached.outcome.clone()),
         }
     }
 
-    fn remote_installed_plugin_configs(
-        &self,
-        config: &PluginsConfigInput,
-    ) -> HashMap<String, PluginConfig> {
-        if !config.remote_plugin_enabled {
-            return HashMap::new();
-        }
-
+    fn remote_installed_plugin_configs(&self) -> HashMap<String, PluginConfig> {
         let cache = match self.remote_installed_plugins_cache.read() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -588,6 +576,39 @@ impl PluginsManager {
         };
 
         remote_installed_plugins_to_config(plugins, &self.store)
+    }
+
+    pub fn build_remote_installed_plugin_marketplaces_from_cache(
+        &self,
+        visible_scopes: &[RemotePluginScope],
+    ) -> Option<Vec<crate::remote::RemoteMarketplace>> {
+        let cache = match self.remote_installed_plugins_cache.read() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let plugins = cache.as_ref()?;
+        Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins, visible_scopes))
+    }
+
+    pub async fn build_and_cache_remote_installed_plugin_marketplaces(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        visible_scopes: &[RemotePluginScope],
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        let plugins = crate::remote::fetch_remote_installed_plugins(
+            &remote_plugin_service_config(config),
+            auth,
+        )
+        .await?;
+        let marketplaces =
+            crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins, visible_scopes);
+        let changed = self.write_remote_installed_plugins_cache(plugins);
+        if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
+            on_effective_plugins_changed();
+        }
+        Ok(marketplaces)
     }
 
     fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
@@ -653,7 +674,7 @@ impl PluginsManager {
         notify: RemoteInstalledPluginsCacheRefreshNotify,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        if !config.plugins_enabled {
             return;
         }
 
@@ -667,13 +688,13 @@ impl PluginsManager {
         );
     }
 
-    fn maybe_start_remote_installed_plugin_bundle_sync(
+    pub fn maybe_start_remote_installed_plugin_bundle_sync(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        if !config.plugins_enabled {
             return;
         }
 
@@ -1166,7 +1187,7 @@ impl PluginsManager {
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let marketplace_outcome =
-            list_marketplaces(&self.marketplace_roots(config, additional_roots))?;
+            self.discover_marketplaces_for_config(config, additional_roots)?;
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -1184,18 +1205,47 @@ impl PluginsManager {
                         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
                             return None;
                         }
+                        let plugin_id =
+                            PluginId::new(plugin.name.clone(), marketplace_name.clone()).ok();
+                        let installed = installed_plugins.contains(&plugin_key);
+                        let installed_version = installed.then_some(()).and_then(|_| {
+                            plugin_id
+                                .as_ref()
+                                .and_then(|plugin_id| self.store.active_plugin_version(plugin_id))
+                        });
+                        let enabled = enabled_plugins.contains(&plugin_key);
+                        let mut interface = plugin.interface;
+                        let mut local_version = plugin.local_version;
+                        if installed
+                            && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
+                            && let Some(plugin_id) = plugin_id.as_ref()
+                            && let Some(plugin_root) = self.store.active_plugin_root(plugin_id)
+                            && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
+                        {
+                            local_version = manifest.version.clone();
+                            let marketplace_category = interface
+                                .as_ref()
+                                .and_then(|interface| interface.category.clone());
+                            interface = plugin_interface_with_marketplace_category(
+                                manifest.interface,
+                                marketplace_category,
+                            );
+                        }
 
                         Some(ConfiguredMarketplacePlugin {
                             // Enabled state is keyed by `<plugin>@<marketplace>`, so duplicate
                             // plugin entries from duplicate marketplace files intentionally
                             // resolve to the first discovered source.
-                            id: plugin_key.clone(),
-                            installed: installed_plugins.contains(&plugin_key),
-                            enabled: enabled_plugins.contains(&plugin_key),
+                            id: plugin_key,
+                            installed_version,
+                            installed,
+                            enabled,
                             name: plugin.name,
+                            local_version,
                             source: plugin.source,
                             policy: plugin.policy,
-                            interface: plugin.interface,
+                            keywords: plugin.keywords,
+                            interface,
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1213,6 +1263,18 @@ impl PluginsManager {
             marketplaces,
             errors: marketplace_outcome.errors,
         })
+    }
+
+    pub fn discover_marketplaces_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        additional_roots: &[AbsolutePathBuf],
+    ) -> Result<MarketplaceListOutcome, MarketplaceError> {
+        if !config.plugins_enabled {
+            return Ok(MarketplaceListOutcome::default());
+        }
+
+        list_marketplaces(&self.marketplace_roots(config, additional_roots))
     }
 
     pub async fn read_plugin_for_config(
@@ -1235,6 +1297,12 @@ impl PluginsManager {
         let marketplace_name = plugin.plugin_id.marketplace_name.clone();
         let plugin_key = plugin.plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let installed = installed_plugins.contains(&plugin_key);
+        let installed_version = if installed {
+            self.store.active_plugin_version(&plugin.plugin_id)
+        } else {
+            None
+        };
         let plugin = self
             .read_plugin_detail_for_marketplace_plugin(
                 config,
@@ -1242,10 +1310,20 @@ impl PluginsManager {
                 ConfiguredMarketplacePlugin {
                     id: plugin_key.clone(),
                     name: plugin.plugin_id.plugin_name,
+                    local_version: plugin
+                        .manifest
+                        .as_ref()
+                        .and_then(|manifest| manifest.version.clone()),
+                    installed_version,
                     source: plugin.source,
                     policy: plugin.policy,
                     interface: plugin.interface,
-                    installed: installed_plugins.contains(&plugin_key),
+                    keywords: plugin
+                        .manifest
+                        .as_ref()
+                        .map(|manifest| manifest.keywords.clone())
+                        .unwrap_or_default(),
+                    installed,
                     enabled: enabled_plugins.contains(&plugin_key),
                 },
             )
@@ -1283,14 +1361,17 @@ impl PluginsManager {
             return Ok(PluginDetail {
                 id: plugin_key,
                 name: plugin.name,
+                local_version: None,
                 description: Some(description),
                 source: plugin.source,
                 policy: plugin.policy,
                 interface: plugin.interface,
+                keywords: plugin.keywords,
                 installed: plugin.installed,
                 enabled: plugin.enabled,
                 skills: Vec::new(),
                 disabled_skill_paths: HashSet::new(),
+                hooks: Vec::new(),
                 apps: Vec::new(),
                 mcp_server_names: Vec::new(),
                 details_unavailable_reason: Some(
@@ -1348,6 +1429,16 @@ impl PluginsManager {
             ),
         )
         .await;
+        let plugin_data_root = self.store.plugin_data_root(&plugin_id);
+        let (hook_sources, _hook_load_warnings) =
+            load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
+        let hooks = plugin_hook_declarations(&hook_sources)
+            .into_iter()
+            .map(|hook| PluginHookSummary {
+                key: hook.key,
+                event_name: hook.event_name,
+            })
+            .collect();
         let apps = load_plugin_apps(source_path.as_path()).await;
         let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
             .await
@@ -1359,14 +1450,17 @@ impl PluginsManager {
         Ok(PluginDetail {
             id: plugin.id,
             name: plugin.name,
+            local_version: manifest.version.clone(),
             description,
             source: plugin.source,
             policy: plugin.policy,
             interface,
+            keywords: manifest.keywords,
             installed: plugin.installed,
             enabled: plugin.enabled,
             skills: resolved_skills.skills,
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
+            hooks,
             apps,
             mcp_server_names,
             details_unavailable_reason: None,
@@ -1439,25 +1533,23 @@ impl PluginsManager {
                 auth_manager.clone(),
             );
 
-            if config.remote_plugin_enabled {
-                let config = config.clone();
-                let manager = Arc::clone(self);
-                let auth_manager = auth_manager.clone();
-                let on_effective_plugins_changed = on_effective_plugins_changed.clone();
-                tokio::spawn(async move {
-                    let auth = auth_manager.auth().await;
-                    manager.maybe_start_remote_installed_plugins_cache_refresh(
-                        &config,
-                        auth.clone(),
-                        on_effective_plugins_changed.clone(),
-                    );
-                    manager.maybe_start_remote_installed_plugin_bundle_sync(
-                        &config,
-                        auth,
-                        on_effective_plugins_changed,
-                    );
-                });
-            }
+            let config_for_remote_sync = config.clone();
+            let manager = Arc::clone(self);
+            let auth_manager_for_remote_sync = auth_manager.clone();
+            let on_effective_plugins_changed = on_effective_plugins_changed.clone();
+            tokio::spawn(async move {
+                let auth = auth_manager_for_remote_sync.auth().await;
+                manager.maybe_start_remote_installed_plugins_cache_refresh(
+                    &config_for_remote_sync,
+                    auth.clone(),
+                    on_effective_plugins_changed.clone(),
+                );
+                manager.maybe_start_remote_installed_plugin_bundle_sync(
+                    &config_for_remote_sync,
+                    auth,
+                    on_effective_plugins_changed,
+                );
+            });
 
             let config = config.clone();
             let manager = Arc::clone(self);
@@ -1941,10 +2033,10 @@ pub(crate) fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
     // Plugin entries remain persisted user config only.
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return HashMap::new();
     };
-    configured_plugins_from_user_config_value(&user_layer.config)
+    configured_plugins_from_user_config_value(&user_config)
 }
 
 fn configured_plugins_from_user_config_value(

@@ -223,6 +223,7 @@ impl EventProcessorWithJsonOutput {
                     arguments,
                     result: result.map(|result| McpToolCallItemResult {
                         content: result.content,
+                        meta: result.meta,
                         structured_content: result.structured_content,
                     }),
                     error: error.map(|error| McpToolCallItemError {
@@ -392,7 +393,7 @@ impl EventProcessorWithJsonOutput {
 
     pub fn thread_started_event(session_configured: &SessionConfiguredEvent) -> ThreadEvent {
         ThreadEvent::ThreadStarted(ThreadStartedEvent {
-            thread_id: session_configured.session_id.to_string(),
+            thread_id: session_configured.thread_id.to_string(),
         })
     }
 

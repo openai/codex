@@ -7,7 +7,6 @@ use super::build_seatbelt_unreadable_glob_policy;
 use super::create_seatbelt_command_args;
 use super::create_seatbelt_command_args_for_legacy_policy;
 use super::dynamic_network_policy;
-use super::macos_dir_params;
 use super::normalize_path_for_sandbox;
 use super::seatbelt_regex_for_unreadable_glob;
 use super::unix_socket_dir_params;
@@ -162,6 +161,29 @@ fn create_seatbelt_args_routes_network_through_proxy_ports() {
 }
 
 #[test]
+fn dynamic_network_policy_allows_tls_without_darwin_user_cache_write() {
+    let policy = dynamic_network_policy(
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        },
+        /*enforce_managed_network*/ false,
+        &ProxyPolicyInputs::default(),
+    );
+
+    assert!(
+        policy.contains("(global-name \"com.apple.trustd.agent\")"),
+        "policy should keep trustd agent access for TLS certificate verification:\n{policy}"
+    );
+    assert!(
+        !policy.contains("DARWIN_USER_CACHE_DIR"),
+        "network policy should not grant broad user cache writes:\n{policy}"
+    );
+}
+
+#[test]
 fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access() {
     let unreadable = absolute_path("/tmp/codex-unreadable");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
@@ -173,7 +195,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: unreadable },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -245,7 +267,7 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: unreadable },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -292,8 +314,14 @@ fn reopened_readable_children_under_unreadable_roots_get_metadata_traversal() {
     let writable_dir = absolute_path("/tmp/codex-home/.cache/uv");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: unreadable },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
@@ -377,7 +405,7 @@ fn reopened_children_under_unreadable_roots_work_under_seatbelt() {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::from_absolute_path(&parent).expect("absolute parent"),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
@@ -410,35 +438,44 @@ fn reopened_children_under_unreadable_roots_work_under_seatbelt() {
             network: None,
             extra_allow_unix_sockets: &[],
         });
-        Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        let policy = seatbelt_policy_arg(&args).to_string();
+        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&args)
             .current_dir(&tmp_path)
             .output()
-            .expect("execute seatbelt command")
+            .expect("execute seatbelt command");
+        (output, policy)
     };
 
-    let ls_parent = run(r#"ls "$1" >/dev/null"#, &parent);
+    let (read_allowed, read_policy) = run(r#"cat "$1" >/dev/null"#, &gitconfig);
+    let read_stderr = String::from_utf8_lossy(&read_allowed.stderr);
+    if !read_allowed.status.success()
+        && read_stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted")
+    {
+        return;
+    }
+    assert!(
+        read_allowed.status.success(),
+        "allowed child read should work; stderr:\n{read_stderr}\npolicy:\n{read_policy}"
+    );
+
+    let (ls_parent, _) = run(r#"ls "$1" >/dev/null"#, &parent);
     assert!(
         !ls_parent.status.success(),
         "parent listing should stay denied"
     );
 
-    let read_allowed = run(r#"cat "$1" >/dev/null"#, &gitconfig);
-    assert!(
-        read_allowed.status.success(),
-        "allowed child read should work"
-    );
-
-    let read_blocked = run(r#"cat "$1" >/dev/null"#, &blocked);
+    let (read_blocked, _) = run(r#"cat "$1" >/dev/null"#, &blocked);
     assert!(
         !read_blocked.status.success(),
         "unlisted child should stay denied"
     );
 
-    let write_allowed = run(r#"printf ok > "$1""#, &writable_file);
+    let (write_allowed, write_policy) = run(r#"printf ok > "$1""#, &writable_file);
     assert!(
         write_allowed.status.success(),
-        "allowed writable child should accept writes"
+        "allowed writable child should accept writes; stderr:\n{}\npolicy:\n{write_policy}",
+        String::from_utf8_lossy(&write_allowed.stderr)
     );
     assert_eq!(
         fs::read_to_string(&writable_file).expect("read writable child"),
@@ -511,7 +548,7 @@ fn unreadable_glob_policy_includes_canonicalized_static_prefix() {
     let mut policy = FileSystemSandboxPolicy::default();
     policy.entries.push(FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern { pattern },
-        access: FileSystemAccessMode::None,
+        access: FileSystemAccessMode::Deny,
     });
 
     let seatbelt_policy = build_seatbelt_unreadable_glob_policy(&policy, temp_dir.path());
@@ -578,8 +615,8 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
@@ -614,8 +651,8 @@ fn dynamic_network_policy_blocks_dns_when_local_binding_has_no_proxy_ports() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
@@ -642,8 +679,8 @@ fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_withou
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ true,
         &ProxyPolicyInputs {
@@ -932,8 +969,8 @@ fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
@@ -1102,14 +1139,6 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         writable_definitions, expected_definitions,
         "unexpected writable-root parameter definitions in {args:#?}"
     );
-    for (key, value) in macos_dir_params() {
-        let expected_definition = format!("-D{key}={}", value.to_string_lossy());
-        assert!(
-            args.contains(&expected_definition),
-            "expected definition arg `{expected_definition}` in {args:#?}"
-        );
-    }
-
     let command_index = args
         .iter()
         .position(|arg| arg == "--")
@@ -1472,14 +1501,6 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         args.contains(&expected_slash_tmp),
         "missing {expected_slash_tmp}: {args:#?}"
     );
-    for (key, value) in macos_dir_params() {
-        let expected_definition = format!("-D{key}={}", value.to_string_lossy());
-        assert!(
-            args.contains(&expected_definition),
-            "expected definition arg `{expected_definition}` in {args:#?}"
-        );
-    }
-
     let command_index = args
         .iter()
         .position(|arg| arg == "--")

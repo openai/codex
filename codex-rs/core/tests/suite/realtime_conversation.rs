@@ -754,6 +754,9 @@ async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Res
         config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
         config.experimental_realtime_ws_startup_context = Some(String::new());
         config.experimental_realtime_ws_base_url = Some("http://127.0.0.1:1".to_string());
+        // Keep the failure-path test inside wait_for_event's timeout on Windows,
+        // where refused localhost websocket connects can take around two seconds.
+        config.model_provider.request_max_retries = Some(0);
         config.realtime.version = RealtimeWsVersion::V1;
     });
     let test = builder.build(&server).await?;
@@ -2165,6 +2168,8 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -2299,6 +2304,8 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -3494,6 +3501,8 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 

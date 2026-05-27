@@ -153,8 +153,14 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_uninstall_rejects_remote_plugin_when_remote_plugin_is_disabled() -> Result<()> {
+async fn plugin_uninstall_rejects_remote_plugin_when_plugins_are_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = false
+"#,
+    )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -213,15 +219,15 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
 
     let remote_plugin_cache_root = codex_home
         .path()
-        .join("plugins/cache/chatgpt-global/linear");
+        .join("plugins/cache/openai-curated-remote/linear");
     std::fs::create_dir_all(remote_plugin_cache_root.join("1.0.0/.codex-plugin"))?;
     std::fs::write(
         remote_plugin_cache_root.join("1.0.0/.codex-plugin/plugin.json"),
         r#"{"name":"linear","version":"1.0.0"}"#,
     )?;
-    let legacy_remote_plugin_cache_root = codex_home
-        .path()
-        .join(format!("plugins/cache/chatgpt-global/{REMOTE_PLUGIN_ID}"));
+    let legacy_remote_plugin_cache_root = codex_home.path().join(format!(
+        "plugins/cache/openai-curated-remote/{REMOTE_PLUGIN_ID}"
+    ));
     std::fs::create_dir_all(legacy_remote_plugin_cache_root.join("local/.codex-plugin"))?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -285,7 +291,7 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
 
     let workspace_cache_root = codex_home
         .path()
-        .join("plugins/cache/chatgpt-workspace/linear");
+        .join("plugins/cache/workspace-directory/linear");
     std::fs::create_dir_all(workspace_cache_root.join("1.0.0/.codex-plugin"))?;
     std::fs::write(
         workspace_cache_root.join("1.0.0/.codex-plugin/plugin.json"),
@@ -293,7 +299,7 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
     )?;
     let global_cache_root = codex_home
         .path()
-        .join("plugins/cache/chatgpt-global/linear");
+        .join("plugins/cache/openai-curated-remote/linear");
     std::fs::create_dir_all(global_cache_root.join("1.0.0/.codex-plugin"))?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -363,7 +369,7 @@ async fn plugin_uninstall_accepts_workspace_remote_plugin_id_shape() -> Result<(
 
     let remote_plugin_cache_root = codex_home
         .path()
-        .join("plugins/cache/chatgpt-workspace/skill-improver");
+        .join("plugins/cache/workspace-directory/skill-improver");
     std::fs::create_dir_all(remote_plugin_cache_root.join("1.0.0/.codex-plugin"))?;
     std::fs::write(
         remote_plugin_cache_root.join("1.0.0/.codex-plugin/plugin.json"),
@@ -414,9 +420,9 @@ async fn plugin_uninstall_rejects_before_post_when_remote_detail_fetch_fails() -
         AuthCredentialsStoreMode::File,
     )?;
 
-    let legacy_remote_plugin_cache_root = codex_home
-        .path()
-        .join(format!("plugins/cache/chatgpt-global/{REMOTE_PLUGIN_ID}"));
+    let legacy_remote_plugin_cache_root = codex_home.path().join(format!(
+        "plugins/cache/openai-curated-remote/{REMOTE_PLUGIN_ID}"
+    ));
     std::fs::create_dir_all(legacy_remote_plugin_cache_root.join("local/.codex-plugin"))?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -611,11 +617,17 @@ async fn mount_remote_plugin_detail_with_name(
     release_version: &str,
     scope: &str,
 ) {
+    let discoverability = if scope == "WORKSPACE" {
+        r#"
+  "discoverability": "LISTED","#
+    } else {
+        ""
+    };
     let detail_body = format!(
         r#"{{
   "id": "{remote_plugin_id}",
   "name": "{plugin_name}",
-  "scope": "{scope}",
+  "scope": "{scope}",{discoverability}
   "installation_policy": "AVAILABLE",
   "authentication_policy": "ON_USE",
   "release": {{

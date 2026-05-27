@@ -207,6 +207,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         scope: PermissionGrantScope::Turn,
         strict_auto_review: false,
     };
+    #[allow(deprecated)]
     let delegated_cwd = parent_ctx.cwd.join("delegated-cwd");
     let cancel_token = CancellationToken::new();
     let request_call_id = call_id.clone();
@@ -225,6 +226,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
                 RequestPermissionsEvent {
                     call_id: request_call_id,
                     turn_id: "child-turn-1".to_string(),
+                    started_at_ms: 0,
                     reason: Some("need access".to_string()),
                     permissions: RequestPermissionProfile {
                         network: Some(NetworkPermissions {
@@ -313,6 +315,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
                     call_id: "command-item-1".to_string(),
                     approval_id: Some("callback-approval-1".to_string()),
                     turn_id: "child-turn-1".to_string(),
+                    started_at_ms: 0,
                     command: vec!["rm".to_string(), "-rf".to_string(), "tmp".to_string()],
                     cwd: test_path_buf("/tmp").abs(),
                     reason: Some("unsafe subcommand".to_string()),

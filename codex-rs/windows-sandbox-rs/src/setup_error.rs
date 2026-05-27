@@ -56,6 +56,8 @@ pub enum SetupErrorCode {
     HelperFirewallComInitFailed,
     /// Helper failed to access firewall policy or rule collections.
     HelperFirewallPolicyAccessFailed,
+    /// Helper detected that local firewall policy changes will not fully take effect.
+    HelperFirewallPolicyIneffective,
     /// Helper failed to create, update, or add the firewall rule.
     HelperFirewallRuleCreateOrAddFailed,
     /// Helper failed to verify the configured firewall rule scope.
@@ -91,6 +93,7 @@ impl SetupErrorCode {
             Self::HelperCapabilitySidFailed => "helper_capability_sid_failed",
             Self::HelperFirewallComInitFailed => "helper_firewall_com_init_failed",
             Self::HelperFirewallPolicyAccessFailed => "helper_firewall_policy_access_failed",
+            Self::HelperFirewallPolicyIneffective => "helper_firewall_policy_ineffective",
             Self::HelperFirewallRuleCreateOrAddFailed => {
                 "helper_firewall_rule_create_or_add_failed"
             }

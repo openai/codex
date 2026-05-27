@@ -9,7 +9,9 @@ pub(crate) mod list;
 pub(crate) mod metadata;
 pub(crate) mod policy;
 pub(crate) mod recorder;
+pub(crate) mod search;
 pub(crate) mod session_index;
+mod sqlite_metrics;
 pub mod state_db;
 
 pub(crate) mod default_client {
@@ -54,15 +56,19 @@ pub use list::rollout_date_parts;
 pub use metadata::builder_from_items;
 pub use policy::EventPersistenceMode;
 pub use policy::is_persisted_rollout_item;
+pub use policy::persisted_rollout_items;
 pub use policy::should_persist_response_item_for_memories;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use recorder::append_rollout_item_to_path;
+pub use search::first_rollout_content_match_snippet;
+pub use search::search_rollout_paths;
 pub use session_index::append_thread_name;
 pub use session_index::find_thread_meta_by_name_str;
 pub use session_index::find_thread_name_by_id;
 pub use session_index::find_thread_names_by_ids;
 pub use state_db::StateDbHandle;
+pub use state_db::sqlite_telemetry_recorder;
 
 #[cfg(test)]
 mod tests;

@@ -25,10 +25,12 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use codex_app_server::app_server_control_socket_path;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server::in_process::LogDbLayer;
+pub use codex_app_server::in_process::StateDbHandle;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -46,10 +48,8 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
-pub use codex_core::StateDbHandle;
 use codex_core::config::Config;
 pub use codex_exec_server::EnvironmentManager;
-pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
@@ -62,6 +62,7 @@ use tracing::warn;
 
 pub use crate::remote::RemoteAppServerClient;
 pub use crate::remote::RemoteAppServerConnectArgs;
+pub use crate::remote::RemoteAppServerEndpoint;
 
 /// Transitional access to core-only embedded app-server types.
 ///
@@ -72,12 +73,9 @@ pub mod legacy_core {
     pub use codex_core::DEFAULT_AGENTS_MD_FILENAME;
     pub use codex_core::LOCAL_AGENTS_MD_FILENAME;
     pub use codex_core::McpManager;
-    pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
-    pub use codex_core::lookup_message_history_entry;
-    pub use codex_core::message_history_metadata;
     pub use codex_core::web_search_detail;
 
     pub mod config {
@@ -178,6 +176,7 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
     matches!(
         notification,
         ServerNotification::TurnCompleted(_)
+            | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ItemCompleted(_)
             | ServerNotification::AgentMessageDelta(_)
             | ServerNotification::PlanDelta(_)
@@ -338,6 +337,8 @@ pub struct InProcessClientStartArgs {
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
     pub loader_overrides: LoaderOverrides,
+    /// Whether config API paths should reject unknown config fields.
+    pub strict_config: bool,
     /// Preloaded cloud requirements provider.
     pub cloud_requirements: CloudRequirementsLoader,
     /// Feedback sink used by app-server/core telemetry and logs.
@@ -378,6 +379,7 @@ impl InProcessClientStartArgs {
     pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
+            request_attestation: false,
             opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
                 None
             } else {
@@ -403,6 +405,7 @@ impl InProcessClientStartArgs {
             config: self.config,
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
+            strict_config: self.strict_config,
             cloud_requirements: self.cloud_requirements,
             thread_config_loader,
             feedback: self.feedback,
@@ -954,12 +957,19 @@ mod tests {
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputQuestion;
     use codex_core::config::ConfigBuilder;
+    use codex_core::init_state_db;
+    use codex_uds::UnixListener;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use futures::SinkExt;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
+    use std::ops::Deref;
+    use std::path::Path;
+    use tempfile::TempDir;
     use tokio::net::TcpListener;
     use tokio::time::Duration;
     use tokio::time::timeout;
+    use tokio_tungstenite::accept_async;
     use tokio_tungstenite::accept_hdr_async;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::tungstenite::handshake::server::Request as WebSocketRequest;
@@ -975,19 +985,60 @@ mod tests {
         }
     }
 
+    async fn build_test_config_for_codex_home(codex_home: &Path) -> Config {
+        match ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .build()
+            .await
+        {
+            Ok(config) => config,
+            Err(_) => Config::load_default_with_cli_overrides_for_codex_home(
+                codex_home.to_path_buf(),
+                Vec::new(),
+            )
+            .await
+            .expect("default config should load"),
+        }
+    }
+
+    struct TestClient {
+        _codex_home: TempDir,
+        client: InProcessAppServerClient,
+    }
+
+    impl Deref for TestClient {
+        type Target = InProcessAppServerClient;
+
+        fn deref(&self) -> &Self::Target {
+            &self.client
+        }
+    }
+
+    impl TestClient {
+        async fn shutdown(self) -> IoResult<()> {
+            self.client.shutdown().await
+        }
+    }
+
     async fn start_test_client_with_capacity(
         session_source: SessionSource,
         channel_capacity: usize,
-    ) -> InProcessAppServerClient {
-        InProcessAppServerClient::start(InProcessClientStartArgs {
+    ) -> TestClient {
+        let codex_home = TempDir::new().expect("temp dir");
+        let config = Arc::new(build_test_config_for_codex_home(codex_home.path()).await);
+        let state_db = init_state_db(config.as_ref())
+            .await
+            .expect("state db should initialize for in-process test");
+        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(build_test_config().await),
+            config,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
-            state_db: None,
+            state_db: Some(state_db),
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source,
@@ -999,10 +1050,15 @@ mod tests {
             channel_capacity,
         })
         .await
-        .expect("in-process app-server client should start")
+        .expect("in-process app-server client should start");
+
+        TestClient {
+            _codex_home: codex_home,
+            client,
+        }
     }
 
-    async fn start_test_client(session_source: SessionSource) -> InProcessAppServerClient {
+    async fn start_test_client(session_source: SessionSource) -> TestClient {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
     }
 
@@ -1054,9 +1110,10 @@ mod tests {
         format!("ws://{addr}")
     }
 
-    async fn expect_remote_initialize(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    ) {
+    async fn expect_remote_initialize<S>(websocket: &mut tokio_tungstenite::WebSocketStream<S>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         let JSONRPCMessage::Request(request) = read_websocket_message(websocket).await else {
             panic!("expected initialize request");
         };
@@ -1065,7 +1122,9 @@ mod tests {
             websocket,
             JSONRPCMessage::Response(JSONRPCResponse {
                 id: request.id,
-                result: serde_json::json!({}),
+                result: serde_json::json!({
+                    "userAgent": "codex_cli_rs/9.8.7-test (Test OS; x86_64) rust",
+                }),
             }),
         )
         .await;
@@ -1077,9 +1136,12 @@ mod tests {
         assert_eq!(notification.method, "initialized");
     }
 
-    async fn read_websocket_message(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    ) -> JSONRPCMessage {
+    async fn read_websocket_message<S>(
+        websocket: &mut tokio_tungstenite::WebSocketStream<S>,
+    ) -> JSONRPCMessage
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         loop {
             let frame = websocket
                 .next()
@@ -1099,10 +1161,12 @@ mod tests {
         }
     }
 
-    async fn write_websocket_message(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    async fn write_websocket_message<S>(
+        websocket: &mut tokio_tungstenite::WebSocketStream<S>,
         message: JSONRPCMessage,
-    ) {
+    ) where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         websocket
             .send(Message::Text(
                 serde_json::to_string(&message)
@@ -1167,8 +1231,10 @@ mod tests {
 
     fn test_remote_connect_args(websocket_url: String) -> RemoteAppServerConnectArgs {
         RemoteAppServerConnectArgs {
-            websocket_url,
-            auth_token: None,
+            endpoint: RemoteAppServerEndpoint::WebSocket {
+                websocket_url,
+                auth_token: None,
+            },
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
@@ -1393,6 +1459,65 @@ mod tests {
             .await
             .expect("remote client should connect");
 
+        assert_eq!(client.server_version(), Some("9.8.7-test"));
+        let response: GetAccountResponse = client
+            .request_typed(ClientRequest::GetAccount {
+                request_id: RequestId::Integer(1),
+                params: codex_app_server_protocol::GetAccountParams {
+                    refresh_token: false,
+                },
+            })
+            .await
+            .expect("typed request should succeed");
+        assert_eq!(response.account, None);
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn remote_unix_socket_typed_request_roundtrip_works() {
+        let socket_dir = TempDir::new().expect("socket dir");
+        let socket_path = AbsolutePathBuf::from_absolute_path(socket_dir.path().join("codex.sock"))
+            .expect("socket path should resolve");
+        let mut listener = UnixListener::bind(socket_path.as_path())
+            .await
+            .expect("listener should bind");
+        tokio::spawn(async move {
+            let stream = listener.accept().await.expect("accept should succeed");
+            let mut websocket = accept_async(stream)
+                .await
+                .expect("websocket upgrade should succeed");
+            expect_remote_initialize(&mut websocket).await;
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected account/read request");
+            };
+            assert_eq!(request.method, "account/read");
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(GetAccountResponse {
+                        account: None,
+                        requires_openai_auth: false,
+                    })
+                    .expect("response should serialize"),
+                }),
+            )
+            .await;
+            websocket.close(None).await.expect("close should succeed");
+        });
+        let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
+        })
+        .await
+        .expect("remote client should connect");
+
         let response: GetAccountResponse = client
             .request_typed(ClientRequest::GetAccount {
                 request_id: RequestId::Integer(1),
@@ -1468,8 +1593,15 @@ mod tests {
         )
         .await;
         let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-            auth_token: Some(auth_token),
-            ..test_remote_connect_args(websocket_url)
+            endpoint: RemoteAppServerEndpoint::WebSocket {
+                websocket_url,
+                auth_token: Some(auth_token),
+            },
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
         })
         .await
         .expect("remote client should connect");
@@ -1480,9 +1612,15 @@ mod tests {
     #[tokio::test]
     async fn remote_connect_rejects_non_loopback_ws_when_auth_configured() {
         let result = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-            websocket_url: "ws://example.com:4500".to_string(),
-            auth_token: Some("remote-bearer-token".to_string()),
-            ..test_remote_connect_args("ws://127.0.0.1:1".to_string())
+            endpoint: RemoteAppServerEndpoint::WebSocket {
+                websocket_url: "ws://example.com:4500".to_string(),
+                auth_token: Some("remote-bearer-token".to_string()),
+            },
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
         })
         .await;
         let err = match result {
@@ -1660,13 +1798,8 @@ mod tests {
         })
         .await;
         let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
-            websocket_url,
-            auth_token: None,
-            client_name: "codex-app-server-client-test".to_string(),
-            client_version: "0.0.0-test".to_string(),
-            experimental_api: true,
-            opt_out_notification_methods: Vec::new(),
             channel_capacity: 1,
+            ..test_remote_connect_args(websocket_url)
         })
         .await
         .expect("remote client should connect");
@@ -2049,11 +2182,13 @@ mod tests {
         let environment_manager = Arc::new(
             EnvironmentManager::create_for_tests(
                 Some("ws://127.0.0.1:8765".to_string()),
-                ExecServerRuntimePaths::new(
-                    std::env::current_exe().expect("current exe"),
-                    /*codex_linux_sandbox_exe*/ None,
-                )
-                .expect("runtime paths"),
+                Some(
+                    ExecServerRuntimePaths::new(
+                        std::env::current_exe().expect("current exe"),
+                        /*codex_linux_sandbox_exe*/ None,
+                    )
+                    .expect("runtime paths"),
+                ),
             )
             .await,
         );
@@ -2063,6 +2198,7 @@ mod tests {
             config: config.clone(),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
@@ -2103,6 +2239,7 @@ mod tests {
             config: Arc::new(config),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,

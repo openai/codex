@@ -8,11 +8,11 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
-    pub(super) analytics_events_client: AnalyticsEventsClient,
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) fallback_model_provider: String,
     pub(super) codex_home: PathBuf,
+    pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
 
 struct UnloadingState {
@@ -227,23 +227,40 @@ pub(super) async fn ensure_listener_task_running(
             "thread {conversation_id} is closing; retry after the thread is closed"
         )));
     };
+    let config = conversation.config().await;
+    let environments = conversation.environment_selections().await;
+    let watch_registration = listener_task_context
+        .skills_watcher
+        .register_thread_config(
+            config.as_ref(),
+            listener_task_context.thread_manager.as_ref(),
+            &environments,
+        )
+        .await;
+    let thread_settings_baseline =
+        thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
             return Ok(());
         }
-        thread_state.set_listener(cancel_tx, &conversation)
+        thread_state.set_listener(
+            cancel_tx,
+            &conversation,
+            watch_registration,
+            thread_settings_baseline,
+        )
     };
     let ListenerTaskContext {
         outgoing,
         thread_manager,
         thread_state_manager,
         pending_thread_unloads,
-        analytics_events_client,
         thread_watch_manager,
         thread_list_state_permit,
         fallback_model_provider,
         codex_home,
+        ..
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
@@ -315,7 +332,6 @@ pub(super) async fn ensure_listener_task_running(
                         conversation_id,
                         conversation.clone(),
                         thread_manager.clone(),
-                        Some(analytics_events_client.clone()),
                         thread_outgoing,
                         thread_state.clone(),
                         thread_watch_manager.clone(),
@@ -548,6 +564,10 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status,
         has_live_in_progress_turn,
     );
+    let token_usage_thread = pending.include_turns.then(|| thread.clone());
+    if pending.redact_resume_payloads {
+        redact_thread_resume_payloads(&mut thread);
+    }
 
     {
         let pending_thread_unloads = pending_thread_unloads.lock().await;
@@ -591,6 +611,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         permission_profile,
         active_permission_profile,
         cwd,
+        workspace_roots,
         reasoning_effort,
         ..
     } = pending.config_snapshot;
@@ -598,6 +619,8 @@ pub(super) async fn handle_pending_thread_resume_request(
     let sandbox = thread_response_sandbox_policy(&permission_profile, cwd.as_path());
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
+    let session_id = conversation.session_configured().session_id.to_string();
+    thread.session_id = session_id;
 
     let response = ThreadResumeResponse {
         thread,
@@ -605,15 +628,14 @@ pub(super) async fn handle_pending_thread_resume_request(
         model_provider: model_provider_id,
         service_tier,
         cwd,
+        runtime_workspace_roots: workspace_roots,
         instruction_sources,
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox,
-        permission_profile: Some(permission_profile.into()),
         active_permission_profile,
         reasoning_effort,
     };
-    let token_usage_thread = pending.include_turns.then(|| response.thread.clone());
     outgoing.send_response(request_id, response).await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
@@ -661,7 +683,7 @@ pub(super) async fn send_thread_goal_snapshot_notification(
     thread_id: ThreadId,
     state_db: &StateDbHandle,
 ) {
-    match state_db.get_thread_goal(thread_id).await {
+    match state_db.thread_goals().get_thread_goal(thread_id).await {
         Ok(Some(goal)) => {
             outgoing
                 .send_server_notification(ServerNotification::ThreadGoalUpdated(

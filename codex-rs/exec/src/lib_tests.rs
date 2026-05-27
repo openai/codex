@@ -1,6 +1,8 @@
 use super::*;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::ActivePermissionProfile;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use opentelemetry::trace::TraceContextExt;
@@ -8,6 +10,10 @@ use opentelemetry::trace::TraceId;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
+use std::io;
+use std::io::Write;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::tempdir;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -20,6 +26,61 @@ fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
 #[test]
 fn exec_defaults_analytics_to_enabled() {
     assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+}
+
+#[derive(Clone)]
+struct TestLogWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+struct TestLogSink {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TestLogWriter {
+    type Writer = TestLogSink;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TestLogSink {
+            buffer: Arc::clone(&self.buffer),
+        }
+    }
+}
+
+impl Write for TestLogSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.lock().expect("log buffer lock").extend(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn exec_default_stderr_filter_suppresses_otel_self_diagnostics() {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let writer = TestLogWriter {
+        buffer: Arc::clone(&buffer),
+    };
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(writer)
+            .with_filter(EnvFilter::try_new(EXEC_DEFAULT_LOG_FILTER).expect("default filter")),
+    );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::error!(target: "opentelemetry_sdk", "telemetry export failed");
+        tracing::error!(target: "opentelemetry_otlp", "telemetry request failed");
+        tracing::error!(target: "codex_exec_test", "real exec error");
+    });
+
+    let logs = String::from_utf8(buffer.lock().expect("log buffer lock").clone()).expect("utf8");
+    assert!(!logs.contains("telemetry export failed"));
+    assert!(!logs.contains("telemetry request failed"));
+    assert!(logs.contains("real exec error"));
 }
 
 #[test]
@@ -244,6 +305,7 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
 fn turn_items_for_thread_returns_matching_turn_items() {
     let thread = AppServerThread {
         id: "thread-1".to_string(),
+        session_id: "thread-1".to_string(),
         forked_from_id: None,
         preview: String::new(),
         ephemeral: false,
@@ -255,6 +317,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         cwd: test_path_buf("/tmp/project").abs(),
         cli_version: "0.0.0-test".to_string(),
         source: codex_app_server_protocol::SessionSource::Exec,
+        thread_source: None,
         agent_nickname: None,
         agent_role: None,
         git_info: None,
@@ -348,6 +411,7 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -392,6 +456,34 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
         params.approvals_reviewer,
         Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview)
     );
+}
+
+#[tokio::test]
+async fn thread_start_params_include_user_thread_source() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+
+    let params = thread_start_params_from_config(&config);
+
+    assert_eq!(
+        params.thread_source,
+        Some(codex_app_server_protocol::ThreadSource::User)
+    );
+}
+
+#[test]
+fn active_profile_selection_uses_profile_id_only() {
+    let selection = permission_profile_id_from_active_profile(ActivePermissionProfile::new(
+        BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    ));
+
+    assert_eq!(selection, BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string());
 }
 
 #[tokio::test]
@@ -440,11 +532,19 @@ async fn session_configured_from_thread_response_uses_review_policy_from_respons
     let event = session_configured_from_thread_start_response(&response, &config)
         .expect("build bootstrap session configured event");
 
+    assert_eq!(
+        event.session_id.to_string(),
+        "67e55044-10b1-426f-9247-bb680e5fe0c7"
+    );
+    assert_eq!(
+        event.thread_id.to_string(),
+        "67e55044-10b1-426f-9247-bb680e5fe0c8"
+    );
     assert_eq!(event.approvals_reviewer, ApprovalsReviewer::AutoReview);
 }
 
 #[tokio::test]
-async fn session_configured_from_thread_response_uses_permission_profile_from_response() {
+async fn session_configured_from_thread_response_uses_permission_profile_from_config() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
@@ -453,19 +553,43 @@ async fn session_configured_from_thread_response_uses_permission_profile_from_re
         .build()
         .await
         .expect("build config");
-    let mut response = sample_thread_start_response();
-    response.permission_profile = Some(PermissionProfile::Disabled.into());
+    let response = sample_thread_start_response();
 
     let event = session_configured_from_thread_start_response(&response, &config)
         .expect("build bootstrap session configured event");
 
-    assert_eq!(event.permission_profile, PermissionProfile::Disabled);
+    assert_eq!(
+        event.permission_profile,
+        config.permissions.effective_permission_profile()
+    );
+}
+
+#[tokio::test]
+async fn session_configured_from_thread_response_preserves_thread_source() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let response = sample_thread_start_response();
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(
+        event.thread_source,
+        Some(codex_protocol::protocol::ThreadSource::User)
+    );
 }
 
 fn sample_thread_start_response() -> ThreadStartResponse {
     ThreadStartResponse {
         thread: codex_app_server_protocol::Thread {
             id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+            session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
             forked_from_id: None,
             preview: String::new(),
             ephemeral: false,
@@ -477,6 +601,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             cwd: test_path_buf("/tmp").abs(),
             cli_version: "0.0.0".to_string(),
             source: codex_app_server_protocol::SessionSource::Cli,
+            thread_source: Some(codex_app_server_protocol::ThreadSource::User),
             agent_nickname: None,
             agent_role: None,
             git_info: None,
@@ -487,6 +612,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
         approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
@@ -496,7 +622,6 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         },
-        permission_profile: None,
         active_permission_profile: None,
         reasoning_effort: None,
     }

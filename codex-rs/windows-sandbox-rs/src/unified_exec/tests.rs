@@ -5,6 +5,8 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
 use crate::run_windows_sandbox_capture;
+use codex_protocol::models::PermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -69,7 +71,7 @@ fn sandbox_home(name: &str) -> TempDir {
 }
 
 fn sandbox_log(codex_home: &Path) -> String {
-    let log_path = codex_home.join(".sandbox").join("sandbox.log");
+    let log_path = crate::current_log_file_path(&codex_home.join(".sandbox"));
     fs::read_to_string(&log_path)
         .unwrap_or_else(|err| format!("failed to read {}: {err}", log_path.display()))
 }
@@ -148,8 +150,9 @@ fn legacy_non_tty_cmd_emits_output() {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-non-tty-cmd");
         println!("cmd codex_home={}", codex_home.path().display());
+        let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -160,6 +163,8 @@ fn legacy_non_tty_cmd_emits_output() {
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
+            &[],
+            &[],
             /*tty*/ false,
             /*stdin_open*/ false,
             /*use_private_desktop*/ true,
@@ -177,6 +182,45 @@ fn legacy_non_tty_cmd_emits_output() {
 }
 
 #[test]
+fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let cwd = sandbox_cwd();
+        let codex_home = sandbox_home("legacy-non-tty-deny-read");
+        let secret_path =
+            AbsolutePathBuf::from_absolute_path(cwd.join("legacy-non-tty-deny-read-secret.env"))
+                .expect("absolute deny-read fixture path");
+        let permission_profile = PermissionProfile::workspace_write();
+        let err = spawn_windows_sandbox_session_legacy(
+            &permission_profile,
+            cwd.as_path(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/c".to_string(),
+                "echo deny-read".to_string(),
+            ],
+            cwd.as_path(),
+            HashMap::new(),
+            Some(5_000),
+            std::slice::from_ref(&secret_path),
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect_err("legacy deny-read should require the elevated backend");
+        assert!(
+            err.to_string()
+                .contains("deny-read overrides require the elevated Windows sandbox backend"),
+            "unexpected error: {err:#}"
+        );
+    });
+}
+
+#[test]
 fn legacy_non_tty_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
@@ -187,8 +231,9 @@ fn legacy_non_tty_powershell_emits_output() {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-non-tty-pwsh");
         println!("pwsh codex_home={}", codex_home.path().display());
+        let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -200,6 +245,8 @@ fn legacy_non_tty_powershell_emits_output() {
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
+            &[],
+            &[],
             /*tty*/ false,
             /*stdin_open*/ false,
             /*use_private_desktop*/ true,
@@ -370,8 +417,9 @@ fn legacy_capture_powershell_emits_output() {
     let cwd = sandbox_cwd();
     let codex_home = sandbox_home("legacy-capture-pwsh");
     println!("capture pwsh codex_home={}", codex_home.path().display());
+    let permission_profile = PermissionProfile::workspace_write();
     let result = run_windows_sandbox_capture(
-        "workspace-write",
+        &permission_profile,
         cwd.as_path(),
         codex_home.path(),
         vec![
@@ -409,8 +457,9 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-tty-pwsh");
         println!("tty pwsh codex_home={}", codex_home.path().display());
+        let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -424,6 +473,8 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ true,
@@ -460,8 +511,9 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
         let cwd = sandbox_cwd();
         let codex_home = sandbox_home("legacy-tty-cmd");
         println!("tty cmd codex_home={}", codex_home.path().display());
+        let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -472,6 +524,8 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ true,
@@ -511,8 +565,9 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
             "tty cmd default desktop codex_home={}",
             codex_home.path().display()
         );
+        let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
-            "workspace-write",
+            &permission_profile,
             cwd.as_path(),
             codex_home.path(),
             vec![
@@ -523,6 +578,8 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ false,

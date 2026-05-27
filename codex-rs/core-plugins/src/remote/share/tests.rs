@@ -93,9 +93,11 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
         "id": plugin_id,
         "name": "demo-plugin",
         "scope": "WORKSPACE",
+        "discoverability": "PRIVATE",
         "installation_policy": "AVAILABLE",
         "authentication_policy": "ON_USE",
         "release": {
+            "version": "0.1.0",
             "display_name": "Demo Plugin",
             "description": "Demo plugin description",
             "interface": {
@@ -107,15 +109,18 @@ fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
     })
 }
 
-fn remote_plugin_json_with_share_url(
+fn remote_plugin_json_with_share_url_and_principals(
     plugin_id: &str,
     share_url: Option<&str>,
+    share_principals: serde_json::Value,
 ) -> serde_json::Value {
     let mut plugin = remote_plugin_json(plugin_id);
     let serde_json::Value::Object(fields) = &mut plugin else {
         unreachable!("plugin json should be an object");
     };
+    fields.insert("discoverability".to_string(), json!("PRIVATE"));
     fields.insert("share_url".to_string(), json!(share_url));
+    fields.insert("share_principals".to_string(), share_principals);
     plugin
 }
 
@@ -202,6 +207,19 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
         .and(body_json(json!({
             "file_id": "file_123",
             "etag": "\"upload_etag_123\"",
+            "discoverability": "UNLISTED",
+            "share_targets": [
+                {
+                    "principal_type": "user",
+                    "principal_id": "user-1",
+                    "role": "reader",
+                },
+                {
+                    "principal_type": "workspace",
+                    "principal_id": "account_id",
+                    "role": "reader",
+                },
+            ],
         })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "plugin_id": "plugins_123",
@@ -217,6 +235,14 @@ async fn save_remote_plugin_share_creates_workspace_plugin() {
         codex_home.path(),
         &plugin_path,
         /*remote_plugin_id*/ None,
+        RemotePluginShareAccessPolicy {
+            discoverability: Some(RemotePluginShareDiscoverability::Unlisted),
+            share_targets: Some(vec![RemotePluginShareTarget {
+                principal_type: RemotePluginSharePrincipalType::User,
+                principal_id: "user-1".to_string(),
+                role: RemotePluginShareTargetRole::Reader,
+            }]),
+        },
     )
     .await
     .unwrap();
@@ -300,6 +326,34 @@ fn archive_plugin_for_upload_places_manifest_at_archive_root() {
     );
 }
 
+#[test]
+fn archive_plugin_for_upload_round_trips_through_plugin_bundle_archive_with_long_paths() {
+    let temp_dir = TempDir::new().unwrap();
+    let plugin_path = write_test_plugin(temp_dir.path(), "demo-plugin");
+    let long_skill_path = Path::new("skills")
+        .join(["segment"; 40].join("/"))
+        .join("SKILL.md");
+    write_file(&plugin_path.join(&long_skill_path), "# Long path skill\n");
+
+    let archive_bytes = archive_plugin_for_upload(&plugin_path).unwrap();
+    let destination = TempDir::new().unwrap();
+    crate::plugin_bundle_archive::unpack_plugin_bundle_tar_gz(
+        &archive_bytes,
+        destination.path(),
+        /*max_total_bytes*/ 1024 * 1024,
+    )
+    .expect("extract shared plugin archive");
+
+    assert_eq!(
+        fs::read_to_string(destination.path().join(".codex-plugin/plugin.json")).unwrap(),
+        r#"{"name":"demo-plugin"}"#
+    );
+    assert_eq!(
+        fs::read_to_string(destination.path().join(long_skill_path)).unwrap(),
+        "# Long path skill\n"
+    );
+}
+
 #[tokio::test]
 async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
     let codex_home = TempDir::new().unwrap();
@@ -354,6 +408,7 @@ async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
         codex_home.path(),
         &plugin_path,
         Some("plugins_123"),
+        RemotePluginShareAccessPolicy::default(),
     )
     .await
     .unwrap();
@@ -363,6 +418,100 @@ async fn save_remote_plugin_share_updates_existing_workspace_plugin() {
         RemotePluginShareSaveResult {
             remote_plugin_id: "plugins_123".to_string(),
             share_url: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn update_remote_plugin_share_targets_updates_targets() {
+    let server = MockServer::start().await;
+    let config = test_config(&server);
+    let auth = test_auth();
+
+    Mock::given(method("PUT"))
+        .and(path("/backend-api/ps/plugins/plugins_123/shares"))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .and(body_json(json!({
+            "discoverability": "UNLISTED",
+            "targets": [
+                {
+                    "principal_type": "user",
+                    "principal_id": "user-1",
+                    "role": "editor",
+                },
+                {
+                    "principal_type": "group",
+                    "principal_id": "group-1",
+                    "role": "reader",
+                },
+                {
+                    "principal_type": "workspace",
+                    "principal_id": "account_id",
+                    "role": "reader",
+                },
+            ],
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "principals": [
+                {
+                    "principal_type": "user",
+                    "principal_id": "user-1",
+                    "role": "editor",
+                    "name": "Gavin",
+                },
+                {
+                    "principal_type": "group",
+                    "principal_id": "group-1",
+                    "role": "reader",
+                    "name": "Engineering",
+                },
+            ],
+            "discoverability": "UNLISTED",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = update_remote_plugin_share_targets(
+        &config,
+        Some(&auth),
+        "plugins_123",
+        vec![
+            RemotePluginShareTarget {
+                principal_type: RemotePluginSharePrincipalType::User,
+                principal_id: "user-1".to_string(),
+                role: RemotePluginShareTargetRole::Editor,
+            },
+            RemotePluginShareTarget {
+                principal_type: RemotePluginSharePrincipalType::Group,
+                principal_id: "group-1".to_string(),
+                role: RemotePluginShareTargetRole::Reader,
+            },
+        ],
+        RemotePluginShareUpdateDiscoverability::Unlisted,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result,
+        RemotePluginShareUpdateTargetsResult {
+            principals: vec![
+                RemotePluginSharePrincipal {
+                    principal_type: RemotePluginSharePrincipalType::User,
+                    principal_id: "user-1".to_string(),
+                    role: RemotePluginSharePrincipalRole::Editor,
+                    name: "Gavin".to_string(),
+                },
+                RemotePluginSharePrincipal {
+                    principal_type: RemotePluginSharePrincipalType::Group,
+                    principal_id: "group-1".to_string(),
+                    role: RemotePluginSharePrincipalRole::Reader,
+                    name: "Engineering".to_string(),
+                },
+            ],
+            discoverability: RemotePluginShareDiscoverability::Unlisted,
         }
     );
 }
@@ -387,9 +536,23 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         ))
         .and(query_param_is_missing("pageToken"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plugins": [remote_plugin_json_with_share_url(
+            "plugins": [remote_plugin_json_with_share_url_and_principals(
                 "plugins_123",
                 Some("https://chatgpt.example/plugins/share/share-key-1"),
+                json!([
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-owner",
+                        "role": "owner",
+                        "name": "Owner",
+                    },
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-reader",
+                        "role": "reader",
+                        "name": "Reader",
+                    },
+                ]),
             )],
             "pagination": {
                 "next_page_token": "page-2"
@@ -408,7 +571,24 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         ))
         .and(query_param("pageToken", "page-2"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "plugins": [remote_plugin_json_with_share_url("plugins_456", /*share_url*/ None)],
+            "plugins": [remote_plugin_json_with_share_url_and_principals(
+                "plugins_456",
+                /*share_url*/ None,
+                json!([
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-owner",
+                        "role": "owner",
+                        "name": "Owner",
+                    },
+                    {
+                        "principal_type": "user",
+                        "principal_id": "user-editor",
+                        "role": "editor",
+                        "name": "Editor",
+                    },
+                ]),
+            )],
             "pagination": empty_pagination_json(),
         })))
         .expect(1)
@@ -434,30 +614,78 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         vec![
             RemotePluginShareSummary {
                 summary: RemotePluginSummary {
-                    id: "plugins_123".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me".to_string(),
+                    remote_plugin_id: "plugins_123".to_string(),
                     name: "demo-plugin".to_string(),
+                    share_context: Some(RemotePluginShareContext {
+                        remote_plugin_id: "plugins_123".to_string(),
+                        remote_version: Some("0.1.0".to_string()),
+                        discoverability: RemotePluginShareDiscoverability::Private,
+                        share_url: Some(
+                            "https://chatgpt.example/plugins/share/share-key-1".to_string(),
+                        ),
+                        creator_account_user_id: None,
+                        creator_name: None,
+                        share_principals: Some(vec![
+                            RemotePluginSharePrincipal {
+                                principal_type: RemotePluginSharePrincipalType::User,
+                                principal_id: "user-owner".to_string(),
+                                role: RemotePluginSharePrincipalRole::Owner,
+                                name: "Owner".to_string(),
+                            },
+                            RemotePluginSharePrincipal {
+                                principal_type: RemotePluginSharePrincipalType::User,
+                                principal_id: "user-reader".to_string(),
+                                role: RemotePluginSharePrincipalRole::Reader,
+                                name: "Reader".to_string(),
+                            },
+                        ]),
+                    }),
                     installed: false,
                     enabled: false,
                     install_policy: PluginInstallPolicy::Available,
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: PluginAvailability::Available,
                     interface: Some(expected_plugin_interface()),
+                    keywords: Vec::new(),
                 },
-                share_url: Some("https://chatgpt.example/plugins/share/share-key-1".to_string()),
                 local_plugin_path: Some(local_plugin_path),
             },
             RemotePluginShareSummary {
                 summary: RemotePluginSummary {
-                    id: "plugins_456".to_string(),
+                    id: "demo-plugin@workspace-shared-with-me".to_string(),
+                    remote_plugin_id: "plugins_456".to_string(),
                     name: "demo-plugin".to_string(),
+                    share_context: Some(RemotePluginShareContext {
+                        remote_plugin_id: "plugins_456".to_string(),
+                        remote_version: Some("0.1.0".to_string()),
+                        discoverability: RemotePluginShareDiscoverability::Private,
+                        share_url: None,
+                        creator_account_user_id: None,
+                        creator_name: None,
+                        share_principals: Some(vec![
+                            RemotePluginSharePrincipal {
+                                principal_type: RemotePluginSharePrincipalType::User,
+                                principal_id: "user-owner".to_string(),
+                                role: RemotePluginSharePrincipalRole::Owner,
+                                name: "Owner".to_string(),
+                            },
+                            RemotePluginSharePrincipal {
+                                principal_type: RemotePluginSharePrincipalType::User,
+                                principal_id: "user-editor".to_string(),
+                                role: RemotePluginSharePrincipalRole::Editor,
+                                name: "Editor".to_string(),
+                            },
+                        ]),
+                    }),
                     installed: true,
                     enabled: true,
                     install_policy: PluginInstallPolicy::Available,
                     auth_policy: PluginAuthPolicy::OnUse,
                     availability: PluginAvailability::Available,
                     interface: Some(expected_plugin_interface()),
+                    keywords: Vec::new(),
                 },
-                share_url: None,
                 local_plugin_path: None,
             }
         ]

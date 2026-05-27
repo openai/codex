@@ -62,6 +62,12 @@ mod thread_processor_behavior_tests {
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
@@ -157,6 +163,22 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn validate_dynamic_tools_accepts_responses_compatible_identifiers() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some("Codex-App_2".to_string()),
+            name: "lookup-ticket_2".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }];
+        validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
     fn validate_dynamic_tools_rejects_duplicate_name_in_same_namespace() {
         let tools = vec![
             ApiDynamicToolSpec {
@@ -195,6 +217,7 @@ mod thread_processor_behavior_tests {
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
+                ..Default::default()
             },
         ))];
         let active_turn = Turn {
@@ -261,6 +284,104 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
+    fn validate_dynamic_tools_rejects_name_not_supported_by_responses() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: None,
+            name: "lookup.ticket".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: false,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("invalid name");
+        assert!(err.contains("lookup.ticket"), "unexpected error: {err}");
+        assert!(
+            err.contains("Responses API") && err.contains("^[a-zA-Z0-9_-]+$"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_namespace_not_supported_by_responses() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some("codex.app".to_string()),
+            name: "lookup_ticket".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("invalid namespace");
+        assert!(err.contains("codex.app"), "unexpected error: {err}");
+        assert!(
+            err.contains("Responses API") && err.contains("^[a-zA-Z0-9_-]+$"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_name_longer_than_responses_limit() {
+        let long_name = "a".repeat(129);
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: None,
+            name: long_name.clone(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: false,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("name too long");
+        assert!(err.contains("at most 128"), "unexpected error: {err}");
+        assert!(err.contains(&long_name), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_namespace_longer_than_responses_limit() {
+        let long_namespace = "a".repeat(65);
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some(long_namespace.clone()),
+            name: "lookup_ticket".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("namespace too long");
+        assert!(err.contains("at most 64"), "unexpected error: {err}");
+        assert!(err.contains(&long_namespace), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_reserved_responses_namespace() {
+        let tools = vec![ApiDynamicToolSpec {
+            namespace: Some("functions".to_string()),
+            name: "lookup_ticket".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }];
+        let err = validate_dynamic_tools(&tools).expect_err("reserved Responses namespace");
+        assert!(err.contains("functions"), "unexpected error: {err}");
+        assert!(err.contains("Responses API"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn summary_from_stored_thread_preserves_millisecond_precision() {
         let created_at =
             DateTime::parse_from_rfc3339("2025-01-02T03:04:05.678Z").expect("valid timestamp");
@@ -283,6 +404,7 @@ mod thread_processor_behavior_tests {
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            thread_source: Some(codex_protocol::protocol::ThreadSource::User),
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -294,8 +416,7 @@ mod thread_processor_behavior_tests {
             history: None,
         };
 
-        let summary =
-            summary_from_stored_thread(stored_thread, "fallback").expect("summary should exist");
+        let summary = summary_from_stored_thread(stored_thread, "fallback");
 
         assert_eq!(
             summary.timestamp.as_deref(),
@@ -324,7 +445,7 @@ mod thread_processor_behavior_tests {
                         path: FileSystemPath::GlobPattern {
                             pattern: "/tmp/project/**/*.env".to_string(),
                         },
-                        access: FileSystemAccessMode::None,
+                        access: FileSystemAccessMode::Deny,
                     },
                 ]),
                 NetworkSandboxPolicy::Restricted,
@@ -353,14 +474,16 @@ mod thread_processor_behavior_tests {
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":workspace".to_string()),
+                default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
                 ..Default::default()
             },
             cwd.as_path()
         ));
         assert!(requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":danger-no-sandbox".to_string()),
+                default_permissions: Some(
+                    BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()
+                ),
                 ..Default::default()
             },
             cwd.as_path()
@@ -374,7 +497,7 @@ mod thread_processor_behavior_tests {
         ));
         assert!(!requested_permissions_trust_project(
             &ConfigOverrides {
-                default_permissions: Some(":read-only".to_string()),
+                default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
                 ..Default::default()
             },
             cwd.as_path()
@@ -468,6 +591,7 @@ mod thread_processor_behavior_tests {
             temp_dir.path().to_path_buf(),
             Vec::new(),
             LoaderOverrides::default(),
+            /*strict_config*/ false,
             CloudRequirementsLoader::default(),
             Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(vec![
@@ -486,6 +610,7 @@ mod thread_processor_behavior_tests {
                 Some(HashMap::from([
                     ("model_provider".to_string(), json!("request")),
                     ("features.plugins".to_string(), json!(true)),
+                    ("bypass_hook_trust".to_string(), json!(true)),
                     (
                         "model_providers.session".to_string(),
                         json!({
@@ -502,6 +627,7 @@ mod thread_processor_behavior_tests {
         assert_eq!(config.model_provider_id, "session");
         assert_eq!(config.model_provider, session_provider);
         assert!(!config.features.enabled(Feature::Plugins));
+        assert!(config.bypass_hook_trust);
         Ok(())
     }
 
@@ -514,8 +640,9 @@ mod thread_processor_behavior_tests {
             path: None,
             model: None,
             model_provider: None,
-            service_tier: Some(Some(codex_protocol::config_types::ServiceTier::Fast)),
+            service_tier: Some(Some("priority".to_string())),
             cwd: None,
+            runtime_workspace_roots: None,
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
@@ -530,21 +657,33 @@ mod thread_processor_behavior_tests {
         let config_snapshot = ThreadConfigSnapshot {
             model: "gpt-5".to_string(),
             model_provider_id: "openai".to_string(),
-            service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
+            service_tier: Some("flex".to_string()),
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             active_permission_profile: None,
             cwd,
+            workspace_roots: Vec::new(),
+            profile_workspace_roots: Vec::new(),
             ephemeral: false,
             reasoning_effort: None,
+            reasoning_summary: None,
             personality: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
             session_source: SessionSource::Cli,
+            thread_source: None,
         };
 
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),
-            vec!["service_tier requested=Some(Fast) active=Some(Flex)".to_string()]
+            vec!["service_tier requested=Some(\"priority\") active=Some(\"flex\")".to_string()]
         );
     }
 
@@ -828,6 +967,7 @@ mod thread_processor_behavior_tests {
                 agent_nickname: None,
                 agent_role: None,
             }),
+            thread_source: Some(codex_protocol::protocol::ThreadSource::Subagent),
             agent_nickname: Some("atlas".to_string()),
             agent_role: Some("explorer".to_string()),
             model_provider: Some("test-provider".to_string()),
@@ -849,6 +989,7 @@ mod thread_processor_behavior_tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        assert_eq!(thread.thread_source, None);
         Ok(())
     }
 
@@ -969,12 +1110,14 @@ mod thread_processor_behavior_tests {
             conversation_id,
             PathBuf::from("/tmp/rollout.jsonl"),
             Some("hi".to_string()),
+            /*preview*/ None,
             "2025-09-05T16:53:11Z".to_string(),
             "2025-09-05T16:53:12Z".to_string(),
             "test-provider".to_string(),
             PathBuf::from("/"),
             "0.0.0".to_string(),
             source,
+            Some(codex_protocol::protocol::ThreadSource::Subagent),
             Some("atlas".to_string()),
             Some("explorer".to_string()),
             /*git_sha*/ None,
@@ -997,7 +1140,9 @@ mod thread_processor_behavior_tests {
         let connection = ConnectionId(1);
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
-        manager.connection_initialized(connection).await;
+        manager
+            .connection_initialized(connection, ConnectionCapabilities::default())
+            .await;
         manager
             .try_ensure_connection_subscribed(
                 thread_id, connection, /*experimental_raw_events*/ false,
@@ -1012,6 +1157,7 @@ mod thread_processor_behavior_tests {
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    trace_id: None,
                     started_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
@@ -1040,8 +1186,12 @@ mod thread_processor_behavior_tests {
         let connection_b = ConnectionId(2);
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
-        manager.connection_initialized(connection_a).await;
-        manager.connection_initialized(connection_b).await;
+        manager
+            .connection_initialized(connection_a, ConnectionCapabilities::default())
+            .await;
+        manager
+            .connection_initialized(connection_b, ConnectionCapabilities::default())
+            .await;
         manager
             .try_ensure_connection_subscribed(
                 thread_id,
@@ -1085,8 +1235,12 @@ mod thread_processor_behavior_tests {
         let connection_a = ConnectionId(1);
         let connection_b = ConnectionId(2);
 
-        manager.connection_initialized(connection_a).await;
-        manager.connection_initialized(connection_b).await;
+        manager
+            .connection_initialized(connection_a, ConnectionCapabilities::default())
+            .await;
+        manager
+            .connection_initialized(connection_b, ConnectionCapabilities::default())
+            .await;
         manager
             .try_ensure_connection_subscribed(
                 thread_id,
@@ -1131,7 +1285,9 @@ mod thread_processor_behavior_tests {
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let connection = ConnectionId(1);
 
-        manager.connection_initialized(connection).await;
+        manager
+            .connection_initialized(connection, ConnectionCapabilities::default())
+            .await;
         let threads_to_unload = manager.remove_connection(connection).await;
         assert_eq!(threads_to_unload, Vec::<ThreadId>::new());
 
@@ -1144,6 +1300,81 @@ mod thread_processor_behavior_tests {
                 .is_none()
         );
         assert!(!manager.has_subscribers(thread_id).await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn first_attestation_capable_connection_for_thread_only_uses_thread_subscribers()
+    -> Result<()> {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("dfbd9a95-2f44-470a-8bd8-1cfc04efc243")?;
+        let other_thread_id = ThreadId::from_string("6c9a74e4-5e59-479e-90bf-5c5798bb50aa")?;
+        let unrelated_supported_connection = ConnectionId(1);
+        let earlier_supported_connection = ConnectionId(2);
+        let later_supported_connection = ConnectionId(3);
+        let unsupported_connection = ConnectionId(4);
+
+        manager
+            .connection_initialized(
+                unrelated_supported_connection,
+                ConnectionCapabilities {
+                    request_attestation: true,
+                },
+            )
+            .await;
+        manager
+            .connection_initialized(
+                earlier_supported_connection,
+                ConnectionCapabilities {
+                    request_attestation: true,
+                },
+            )
+            .await;
+        manager
+            .connection_initialized(
+                later_supported_connection,
+                ConnectionCapabilities {
+                    request_attestation: true,
+                },
+            )
+            .await;
+        manager
+            .connection_initialized(unsupported_connection, ConnectionCapabilities::default())
+            .await;
+
+        assert!(
+            manager
+                .try_add_connection_to_thread(other_thread_id, unrelated_supported_connection)
+                .await
+        );
+        assert!(
+            manager
+                .try_add_connection_to_thread(thread_id, later_supported_connection)
+                .await
+        );
+        assert!(
+            manager
+                .try_add_connection_to_thread(thread_id, earlier_supported_connection)
+                .await
+        );
+        assert!(
+            manager
+                .try_add_connection_to_thread(thread_id, unsupported_connection)
+                .await
+        );
+
+        assert_eq!(
+            manager
+                .first_attestation_capable_connection_for_thread(thread_id)
+                .await,
+            Some(earlier_supported_connection)
+        );
+        assert_eq!(
+            manager
+                .first_attestation_capable_connection_for_thread(other_thread_id)
+                .await,
+            Some(unrelated_supported_connection)
+        );
         Ok(())
     }
 }

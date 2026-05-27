@@ -1,5 +1,6 @@
 use crate::identity::SandboxCreds;
 use crate::ipc_framed::FramedMessage;
+use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::ipc_framed::read_frame;
@@ -56,7 +57,7 @@ pub(crate) struct RunnerTransport {
 impl RunnerTransport {
     pub(crate) fn send_spawn_request(&mut self, request: SpawnRequest) -> Result<()> {
         let spawn_request = FramedMessage {
-            version: 1,
+            version: IPC_PROTOCOL_VERSION,
             message: Message::SpawnRequest {
                 payload: Box::new(request),
             },

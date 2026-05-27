@@ -25,7 +25,10 @@ use std::thread;
 use std::time::Duration;
 
 use crate::auth::AuthDotJson;
+use crate::auth::load_auth_dot_json;
+use crate::auth::revoke_auth_tokens;
 use crate::auth::save_auth;
+use crate::auth::should_revoke_auth_tokens;
 use crate::default_client::originator;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
@@ -66,7 +69,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
@@ -76,7 +79,7 @@ impl ServerOptions {
     pub fn new(
         codex_home: PathBuf,
         client_id: String,
-        forced_chatgpt_workspace_id: Option<String>,
+        forced_chatgpt_workspace_id: Option<Vec<String>>,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
         Self {
@@ -483,7 +486,7 @@ fn build_authorize_url(
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
-    forced_chatgpt_workspace_id: Option<&str>,
+    forced_chatgpt_workspace_ids: Option<&[String]>,
 ) -> String {
     let mut query = vec![
         ("response_type".to_string(), "code".to_string()),
@@ -504,8 +507,8 @@ fn build_authorize_url(
         ("state".to_string(), state.to_string()),
         ("originator".to_string(), originator().value),
     ];
-    if let Some(workspace_id) = forced_chatgpt_workspace_id {
-        query.push(("allowed_workspace_id".to_string(), workspace_id.to_string()));
+    if let Some(workspace_ids) = forced_chatgpt_workspace_ids {
+        query.push(("allowed_workspace_id".to_string(), workspace_ids.join(",")));
     }
     let qs = query
         .into_iter()
@@ -781,7 +784,8 @@ pub(crate) async fn exchange_code_for_tokens(
     })
 }
 
-/// Persists exchanged credentials using the configured local auth store.
+/// Persists exchanged credentials using the configured local auth store, then
+/// best-effort revokes any superseded managed ChatGPT tokens.
 pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
@@ -792,7 +796,14 @@ pub(crate) async fn persist_tokens_async(
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
-    tokio::task::spawn_blocking(move || {
+    let (previous_auth, auth) = tokio::task::spawn_blocking(move || {
+        let previous_auth = match load_auth_dot_json(&codex_home, auth_credentials_store_mode) {
+            Ok(auth) => auth,
+            Err(err) => {
+                warn!("failed to load previous auth before saving new login: {err}");
+                None
+            }
+        };
         let mut tokens = TokenData {
             id_token: parse_chatgpt_jwt_claims(&id_token).map_err(io::Error::other)?,
             access_token,
@@ -812,10 +823,19 @@ pub(crate) async fn persist_tokens_async(
             last_refresh: Some(Utc::now()),
             agent_identity: None,
         };
-        save_auth(&codex_home, &auth, auth_credentials_store_mode)
+        save_auth(&codex_home, &auth, auth_credentials_store_mode)?;
+        Ok::<_, io::Error>((previous_auth, auth))
     })
     .await
-    .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
+    .map_err(|e| io::Error::other(format!("persist task failed: {e}")))??;
+
+    if should_revoke_auth_tokens(previous_auth.as_ref(), &auth)
+        && let Err(err) = revoke_auth_tokens(previous_auth.as_ref()).await
+    {
+        warn!("failed to revoke superseded auth tokens after login: {err}");
+    }
+
+    Ok(())
 }
 
 fn compose_success_url(
@@ -908,7 +928,7 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
 
 /// Validates the ID token against an optional workspace restriction.
 pub(crate) fn ensure_workspace_allowed(
-    expected: Option<&str>,
+    expected: Option<&[String]>,
     id_token: &str,
 ) -> Result<(), String> {
     let Some(expected) = expected else {
@@ -920,10 +940,13 @@ pub(crate) fn ensure_workspace_allowed(
         return Err("Login is restricted to a specific workspace, but the token did not include an chatgpt_account_id claim.".to_string());
     };
 
-    if actual == expected {
+    if expected.iter().any(|workspace_id| workspace_id == actual) {
         Ok(())
     } else {
-        Err(format!("Login is restricted to workspace id {expected}."))
+        Err(format!(
+            "Login is restricted to workspace id(s) {}.",
+            expected.join(", ")
+        ))
     }
 }
 
@@ -1132,6 +1155,28 @@ pub(crate) async fn obtain_api_key(
 }
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
+    use anyhow::Context;
+    use base64::Engine;
+    use codex_app_server_protocol::AuthMode;
+    use codex_config::types::AuthCredentialsStoreMode;
+    use serde_json::Value;
+    use serde_json::json;
+    use tempfile::tempdir;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    use crate::auth::AuthDotJson;
+    use crate::auth::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
+    use crate::auth::load_auth_dot_json;
+    use crate::auth::save_auth;
+    use crate::token_data::TokenData;
+    use crate::token_data::parse_chatgpt_jwt_claims;
+    use core_test_support::skip_if_no_network;
     use pretty_assertions::assert_eq;
 
     use super::DEFAULT_ISSUER;
@@ -1140,10 +1185,178 @@ mod tests {
     use super::html_escape;
     use super::is_missing_codex_entitlement_error;
     use super::parse_token_endpoint_error;
+    use super::persist_tokens_async;
     use super::redact_sensitive_query_value;
     use super::redact_sensitive_url_parts;
     use super::render_login_error_page;
     use super::sanitize_url_for_logging;
+
+    #[serial_test::serial(logout_revoke)]
+    #[tokio::test]
+    async fn persist_tokens_async_revokes_previous_auth_without_failing_login() -> anyhow::Result<()>
+    {
+        skip_if_no_network!(Ok(()));
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/revoke"))
+            .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+                "error": {
+                    "message": "revoke failed"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let _env_guard = EnvGuard::set(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        );
+
+        let codex_home = tempdir()?;
+        save_auth(
+            codex_home.path(),
+            &chatgpt_auth("old-access", "old-refresh", "old-account"),
+            AuthCredentialsStoreMode::File,
+        )?;
+
+        persist_tokens_async(
+            codex_home.path(),
+            /*api_key*/ None,
+            jwt_for_account("new-account"),
+            "new-access".to_string(),
+            "new-refresh".to_string(),
+            AuthCredentialsStoreMode::File,
+        )
+        .await?;
+
+        let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?
+            .context("auth.json should exist after login")?;
+        assert_eq!(
+            auth.tokens.context("new tokens should be persisted")?,
+            TokenData {
+                id_token: parse_chatgpt_jwt_claims(&jwt_for_account("new-account"))
+                    .expect("new JWT should parse"),
+                access_token: "new-access".to_string(),
+                refresh_token: "new-refresh".to_string(),
+                account_id: Some("new-account".to_string()),
+            }
+        );
+
+        let requests = server
+            .received_requests()
+            .await
+            .context("failed to fetch revoke requests")?;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]
+                .body_json::<Value>()
+                .context("revoke request should be JSON")?,
+            json!({
+                "token": "old-refresh",
+                "token_type_hint": "refresh_token",
+                "client_id": crate::auth::CLIENT_ID,
+            })
+        );
+        server.verify().await;
+        Ok(())
+    }
+
+    #[serial_test::serial(logout_revoke)]
+    #[tokio::test]
+    async fn persist_tokens_async_does_not_revoke_reused_refresh_token() -> anyhow::Result<()> {
+        skip_if_no_network!(Ok(()));
+
+        let server = MockServer::start().await;
+        let _env_guard = EnvGuard::set(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        );
+
+        let codex_home = tempdir()?;
+        save_auth(
+            codex_home.path(),
+            &chatgpt_auth("old-access", "shared-refresh", "old-account"),
+            AuthCredentialsStoreMode::File,
+        )?;
+
+        persist_tokens_async(
+            codex_home.path(),
+            /*api_key*/ None,
+            jwt_for_account("new-account"),
+            "new-access".to_string(),
+            "shared-refresh".to_string(),
+            AuthCredentialsStoreMode::File,
+        )
+        .await?;
+
+        let requests = server
+            .received_requests()
+            .await
+            .context("failed to fetch revoke requests")?;
+        assert_eq!(requests.len(), 0);
+        Ok(())
+    }
+
+    fn chatgpt_auth(access_token: &str, refresh_token: &str, account_id: &str) -> AuthDotJson {
+        AuthDotJson {
+            auth_mode: Some(AuthMode::Chatgpt),
+            openai_api_key: None,
+            tokens: Some(TokenData {
+                id_token: parse_chatgpt_jwt_claims(&jwt_for_account(account_id))
+                    .expect("test JWT should parse"),
+                access_token: access_token.to_string(),
+                refresh_token: refresh_token.to_string(),
+                account_id: Some(account_id.to_string()),
+            }),
+            last_refresh: None,
+            agent_identity: None,
+        }
+    }
+
+    fn jwt_for_account(account_id: &str) -> String {
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        let header_b64 = encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let payload_b64 = encode(
+            serde_json::to_string(&json!({
+                "https://api.openai.com/auth": {
+                    "chatgpt_account_id": account_id,
+                }
+            }))
+            .expect("payload should serialize")
+            .as_bytes(),
+        );
+        let signature_b64 = encode(b"sig");
+        format!("{header_b64}.{payload_b64}.{signature_b64}")
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: String) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: this test executes serially with other revoke tests.
+            unsafe {
+                std::env::set_var(key, &value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: the guard restores the original environment before other revoke tests run.
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn parse_token_endpoint_error_prefers_error_description() {

@@ -1,11 +1,10 @@
-//! Codex Apps support for the built-in apps MCP server.
+//! Codex Apps support for the host-owned apps MCP server.
 //!
 //! This module owns the pieces that are unique to ChatGPT-hosted app
 //! connectors: cache scoping by authenticated user, disk cache reads/writes,
 //! connector allow-list filtering, and the normalization that turns app
 //! connector/tool metadata into model-visible MCP callable names.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -21,7 +20,7 @@ use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
 
-pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 2;
+pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexAppsToolsCacheKey {
@@ -36,16 +35,6 @@ pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCac
         chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
         is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
     }
-}
-
-pub fn filter_non_codex_apps_mcp_tools_only(
-    mcp_tools: &HashMap<String, ToolInfo>,
-) -> HashMap<String, ToolInfo> {
-    mcp_tools
-        .iter()
-        .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
-        .map(|(name, tool)| (name.clone(), tool.clone()))
-        .collect()
 }
 
 #[derive(Clone)]
@@ -138,9 +127,9 @@ pub(crate) fn normalize_codex_apps_callable_namespace(
     if server_name == CODEX_APPS_MCP_SERVER_NAME
         && let Some(connector_name) = connector_name
     {
-        format!("mcp__{}__{}", server_name, sanitize_name(connector_name))
+        format!("{}__{}", server_name, sanitize_name(connector_name))
     } else {
-        format!("mcp__{server_name}__")
+        server_name.to_string()
     }
 }
 
