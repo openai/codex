@@ -179,7 +179,7 @@ pub fn keymap_binding_clear_edit(context: &str, action: &str) -> ConfigEdit {
 
 pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) -> Vec<ConfigEdit> {
     let mut shown_count_entries: Vec<_> = shown_count.iter().collect();
-    shown_count_entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    shown_count_entries.sort_unstable_by_key(|(left, _)| *left);
 
     let mut edits = vec![ConfigEdit::ClearPath {
         segments: vec!["tui".to_string(), "model_availability_nux".to_string()],
@@ -354,7 +354,7 @@ mod document_helpers {
         if !config.tools.is_empty() {
             let mut tools = new_implicit_table();
             let mut tool_entries: Vec<_> = config.tools.iter().collect();
-            tool_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            tool_entries.sort_by_key(|(name, _)| *name);
             for (name, tool_config) in tool_entries {
                 tools.insert(name, serialize_mcp_server_tool(tool_config));
             }
@@ -501,7 +501,7 @@ mod document_helpers {
         I: IntoIterator<Item = (&'a String, &'a String)>,
     {
         let mut entries: Vec<_> = pairs.into_iter().collect();
-        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        entries.sort_by_key(|(key, _)| *key);
         let mut table = TomlTable::new();
         table.set_implicit(false);
         for (key, val) in entries {

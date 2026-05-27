@@ -5,7 +5,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
@@ -58,14 +57,6 @@ pub fn token_mode_for_permission_profile(
 }
 
 impl ResolvedWindowsSandboxPermissions {
-    pub fn from_legacy_policy_for_cwd(policy: &SandboxPolicy, cwd: &Path) -> Self {
-        Self {
-            file_system: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(policy, cwd)
-                .materialize_project_roots_with_cwd(cwd),
-            network: NetworkSandboxPolicy::from(policy),
-        }
-    }
-
     pub fn try_from_permission_profile(permission_profile: &PermissionProfile) -> Result<Self> {
         if !matches!(permission_profile, PermissionProfile::Managed { .. }) {
             anyhow::bail!(
@@ -244,34 +235,6 @@ mod tests {
         .collect::<std::collections::HashSet<_>>();
 
         assert_eq!(expected_roots, roots);
-    }
-
-    #[test]
-    fn legacy_workspace_root_stays_bound_to_policy_cwd() {
-        let tmp = TempDir::new().expect("tempdir");
-        let policy_cwd = tmp.path().join("workspace");
-        let command_cwd = policy_cwd.join("subdir");
-        std::fs::create_dir_all(&command_cwd).expect("create command cwd");
-
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-        let permissions =
-            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(&policy, &policy_cwd);
-
-        let roots = permissions
-            .writable_roots_for_cwd(&command_cwd, &HashMap::new())
-            .into_iter()
-            .map(|root| root.root)
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            roots,
-            vec![dunce::canonicalize(&policy_cwd).expect("canonical policy cwd")]
-        );
     }
 
     #[test]

@@ -77,6 +77,7 @@ fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) ->
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(test.config.cwd.to_path_buf()),
             approval_policy: Some(AskForApproval::Never),

@@ -1,0 +1,10 @@
+---
+source: tui/src/insert_history.rs
+expression: "rows.join(\"\\n\")"
+---
+
+
+
+raw-start-aaaaaaaaaa
+aaaaaaaaaaaaaa-tail-
+must-remain

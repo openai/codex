@@ -76,10 +76,8 @@ impl WindowsSandboxRequestProcessor {
                 Ok(config) => {
                     let setup_request = WindowsSandboxSetupRequest {
                         mode,
-                        policy: config
-                            .permissions
-                            .legacy_sandbox_policy(config.cwd.as_path()),
-                        policy_cwd: config.cwd.to_path_buf(),
+                        permission_profile: config.permissions.effective_permission_profile(),
+                        permission_profile_cwd: config.cwd.to_path_buf(),
                         command_cwd,
                         env_map: std::env::vars().collect(),
                         codex_home: config.codex_home.to_path_buf(),
