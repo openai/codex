@@ -19,8 +19,9 @@ jobs:
   test:
     # PRs use the sharded Windows cross-compiled test jobs below. Post-merge
     # pushes to main also run the native Windows test job for broader Windows
-    # signal without putting PR latency back on the critical path. Cargo CI
-    # owns V8/code-mode test coverage for now.
+    # signal without putting PR latency back on the critical path. A focused
+    # Windows gnullvm job below exercises V8/code-mode through the cross-built
+    # artifact.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -239,6 +240,91 @@ jobs:
             echo "Windows Bazel test shards finished with result: ${{ needs.test-windows-shard.result }}" >&2
             exit 1
           fi
+
+  test-windows-code-mode-gnullvm:
+    # Probe the Windows GNU V8 artifact directly: build it through the same
+    # Linux RBE path as the sharded Windows test jobs and execute its V8-backed
+    # tests on the Windows runner.
+    timeout-minutes: 45
+    runs-on: windows-latest
+    name: Bazel V8/code-mode test on windows-latest for x86_64-pc-windows-gnullvm
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: x86_64-pc-windows-gnullvm
+          cache-scope: bazel-${{ github.job }}
+          install-test-prereqs: "true"
+
+      - name: bazel test Windows gnullvm V8 and code-mode targets
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          bazel_test_args=(
+            test
+            --nocache_test_results
+            --test_tag_filters=-argument-comment-lint
+            --test_output=all
+            --test_verbose_timeout_warnings
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
+            --build_metadata=TAG_windows_code_mode_gnullvm=true
+          )
+
+          # Run the direct runtime smoke tests against the source-built
+          # Windows GNU V8 archive.
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            --print-failed-test-logs \
+            --windows-cross-compile \
+            --remote-download-toplevel \
+            -- \
+            "${bazel_test_args[@]}" \
+            -- \
+            //codex-rs/code-mode:code-mode-unit-tests \
+            //codex-rs/v8-poc:v8-poc-unit-tests
+
+          # Supplying an explicit test filter intentionally runs these
+          # integration tests despite ci-windows-cross's broad code-mode skip.
+          # Disable Bazel sharding because the explicit libtest filter would
+          # otherwise select the same subset in every core-all-test shard.
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            --print-failed-test-logs \
+            --windows-cross-compile \
+            --remote-download-toplevel \
+            -- \
+            "${bazel_test_args[@]}" \
+            --test_sharding_strategy=disabled \
+            --test_filter=suite::code_mode:: \
+            -- \
+            //codex-rs/core:core-all-test-windows-cross
+
+      - name: Upload Bazel execution logs
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: bazel-execution-logs-test-windows-code-mode-x86_64-pc-windows-gnullvm
+          path: ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: ignore
+
+      # Save the job-scoped Bazel repository cache after cache misses. Keep the
+      # upload non-fatal so cache service issues never fail the job itself.
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
+          key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
 
   test-windows-native-main:
     # Native Windows Bazel tests are slower and frequently approach the
