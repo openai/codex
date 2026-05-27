@@ -26,7 +26,7 @@ Existing Codex auth state is reused automatically. To authenticate from the SDK,
 use the flow that fits your app:
 
 ```python
-from openai_codex import Codex
+from openai_codex import Codex, Sandbox
 
 with Codex() as codex:
     codex.login_api_key("sk-...")
@@ -58,7 +58,11 @@ with Codex() as codex:
     server = codex.metadata.serverInfo
     print("Server:", None if server is None else server.name, None if server is None else server.version)
 
-    thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
+    thread = codex.thread_start(
+        model="gpt-5.4",
+        config={"model_reasoning_effort": "high"},
+        sandbox=Sandbox.workspace,
+    )
     result = thread.run("Say hello in one sentence.")
 
     print("Thread:", thread.id)
@@ -76,7 +80,24 @@ What happened:
 - use `thread.turn(...)` when you need a `TurnHandle` for streaming, steering, or interrupting before collecting `TurnResult`
 - one client can consume multiple active turns concurrently; turn streams are routed by turn ID
 
-## 4) Continue the same thread (multi-turn)
+## 4) Change sandbox access
+
+Use one enum for the initial sandbox and for later turn overrides:
+
+```python
+from openai_codex import Codex, Sandbox
+
+with Codex() as codex:
+    thread = codex.thread_start(sandbox=Sandbox.workspace)
+    thread.run("Make the requested changes.")
+    review = thread.run("Review the diff only.", sandbox=Sandbox.read_only)
+```
+
+Available presets are `Sandbox.read_only`, `Sandbox.workspace`, and
+`Sandbox.full_access`. A turn override also becomes the sandbox for subsequent
+turns on that thread.
+
+## 5) Continue the same thread (multi-turn)
 
 ```python
 from openai_codex import Codex
@@ -91,7 +112,7 @@ with Codex() as codex:
     print("second:", second.final_response)
 ```
 
-## 5) Async parity
+## 6) Async parity
 
 Use `async with AsyncCodex()` as the normal async entrypoint. `AsyncCodex`
 initializes lazily, and context entry makes startup/shutdown explicit.
@@ -111,7 +132,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## 6) Resume an existing thread
+## 7) Resume an existing thread
 
 ```python
 from openai_codex import Codex
@@ -124,7 +145,7 @@ with Codex() as codex:
     print(result.final_response)
 ```
 
-## 7) Public app-server types
+## 8) Public app-server types
 
 The convenience wrappers live at the package root. Public app-server value and
 event types live under:
@@ -133,7 +154,7 @@ event types live under:
 from openai_codex.types import ThreadReadResponse, Turn, TurnStatus
 ```
 
-## 8) Next stops
+## 9) Next stops
 
 - API surface and signatures: `docs/api-reference.md`
 - Common decisions/pitfalls: `docs/faq.md`

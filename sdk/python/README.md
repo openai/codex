@@ -23,12 +23,12 @@ when you intentionally want to run against a specific local app-server binary.
 ## Quickstart
 
 ```python
-from openai_codex import Codex
+from openai_codex import Codex, Sandbox
 
 with Codex() as codex:
     # Call login_api_key(...) first when this app-server session is not
     # already authenticated.
-    thread = codex.thread_start(model="gpt-5")
+    thread = codex.thread_start(model="gpt-5", sandbox=Sandbox.workspace)
     result = thread.run("Say hello in one sentence.")
     print(result.final_response)
     print(len(result.items))
@@ -37,6 +37,23 @@ with Codex() as codex:
 `thread.run(...)` and `thread.turn(...).run()` return `TurnResult`. Its
 `final_response` is `None` when the turn completes without a final-answer or
 phase-less assistant message item.
+
+## Sandbox
+
+Use the same enum when creating a thread or changing its sandbox for a turn:
+
+```python
+from openai_codex import Codex, Sandbox
+
+with Codex() as codex:
+    thread = codex.thread_start(sandbox=Sandbox.workspace)
+    thread.run("Make the requested change.")
+    review = thread.run("Review the diff only.", sandbox=Sandbox.read_only)
+```
+
+Available presets are `Sandbox.read_only`, `Sandbox.workspace`, and
+`Sandbox.full_access`. A sandbox passed to `run(...)` or `turn(...)` applies
+to that turn and subsequent turns on the thread.
 
 ## Login
 

@@ -48,7 +48,21 @@ If you are migrating older code, update these names:
 - `sortKey` -> `sort_key`
 - `sourceKinds` -> `source_kinds`
 - `outputSchema` -> `output_schema`
-- `sandboxPolicy` -> `sandbox_policy`
+
+## How do I choose sandbox access?
+
+Use the same `sandbox=` keyword for threads and turns:
+
+```python
+from openai_codex import Sandbox
+
+thread = codex.thread_start(sandbox=Sandbox.workspace)
+result = thread.run("Review only.", sandbox=Sandbox.read_only)
+```
+
+The presets are `Sandbox.read_only`, `Sandbox.workspace`, and
+`Sandbox.full_access`. A turn sandbox override applies to that turn and
+subsequent turns.
 
 ## Why only `thread_start(...)` and `thread_resume(...)`?
 
