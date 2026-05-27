@@ -1,5 +1,6 @@
 use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
+use std::collections::HashMap;
 use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
@@ -36,6 +37,7 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub command_env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -73,6 +75,7 @@ impl Hooks {
             CommandShell {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
+                env: config.command_env,
             },
         );
         Self {

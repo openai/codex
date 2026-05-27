@@ -23,7 +23,8 @@ use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
-use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::maybe_wrap_shell_command_with_runtime_env;
+use crate::tools::runtimes::with_shell_env_file_read_permission;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -232,10 +233,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
         let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
-        let command = maybe_wrap_shell_lc_with_snapshot(
+        let shell_env_file_path = ctx.session.shell_env_file_path();
+        let command = maybe_wrap_shell_command_with_runtime_env(
             &req.command,
             session_shell.as_ref(),
             &req.cwd,
+            shell_env_file_path,
             &req.explicit_env_overrides,
             &env,
         );
@@ -262,8 +265,11 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
         }
 
-        let command =
-            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
+        let additional_permissions = with_shell_env_file_read_permission(
+            req.additional_permissions.clone(),
+            shell_env_file_path,
+        );
+        let command = build_sandbox_command(&command, &req.cwd, &env, additional_permissions)?;
         let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
         if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
             expiration = expiration.with_cancellation(cancellation);

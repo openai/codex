@@ -1488,6 +1488,7 @@ impl Session {
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
             self.services.user_shell.as_ref(),
+            self.services.shell_env_file.as_ref(),
         )
         .await;
 
@@ -3269,6 +3270,19 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
+    pub(crate) fn shell_env_file_path(&self) -> Option<&Path> {
+        self.services
+            .shell_env_file
+            .as_ref()
+            .map(crate::shell_env_file::ShellEnvFile::path)
+    }
+
+    pub(crate) fn insert_shell_env_file(&self, env: &mut HashMap<String, String>) {
+        if let Some(shell_env_file) = self.services.shell_env_file.as_ref() {
+            shell_env_file.insert_into_env(env);
+        }
+    }
+
     pub(crate) async fn current_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {
         let Some(live_thread) = self.live_thread() else {
             return Ok(None);
@@ -3337,6 +3351,7 @@ async fn build_hooks_for_config(
     config: &Config,
     plugins_manager: &PluginsManager,
     user_shell: &crate::shell::Shell,
+    shell_env_file: Option<&crate::shell_env_file::ShellEnvFile>,
 ) -> Hooks {
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
@@ -3345,6 +3360,10 @@ async fn build_hooks_for_config(
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
     let plugin_hook_load_warnings = plugin_outcome.effective_plugin_hook_warnings();
+    let mut command_env = HashMap::new();
+    if let Some(shell_env_file) = shell_env_file {
+        shell_env_file.insert_into_env(&mut command_env);
+    }
     Hooks::new(HooksConfig {
         legacy_notify_argv: config.notify.clone(),
         feature_enabled: config.features.enabled(Feature::CodexHooks),
@@ -3354,6 +3373,7 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
+        command_env,
     })
 }
 

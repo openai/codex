@@ -20,7 +20,7 @@ use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
-use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::maybe_wrap_shell_command_with_runtime_env;
 use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -132,6 +132,7 @@ pub(crate) async fn execute_user_shell_command(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
+    session.insert_shell_env_file(&mut exec_env_map);
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
         for key in PROXY_ENV_KEYS {
             exec_env_map.remove(*key);
@@ -146,11 +147,12 @@ pub(crate) async fn execute_user_shell_command(
             exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
         }
     }
-    let exec_command = maybe_wrap_shell_lc_with_snapshot(
+    let exec_command = maybe_wrap_shell_command_with_runtime_env(
         &display_command,
         session_shell.as_ref(),
         #[allow(deprecated)]
         &turn_context.cwd,
+        session.shell_env_file_path(),
         &turn_context.shell_environment_policy.r#set,
         &exec_env_map,
     );

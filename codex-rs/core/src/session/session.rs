@@ -865,6 +865,8 @@ impl Session {
                 default_shell.shell_snapshot = rx;
                 tx
             };
+            let shell_env_file =
+                crate::shell_env_file::ShellEnvFile::for_session(&config.codex_home, thread_id)?;
             let thread_name =
                 thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
                     .instrument(info_span!(
@@ -935,8 +937,13 @@ impl Session {
                     (None, None)
                 };
 
-            let hooks =
-                build_hooks_for_config(&config, plugins_manager.as_ref(), &default_shell).await;
+            let hooks = build_hooks_for_config(
+                &config,
+                plugins_manager.as_ref(),
+                &default_shell,
+                shell_env_file.as_ref(),
+            )
+            .await;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -996,6 +1003,7 @@ impl Session {
                 hooks: arc_swap::ArcSwap::from_pointee(hooks),
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
+                shell_env_file,
                 shell_snapshot_tx,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 exec_policy,

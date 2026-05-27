@@ -9,6 +9,7 @@ use crate::path_utils;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
+use crate::shell_env_file::CODEX_ENV_FILE_ENV_VAR;
 use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
@@ -18,10 +19,14 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::path::Path;
 
 pub(crate) mod apply_patch;
 pub(crate) mod shell;
@@ -70,6 +75,29 @@ pub(crate) fn exec_env_for_sandbox_permissions(
     env
 }
 
+/// Adds the read required by a shell wrapper that sources `CODEX_ENV_FILE`.
+///
+/// Callers apply this only while preparing execution, after requested
+/// permissions have already been considered for approval.
+pub(crate) fn with_shell_env_file_read_permission(
+    mut additional_permissions: Option<AdditionalPermissionProfile>,
+    env_file: Option<&Path>,
+) -> Option<AdditionalPermissionProfile> {
+    let Some(path) = non_empty_shell_env_file_path(env_file) else {
+        return additional_permissions;
+    };
+    let Ok(path) = AbsolutePathBuf::from_absolute_path(path) else {
+        return additional_permissions;
+    };
+    let profile = additional_permissions.get_or_insert_with(Default::default);
+    let file_system = profile.file_system.get_or_insert_with(Default::default);
+    file_system.entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::Path { path },
+        access: FileSystemAccessMode::Read,
+    });
+    additional_permissions
+}
+
 pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
     command: &[String],
     shell_type: Option<&ShellType>,
@@ -99,45 +127,33 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
     command
 }
 
-/// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
-/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
-/// when a snapshot is configured on the session shell, rewrite the argv
-/// to a single non-login shell that sources the snapshot before running
-/// the original script:
+/// POSIX-only wrapper for commands produced by `Shell::derive_exec_args` for
+/// Bash/Zsh/sh when shell setup must be sourced before the user script:
 ///
 ///   shell -lc "<script>"
-///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
+///   => user_shell -c ". SNAPSHOT; . ENV_FILE; exec shell -c <script>"
 ///
 /// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
-/// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
-/// not match the snapshot cwd, this is a no-op.
+/// be run by Bash/Zsh/sh. The env file is sourced for either `-c` or `-lc`
+/// commands and is independent of cwd. A snapshot remains restricted to
+/// login commands in its matching cwd.
 ///
 /// `explicit_env_overrides` and `env` are intentionally separate inputs.
 /// `explicit_env_overrides` contains policy-driven shell env overrides that
 /// should win after the snapshot is sourced, while `env` is the full live exec
 /// environment. We need access to both so snapshot restore logic can preserve
-/// runtime-only vars like `CODEX_THREAD_ID` without pretending they came from
-/// the explicit override policy.
-pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
+/// runtime-only vars like `CODEX_THREAD_ID` and `CODEX_ENV_FILE` without
+/// pretending they came from the explicit override policy.
+pub(crate) fn maybe_wrap_shell_command_with_runtime_env(
     command: &[String],
     session_shell: &Shell,
     cwd: &AbsolutePathBuf,
+    env_file: Option<&Path>,
     explicit_env_overrides: &HashMap<String, String>,
     env: &HashMap<String, String>,
 ) -> Vec<String> {
     if cfg!(windows) {
-        return command.to_vec();
-    }
-
-    let Some(snapshot) = session_shell.shell_snapshot() else {
-        return command.to_vec();
-    };
-
-    if !snapshot.path.exists() {
-        return command.to_vec();
-    }
-
-    if !path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd) {
+        // TODO: Support a Windows shell environment persistence contract.
         return command.to_vec();
     }
 
@@ -146,38 +162,73 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     }
 
     let flag = command[1].as_str();
-    if flag != "-lc" {
+    if flag != "-c" && flag != "-lc" {
         return command.to_vec();
     }
 
-    let snapshot_path = snapshot.path.to_string_lossy();
-    let shell_path = session_shell.shell_path.to_string_lossy();
+    // Login-shell snapshots and hook-written exports have separate lifetimes
+    // and eligibility rules. When both apply, restore login state first, then
+    // layer the session hook exports over it.
+    let snapshot = (flag == "-lc")
+        .then(|| session_shell.shell_snapshot())
+        .flatten()
+        .filter(|snapshot| {
+            snapshot.path.exists()
+                && path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd)
+        });
+    let env_file = non_empty_shell_env_file_path(env_file);
+    if snapshot.is_none() && env_file.is_none() {
+        return command.to_vec();
+    }
+
+    let has_snapshot = snapshot.is_some();
+    let shell_path = if has_snapshot {
+        session_shell.shell_path.to_string_lossy().to_string()
+    } else {
+        command[0].clone()
+    };
+    let shell_flag = if has_snapshot { "-c" } else { flag };
     let original_shell = shell_single_quote(&command[0]);
     let original_script = shell_single_quote(&command[2]);
-    let snapshot_path = shell_single_quote(snapshot_path.as_ref());
     let trailing_args = command[3..]
         .iter()
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
     let mut override_env = explicit_env_overrides.clone();
-    if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
-        override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+    for key in [CODEX_THREAD_ID_ENV_VAR, CODEX_ENV_FILE_ENV_VAR] {
+        if let Some(value) = env.get(key) {
+            override_env.insert(key.to_string(), value.clone());
+        }
     }
     let (override_captures, override_exports) = build_override_exports(&override_env);
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
     let override_captures = join_shell_blocks([override_captures, proxy_captures]);
     let override_exports = join_shell_blocks([override_exports, proxy_exports]);
+    let mut source_commands = Vec::new();
+    if let Some(snapshot) = snapshot {
+        let path = shell_single_quote(&snapshot.path.to_string_lossy());
+        source_commands.push(format!("if . '{path}' >/dev/null 2>&1; then :; fi"));
+    }
+    if let Some(env_file) = env_file {
+        let path = shell_single_quote(&env_file.to_string_lossy());
+        source_commands.push(format!("if . '{path}' >/dev/null 2>&1; then :; fi"));
+    }
+    let source_commands = join_shell_blocks(source_commands);
     let rewritten_script = if override_exports.is_empty() {
         format!(
-            "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+            "{source_commands}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
         )
     } else {
         format!(
-            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+            "{override_captures}\n\n{source_commands}\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
         )
     };
 
-    vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
+    vec![shell_path, shell_flag.to_string(), rewritten_script]
+}
+
+fn non_empty_shell_env_file_path(env_file: Option<&Path>) -> Option<&Path> {
+    env_file.filter(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0))
 }
 
 fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {

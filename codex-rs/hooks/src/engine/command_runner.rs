@@ -7,6 +7,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+use codex_protocol::protocol::HookEventName;
+
 use super::CommandShell;
 use super::ConfiguredHandler;
 
@@ -113,6 +115,10 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
         command.arg(&handler.command);
     }
     command.envs(&handler.env);
+    // CODEX_ENV_FILE is only available for SessionStart hook types
+    if handler.event_name == HookEventName::SessionStart {
+        command.envs(&shell.env);
+    }
     command
 }
 

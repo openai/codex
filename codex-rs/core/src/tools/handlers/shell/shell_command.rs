@@ -95,12 +95,15 @@ impl ShellCommandHandler {
         #[allow(deprecated)]
         let cwd = turn_context.resolve_path(params.workdir.clone());
 
+        let mut env = create_env(&turn_context.shell_environment_policy, Some(thread_id));
+        session.insert_shell_env_file(&mut env);
+
         Ok(ExecParams {
             command,
             cwd,
             expiration: params.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
-            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            env,
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,

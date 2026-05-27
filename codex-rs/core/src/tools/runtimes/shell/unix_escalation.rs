@@ -16,6 +16,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
+use crate::tools::runtimes::with_shell_env_file_read_permission;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -117,8 +118,11 @@ pub(super) async fn try_run_zsh_fork(
     }
 
     let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
-    let command =
-        build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
+    let additional_permissions = with_shell_env_file_read_permission(
+        req.additional_permissions.clone(),
+        ctx.session.shell_env_file_path(),
+    );
+    let command = build_sandbox_command(command, &req.cwd, &env, additional_permissions)?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
