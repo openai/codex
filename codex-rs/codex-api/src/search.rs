@@ -30,37 +30,26 @@ pub enum SearchInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, JsonSchema)]
 pub struct SearchCommands {
-    /// Query the internet search engine for a given list of queries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search_query: Option<Vec<SearchQuery>>,
-    /// Query the image search engine for a given list of queries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_query: Option<Vec<SearchQuery>>,
-    /// Open pages by reference id or URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open: Option<Vec<OpenOperation>>,
-    /// Open links from previously opened pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub click: Option<Vec<ClickOperation>>,
-    /// Find text patterns in pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub find: Option<Vec<FindOperation>>,
-    /// Take screenshots of PDF pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screenshot: Option<Vec<ScreenshotOperation>>,
-    /// Look up prices for the given stock symbols.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finance: Option<Vec<FinanceOperation>>,
-    /// Look up weather forecasts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weather: Option<Vec<WeatherOperation>>,
-    /// Look up sports schedules and standings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sports: Option<Vec<SportsOperation>>,
-    /// Get time for the given UTC offsets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time: Option<Vec<TimeOperation>>,
-    /// Set the length of the response to be returned.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_length: Option<SearchResponseLength>,
 }
