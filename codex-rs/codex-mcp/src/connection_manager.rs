@@ -77,8 +77,8 @@ const MCP_UI_MODEL_VISIBILITY: &str = "model";
 
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
-/// Tools without visibility metadata remain visible. Tools with visibility
-/// metadata are hidden unless they explicitly include the model.
+/// Tools without visibility metadata remain visible.
+/// Tools with visibility metadata are hidden unless they explicitly "model".
 fn tool_is_model_visible(tool: &ToolInfo) -> bool {
     let Some(visibility) = tool
         .tool
