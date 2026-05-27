@@ -33,7 +33,6 @@ use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
-use crate::tools::normalize_tools_for_inventory_with_prefix;
 use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Context;
@@ -79,7 +78,7 @@ const MCP_UI_MODEL_VISIBILITY: &str = "model";
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
 /// Tools without visibility metadata remain visible.
-/// Tools with visibility metadata are hidden unless they explicitly "model".
+/// Tools with visibility metadata are hidden unless they explicitly include `model`.
 fn tool_is_model_visible(tool: &ToolInfo) -> bool {
     let Some(visibility) = tool
         .tool
@@ -408,16 +407,16 @@ impl McpConnectionManager {
         failures
     }
 
-    /// Returns all tools with callable names normalized.
+    /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
-        normalize_tools_for_inventory_with_prefix(
+        normalize_tools_for_model_with_prefix(
             self.list_all_tools_unprocessed().await,
             self.prefix_mcp_tool_names,
         )
     }
 
-    /// Returns the tools exposed to the model with callable names normalized.
+    /// Returns the model-visible subset of tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools_for_model(&self) -> Vec<ToolInfo> {
         normalize_tools_for_model_with_prefix(
@@ -471,7 +470,7 @@ impl McpConnectionManager {
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace the cache contents and the
-    /// latest tools are returned directly to the caller. On
+    /// latest filtered tools are returned directly to the caller. On
     /// failure, the existing cache remains unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let managed_client = self
@@ -516,7 +515,7 @@ impl McpConnectionManager {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
                 self.with_server_metadata(tool)
             });
-        Ok(normalize_tools_for_inventory_with_prefix(
+        Ok(normalize_tools_for_model_with_prefix(
             tools,
             self.prefix_mcp_tool_names,
         ))

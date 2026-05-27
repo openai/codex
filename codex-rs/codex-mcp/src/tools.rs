@@ -138,17 +138,6 @@ pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<Too
         .collect()
 }
 
-/// Returns MCP tools for inventory consumers with callable names normalized.
-pub(crate) fn normalize_tools_for_inventory_with_prefix<I>(
-    tools: I,
-    prefix_mcp_tool_names: bool,
-) -> Vec<ToolInfo>
-where
-    I: IntoIterator<Item = ToolInfo>,
-{
-    normalize_tools_for_model_with_prefix(tools, prefix_mcp_tool_names)
-}
-
 /// Returns MCP tools with model-visible names normalized.
 ///
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
