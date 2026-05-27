@@ -31,12 +31,12 @@ fn env_flag_enabled(name: &str) -> bool {
                 "1" | "true" | "on" | "yes"
             )
         })
-        .unwrap_or(false)
+        .unwrap_or(/*default*/ false)
 }
 
 /// Returns whether opt-in network diagnostics are enabled for this process.
 pub fn network_diagnostics_enabled() -> bool {
-    env_flag_enabled(/* name */ CODEX_NETWORK_DIAGNOSTICS_ENV)
+    env_flag_enabled(/*name*/ CODEX_NETWORK_DIAGNOSTICS_ENV)
 }
 
 fn env_present(name: &str) -> bool {
@@ -64,18 +64,15 @@ pub fn emit_auth_network_environment_snapshot(operation: &'static str) {
         target_class = "auth",
         operation = operation,
         http_proxy_present =
-            proxy_env_present(/* upper */ "HTTP_PROXY", /* lower */ "http_proxy"),
-        https_proxy_present = proxy_env_present(
-            /* upper */ "HTTPS_PROXY",
-            /* lower */ "https_proxy"
-        ),
+            proxy_env_present(/*upper*/ "HTTP_PROXY", /*lower*/ "http_proxy"),
+        https_proxy_present =
+            proxy_env_present(/*upper*/ "HTTPS_PROXY", /*lower*/ "https_proxy"),
         all_proxy_present =
-            proxy_env_present(/* upper */ "ALL_PROXY", /* lower */ "all_proxy"),
-        no_proxy_present =
-            proxy_env_present(/* upper */ "NO_PROXY", /* lower */ "no_proxy"),
+            proxy_env_present(/*upper*/ "ALL_PROXY", /*lower*/ "all_proxy"),
+        no_proxy_present = proxy_env_present(/*upper*/ "NO_PROXY", /*lower*/ "no_proxy"),
         codex_system_proxy = system_proxy_state,
-        custom_ca_present = env_present(/* name */ "CODEX_CA_CERTIFICATE")
-            || env_present(/* name */ "SSL_CERT_FILE"),
+        custom_ca_present = env_present(/*name*/ "CODEX_CA_CERTIFICATE")
+            || env_present(/*name*/ "SSL_CERT_FILE"),
         "opt-in auth network diagnostic snapshot"
     );
 }
@@ -112,7 +109,7 @@ pub fn emit_auth_transport_failure(operation: &'static str, error: &reqwest::Err
         is_timeout = error.is_timeout(),
         is_connect = error.is_connect(),
         status_present = error.status().is_some(),
-        status = error.status().map(|status| status.as_u16()).unwrap_or(0),
+        status = error.status().map(|status| status.as_u16()).unwrap_or(/*default*/ 0),
         "opt-in auth network transport diagnostic"
     );
 }
@@ -154,7 +151,9 @@ impl SystemProxyEnvOverride {
     }
 
     pub fn from_env() -> Self {
-        Self::from_value(std::env::var(CODEX_SYSTEM_PROXY_ENV).ok().as_deref())
+        Self::from_value(
+            /*value*/ std::env::var(CODEX_SYSTEM_PROXY_ENV).ok().as_deref(),
+        )
     }
 
     pub const fn system_discovery_enabled(self) -> bool {
@@ -428,16 +427,16 @@ mod tests {
     fn system_proxy_env_override_accepts_disable_spellings() {
         for value in ["off", " OFF ", "false", "0", "no", "disabled"] {
             assert_eq!(
-                SystemProxyEnvOverride::from_value(/* value */ Some(value)),
+                SystemProxyEnvOverride::from_value(/*value*/ Some(value)),
                 SystemProxyEnvOverride::Disabled
             );
         }
         assert_eq!(
-            SystemProxyEnvOverride::from_value(/* value */ None),
+            SystemProxyEnvOverride::from_value(/*value*/ None),
             SystemProxyEnvOverride::Default
         );
         assert_eq!(
-            SystemProxyEnvOverride::from_value(/* value */ Some("auto")),
+            SystemProxyEnvOverride::from_value(/*value*/ Some("auto")),
             SystemProxyEnvOverride::Default
         );
     }
