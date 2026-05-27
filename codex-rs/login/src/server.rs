@@ -29,6 +29,7 @@ use crate::auth::load_auth_dot_json;
 use crate::auth::revoke_auth_tokens_with_proxy_config;
 use crate::auth::save_auth;
 use crate::auth::should_revoke_auth_tokens;
+use crate::default_client::build_auth_reqwest_client_with_proxy_config;
 use crate::default_client::originator;
 use crate::outbound_proxy::outbound_proxy_config_from_network_config;
 use crate::pkce::PkceCodes;
@@ -39,8 +40,6 @@ use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_client::OutboundProxyConfig;
-use codex_client::RouteTarget;
-use codex_client::build_reqwest_client_for_route;
 use codex_client::emit_auth_http_status;
 use codex_client::emit_auth_network_environment_snapshot;
 use codex_client::emit_auth_transport_failure;
@@ -104,8 +103,9 @@ impl ServerOptions {
         }
     }
 
-    pub fn set_network_config(&mut self, network: Option<&NetworkConfigToml>) {
+    pub fn with_network_config(mut self, network: Option<&NetworkConfigToml>) -> Self {
         self.outbound_proxy_config = network.map(outbound_proxy_config_from_network_config);
+        self
     }
 }
 
@@ -754,12 +754,8 @@ pub(crate) async fn exchange_code_for_tokens(
 
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     emit_auth_network_environment_snapshot(/*operation*/ "oauth_token_exchange");
-    let client = build_reqwest_client_for_route(
-        reqwest::Client::builder(),
-        &token_endpoint,
-        RouteTarget::Auth,
-        outbound_proxy_config,
-    )?;
+    let client =
+        build_auth_reqwest_client_with_proxy_config(&token_endpoint, outbound_proxy_config)?;
     info!(
         issuer = %sanitize_url_for_logging(issuer),
         token_endpoint = %sanitize_url_for_logging(&token_endpoint),
@@ -1169,12 +1165,8 @@ pub(crate) async fn obtain_api_key(
     }
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     emit_auth_network_environment_snapshot(/*operation*/ "api_key_exchange");
-    let client = build_reqwest_client_for_route(
-        reqwest::Client::builder(),
-        &token_endpoint,
-        RouteTarget::Auth,
-        outbound_proxy_config,
-    )?;
+    let client =
+        build_auth_reqwest_client_with_proxy_config(&token_endpoint, outbound_proxy_config)?;
     let resp = client
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")

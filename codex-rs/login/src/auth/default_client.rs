@@ -254,12 +254,26 @@ pub fn try_build_reqwest_client_with_proxy_config(
         return build_reqwest_client_with_custom_ca(builder).map_err(Into::into);
     }
 
-    build_reqwest_client_for_route(
-        builder,
-        DEFAULT_AUTH_ROUTE_URL,
-        RouteTarget::Auth,
+    build_auth_reqwest_client_with_builder(builder, DEFAULT_AUTH_ROUTE_URL, outbound_proxy_config)
+}
+
+pub(crate) fn build_auth_reqwest_client_with_proxy_config(
+    endpoint: &str,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
+) -> Result<reqwest::Client, BuildProxiedHttpClientError> {
+    build_auth_reqwest_client_with_builder(
+        reqwest::Client::builder(),
+        endpoint,
         outbound_proxy_config,
     )
+}
+
+fn build_auth_reqwest_client_with_builder(
+    builder: reqwest::ClientBuilder,
+    endpoint: &str,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
+) -> Result<reqwest::Client, BuildProxiedHttpClientError> {
+    build_reqwest_client_for_route(builder, endpoint, RouteTarget::Auth, outbound_proxy_config)
 }
 
 pub fn default_headers() -> HeaderMap {

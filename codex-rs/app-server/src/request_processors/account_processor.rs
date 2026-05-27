@@ -326,9 +326,8 @@ impl AccountRequestProcessor {
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
             )
+            .with_network_config(config.network.as_ref())
         };
-        let mut opts = opts;
-        opts.set_network_config(config.network.as_ref());
         #[cfg(debug_assertions)]
         let opts = {
             let mut opts = opts;
