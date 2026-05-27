@@ -209,6 +209,7 @@ struct ExecRunArgs {
     oss: bool,
     output_schema_path: Option<PathBuf>,
     prompt: Option<String>,
+    responsesapi_client_metadata: Option<HashMap<String, String>>,
     skip_git_repo_check: bool,
     stderr_with_ansi: bool,
 }
@@ -228,6 +229,36 @@ fn exec_stderr_env_filter() -> EnvFilter {
     EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new(EXEC_DEFAULT_LOG_FILTER))
         .unwrap_or_else(|_| EnvFilter::new("error"))
+}
+
+fn parse_responsesapi_client_metadata(
+    raw_entries: Vec<String>,
+) -> anyhow::Result<Option<HashMap<String, String>>> {
+    if raw_entries.is_empty() {
+        return Ok(None);
+    }
+
+    let mut metadata = HashMap::new();
+    for entry in raw_entries {
+        let Some((key, value)) = entry.split_once('=') else {
+            anyhow::bail!(
+                "Invalid --responsesapi-client-metadata value `{entry}`: expected KEY=VALUE"
+            );
+        };
+        if key.is_empty() {
+            anyhow::bail!(
+                "Invalid --responsesapi-client-metadata value `{entry}`: key must not be empty"
+            );
+        }
+        if metadata.contains_key(key) {
+            anyhow::bail!(
+                "Invalid --responsesapi-client-metadata value `{entry}`: duplicate key `{key}`"
+            );
+        }
+        metadata.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(Some(metadata))
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
@@ -254,8 +285,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         json: json_mode,
         prompt,
         output_schema: output_schema_path,
+        responsesapi_client_metadata,
         config_overrides,
     } = cli;
+    let responsesapi_client_metadata =
+        parse_responsesapi_client_metadata(responsesapi_client_metadata)?;
     let shared = shared.into_inner();
     let SharedCliOptions {
         images,
@@ -561,6 +595,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         oss,
         output_schema_path,
         prompt,
+        responsesapi_client_metadata,
         skip_git_repo_check,
         stderr_with_ansi,
     })
@@ -583,6 +618,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         oss,
         output_schema_path,
         prompt,
+        responsesapi_client_metadata,
         skip_git_repo_check,
         stderr_with_ansi,
     } = args;
@@ -675,6 +711,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             )
         }
     };
+    if matches!(initial_operation, InitialOperation::Review { .. })
+        && responsesapi_client_metadata.is_some()
+    {
+        anyhow::bail!("--responsesapi-client-metadata is only supported for exec user turns");
+    }
 
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
@@ -787,7 +828,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     params: TurnStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
                         input: items.into_iter().map(Into::into).collect(),
-                        responsesapi_client_metadata: None,
+                        responsesapi_client_metadata: responsesapi_client_metadata.clone(),
                         environments: None,
                         cwd: Some(default_cwd),
                         runtime_workspace_roots: None,

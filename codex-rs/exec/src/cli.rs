@@ -53,6 +53,15 @@ pub struct Cli {
     #[arg(long = "output-schema", value_name = "FILE", global = true)]
     pub output_schema: Option<PathBuf>,
 
+    /// Internal automation metadata to include in Responses API client metadata.
+    #[arg(
+        long = "responsesapi-client-metadata",
+        value_name = "KEY=VALUE",
+        hide = true,
+        global = true
+    )]
+    pub responsesapi_client_metadata: Vec<String>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 

@@ -75,6 +75,26 @@ fn parses_config_isolation_flags() {
 }
 
 #[test]
+fn parses_responsesapi_client_metadata_flags() {
+    let cli = Cli::parse_from([
+        "codex-exec",
+        "--responsesapi-client-metadata",
+        "usage_source=chronicle",
+        "--responsesapi-client-metadata",
+        "feature=memory_summary",
+        "summarize",
+    ]);
+
+    assert_eq!(
+        cli.responsesapi_client_metadata,
+        vec![
+            "usage_source=chronicle".to_string(),
+            "feature=memory_summary".to_string()
+        ]
+    );
+}
+
+#[test]
 fn removed_full_auto_flag_reports_migration_path() {
     let cli = Cli::parse_from(["codex-exec", "--full-auto", "summarize"]);
 

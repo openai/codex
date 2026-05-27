@@ -103,6 +103,46 @@ fn exec_root_span_can_be_parented_from_trace_context() {
 }
 
 #[test]
+fn parse_responsesapi_client_metadata_accepts_key_value_pairs() {
+    let metadata = parse_responsesapi_client_metadata(vec![
+        "usage_source=chronicle".to_string(),
+        "feature=memory_summary".to_string(),
+        "empty_value=".to_string(),
+    ])
+    .expect("metadata should parse")
+    .expect("metadata should be present");
+
+    assert_eq!(metadata.get("usage_source"), Some(&"chronicle".to_string()));
+    assert_eq!(metadata.get("feature"), Some(&"memory_summary".to_string()));
+    assert_eq!(metadata.get("empty_value"), Some(&"".to_string()));
+}
+
+#[test]
+fn parse_responsesapi_client_metadata_rejects_invalid_entries() {
+    let error = parse_responsesapi_client_metadata(vec!["usage_source".to_string()])
+        .expect_err("metadata without equals should fail");
+
+    assert!(
+        error.to_string().contains("expected KEY=VALUE"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn parse_responsesapi_client_metadata_rejects_duplicate_keys() {
+    let error = parse_responsesapi_client_metadata(vec![
+        "usage_source=chronicle".to_string(),
+        "usage_source=other".to_string(),
+    ])
+    .expect_err("duplicate metadata keys should fail");
+
+    assert!(
+        error.to_string().contains("duplicate key `usage_source`"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn builds_uncommitted_review_request() {
     let args = ReviewArgs {
         uncommitted: true,
