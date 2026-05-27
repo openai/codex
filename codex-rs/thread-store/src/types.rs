@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use serde_json::Value;
 
 mod optional_option {
     use super::*;
@@ -325,31 +326,66 @@ pub struct TurnPage {
     pub backwards_cursor: Option<String>,
 }
 
-/// Parameters for listing persisted items within a single turn.
+/// Reference to a stored item by its canonical ordinal within a thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredItemRef {
+    /// Thread id containing the item.
+    pub thread_id: ThreadId,
+    /// Canonical client-visible item ordinal, not a raw rollout index.
+    pub item_ordinal: u64,
+}
+
+/// Starting point for canonical item pagination.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemPageStart {
+    /// Opaque store-owned continuation token returned by a previous list call.
+    Cursor(String),
+    /// Canonical client-visible item ordinal. `Ordinal(0)` starts before the first item.
+    Ordinal(u64),
+}
+
+/// Parameters for listing persisted item snapshots by canonical item ordinal within a thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListItemsParams {
     /// Thread id to read.
     pub thread_id: ThreadId,
-    /// Turn id to hydrate.
-    pub turn_id: String,
+    /// Optional turn id filter when callers need to hydrate one stored turn.
+    pub turn_id: Option<String>,
     /// Whether archived threads are eligible.
     pub include_archived: bool,
-    /// Opaque cursor returned by a previous list call.
-    pub cursor: Option<String>,
+    /// Optional starting point for the page.
+    pub start: Option<ItemPageStart>,
     /// Maximum number of items to return.
     pub page_size: usize,
-    /// Sort direction requested by the caller.
+    /// Sort direction requested by the caller, applied to canonical item ordinal order.
     pub sort_direction: SortDirection,
 }
 
-/// A page of persisted rollout items within a turn.
+/// Store-owned item snapshot addressed by a canonical item ordinal.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredCanonicalItem {
+    /// Canonical item reference.
+    pub item_ref: StoredItemRef,
+    /// Turn id associated with this item, when the item belongs to a known turn.
+    ///
+    /// This can be `None` for thread-level items, legacy data without turn markers, or stores that
+    /// cannot assign a turn id while still exposing canonical item ordinals.
+    pub turn_id: Option<String>,
+    /// Store-owned item payload.
+    ///
+    /// This is intentionally not the current raw `RolloutItem` type or an app-server `ThreadItem`.
+    /// Callers above the store own projection into public API shapes.
+    pub item: Value,
+}
+
+/// A page of persisted item snapshots within a thread, ordered by canonical item ordinal.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ItemPage {
     /// Items returned for this page.
-    pub items: Vec<RolloutItem>,
-    /// Opaque cursor to continue listing.
+    pub items: Vec<StoredCanonicalItem>,
+    /// Opaque store-owned continuation token.
     pub next_cursor: Option<String>,
-    /// Opaque cursor for fetching in the opposite direction.
+    /// Opaque store-owned continuation token for fetching in the opposite direction.
     pub backwards_cursor: Option<String>,
 }
 
