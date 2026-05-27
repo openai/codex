@@ -168,27 +168,34 @@ fn build_managed_ca_trust_bundle(
         push_certificate_pem(&mut trust_bundle, cert.as_ref());
     }
 
-    let mut custom_ca_paths = Vec::new();
+    let mut custom_ca_path: Option<PathBuf> = None;
     for key in CUSTOM_CA_ENV_KEYS {
         let Some(path) = env.get(key).filter(|path| !path.is_empty()) else {
             continue;
         };
         let path = resolve_ca_bundle_path(path, cwd);
-        if path == managed_ca_cert_path
-            || path == trust_bundle_path
-            || custom_ca_paths.contains(&path)
-        {
+        if path == managed_ca_cert_path || path == trust_bundle_path {
             continue;
         }
-        custom_ca_paths.push(path);
-    }
-    for path in custom_ca_paths {
-        if let Err(err) = append_pem_file(&mut trust_bundle, &path) {
-            warn!(
-                path = %path.display(),
-                "failed to append inherited custom CA bundle; continuing without it: {err}"
-            );
+        if let Some(existing_path) = custom_ca_path.as_ref() {
+            if existing_path != &path {
+                return Err(anyhow!(
+                    "cannot merge distinct inherited CA bundles for managed MITM trust: {} and {}",
+                    existing_path.display(),
+                    path.display()
+                ));
+            }
+            continue;
         }
+        custom_ca_path = Some(path);
+    }
+    if let Some(path) = custom_ca_path
+        && let Err(err) = append_pem_file(&mut trust_bundle, &path)
+    {
+        warn!(
+            path = %path.display(),
+            "failed to append inherited custom CA bundle; continuing without it: {err}"
+        );
     }
     append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
     Ok(trust_bundle)
@@ -542,6 +549,42 @@ mod tests {
 
         assert!(trust_bundle.contains("inherited ca"));
         assert!(trust_bundle.contains("managed ca"));
+    }
+
+    #[test]
+    fn build_managed_ca_trust_bundle_rejects_distinct_inherited_bundles() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let trust_bundle_path = dir.path().join("ca-bundle.pem");
+        let requests_bundle_path = dir.path().join("requests.pem");
+        let curl_bundle_path = dir.path().join("curl.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        fs::write(&requests_bundle_path, "requests ca\n").unwrap();
+        fs::write(&curl_bundle_path, "curl ca\n").unwrap();
+        let env = HashMap::from([
+            (
+                "REQUESTS_CA_BUNDLE".to_string(),
+                requests_bundle_path.display().to_string(),
+            ),
+            (
+                "CURL_CA_BUNDLE".to_string(),
+                curl_bundle_path.display().to_string(),
+            ),
+        ]);
+
+        let err = build_managed_ca_trust_bundle(
+            &managed_ca_cert_path,
+            &trust_bundle_path,
+            &env,
+            dir.path(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("cannot merge distinct inherited CA bundles for managed MITM trust"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]

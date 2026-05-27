@@ -622,21 +622,8 @@ impl NetworkProxy {
         self.runtime_settings().mitm_ca_trust_bundle_path
     }
 
-    pub fn apply_to_env(&self, env: &mut HashMap<String, String>, cwd: &Path) {
+    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         let runtime_settings = self.runtime_settings();
-        // Fold command-level CA overrides into our replacement bundle before overwriting them.
-        let mitm_ca_trust_bundle_path =
-            runtime_settings
-                .mitm_ca_trust_bundle_path
-                .as_ref()
-                .map(|fallback_path| {
-                    crate::certs::managed_ca_trust_bundle_path(env, cwd).unwrap_or_else(|err| {
-                        warn!(
-                            "failed to refresh managed MITM CA trust bundle from child env; using startup bundle: {err}"
-                        );
-                        fallback_path.clone()
-                    })
-                });
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -645,7 +632,7 @@ impl NetworkProxy {
             self.socks_addr,
             self.socks_enabled,
             runtime_settings.allow_local_binding,
-            mitm_ca_trust_bundle_path.as_deref(),
+            runtime_settings.mitm_ca_trust_bundle_path.as_deref(),
         );
     }
 
