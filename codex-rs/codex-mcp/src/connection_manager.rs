@@ -79,7 +79,7 @@ const MCP_UI_MODEL_VISIBILITY: &str = "model";
 ///
 /// Tools without visibility metadata remain visible.
 /// Tools with visibility metadata are hidden unless they explicitly include `model`.
-fn tool_is_model_visible(tool: &ToolInfo) -> bool {
+pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
     let Some(visibility) = tool
         .tool
         .meta
@@ -410,25 +410,6 @@ impl McpConnectionManager {
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
-        normalize_tools_for_model_with_prefix(
-            self.list_all_tools_unprocessed().await,
-            self.prefix_mcp_tool_names,
-        )
-    }
-
-    /// Returns the model-visible subset of tools with model-visible names normalized.
-    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
-    pub async fn list_all_tools_for_model(&self) -> Vec<ToolInfo> {
-        normalize_tools_for_model_with_prefix(
-            self.list_all_tools_unprocessed()
-                .await
-                .into_iter()
-                .filter(tool_is_model_visible),
-            self.prefix_mcp_tool_names,
-        )
-    }
-
-    async fn list_all_tools_unprocessed(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for (server_name, managed_client) in &self.clients {
             let has_startup_snapshot = managed_client.startup_snapshot.is_some();
@@ -464,7 +445,7 @@ impl McpConnectionManager {
                     .map(|tool| self.with_server_metadata(tool)),
             );
         }
-        tools
+        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.

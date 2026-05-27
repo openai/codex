@@ -1027,7 +1027,7 @@ pub(crate) async fn built_tools(
         .await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
-        .list_all_tools_for_model()
+        .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
     drop(mcp_connection_manager);
