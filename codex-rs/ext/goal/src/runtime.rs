@@ -192,6 +192,54 @@ impl GoalRuntimeHandle {
         Ok(())
     }
 
+    pub async fn usage_limit_active_goal_for_turn(&self, turn_id: &str) -> Result<(), String> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        if !self
+            .inner
+            .accounting_state
+            .turn_is_current_active_goal(turn_id)
+        {
+            return Ok(());
+        }
+
+        let progress_event_id = format!("{turn_id}:usage-limit-progress");
+        self.account_active_goal_progress(
+            turn_id,
+            progress_event_id.as_str(),
+            codex_state::GoalAccountingMode::ActiveOnly,
+            BudgetLimitedGoalDisposition::ClearActive,
+        )
+        .await?;
+
+        let previous_status = self
+            .current_goal_status_for_metrics(/*expected_goal_id*/ None)
+            .await?;
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .usage_limit_active_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            return Ok(());
+        };
+        self.inner
+            .metrics
+            .record_terminal_if_status_changed(previous_status, &goal);
+        self.inner.accounting_state.clear_active_goal();
+        let goal = protocol_goal_from_state(goal);
+        self.inner.event_emitter.thread_goal_updated(
+            format!("{turn_id}:usage-limit"),
+            Some(turn_id.to_string()),
+            goal,
+        );
+        Ok(())
+    }
+
     pub async fn restore_after_resume(&self) -> Result<(), String> {
         if !self.is_enabled() {
             return Ok(());
