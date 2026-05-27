@@ -47,6 +47,19 @@ normalize_version() {
   esac
 }
 
+validate_version() {
+  version="$1"
+
+  if [ "$version" = "latest" ]; then
+    return
+  fi
+
+  if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$'; then
+    echo "Invalid Codex release version: $version. Expected latest or x.y.z[-alpha[.N]|-beta[.N]]." >&2
+    exit 1
+  fi
+}
+
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -264,6 +277,7 @@ require_command() {
 
 resolve_version() {
   normalized_version="$(normalize_version "$RELEASE")"
+  validate_version "$normalized_version"
 
   if [ "$normalized_version" != "latest" ]; then
     printf '%s\n' "$normalized_version"
@@ -278,6 +292,7 @@ resolve_version() {
     exit 1
   fi
 
+  validate_version "$resolved"
   printf '%s\n' "$resolved"
 }
 

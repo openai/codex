@@ -51,7 +51,7 @@ function Normalize-Version {
         [string]$RawVersion
     )
 
-    if ([string]::IsNullOrWhiteSpace($RawVersion) -or $RawVersion -eq "latest") {
+    if ([string]::IsNullOrWhiteSpace($RawVersion) -or $RawVersion -ceq "latest") {
         return "latest"
     }
 
@@ -64,6 +64,16 @@ function Normalize-Version {
     }
 
     return $RawVersion
+}
+
+function Assert-ValidReleaseVersion {
+    param(
+        [string]$Version
+    )
+
+    if ($Version -cne "latest" -and $Version -cnotmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)(?:\.[0-9]+)?)?$") {
+        throw "Invalid Codex release version: $Version. Expected latest or x.y.z[-alpha[.N]|-beta[.N]]."
+    }
 }
 
 function Find-ReleaseAssetMetadata {
@@ -192,7 +202,8 @@ function Remove-StaleInstallArtifacts {
 
 function Resolve-Version {
     $normalizedVersion = Normalize-Version -RawVersion $Release
-    if ($normalizedVersion -ne "latest") {
+    Assert-ValidReleaseVersion -Version $normalizedVersion
+    if ($normalizedVersion -cne "latest") {
         return $normalizedVersion
     }
 
@@ -202,7 +213,9 @@ function Resolve-Version {
         exit 1
     }
 
-    return (Normalize-Version -RawVersion $release.tag_name)
+    $resolvedVersion = Normalize-Version -RawVersion $release.tag_name
+    Assert-ValidReleaseVersion -Version $resolvedVersion
+    return $resolvedVersion
 }
 
 function Get-VersionFromBinary {
