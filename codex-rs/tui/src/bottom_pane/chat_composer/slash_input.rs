@@ -404,6 +404,9 @@ impl ChatComposer {
             .unwrap_or(first_line_end);
         let typed_command_name = &text[1..command_token_end];
         let rest_after_token_is_empty = text[command_token_end..].trim().is_empty();
+        if rest_after_token_is_empty && (cursor <= 1 || cursor >= command_token_end) {
+            return false;
+        }
         let replace_end =
             if cursor <= 1 || (typed_command_name == cmd.command() && rest_after_token_is_empty) {
                 command_token_end
