@@ -5,6 +5,8 @@ use crate::accepted_lines::accepted_line_repo_hash_for_cwd;
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
+use crate::events::CodexAppServerStartedEventParams;
+use crate::events::CodexAppServerStartedEventRequest;
 use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCollabAgentToolCallEventParams;
 use crate::events::CodexCollabAgentToolCallEventRequest;
@@ -45,6 +47,7 @@ use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ThreadStartTimingEventParams;
 use crate::events::ToolItemFailureKind;
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
@@ -61,6 +64,7 @@ use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
+use crate::facts::AppServerStartedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CustomAnalyticsFact;
@@ -71,6 +75,7 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadStartTimingFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -147,6 +152,15 @@ struct ConnectionState {
 struct ThreadAnalyticsState {
     connection_id: Option<u64>,
     metadata: Option<ThreadMetadataState>,
+    thread_start_timing: Option<ThreadStartTimingState>,
+}
+
+#[derive(Clone, Copy)]
+struct ThreadStartTimingState {
+    duration_ms: u64,
+    prepare_duration_ms: u64,
+    spawn_duration_ms: u64,
+    finalize_duration_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -449,8 +463,14 @@ impl AnalyticsReducer {
                 self.ingest_server_request_aborted(completed_at_ms, request_id, out);
             }
             AnalyticsFact::Custom(input) => match input {
+                CustomAnalyticsFact::AppServerStarted(input) => {
+                    self.ingest_app_server_started(input, out);
+                }
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
+                }
+                CustomAnalyticsFact::ThreadStartTiming(input) => {
+                    self.ingest_thread_start_timing(input);
                 }
                 CustomAnalyticsFact::Compaction(input) => {
                     self.ingest_compaction(*input, out);
@@ -511,6 +531,24 @@ impl AnalyticsReducer {
         );
     }
 
+    fn ingest_app_server_started(
+        &mut self,
+        input: AppServerStartedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(TrackEventRequest::AppServerStarted(
+            CodexAppServerStartedEventRequest {
+                event_type: "codex_app_server_started",
+                event_params: CodexAppServerStartedEventParams {
+                    runtime: input.runtime,
+                    remote_control_enabled: input.remote_control_enabled,
+                    startup_duration_ms: input.startup_duration_ms,
+                    completed_at: input.completed_at,
+                },
+            },
+        ));
+    }
+
     fn ingest_subagent_thread_started(
         &mut self,
         input: SubAgentThreadStartedInput,
@@ -540,6 +578,19 @@ impl AnalyticsReducer {
         out.push(TrackEventRequest::ThreadInitialized(
             subagent_thread_started_event_request(input),
         ));
+    }
+
+    fn ingest_thread_start_timing(&mut self, input: ThreadStartTimingFact) {
+        let thread_start_timing = ThreadStartTimingState {
+            duration_ms: input.duration_ms,
+            prepare_duration_ms: input.prepare_duration_ms,
+            spawn_duration_ms: input.spawn_duration_ms,
+            finalize_duration_ms: input.finalize_duration_ms,
+        };
+        self.threads
+            .entry(input.thread_id)
+            .or_default()
+            .thread_start_timing = Some(thread_start_timing);
     }
 
     fn ingest_guardian_review(
@@ -1247,13 +1298,12 @@ impl AnalyticsReducer {
             thread.thread_source.map(Into::into),
             initialization_mode,
         );
-        self.threads.insert(
-            thread_id.clone(),
-            ThreadAnalyticsState {
-                connection_id: Some(connection_id),
-                metadata: Some(thread_metadata.clone()),
-            },
-        );
+        let thread_state = self.threads.entry(thread_id.clone()).or_default();
+        thread_state.connection_id = Some(connection_id);
+        thread_state.metadata = Some(thread_metadata.clone());
+        let thread_start_timing = matches!(initialization_mode, ThreadInitializationMode::New)
+            .then_some(thread_state.thread_start_timing)
+            .flatten();
         out.push(TrackEventRequest::ThreadInitialized(
             ThreadInitializedEvent {
                 event_type: "codex_thread_initialized",
@@ -1268,6 +1318,15 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
+                    thread_start_timing: match thread_start_timing {
+                        Some(timing) => ThreadStartTimingEventParams {
+                            thread_start_duration_ms: Some(timing.duration_ms),
+                            thread_start_prepare_duration_ms: Some(timing.prepare_duration_ms),
+                            thread_start_spawn_duration_ms: Some(timing.spawn_duration_ms),
+                            thread_start_finalize_duration_ms: Some(timing.finalize_duration_ms),
+                        },
+                        None => ThreadStartTimingEventParams::default(),
+                    },
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },

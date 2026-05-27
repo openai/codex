@@ -44,10 +44,10 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+use super::analytics::ANALYTICS_TEST_TIMEOUT;
 use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
-use super::analytics::thread_initialized_event;
-use super::analytics::wait_for_analytics_payload;
+use super::analytics::wait_for_analytics_event;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
@@ -436,17 +436,25 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
 
-    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
-    assert_eq!(payload["events"].as_array().expect("events array").len(), 1);
-    let event = thread_initialized_event(&payload)?;
+    let event =
+        wait_for_analytics_event(&server, ANALYTICS_TEST_TIMEOUT, "codex_thread_initialized")
+            .await?;
     assert_basic_thread_initialized_event(
-        event,
+        &event,
         &thread.id,
         &thread.session_id,
         "mock-model",
         "new",
         "user",
     );
+    let thread_start_timings = [
+        "thread_start_duration_ms",
+        "thread_start_prepare_duration_ms",
+        "thread_start_spawn_duration_ms",
+        "thread_start_finalize_duration_ms",
+    ]
+    .map(|field| event["event_params"][field].as_u64().is_some());
+    assert_eq!(thread_start_timings, [true, true, true, true]);
     Ok(())
 }
 

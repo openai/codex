@@ -15,6 +15,7 @@ use crate::session::INITIAL_SUBMIT_ID;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
+use crate::thread_start_timing::ThreadStartTiming;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -1219,6 +1220,7 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
+        let mut thread_start_timing = ThreadStartTiming::start();
         if let InitialHistory::Resumed(resumed) = &initial_history {
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {
@@ -1230,6 +1232,12 @@ impl ThreadManagerState {
                             "thread {} is already running with a different rollout path",
                             resumed.conversation_id
                         )));
+                    }
+                    thread_start_timing.mark_prepare_completed();
+                    if let Some(analytics_events_client) = self.analytics_events_client.as_ref() {
+                        analytics_events_client.track_thread_start_timing(
+                            thread_start_timing.into_fact(resumed.conversation_id.to_string()),
+                        );
                     }
                     return Ok(NewThread {
                         thread_id: resumed.conversation_id,
@@ -1245,6 +1253,7 @@ impl ThreadManagerState {
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
+        thread_start_timing.mark_prepare_completed();
         let tracked_session_source = session_source.clone();
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -1277,9 +1286,16 @@ impl ThreadManagerState {
             attestation_provider: self.attestation_provider.clone(),
         })
         .await?;
+        thread_start_timing.mark_spawn_completed();
         let new_thread = self
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
+        thread_start_timing.mark_finalize_completed();
+        if let Some(analytics_events_client) = self.analytics_events_client.as_ref() {
+            analytics_events_client.track_thread_start_timing(
+                thread_start_timing.into_fact(new_thread.thread_id.to_string()),
+            );
+        }
         if is_resumed_thread {
             new_thread.thread.emit_thread_resume_lifecycle().await;
             if let Err(err) = new_thread.thread.apply_goal_resume_runtime_effects().await {

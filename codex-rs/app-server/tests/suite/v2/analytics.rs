@@ -21,6 +21,12 @@ use wiremock::matchers::path;
 
 const SERVICE_VERSION: &str = "0.0.0-test";
 
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) const ANALYTICS_TEST_TIMEOUT: Duration = Duration::from_secs(25);
+
+#[cfg(not(any(target_os = "macos", windows)))]
+pub(crate) const ANALYTICS_TEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn set_metrics_exporter(config: &mut codex_core::config::Config) {
     config.otel.metrics_exporter = OtelExporterKind::OtlpHttp {
         endpoint: "http://localhost:4318".to_string(),
@@ -98,28 +104,6 @@ pub(crate) async fn mount_analytics_capture(server: &MockServer, codex_home: &Pa
     Ok(())
 }
 
-pub(crate) async fn wait_for_analytics_payload(
-    server: &MockServer,
-    read_timeout: Duration,
-) -> Result<Value> {
-    let body = timeout(read_timeout, async {
-        loop {
-            let Some(requests) = server.received_requests().await else {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-                continue;
-            };
-            if let Some(request) = requests.iter().find(|request| {
-                request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
-            }) {
-                break request.body.clone();
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await?;
-    serde_json::from_slice(&body).map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))
-}
-
 pub(crate) async fn wait_for_analytics_event(
     server: &MockServer,
     read_timeout: Duration,
@@ -133,7 +117,10 @@ pub(crate) async fn wait_for_analytics_event(
             };
             for request in &requests {
                 if request.method != "POST"
-                    || request.url.path() != "/codex/analytics-events/events"
+                    || !request
+                        .url
+                        .path()
+                        .ends_with("/codex/analytics-events/events")
                 {
                     continue;
                 }
@@ -153,16 +140,6 @@ pub(crate) async fn wait_for_analytics_event(
         }
     })
     .await?
-}
-
-pub(crate) fn thread_initialized_event(payload: &Value) -> Result<&Value> {
-    let events = payload["events"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("analytics payload missing events array"))?;
-    events
-        .iter()
-        .find(|event| event["event_type"] == "codex_thread_initialized")
-        .ok_or_else(|| anyhow::anyhow!("codex_thread_initialized event should be present"))
 }
 
 pub(crate) fn assert_basic_thread_initialized_event(
