@@ -718,6 +718,7 @@ async fn run_websocket_response_stream(
                     }
                 };
                 let model_verifications = event.model_verifications();
+                let turn_protection_result = event.turn_protection_result();
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -735,6 +736,16 @@ async fn run_websocket_response_stream(
                 if let Some(verifications) = model_verifications
                     && tx_event
                         .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                        .await
+                        .is_err()
+                {
+                    return Err(ApiError::Stream(
+                        "response event consumer dropped".to_string(),
+                    ));
+                }
+                if let Some(result) = turn_protection_result
+                    && tx_event
+                        .send(Ok(ResponseEvent::TurnProtectionResult(result)))
                         .await
                         .is_err()
                 {

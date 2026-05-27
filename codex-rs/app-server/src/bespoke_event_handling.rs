@@ -46,6 +46,7 @@ use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendmen
 use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
+use codex_app_server_protocol::ProtectionClassifierResult as V2ProtectionClassifierResult;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
@@ -77,9 +78,11 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
+use codex_app_server_protocol::TurnProtectionResultNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WarningNotification;
+use codex_app_server_protocol::WellbeingProtectionResult as V2WellbeingProtectionResult;
 use codex_app_server_protocol::build_item_from_guardian_event;
 use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_app_server_protocol::item_event_to_server_notification;
@@ -335,6 +338,25 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::ModelVerification(notification))
+                .await;
+        }
+        EventMsg::TurnProtectionResult(event) => {
+            let notification = TurnProtectionResultNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                wellbeing: V2WellbeingProtectionResult {
+                    prompt: V2ProtectionClassifierResult {
+                        labels: event.wellbeing.prompt.labels,
+                        modapi_scores: event.wellbeing.prompt.modapi_scores,
+                    },
+                    generation: V2ProtectionClassifierResult {
+                        labels: event.wellbeing.generation.labels,
+                        modapi_scores: event.wellbeing.generation.modapi_scores,
+                    },
+                },
+            };
+            outgoing
+                .send_server_notification(ServerNotification::TurnProtectionResult(notification))
                 .await;
         }
         EventMsg::RealtimeConversationStarted(event) => {

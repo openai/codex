@@ -8,6 +8,7 @@ use codex_client::StreamResponse;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnProtectionResultEvent;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -192,6 +193,17 @@ impl ResponsesStreamEvent {
             .as_ref()
             .and_then(|metadata| metadata.get("openai_verification_recommendation"))
             .and_then(model_verifications_from_json_value)
+    }
+
+    pub(crate) fn turn_protection_result(&self) -> Option<TurnProtectionResultEvent> {
+        if self.kind() != "response.metadata" {
+            return None;
+        }
+
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("openai_chatgpt_protection_result"))
+            .and_then(|result| serde_json::from_value(result.clone()).ok())
     }
 }
 
@@ -444,6 +456,7 @@ pub async fn process_sse(
             }
         };
         let model_verifications = event.model_verifications();
+        let turn_protection_result = event.turn_protection_result();
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -460,6 +473,14 @@ pub async fn process_sse(
         if let Some(verifications) = model_verifications
             && tx_event
                 .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                .await
+                .is_err()
+        {
+            return;
+        }
+        if let Some(result) = turn_protection_result
+            && tx_event
+                .send(Ok(ResponseEvent::TurnProtectionResult(result)))
                 .await
                 .is_err()
         {
@@ -1204,6 +1225,52 @@ mod tests {
             &events[0],
             ResponseEvent::ModelVerifications(verifications)
                 if verifications == &vec![ModelVerification::TrustedAccessForCyber]
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+                end_turn: None,
+            } if response_id == "resp-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_sse_emits_turn_protection_result_field() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.metadata",
+                "metadata": {
+                    "openai_chatgpt_protection_result": {
+                        "wellbeing": {
+                            "prompt": {
+                                "labels": ["U-S5"],
+                                "modapi_scores": {"U-S4": 0.91}
+                            },
+                            "generation": {
+                                "labels": ["A-S4"],
+                                "modapi_scores": {}
+                            }
+                        }
+                    }
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-1"
+                }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::TurnProtectionResult(result)
+                if result.wellbeing.prompt.labels == vec!["U-S5".to_string()]
+                    && result.wellbeing.prompt.modapi_scores.get("U-S4") == Some(&0.91)
+                    && result.wellbeing.generation.labels == vec!["A-S4".to_string()]
         );
         assert_matches!(
             &events[1],

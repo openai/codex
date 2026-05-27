@@ -1186,6 +1186,9 @@ pub enum EventMsg {
     /// Backend recommends additional account verification for this turn.
     ModelVerification(ModelVerificationEvent),
 
+    /// Backend safety results intended for first-party turn presentation.
+    TurnProtectionResult(TurnProtectionResultEvent),
+
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
@@ -1848,6 +1851,23 @@ pub enum ModelVerification {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct ModelVerificationEvent {
     pub verifications: Vec<ModelVerification>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ProtectionClassifierResult {
+    pub labels: Vec<String>,
+    pub modapi_scores: HashMap<String, f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct WellbeingProtectionResult {
+    pub prompt: ProtectionClassifierResult,
+    pub generation: ProtectionClassifierResult,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct TurnProtectionResultEvent {
+    pub wellbeing: WellbeingProtectionResult,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

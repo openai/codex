@@ -9845,6 +9845,28 @@
       ],
       "type": "object"
     },
+    "ProtectionClassifierResult": {
+      "properties": {
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "modapiScores": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "labels",
+        "modapiScores"
+      ],
+      "type": "object"
+    },
     "RateLimitReachedType": {
       "enum": [
         "rate_limit_reached",
@@ -12300,6 +12322,26 @@
             "params"
           ],
           "title": "Model/verificationNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "turn/protectionResult"
+              ],
+              "title": "Turn/protectionResultNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TurnProtectionResultNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/protectionResultNotification",
           "type": "object"
         },
         {
@@ -16353,6 +16395,27 @@
       "title": "TurnPlanUpdatedNotification",
       "type": "object"
     },
+    "TurnProtectionResultNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "wellbeing": {
+          "$ref": "#/definitions/WellbeingProtectionResult"
+        }
+      },
+      "required": [
+        "threadId",
+        "turnId",
+        "wellbeing"
+      ],
+      "title": "TurnProtectionResultNotification",
+      "type": "object"
+    },
     "TurnStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -16930,6 +16993,21 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "WellbeingProtectionResult": {
+      "properties": {
+        "generation": {
+          "$ref": "#/definitions/ProtectionClassifierResult"
+        },
+        "prompt": {
+          "$ref": "#/definitions/ProtectionClassifierResult"
+        }
+      },
+      "required": [
+        "generation",
+        "prompt"
+      ],
       "type": "object"
     },
     "WindowsSandboxReadiness": {

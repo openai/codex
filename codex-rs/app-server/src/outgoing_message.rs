@@ -721,10 +721,13 @@ mod tests {
     use codex_app_server_protocol::ModelReroutedNotification;
     use codex_app_server_protocol::ModelVerification;
     use codex_app_server_protocol::ModelVerificationNotification;
+    use codex_app_server_protocol::ProtectionClassifierResult;
     use codex_app_server_protocol::RateLimitSnapshot;
     use codex_app_server_protocol::RateLimitWindow;
     use codex_app_server_protocol::ServerResponse;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_app_server_protocol::TurnProtectionResultNotification;
+    use codex_app_server_protocol::WellbeingProtectionResult;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -943,6 +946,49 @@ mod tests {
                     "threadId": "thread-1",
                     "turnId": "turn-1",
                     "verifications": ["trustedAccessForCyber"],
+                },
+            }),
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the notification serializes correctly"),
+            "ensure the notification serializes correctly"
+        );
+    }
+
+    #[test]
+    fn verify_turn_protection_result_notification_serialization() {
+        let notification =
+            ServerNotification::TurnProtectionResult(TurnProtectionResultNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                wellbeing: WellbeingProtectionResult {
+                    prompt: ProtectionClassifierResult {
+                        labels: vec!["U-S5".to_string()],
+                        modapi_scores: [("U-S4".to_string(), 0.91)].into_iter().collect(),
+                    },
+                    generation: ProtectionClassifierResult {
+                        labels: vec!["A-S4".to_string()],
+                        modapi_scores: Default::default(),
+                    },
+                },
+            });
+
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
+        assert_eq!(
+            json!({
+                "method": "turn/protectionResult",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "wellbeing": {
+                        "prompt": {
+                            "labels": ["U-S5"],
+                            "modapiScores": {"U-S4": 0.91},
+                        },
+                        "generation": {
+                            "labels": ["A-S4"],
+                            "modapiScores": {},
+                        },
+                    },
                 },
             }),
             serde_json::to_value(jsonrpc_notification)
