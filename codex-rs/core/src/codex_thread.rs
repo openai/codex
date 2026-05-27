@@ -5,6 +5,8 @@ use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
+#[cfg(test)]
+use crate::tasks::TurnSpanParent;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -414,7 +416,10 @@ impl CodexThread {
                 .input_queue
                 .queue_response_items_for_next_turn(items)
                 .await;
-            self.codex.session.maybe_start_turn_for_pending_work().await;
+            self.codex
+                .session
+                .maybe_start_turn_for_pending_work(TurnSpanParent::Current)
+                .await;
         }
 
         Ok(submission_id)

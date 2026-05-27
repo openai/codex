@@ -66,6 +66,7 @@ use crate::state::ActiveTurn;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TurnSpanParent;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
@@ -5827,6 +5828,88 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     assert_ne!(
         task_context.span().span_context().span_id(),
         dispatch_span_id
+    );
+}
+
+#[tokio::test]
+async fn root_task_turn_span_does_not_inherit_current_trace_context() {
+    struct TraceCaptureTask {
+        captured_trace: Arc<std::sync::Mutex<Option<W3cTraceContext>>>,
+    }
+
+    impl SessionTask for TraceCaptureTask {
+        fn kind(&self) -> TaskKind {
+            TaskKind::Regular
+        }
+
+        fn span_name(&self) -> &'static str {
+            "session_task.root_trace_capture"
+        }
+
+        async fn run(
+            self: Arc<Self>,
+            _session: Arc<SessionTaskContext>,
+            _ctx: Arc<TurnContext>,
+            _input: Vec<TurnInput>,
+            _cancellation_token: CancellationToken,
+        ) -> Option<String> {
+            let mut trace = self
+                .captured_trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *trace = current_span_w3c_trace_context();
+            None
+        }
+    }
+
+    let _trace_test_context = install_test_tracing("codex-core-tests");
+    let request_parent = W3cTraceContext {
+        traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
+        tracestate: Some("vendor=value".into()),
+    };
+    let request_span = tracing::info_span!("completed_turn");
+    assert!(set_parent_from_w3c_trace_context(
+        &request_span,
+        &request_parent
+    ));
+
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    let captured_trace = Arc::new(std::sync::Mutex::new(None));
+    let request_trace = async {
+        let request_trace =
+            current_span_w3c_trace_context().expect("request span should have trace context");
+        sess.start_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            TraceCaptureTask {
+                captured_trace: Arc::clone(&captured_trace),
+            },
+            TurnSpanParent::Root,
+        )
+        .await;
+        request_trace
+    }
+    .instrument(request_span)
+    .await;
+
+    let evt = tokio::time::timeout(StdDuration::from_secs(2), rx.recv())
+        .await
+        .expect("timeout waiting for turn completion")
+        .expect("event");
+    assert!(matches!(evt.msg, EventMsg::TurnComplete(_)));
+
+    let task_trace = captured_trace
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .expect("turn task should capture the current span trace context");
+    let request_context =
+        codex_otel::context_from_w3c_trace_context(&request_trace).expect("request");
+    let task_context = codex_otel::context_from_w3c_trace_context(&task_trace).expect("task");
+
+    assert_ne!(
+        task_context.span().span_context().trace_id(),
+        request_context.span().span_context().trace_id()
     );
 }
 

@@ -64,6 +64,14 @@ const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TASK_COMPACT_METRIC: &str = "codex.task.compact";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnSpanParent {
+    /// Preserve the active request or dispatch context for externally started work.
+    Current,
+    /// Avoid nesting automatic follow-on turns under the completed turn that launched them.
+    Root,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterruptedTurnHistoryMarker {
     Disabled,
     ContextualUser,
@@ -307,7 +315,8 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.start_task(turn_context, input, task).await;
+        self.start_task(turn_context, input, task, TurnSpanParent::Current)
+            .await;
     }
 
     pub(crate) async fn start_task<T: SessionTask>(
@@ -315,6 +324,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
+        span_parent: TurnSpanParent,
     ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -386,7 +396,12 @@ impl Session {
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
         let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
+        let parent_span_id = match span_parent {
+            TurnSpanParent::Current => Span::current().id(),
+            TurnSpanParent::Root => None,
+        };
         let task_span = info_span!(
+            parent: parent_span_id,
             "turn",
             otel.name = span_name,
             thread.id = %self.conversation_id,
@@ -457,9 +472,15 @@ impl Session {
     ///
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
-    pub(crate) async fn maybe_start_turn_for_pending_work(self: &Arc<Self>) {
-        self.maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
+    pub(crate) async fn maybe_start_turn_for_pending_work(
+        self: &Arc<Self>,
+        span_parent: TurnSpanParent,
+    ) {
+        self.maybe_start_turn_for_pending_work_with_sub_id(
+            uuid::Uuid::new_v4().to_string(),
+            span_parent,
+        )
+        .await;
     }
 
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
@@ -470,6 +491,7 @@ impl Session {
     pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
         self: &Arc<Self>,
         sub_id: String,
+        span_parent: TurnSpanParent,
     ) {
         if !self
             .input_queue
@@ -491,7 +513,7 @@ impl Session {
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
+        self.start_task(turn_context, Vec::new(), RegularTask::new(), span_parent)
             .await;
     }
 
@@ -530,7 +552,8 @@ impl Session {
             self.input_queue.clear_pending(&active_turn).await;
         }
         if reason == TurnAbortReason::Interrupted && aborted_turn {
-            self.maybe_start_turn_for_pending_work().await;
+            self.maybe_start_turn_for_pending_work(TurnSpanParent::Current)
+                .await;
         }
     }
 
@@ -577,7 +600,8 @@ impl Session {
         self.input_queue.clear_pending(&active_turn).await;
 
         if reason == TurnAbortReason::Interrupted {
-            self.maybe_start_turn_for_pending_work().await;
+            self.maybe_start_turn_for_pending_work(TurnSpanParent::Current)
+                .await;
         }
 
         true

@@ -13,6 +13,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
+use crate::tasks::TurnSpanParent;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
 use codex_features::Feature;
@@ -1268,7 +1269,8 @@ impl Session {
     }
 
     async fn maybe_continue_goal_if_idle_runtime(self: &Arc<Self>) {
-        self.maybe_start_turn_for_pending_work().await;
+        self.maybe_start_turn_for_pending_work(TurnSpanParent::Root)
+            .await;
         self.maybe_start_goal_continuation_turn().await;
     }
 
@@ -1353,8 +1355,13 @@ impl Session {
                 .await;
             return;
         }
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
+        self.start_task(
+            turn_context,
+            Vec::new(),
+            RegularTask::new(),
+            TurnSpanParent::Root,
+        )
+        .await;
     }
 
     async fn goal_continuation_candidate_if_active(

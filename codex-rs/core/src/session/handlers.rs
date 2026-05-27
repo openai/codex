@@ -22,6 +22,7 @@ use crate::realtime_conversation::prefix_realtime_v2_text;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
+use crate::tasks::TurnSpanParent;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
@@ -316,7 +317,7 @@ pub async fn inter_agent_communication(
         .enqueue_mailbox_communication(communication)
         .await;
     if trigger_turn {
-        sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
+        sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id, TurnSpanParent::Current)
             .await;
     }
 }
