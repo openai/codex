@@ -59,6 +59,70 @@ const fn default_enabled() -> bool {
     true
 }
 
+/// How Codex should choose an outbound proxy when a future resolver is available.
+///
+/// This is intentionally configuration-only for now: it establishes the stable
+/// spelling used by the resolver work without changing any HTTP routing by
+/// itself.
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkProxyMode {
+    /// Prefer explicit proxy configuration, then OS/system discovery, then direct.
+    #[default]
+    Auto,
+    /// Only honor conventional environment/configured proxy values.
+    Env,
+    /// Prefer OS/system proxy discovery (for example PAC/WPAD) when supported.
+    System,
+    /// Do not use a proxy for Codex-managed outbound clients.
+    Direct,
+}
+
+impl NetworkProxyMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Env => "env",
+            Self::System => "system",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+impl fmt::Display for NetworkProxyMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Optional outbound networking settings.
+///
+/// `proxy_url` is reserved for a concrete proxy URL (for example
+/// `http://proxy.example:8080`). It is deliberately not a PAC/WPAD URL, and
+/// callers must redact credentials before logging it.
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Eq, JsonSchema)]
+pub struct NetworkConfigToml {
+    /// Proxy selection mode. Defaults to `auto` when omitted.
+    #[serde(default)]
+    pub proxy_mode: Option<NetworkProxyMode>,
+
+    /// Explicit concrete proxy URL override for future resolver-aware clients.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+}
+
+impl fmt::Debug for NetworkConfigToml {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NetworkConfigToml")
+            .field("proxy_mode", &self.proxy_mode)
+            .field(
+                "proxy_url",
+                &self.proxy_url.as_ref().map(|_| "<redacted-proxy-url>"),
+            )
+            .finish()
+    }
+}
+
 /// Preferred layout for the resume/fork session picker.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]

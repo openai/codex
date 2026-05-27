@@ -1603,6 +1603,27 @@
       },
       "type": "object"
     },
+    "NetworkConfigToml": {
+      "additionalProperties": false,
+      "description": "Optional outbound networking settings.\n\n`proxy_url` is reserved for a concrete proxy URL (for example `http://proxy.example:8080`). It is deliberately not a PAC/WPAD URL, and callers must redact credentials before logging it.",
+      "properties": {
+        "proxy_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NetworkProxyMode"
+            }
+          ],
+          "default": null,
+          "description": "Proxy selection mode. Defaults to `auto` when omitted."
+        },
+        "proxy_url": {
+          "default": null,
+          "description": "Explicit concrete proxy URL override for future resolver-aware clients.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "NetworkDomainPermissionToml": {
       "enum": [
         "allow",
@@ -1784,6 +1805,16 @@
       "enum": [
         "allow",
         "deny"
+      ],
+      "type": "string"
+    },
+    "NetworkProxyMode": {
+      "description": "How Codex should choose an outbound proxy when a future resolver is available.\n\nThis is intentionally configuration-only for now: it establishes the stable spelling used by the resolver work without changing any HTTP routing by itself.",
+      "enum": [
+        "auto",
+        "env",
+        "system",
+        "direct"
       ],
       "type": "string"
     },
@@ -4981,6 +5012,14 @@
         }
       ],
       "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`)."
+    },
+    "network": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/NetworkConfigToml"
+        }
+      ],
+      "description": "Outbound networking/proxy selection settings.\n\nThis section is parsed early so resolver-aware clients can share one spelling; it does not by itself change routing behavior."
     },
     "notice": {
       "allOf": [

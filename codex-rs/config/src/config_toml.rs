@@ -16,6 +16,7 @@ use crate::types::History;
 use crate::types::MarketplaceConfig;
 use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
+use crate::types::NetworkConfigToml;
 use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
 use crate::types::OtelConfigToml;
@@ -362,6 +363,12 @@ pub struct ConfigToml {
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,
+
+    /// Outbound networking/proxy selection settings.
+    ///
+    /// This section is parsed early so resolver-aware clients can share one
+    /// spelling; it does not by itself change routing behavior.
+    pub network: Option<NetworkConfigToml>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
@@ -992,6 +999,47 @@ mod tests {
                 .into_vec(),
             vec![WORKSPACE_ID_A.to_string(), WORKSPACE_ID_B.to_string()]
         );
+    }
+
+    #[test]
+    fn network_config_accepts_reserved_proxy_spelling() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [network]
+            proxy_mode = "system"
+            proxy_url = "http://proxy.example:8080"
+            "#,
+        )
+        .expect("network config should deserialize");
+
+        let network = config.network.expect("network config should be present");
+        assert_eq!(
+            network
+                .proxy_mode
+                .expect("proxy mode should be set")
+                .as_str(),
+            "system"
+        );
+        assert_eq!(
+            network.proxy_url.as_deref(),
+            Some("http://proxy.example:8080")
+        );
+    }
+
+    #[test]
+    fn network_config_debug_redacts_proxy_url() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [network]
+            proxy_url = "http://user:secret@proxy.internal:8080"
+            "#,
+        )
+        .expect("network config should deserialize");
+
+        let rendered = format!("{:?}", config.network.expect("network config"));
+        assert!(rendered.contains("<redacted-proxy-url>"));
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains("proxy.internal"));
     }
 
     #[test]
