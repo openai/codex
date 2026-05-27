@@ -17,6 +17,7 @@ use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::runtimes::additional_permissions_with_env_file_read;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
@@ -266,6 +267,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = managed_network {
             network.apply_to_env(&mut env);
         }
+        let additional_permissions = additional_permissions_with_env_file_read(
+            req.additional_permissions.clone(),
+            req.env_file_path.as_ref(),
+        );
         let environment_is_remote = req.environment.is_remote();
         let command = if environment_is_remote {
             base_command.to_vec()
@@ -293,7 +298,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
-                build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
+                build_sandbox_command(&command, &req.cwd, &env, additional_permissions.clone())
                     .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
@@ -343,9 +348,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
             }
         }
-        let command =
-            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
-                .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+        let command = build_sandbox_command(&command, &req.cwd, &env, additional_permissions)
+            .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
             .env_for(command, options, managed_network)

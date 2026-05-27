@@ -18,6 +18,10 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -45,6 +49,32 @@ pub(crate) fn build_sandbox_command(
         env: env.clone(),
         additional_permissions,
     })
+}
+
+/// Adds an exact read grant for the hook env file so sandboxed commands can
+/// source it while the file stays in Codex-managed storage.
+pub(crate) fn additional_permissions_with_env_file_read(
+    mut additional_permissions: Option<AdditionalPermissionProfile>,
+    env_file_path: Option<&AbsolutePathBuf>,
+) -> Option<AdditionalPermissionProfile> {
+    let Some(env_file_path) = env_file_path else {
+        return additional_permissions;
+    };
+    let entry = FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: env_file_path.clone(),
+        },
+        access: FileSystemAccessMode::Read,
+    };
+    let permissions =
+        additional_permissions.get_or_insert_with(AdditionalPermissionProfile::default);
+    let file_system = permissions
+        .file_system
+        .get_or_insert_with(FileSystemPermissions::default);
+    if !file_system.entries.contains(&entry) {
+        file_system.entries.push(entry);
+    }
+    additional_permissions
 }
 
 pub(crate) fn exec_env_for_sandbox_permissions(

@@ -20,6 +20,7 @@ use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::runtimes::additional_permissions_with_env_file_read;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
@@ -237,6 +238,10 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         if let Some(env_file_path) = &req.env_file_path {
             crate::hook_env::add_env_file_vars(&mut env, env_file_path);
         }
+        let additional_permissions = additional_permissions_with_env_file_read(
+            req.additional_permissions.clone(),
+            req.env_file_path.as_ref(),
+        );
         let command = maybe_source_hook_env_file(&req.command, req.env_file_path.as_ref());
         let command = maybe_wrap_shell_lc_with_snapshot(
             &command,
@@ -258,7 +263,16 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         };
 
         if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
-            match zsh_fork_backend::maybe_run_shell_command(req, attempt, ctx, &command).await? {
+            match zsh_fork_backend::maybe_run_shell_command(
+                req,
+                attempt,
+                ctx,
+                &command,
+                &env,
+                additional_permissions.clone(),
+            )
+            .await?
+            {
                 Some(out) => return Ok(out),
                 None => {
                     tracing::warn!(
@@ -268,8 +282,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
         }
 
-        let command =
-            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
+        let command = build_sandbox_command(&command, &req.cwd, &env, additional_permissions)?;
         let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
         if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
             expiration = expiration.with_cancellation(cancellation);

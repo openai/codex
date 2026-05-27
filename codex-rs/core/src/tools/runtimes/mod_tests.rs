@@ -144,6 +144,59 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
 }
 
 #[test]
+fn additional_permissions_with_env_file_read_adds_exact_read_grant() {
+    let dir = tempdir().expect("create temp dir");
+    let env_file_path = dir.path().join("codex-env.sh").abs();
+
+    let permissions = additional_permissions_with_env_file_read(
+        /*additional_permissions*/ None,
+        Some(&env_file_path),
+    );
+
+    assert_eq!(
+        permissions,
+        Some(AdditionalPermissionProfile {
+            network: None,
+            file_system: Some(FileSystemPermissions {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: env_file_path,
+                    },
+                    access: FileSystemAccessMode::Read,
+                }],
+                glob_scan_max_depth: None,
+            }),
+        })
+    );
+}
+
+#[test]
+fn additional_permissions_with_env_file_read_preserves_existing_permissions() {
+    let dir = tempdir().expect("create temp dir");
+    let env_file_path = dir.path().join("codex-env.sh").abs();
+    let existing = Some(AdditionalPermissionProfile {
+        network: None,
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: env_file_path.clone(),
+                },
+                access: FileSystemAccessMode::Read,
+            }],
+            glob_scan_max_depth: None,
+        }),
+    });
+
+    let permissions =
+        additional_permissions_with_env_file_read(existing.clone(), Some(&env_file_path));
+    assert_eq!(permissions, existing);
+
+    let permissions =
+        additional_permissions_with_env_file_read(existing.clone(), /*env_file_path*/ None);
+    assert_eq!(permissions, existing);
+}
+
+#[test]
 fn explicit_escalation_keeps_user_proxy_env_without_codex_marker() {
     let env = HashMap::from([
         (

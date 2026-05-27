@@ -3144,6 +3144,60 @@ async fn plugin_session_start_env_file_path_persists_for_shell_and_exec_command(
 }
 
 #[tokio::test]
+async fn plugin_session_start_env_file_path_persists_for_initial_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let (plugin_hook_sources, plugin_data) = write_path_persisting_plugin(home.path())?;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Plugins)
+                .expect("test config should allow feature update");
+            trust_plugin_hooks(config, plugin_hook_sources);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            command: "adam-shim".to_string(),
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ExecCommandEnd(_))
+    })
+    .await;
+    let EventMsg::ExecCommandEnd(event) = event else {
+        unreachable!("wait_for_event matched ExecCommandEnd");
+    };
+    assert_eq!(
+        event.exit_code, 0,
+        "initial /shell command should run successfully. stdout=`{}`, stderr=`{}`",
+        event.stdout, event.stderr
+    );
+    assert!(
+        event.stdout.contains("shim-ok"),
+        "initial /shell command should find the shim through CODEX_ENV_FILE PATH"
+    );
+    assert!(
+        plugin_data.join("bin/adam-shim").exists(),
+        "session start hook should create the shim under plugin data"
+    );
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -16,6 +16,7 @@ use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::hook_env::add_env_file_vars;
+use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::sandboxing::ExecRequest;
 use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
@@ -122,6 +123,12 @@ pub(crate) async fn execute_user_shell_command(
             collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
         session.send_event(turn_context.as_ref(), event).await;
+    }
+
+    // A standalone `/shell` command can be the first action in a session,
+    // before the regular turn path has a chance to consume SessionStart hooks.
+    if run_pending_session_start_hooks(&session, &turn_context).await {
+        return;
     }
 
     // Execute the user's script under their default shell when known; this
