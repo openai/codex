@@ -14,7 +14,6 @@ mod steering;
 mod tool;
 
 pub use extension::GoalExtension;
-pub use extension::GoalExtensionConfig;
 pub use extension::install_with_backend;
 pub use runtime::GoalRuntimeHandle;
 pub use spec::CREATE_GOAL_TOOL_NAME;

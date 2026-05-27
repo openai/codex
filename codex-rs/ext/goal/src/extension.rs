@@ -44,17 +44,6 @@ use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
 
-#[derive(Clone, Debug)]
-pub struct GoalExtensionConfig {
-    pub enabled: bool,
-}
-
-impl GoalExtensionConfig {
-    fn from_enabled(enabled: bool) -> Self {
-        Self { enabled }
-    }
-}
-
 #[derive(Clone)]
 pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
@@ -95,9 +84,6 @@ where
 {
     async fn on_thread_start(&self, input: ThreadStartInput<'_, C>) {
         let enabled = (self.goals_enabled)(input.config);
-        input
-            .thread_store
-            .insert(GoalExtensionConfig::from_enabled(enabled));
         let accounting_state = input
             .thread_store
             .get_or_init::<GoalAccountingState>(GoalAccountingState::default);
@@ -192,7 +178,6 @@ where
         new_config: &C,
     ) {
         let enabled = (self.goals_enabled)(new_config);
-        thread_store.insert(GoalExtensionConfig::from_enabled(enabled));
         if let Some(runtime) = goal_runtime_handle(thread_store) {
             runtime.set_enabled(enabled);
         }
