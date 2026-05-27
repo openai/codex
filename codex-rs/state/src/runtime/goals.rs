@@ -399,44 +399,78 @@ WHERE thread_id = ?
         }
 
         let now_ms = datetime_to_epoch_millis(Utc::now());
+        let active_or_stopped_status_filter =
+            "status IN ('active', 'paused', 'blocked', 'usage_limited', 'budget_limited')";
         let status_filter = match mode {
             GoalAccountingMode::ActiveStatusOnly => "status = 'active'",
             GoalAccountingMode::ActiveOnly => "status IN ('active', 'budget_limited')",
             GoalAccountingMode::ActiveOrComplete => {
                 "status IN ('active', 'budget_limited', 'complete')"
             }
-            GoalAccountingMode::ActiveOrStopped => {
-                "status IN ('active', 'paused', 'blocked', 'usage_limited', 'budget_limited')"
-            }
+            GoalAccountingMode::ActiveOrStopped => active_or_stopped_status_filter,
         };
         let budget_limit_status_filter = match mode {
             GoalAccountingMode::ActiveStatusOnly
             | GoalAccountingMode::ActiveOnly
             | GoalAccountingMode::ActiveOrComplete => "status = 'active'",
-            GoalAccountingMode::ActiveOrStopped => {
-                "status IN ('active', 'paused', 'blocked', 'usage_limited', 'budget_limited')"
-            }
+            GoalAccountingMode::ActiveOrStopped => active_or_stopped_status_filter,
         };
-        let goal_id_filter = if expected_goal_id.is_some() {
-            "goal_id = ?"
-        } else {
-            "1 = 1"
-        };
-        let query = format!(
+        let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 UPDATE thread_goals
 SET
-    time_used_seconds = time_used_seconds + ?,
-    tokens_used = tokens_used + ?,
+    time_used_seconds = time_used_seconds +
+            "#,
+        );
+        builder.push_bind(time_delta_seconds);
+        builder.push(
+            r#",
+    tokens_used = tokens_used +
+            "#,
+        );
+        builder.push_bind(token_delta);
+        builder.push(
+            r#",
     status = CASE
-        WHEN {budget_limit_status_filter} AND token_budget IS NOT NULL AND tokens_used + ? >= token_budget
-            THEN ?
+        WHEN
+            "#,
+        );
+        builder.push(budget_limit_status_filter);
+        builder.push(
+            r#"
+            AND token_budget IS NOT NULL
+            AND tokens_used +
+            "#,
+        );
+        builder.push_bind(token_delta);
+        builder.push(
+            r#"
+                >= token_budget
+            THEN
+            "#,
+        );
+        builder.push_bind(crate::ThreadGoalStatus::BudgetLimited.as_str());
+        builder.push(
+            r#"
         ELSE status
     END,
-    updated_at_ms = ?
-WHERE thread_id = ?
-  AND {status_filter}
-  AND {goal_id_filter}
+    updated_at_ms =
+            "#,
+        );
+        builder.push_bind(now_ms);
+        builder.push(
+            r#"
+WHERE thread_id =
+            "#,
+        );
+        builder.push_bind(thread_id.to_string());
+        builder.push(" AND ");
+        builder.push(status_filter);
+        if let Some(expected_goal_id) = expected_goal_id {
+            builder.push(" AND goal_id = ").push_bind(expected_goal_id);
+        }
+        builder.push(
+            r#"
 RETURNING
     thread_id,
     goal_id,
@@ -450,18 +484,7 @@ RETURNING
             "#,
         );
 
-        let mut query = sqlx::query(&query)
-            .bind(time_delta_seconds)
-            .bind(token_delta)
-            .bind(token_delta)
-            .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
-            .bind(now_ms)
-            .bind(thread_id.to_string());
-        if let Some(expected_goal_id) = expected_goal_id {
-            query = query.bind(expected_goal_id);
-        }
-
-        let row = query.fetch_optional(self.pool.as_ref()).await?;
+        let row = builder.build().fetch_optional(self.pool.as_ref()).await?;
 
         let Some(row) = row else {
             return Ok(GoalAccountingOutcome::Unchanged(

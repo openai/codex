@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_api::AllowedCaller;
 use codex_api::ApproximateLocation;
 use codex_api::LocationType;
 use codex_api::SearchContextSize;
@@ -71,6 +72,7 @@ fn search_settings(config: &Config, web_search_mode: WebSearchMode) -> SearchSet
                 allowed_domains: filters.allowed_domains.clone(),
                 blocked_domains: None,
             }),
+        allowed_callers: Some(vec![AllowedCaller::Direct]),
         external_web_access: Some(match web_search_mode {
             WebSearchMode::Live => true,
             WebSearchMode::Cached | WebSearchMode::Disabled => false,

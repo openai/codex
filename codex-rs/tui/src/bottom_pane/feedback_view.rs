@@ -1,6 +1,7 @@
 use codex_feedback::DOCTOR_REPORT_ATTACHMENT_FILENAME;
 use codex_feedback::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 use codex_feedback::FeedbackDiagnostics;
+use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -472,6 +473,7 @@ pub(crate) fn feedback_upload_consent_params(
     category: FeedbackCategory,
     rollout_path: Option<std::path::PathBuf>,
     auto_review_rollout_filename: Option<String>,
+    include_windows_sandbox_log: bool,
     feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
@@ -509,6 +511,15 @@ pub(crate) fn feedback_upload_consent_params(
         ])
         .into(),
     ];
+    if include_windows_sandbox_log {
+        header_lines.push(
+            Line::from(vec![
+                "  • ".into(),
+                WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME.into(),
+            ])
+            .into(),
+        );
+    }
     if let Some(path) = rollout_path.as_deref()
         && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
     {
@@ -696,12 +707,34 @@ mod tests {
             FeedbackCategory::Bug,
             Some(std::path::PathBuf::from("rollout.jsonl")),
             Some("auto-review-rollout.jsonl".to_string()),
+            /*include_windows_sandbox_log*/ false,
             &FeedbackDiagnostics::default(),
         );
 
         let rendered = render_renderable(params.header.as_ref(), /*width*/ 60);
 
         insta::assert_snapshot!("feedback_upload_consent_lists_doctor_report", rendered);
+    }
+
+    #[test]
+    fn feedback_upload_consent_lists_windows_sandbox_log_when_included() {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let params = feedback_upload_consent_params(
+            tx,
+            FeedbackCategory::Bug,
+            Some(std::path::PathBuf::from("rollout.jsonl")),
+            Some("auto-review-rollout.jsonl".to_string()),
+            /*include_windows_sandbox_log*/ true,
+            &FeedbackDiagnostics::default(),
+        );
+
+        let rendered = render_renderable(params.header.as_ref(), /*width*/ 60);
+
+        insta::assert_snapshot!(
+            "feedback_upload_consent_lists_windows_sandbox_log_when_included",
+            rendered
+        );
     }
 
     #[test]
