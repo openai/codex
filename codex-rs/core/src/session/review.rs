@@ -69,12 +69,17 @@ pub(super) async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
+    let forked_from_thread_id = {
+        let state = sess.state.lock().await;
+        state.session_configuration.forked_from_thread_id
+    };
 
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
+        forked_from_thread_id,
         parent_turn_context.thread_source,
         review_turn_id.clone(),
         #[allow(deprecated)]
@@ -132,11 +137,11 @@ pub(super) async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input: Vec<UserInput> = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: review_prompt,
         // Review prompt is synthesized; no UI element ranges to preserve.
         text_elements: Vec::new(),
-    }];
+    }])];
     let tc = Arc::new(review_turn_context);
     tc.turn_metadata_state.spawn_git_enrichment_task();
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not

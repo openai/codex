@@ -10,7 +10,7 @@ use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolSpec;
-use codex_extension_api::parse_tool_input_schema;
+use codex_extension_api::parse_tool_input_schema_without_compaction;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
 use codex_tools::ResponsesApiNamespace;
@@ -40,7 +40,8 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
     }
 
     fn spec(&self) -> ToolSpec {
-        let parameters = match parse_tool_input_schema(&commands_schema()) {
+        // parse schema without compaction that removes field metadata/descriptions to match hosted tool definition
+        let parameters = match parse_tool_input_schema_without_compaction(&commands_schema()) {
             Ok(parameters) => parameters,
             Err(err) => panic!("search command schema should parse: {err}"),
         };

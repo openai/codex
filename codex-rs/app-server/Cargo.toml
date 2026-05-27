@@ -94,6 +94,9 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
+[target.'cfg(windows)'.dependencies]
+codex-windows-sandbox = { workspace = true }
+
 [dev-dependencies]
 app_test_support = { workspace = true }
 axum = { workspace = true, default-features = false, features = [
