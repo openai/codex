@@ -79,6 +79,8 @@ const MCP_UI_MODEL_VISIBILITY: &str = "model";
 ///
 /// Tools without visibility metadata remain visible.
 /// Tools with visibility metadata are hidden unless they explicitly include `model`.
+///
+/// <https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx#resource-discovery>
 pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
     let Some(visibility) = tool
         .tool
