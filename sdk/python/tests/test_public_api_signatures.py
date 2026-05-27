@@ -11,11 +11,11 @@ import openai_codex
 import openai_codex.types as public_types
 from openai_codex import (
     ApprovalMode,
-    AppServerConfig,
     AsyncCodex,
     AsyncThread,
     AsyncTurnHandle,
     Codex,
+    CodexConfig,
     Sandbox,
     Thread,
     TurnHandle,
@@ -26,7 +26,7 @@ from openai_codex.types import InitializeResponse
 
 EXPECTED_ROOT_EXPORTS = [
     "__version__",
-    "AppServerConfig",
+    "CodexConfig",
     "Codex",
     "AsyncCodex",
     "ApprovalMode",
@@ -129,9 +129,9 @@ def _assert_no_any_annotations(fn: object) -> None:
         raise AssertionError(f"{fn} has public return annotation typed as Any")
 
 
-def test_root_exports_app_server_config() -> None:
+def test_root_exports_codex_config() -> None:
     """The root package should expose the process configuration object."""
-    assert AppServerConfig.__name__ == "AppServerConfig"
+    assert CodexConfig.__name__ == "CodexConfig"
 
 
 def test_root_exports_turn_result() -> None:
@@ -208,7 +208,7 @@ def test_package_and_default_client_versions_follow_project_version() -> None:
     pyproject = tomllib.loads(pyproject_path.read_text())
 
     assert openai_codex.__version__ == pyproject["project"]["version"]
-    assert AppServerConfig().client_version == openai_codex.__version__
+    assert CodexConfig().client_version == openai_codex.__version__
 
 
 def test_package_includes_py_typed_marker() -> None:

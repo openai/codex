@@ -6,7 +6,7 @@ from typing import AsyncIterator, Callable, ParamSpec, TypeVar
 
 from pydantic import BaseModel
 
-from .client import AppServerClient, AppServerConfig
+from .client import AppServerClient, CodexConfig
 from .generated.v2_all import (
     AccountLoginCompletedNotification,
     AgentMessageDeltaNotification,
@@ -46,7 +46,7 @@ ReturnT = TypeVar("ReturnT")
 class AsyncAppServerClient:
     """Async wrapper around AppServerClient using thread offloading."""
 
-    def __init__(self, config: AppServerConfig | None = None) -> None:
+    def __init__(self, config: CodexConfig | None = None) -> None:
         """Create the wrapped sync client that owns the transport process."""
         self._sync = AppServerClient(config=config)
 

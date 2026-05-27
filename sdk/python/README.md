@@ -17,7 +17,7 @@ source .venv/bin/activate
 ```
 
 Published SDK builds pin an exact `openai-codex-cli-bin` runtime dependency
-with the same version as the SDK. Pass `AppServerConfig(codex_bin=...)` only
+with the same version as the SDK. Pass `CodexConfig(codex_bin=...)` only
 when you intentionally want to run against a specific local app-server binary.
 
 ## Quickstart

@@ -39,7 +39,7 @@ from ._run import (
 )
 from ._sandbox import Sandbox as Sandbox, _sandbox_mode, _sandbox_policy
 from .async_client import AsyncAppServerClient
-from .client import AppServerClient, AppServerConfig
+from .client import AppServerClient, CodexConfig
 from .generated.v2_all import (
     ApiKeyLoginAccountParams,
     GetAccountParams,
@@ -75,7 +75,7 @@ from .models import InitializeResponse, JsonObject, Notification
 class Codex:
     """Typed Python client for app-server v2 workflows."""
 
-    def __init__(self, config: AppServerConfig | None = None) -> None:
+    def __init__(self, config: CodexConfig | None = None) -> None:
         self._client = AppServerClient(config=config)
         try:
             self._client.start()
@@ -281,7 +281,7 @@ class AsyncCodex:
     or first awaited API use.
     """
 
-    def __init__(self, config: AppServerConfig | None = None) -> None:
+    def __init__(self, config: CodexConfig | None = None) -> None:
         self._client = AsyncAppServerClient(config=config)
         self._init: InitializeResponse | None = None
         self._initialized = False

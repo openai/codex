@@ -94,7 +94,7 @@ def _installed_codex_path() -> Path:
     except ImportError as exc:
         raise FileNotFoundError(
             "Unable to locate the pinned Codex runtime. Install the published SDK build "
-            f"with its {RUNTIME_PKG_NAME} dependency, or set AppServerConfig.codex_bin "
+            f"with its {RUNTIME_PKG_NAME} dependency, or set CodexConfig.codex_bin "
             "explicitly."
         ) from exc
 
@@ -153,12 +153,12 @@ def _default_codex_bin_resolver_ops() -> CodexBinResolverOps:
     )
 
 
-def resolve_codex_bin(config: "AppServerConfig", ops: CodexBinResolverOps) -> Path:
+def resolve_codex_bin(config: "CodexConfig", ops: CodexBinResolverOps) -> Path:
     if config.codex_bin is not None:
         codex_bin = Path(config.codex_bin)
         if not ops.path_exists(codex_bin):
             raise FileNotFoundError(
-                f"Codex binary not found at {codex_bin}. Set AppServerConfig.codex_bin "
+                f"Codex binary not found at {codex_bin}. Set CodexConfig.codex_bin "
                 "to a valid binary path."
             )
         return codex_bin
@@ -166,12 +166,12 @@ def resolve_codex_bin(config: "AppServerConfig", ops: CodexBinResolverOps) -> Pa
     return ops.installed_codex_path()
 
 
-def _resolve_codex_bin(config: "AppServerConfig") -> Path:
+def _resolve_codex_bin(config: "CodexConfig") -> Path:
     return resolve_codex_bin(config, _default_codex_bin_resolver_ops())
 
 
 @dataclass(slots=True)
-class AppServerConfig:
+class CodexConfig:
     codex_bin: str | None = None
     launch_args_override: tuple[str, ...] | None = None
     config_overrides: tuple[str, ...] = ()
@@ -188,10 +188,10 @@ class AppServerClient:
 
     def __init__(
         self,
-        config: AppServerConfig | None = None,
+        config: CodexConfig | None = None,
         approval_handler: ApprovalHandler | None = None,
     ) -> None:
-        self.config = config or AppServerConfig()
+        self.config = config or CodexConfig()
         self._approval_handler = approval_handler or self._default_approval_handler
         self._proc: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()

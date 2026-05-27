@@ -22,7 +22,7 @@ from .api import (
     TurnHandle,
     TurnResult,
 )
-from .client import AppServerConfig
+from .client import CodexConfig
 from .errors import (
     AppServerError,
     AppServerRpcError,
@@ -41,7 +41,7 @@ from .retry import retry_on_overload
 
 __all__ = [
     "__version__",
-    "AppServerConfig",
+    "CodexConfig",
     "Codex",
     "AsyncCodex",
     "ApprovalMode",

@@ -11,6 +11,7 @@ Thread starts default to `ApprovalMode.auto_review`; turn starts accept an optio
 from openai_codex import (
     Codex,
     AsyncCodex,
+    CodexConfig,
     ApprovalMode,
     Sandbox,
     ChatgptLoginHandle,
@@ -52,7 +53,7 @@ from openai_codex.types import (
 ## Codex (sync)
 
 ```python
-Codex(config: AppServerConfig | None = None)
+Codex(config: CodexConfig | None = None)
 ```
 
 Properties/methods:
@@ -82,7 +83,7 @@ with Codex() as codex:
 ## AsyncCodex (async parity)
 
 ```python
-AsyncCodex(config: AppServerConfig | None = None)
+AsyncCodex(config: CodexConfig | None = None)
 ```
 
 Preferred usage:
