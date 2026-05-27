@@ -1,7 +1,5 @@
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::models::ResponseInputItem;
-
 use crate::ExtensionData;
+use codex_protocol::config_types::CollaborationMode;
 
 /// Input supplied when the host starts a runtime for a thread.
 pub struct ThreadStartInput<'a, C> {
@@ -33,7 +31,36 @@ pub struct ThreadIdleInput<'a> {
 
 /// Extension request to start a new idle turn.
 pub struct ThreadIdleRequest {
-    pub items: Vec<ResponseInputItem>,
+    /// Hidden prompt body that the host wraps as extension-owned context.
+    pub prompt: String,
+    /// Opaque extension-owned key used to reject stale requests before start.
+    pub validation_key: Option<String>,
+}
+
+impl ThreadIdleRequest {
+    pub fn new(prompt: impl Into<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+            validation_key: None,
+        }
+    }
+
+    pub fn with_validation_key(mut self, validation_key: impl Into<String>) -> Self {
+        self.validation_key = Some(validation_key.into());
+        self
+    }
+}
+
+/// Input supplied before the host starts an extension-requested idle turn.
+pub struct ThreadIdleTurnStartInput<'a> {
+    /// Effective collaboration mode for the default turn being started.
+    pub collaboration_mode: &'a CollaborationMode,
+    /// Request returned by this contributor for the candidate idle turn.
+    pub request: &'a ThreadIdleRequest,
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
 }
 
 /// Input supplied when the host stops a thread runtime.

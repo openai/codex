@@ -9,6 +9,8 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ThreadIdleInput;
+use codex_extension_api::ThreadIdleRequest;
+use codex_extension_api::ThreadIdleTurnStartInput;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
@@ -26,8 +28,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -466,23 +466,63 @@ async fn thread_idle_hook_requests_hidden_goal_continuation() -> anyhow::Result<
     let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
 
     assert!(harness.next_idle_turn(ModeKind::Plan).await.is_none());
-    let items = harness
+    let request = harness
         .next_idle_turn(ModeKind::Default)
         .await
         .ok_or_else(|| anyhow::anyhow!("active goal should request idle continuation"))?;
 
-    let [ResponseInputItem::Message { role, content, .. }] = items.as_slice() else {
-        panic!("expected a single hidden continuation message");
-    };
-    assert_eq!("user", role);
-    let [ContentItem::InputText { text }] = content.as_slice() else {
-        panic!("expected a single text content item");
-    };
-    assert!(text.starts_with("<extension_context>"));
-    assert!(text.contains("<goal_context>"));
-    assert!(text.contains("Continue working toward the active thread goal."));
-    assert!(text.contains("Completion audit:"));
-    assert!(text.ends_with("</extension_context>"));
+    assert!(request.validation_key.is_some());
+    assert!(request.prompt.starts_with("<goal_context>"));
+    assert!(
+        request
+            .prompt
+            .contains("Continue working toward the active thread goal.")
+    );
+    assert!(request.prompt.contains("Completion audit:"));
+    assert!(request.prompt.ends_with("</goal_context>"));
+    assert!(
+        harness
+            .should_start_idle_turn(ModeKind::Default, &request)
+            .await
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_idle_hook_rejects_stale_goal_continuation() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    runtime
+        .thread_goals()
+        .replace_thread_goal(
+            thread_id,
+            "ship goal extension backend",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+        )
+        .await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    let request = harness
+        .next_idle_turn(ModeKind::Default)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("active goal should request idle continuation"))?;
+
+    runtime
+        .thread_goals()
+        .replace_thread_goal(
+            thread_id,
+            "ship another goal",
+            codex_state::ThreadGoalStatus::Complete,
+            /*token_budget*/ None,
+        )
+        .await?;
+
+    assert!(
+        !harness
+            .should_start_idle_turn(ModeKind::Default, &request)
+            .await
+    );
     Ok(())
 }
 
@@ -1091,22 +1131,41 @@ impl GoalExtensionHarness {
         }
     }
 
-    async fn next_idle_turn(&self, mode: ModeKind) -> Option<Vec<ResponseInputItem>> {
+    async fn next_idle_turn(&self, mode: ModeKind) -> Option<ThreadIdleRequest> {
         let mut collaboration_mode = default_collaboration_mode();
         collaboration_mode.mode = mode;
-        for contributor in self.registry.thread_lifecycle_contributors() {
+        for contributor in self.registry.thread_idle_turn_contributors() {
             if let Some(request) = contributor
-                .on_thread_idle(ThreadIdleInput {
+                .request_thread_idle_turn(ThreadIdleInput {
                     collaboration_mode: &collaboration_mode,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                 })
                 .await
             {
-                return Some(request.items);
+                return Some(request);
             }
         }
         None
+    }
+
+    async fn should_start_idle_turn(&self, mode: ModeKind, request: &ThreadIdleRequest) -> bool {
+        let mut collaboration_mode = default_collaboration_mode();
+        collaboration_mode.mode = mode;
+        for contributor in self.registry.thread_idle_turn_contributors() {
+            if contributor
+                .should_start_thread_idle_turn(ThreadIdleTurnStartInput {
+                    collaboration_mode: &collaboration_mode,
+                    request,
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                })
+                .await
+            {
+                return true;
+            }
+        }
+        false
     }
 
     fn runtime_handle(&self) -> Arc<GoalRuntimeHandle> {

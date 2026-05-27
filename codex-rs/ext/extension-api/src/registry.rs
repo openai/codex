@@ -8,6 +8,7 @@ use crate::ContextContributor;
 use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::NoopExtensionEventSink;
+use crate::ThreadIdleTurnContributor;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
 use crate::ToolContributor;
@@ -19,6 +20,7 @@ use crate::TurnLifecycleContributor;
 pub struct ExtensionRegistryBuilder<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
+    thread_idle_turn_contributors: Vec<Arc<dyn ThreadIdleTurnContributor>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
@@ -34,6 +36,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
         Self {
             event_sink: Arc::new(NoopExtensionEventSink),
             thread_lifecycle_contributors: Vec::new(),
+            thread_idle_turn_contributors: Vec::new(),
             turn_lifecycle_contributors: Vec::new(),
             config_contributors: Vec::new(),
             token_usage_contributors: Vec::new(),
@@ -78,6 +81,14 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.thread_lifecycle_contributors.push(contributor);
     }
 
+    /// Registers one idle-turn contributor.
+    pub fn thread_idle_turn_contributor(
+        &mut self,
+        contributor: Arc<dyn ThreadIdleTurnContributor>,
+    ) {
+        self.thread_idle_turn_contributors.push(contributor);
+    }
+
     /// Registers one turn-lifecycle contributor.
     pub fn turn_lifecycle_contributor(&mut self, contributor: Arc<dyn TurnLifecycleContributor>) {
         self.turn_lifecycle_contributors.push(contributor);
@@ -118,6 +129,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         ExtensionRegistry {
             event_sink: self.event_sink,
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
+            thread_idle_turn_contributors: self.thread_idle_turn_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             config_contributors: self.config_contributors,
             token_usage_contributors: self.token_usage_contributors,
@@ -134,6 +146,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
 pub struct ExtensionRegistry<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
+    thread_idle_turn_contributors: Vec<Arc<dyn ThreadIdleTurnContributor>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
@@ -153,6 +166,11 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered thread-lifecycle contributors.
     pub fn thread_lifecycle_contributors(&self) -> &[Arc<dyn ThreadLifecycleContributor<C>>] {
         &self.thread_lifecycle_contributors
+    }
+
+    /// Returns the registered idle-turn contributors.
+    pub fn thread_idle_turn_contributors(&self) -> &[Arc<dyn ThreadIdleTurnContributor>] {
+        &self.thread_idle_turn_contributors
     }
 
     /// Returns the registered turn-lifecycle contributors.

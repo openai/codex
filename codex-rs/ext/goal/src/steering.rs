@@ -48,8 +48,11 @@ pub(crate) fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem
     goal_context_input_item(budget_limit_prompt(goal))
 }
 
-pub(crate) fn continuation_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
-    goal_context_input_item(continuation_prompt(goal))
+pub(crate) fn continuation_steering_prompt(goal: &ThreadGoal) -> String {
+    format!(
+        "<goal_context>\n{}\n</goal_context>",
+        continuation_prompt(goal)
+    )
 }
 
 pub(crate) fn objective_updated_steering_item(goal: &ThreadGoal) -> ResponseInputItem {

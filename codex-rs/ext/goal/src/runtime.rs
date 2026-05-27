@@ -13,7 +13,7 @@ use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
-use crate::steering::continuation_steering_item;
+use crate::steering::continuation_steering_prompt;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 
@@ -249,10 +249,10 @@ impl GoalRuntimeHandle {
         Ok(())
     }
 
-    pub async fn idle_continuation_items(
+    pub async fn idle_continuation_request(
         &self,
         collaboration_mode: ModeKind,
-    ) -> Result<Option<Vec<ResponseInputItem>>, String> {
+    ) -> Result<Option<codex_extension_api::ThreadIdleRequest>, String> {
         if !self.is_enabled() || matches!(collaboration_mode, ModeKind::Plan) {
             return Ok(None);
         }
@@ -276,8 +276,45 @@ impl GoalRuntimeHandle {
         self.inner
             .accounting_state
             .mark_idle_goal_active(goal.goal_id.clone());
+        let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
-        Ok(Some(vec![continuation_steering_item(&goal)]))
+        let request =
+            codex_extension_api::ThreadIdleRequest::new(continuation_steering_prompt(&goal))
+                .with_validation_key(goal_id);
+        Ok(Some(request))
+    }
+
+    pub async fn idle_continuation_is_current(
+        &self,
+        collaboration_mode: ModeKind,
+        expected_goal_id: Option<&str>,
+    ) -> Result<bool, String> {
+        if !self.is_enabled() || matches!(collaboration_mode, ModeKind::Plan) {
+            return Ok(false);
+        }
+        let Some(expected_goal_id) = expected_goal_id else {
+            return Ok(false);
+        };
+
+        let goal = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?;
+        let Some(goal) = goal else {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(false);
+        };
+        if goal.status != codex_state::ThreadGoalStatus::Active {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(false);
+        }
+        self.inner
+            .accounting_state
+            .mark_idle_goal_active(goal.goal_id.clone());
+        Ok(goal.goal_id == expected_goal_id)
     }
 
     pub(crate) async fn inject_active_turn_steering(&self, item: ResponseInputItem) {

@@ -8,7 +8,10 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadIdleInput;
-use codex_extension_api::ThreadIdleRequest;
+use codex_extension_api::ThreadIdleTurnContributor;
+use codex_extension_api::ThreadIdleTurnRequestFuture;
+use codex_extension_api::ThreadIdleTurnStartFuture;
+use codex_extension_api::ThreadIdleTurnStartInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
@@ -127,20 +130,53 @@ where
             );
         }
     }
+}
 
-    async fn on_thread_idle(&self, input: ThreadIdleInput<'_>) -> Option<ThreadIdleRequest> {
-        let runtime = goal_runtime_handle(input.thread_store)?;
-        match runtime
-            .idle_continuation_items(input.collaboration_mode.mode)
-            .await
-        {
-            Ok(Some(items)) => Some(ThreadIdleRequest { items }),
-            Ok(None) => None,
-            Err(err) => {
-                tracing::warn!("failed to request idle goal continuation: {err}");
-                None
+impl<C> ThreadIdleTurnContributor for GoalExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn request_thread_idle_turn<'a>(
+        &'a self,
+        input: ThreadIdleInput<'a>,
+    ) -> ThreadIdleTurnRequestFuture<'a> {
+        Box::pin(async move {
+            let runtime = goal_runtime_handle(input.thread_store)?;
+            match runtime
+                .idle_continuation_request(input.collaboration_mode.mode)
+                .await
+            {
+                Ok(request) => request,
+                Err(err) => {
+                    tracing::warn!("failed to request idle goal continuation: {err}");
+                    None
+                }
             }
-        }
+        })
+    }
+
+    fn should_start_thread_idle_turn<'a>(
+        &'a self,
+        input: ThreadIdleTurnStartInput<'a>,
+    ) -> ThreadIdleTurnStartFuture<'a> {
+        Box::pin(async move {
+            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+                return false;
+            };
+            match runtime
+                .idle_continuation_is_current(
+                    input.collaboration_mode.mode,
+                    input.request.validation_key.as_deref(),
+                )
+                .await
+            {
+                Ok(should_start) => should_start,
+                Err(err) => {
+                    tracing::warn!("failed to validate idle goal continuation: {err}");
+                    false
+                }
+            }
+        })
     }
 }
 
@@ -448,6 +484,7 @@ pub fn install_with_backend<C>(
         goals_enabled,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
+    registry.thread_idle_turn_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.turn_lifecycle_contributor(extension.clone());
     registry.token_usage_contributor(extension.clone());

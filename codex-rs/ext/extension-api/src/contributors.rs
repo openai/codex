@@ -21,6 +21,7 @@ pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadIdleInput;
 pub use thread_lifecycle::ThreadIdleRequest;
+pub use thread_lifecycle::ThreadIdleTurnStartInput;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
@@ -58,16 +59,42 @@ pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
     async fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
 
     /// Called after the host has drained immediately pending thread work.
-    ///
-    /// Implementations may use host capabilities captured by the extension to
-    /// submit follow-up input. The host remains responsible for deciding
-    /// whether that input starts a turn, is queued, or is ignored.
-    async fn on_thread_idle(&self, _input: ThreadIdleInput<'_>) -> Option<ThreadIdleRequest> {
-        None
-    }
+    async fn on_thread_idle(&self, _input: ThreadIdleInput<'_>) {}
 
     /// Called before the host drops the thread runtime and thread-scoped store.
     async fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
+}
+
+/// Future returned while requesting an extension-owned idle turn.
+pub type ThreadIdleTurnRequestFuture<'a> =
+    std::pin::Pin<Box<dyn Future<Output = Option<ThreadIdleRequest>> + Send + 'a>>;
+
+/// Future returned while validating an extension-owned idle turn.
+pub type ThreadIdleTurnStartFuture<'a> = std::pin::Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
+
+/// Contributor that can request a host-owned turn while a thread is idle.
+///
+/// Implementations should return a concise hidden prompt body. The host owns
+/// the response-item shape and may ask the contributor to confirm the request
+/// again immediately before the turn starts.
+pub trait ThreadIdleTurnContributor: Send + Sync {
+    /// Returns one hidden prompt body to start an idle turn, if the extension
+    /// still has work that should run without user input.
+    fn request_thread_idle_turn<'a>(
+        &'a self,
+        _input: ThreadIdleInput<'a>,
+    ) -> ThreadIdleTurnRequestFuture<'a> {
+        Box::pin(std::future::ready(None))
+    }
+
+    /// Confirms that the idle-turn request is still current immediately before
+    /// the host starts the turn.
+    fn should_start_thread_idle_turn<'a>(
+        &'a self,
+        _input: ThreadIdleTurnStartInput<'a>,
+    ) -> ThreadIdleTurnStartFuture<'a> {
+        Box::pin(std::future::ready(true))
+    }
 }
 
 /// Contributor for host-owned turn lifecycle gates.
