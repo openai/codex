@@ -54,6 +54,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "mentions_v2",
     "plugins",
     "remote_control",
+    "remote_plugin",
     "tool_suggest",
     "tool_call_mcp_elicitation",
 ];
