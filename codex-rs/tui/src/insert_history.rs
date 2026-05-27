@@ -88,13 +88,14 @@ pub(crate) fn insert_history_lines_with_mode_and_wrap_policy<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
     mode: InsertHistoryMode,
+    wrap_policy: HistoryLineWrapPolicy,
 ) -> io::Result<()>
 where
     B: Backend + Write,
 {
     insert_history_hyperlink_lines_with_mode_and_wrap_policy(
         terminal,
-        plain_hyperlink_lines(lines.into_iter().map(line_to_static).collect()),
+        plain_hyperlink_lines(lines.iter().map(line_to_static).collect()),
         mode,
         wrap_policy,
     )
