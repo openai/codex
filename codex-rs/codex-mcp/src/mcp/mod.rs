@@ -589,7 +589,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let (tools, resources, resource_templates) = tokio::join!(
-        mcp_connection_manager.list_all_tools(),
+        mcp_connection_manager.list_all_tools_for_inventory(),
         async {
             if detail.include_resources() {
                 mcp_connection_manager.list_all_resources().await

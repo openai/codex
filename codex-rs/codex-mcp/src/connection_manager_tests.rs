@@ -729,6 +729,57 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
+async fn list_all_tools_hides_app_only_tools_but_inventory_retains_them() {
+    let mut app_tool = create_test_tool("rmcp", "app_tool");
+    app_tool.tool.meta = Some(Meta(
+        serde_json::json!({ "ui": { "visibility": ["app"] } })
+            .as_object()
+            .expect("metadata object")
+            .clone(),
+    ));
+    let startup_tools = vec![create_test_tool("rmcp", "model_tool"), app_tool];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ false,
+    );
+    manager.clients.insert(
+        "rmcp".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            startup_snapshot: Some(startup_tools),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    assert_eq!(
+        manager
+            .list_all_tools()
+            .await
+            .into_iter()
+            .map(|tool| tool.tool.name.to_string())
+            .collect::<Vec<_>>(),
+        vec!["model_tool".to_string()]
+    );
+    assert_eq!(
+        manager
+            .list_all_tools_for_inventory()
+            .await
+            .into_iter()
+            .map(|tool| tool.tool.name.to_string())
+            .collect::<Vec<_>>(),
+        vec!["model_tool".to_string(), "app_tool".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
     let startup_tools = vec![create_test_tool("rmcp", "echo")];
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()

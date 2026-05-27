@@ -26,6 +26,10 @@ pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
     "codex.mcp.tools.cache_write.duration_ms";
 
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
+const MCP_UI_META_KEY: &str = "ui";
+const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
+const MCP_UI_APP_VISIBILITY: &str = "app";
+const MCP_UI_MODEL_VISIBILITY: &str = "model";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
@@ -136,6 +140,33 @@ pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<Too
         .into_iter()
         .filter(|tool| filter.allows(&tool.tool.name))
         .collect()
+}
+
+pub(crate) fn filter_tools_for_model(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
+    tools
+        .into_iter()
+        .filter(|tool| tool_is_model_visible(&tool.tool))
+        .collect()
+}
+
+fn tool_is_model_visible(tool: &Tool) -> bool {
+    let Some(visibility) = tool
+        .meta
+        .as_deref()
+        .and_then(|meta| meta.get(MCP_UI_META_KEY))
+        .and_then(JsonValue::as_object)
+        .and_then(|ui| ui.get(MCP_UI_VISIBILITY_META_KEY))
+        .and_then(JsonValue::as_array)
+    else {
+        return true;
+    };
+
+    !visibility
+        .iter()
+        .any(|target| target.as_str() == Some(MCP_UI_APP_VISIBILITY))
+        || visibility
+            .iter()
+            .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
 }
 
 /// Returns MCP tools with model-visible names normalized.
