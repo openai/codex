@@ -263,10 +263,14 @@ impl ChatWidget {
                 else {
                     continue;
                 };
-                if !selected_app_ids.insert(app_id.to_string()) {
+                if selected_app_ids.contains(app_id) {
                     continue;
                 }
-                if let Some(app) = apps.iter().find(|app| app.id == app_id && app.is_enabled) {
+                if let Some(app) = apps
+                    .iter()
+                    .find(|app| app.id == app_id && is_app_mentionable(app))
+                {
+                    selected_app_ids.insert(app_id.to_string());
                     items.push(UserInput::Mention {
                         name: app.name.clone(),
                         path: binding.path.clone(),
@@ -331,11 +335,7 @@ impl ChatWidget {
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
-        let service_tier = match self.config.service_tier.clone() {
-            Some(service_tier) => Some(Some(service_tier)),
-            None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
-            None => None,
-        };
+        let service_tier = self.service_tier_update_for_core();
         let active_permission_profile = self.config.permissions.active_permission_profile();
         let op = AppCommand::user_turn(
             items,

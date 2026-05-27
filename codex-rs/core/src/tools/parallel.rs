@@ -263,6 +263,17 @@ mod tests {
             self.tool_name.clone()
         }
 
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: self.tool_name.name.clone(),
+                description: "Immediate test tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })
+        }
+
         async fn handle(
             &self,
             _invocation: ToolInvocation,
@@ -287,6 +298,17 @@ mod tests {
     impl ToolExecutor<ToolInvocation> for CancellationCleanupHandler {
         fn tool_name(&self) -> codex_tools::ToolName {
             self.tool_name.clone()
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: self.tool_name.name.clone(),
+                description: "Cancellation cleanup test tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })
         }
 
         async fn handle(

@@ -148,6 +148,7 @@ impl ThreadGoalRequestProcessor {
             thread.prepare_external_goal_mutation().await;
         }
 
+        let should_set_thread_preview = objective.is_some();
         let (goal, previous_status) = (if let Some(objective) = objective {
             let existing_goal = state_db
                 .thread_goals()
@@ -160,7 +161,7 @@ impl ThreadGoalRequestProcessor {
                     .thread_goals()
                     .update_thread_goal(
                         thread_id,
-                        codex_state::ThreadGoalUpdate {
+                        codex_state::GoalUpdate {
                             objective: Some(objective.to_string()),
                             status,
                             token_budget: params.token_budget,
@@ -205,7 +206,7 @@ impl ThreadGoalRequestProcessor {
                 .thread_goals()
                 .update_thread_goal(
                     thread_id,
-                    codex_state::ThreadGoalUpdate {
+                    codex_state::GoalUpdate {
                         objective: None,
                         status,
                         token_budget: params.token_budget,
@@ -221,6 +222,13 @@ impl ThreadGoalRequestProcessor {
                 .map(|goal| (goal, previous_status))
         })
         .map_err(|err| invalid_request(err.to_string()))?;
+        if should_set_thread_preview
+            && let Err(err) = state_db
+                .set_thread_preview_if_empty(thread_id, goal.objective.as_str())
+                .await
+        {
+            warn!("failed to set empty thread preview from goal objective for {thread_id}: {err}");
+        }
         let external_goal_set = ExternalGoalSet {
             goal: goal.clone(),
             previous_status,

@@ -24,7 +24,7 @@ use codex_protocol::protocol::AskForApproval;
 pub struct ConfigProfile {
     pub model: Option<String>,
     /// Optional explicit service tier request id for new turns (for example
-    /// `priority` or `flex`; legacy `fast` also works).
+    /// `default`, `priority`, or `flex`; legacy `fast` also works).
     pub service_tier: Option<String>,
     /// The key in the `model_providers` map identifying the
     /// [`ModelProviderInfo`] to use.
@@ -48,8 +48,6 @@ pub struct ConfigProfile {
     /// Deprecated: ignored.
     #[schemars(skip)]
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
-    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
-    pub zsh_path: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub include_permissions_instructions: Option<bool>,
     pub include_apps_instructions: Option<bool>,
@@ -80,18 +78,4 @@ pub struct ProfileTui {
     /// Preferred layout for resume/fork session picker results.
     #[serde(default)]
     pub session_picker_view: Option<SessionPickerViewMode>,
-}
-
-impl From<ConfigProfile> for codex_app_server_protocol::Profile {
-    fn from(config_profile: ConfigProfile) -> Self {
-        Self {
-            model: config_profile.model,
-            model_provider: config_profile.model_provider,
-            approval_policy: config_profile.approval_policy,
-            model_reasoning_effort: config_profile.model_reasoning_effort,
-            model_reasoning_summary: config_profile.model_reasoning_summary,
-            model_verbosity: config_profile.model_verbosity,
-            chatgpt_base_url: config_profile.chatgpt_base_url,
-        }
-    }
 }

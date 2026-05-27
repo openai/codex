@@ -43,6 +43,7 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -181,6 +182,70 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
         resume_err.error.message
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "materialize rollout".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            path: Some(PathBuf::new()),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(resumed.id, thread.id);
     Ok(())
 }
 
@@ -357,7 +422,14 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.3-codex", "resumed", "user");
+    assert_basic_thread_initialized_event(
+        event,
+        &thread.id,
+        &thread.session_id,
+        "gpt-5.3-codex",
+        "resumed",
+        "user",
+    );
     assert_eq!(event["event_params"]["thread_source"], "user");
     Ok(())
 }
@@ -615,6 +687,7 @@ fn append_resume_redaction_history(
                 arguments: Some(json!({"secret":"argument"})),
             },
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+            plugin_id: None,
             duration: Duration::from_millis(8),
             result: Ok(CallToolResult {
                 content: vec![json!({
@@ -994,7 +1067,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
         codex_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
-        "materialized thread",
+        "",
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
@@ -1028,6 +1101,11 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
     let state_db =
         StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
     let thread_id = ThreadId::from_string(&thread_id)?;
+    let thread_metadata = state_db
+        .get_thread(thread_id)
+        .await?
+        .expect("thread metadata should exist");
+    assert_eq!(thread_metadata.preview.as_deref(), Some("keep polishing"));
     let persisted_goal = state_db
         .thread_goals()
         .get_thread_goal(thread_id)
@@ -1039,7 +1117,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
             thread_id,
             /*time_delta_seconds*/ 12,
             /*token_delta*/ 50,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::GoalAccountingMode::ActiveOnly,
             Some(persisted_goal.goal_id.as_str()),
         )
         .await?;
@@ -1066,8 +1144,13 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
         .get_thread_goal(thread_id)
         .await?
         .expect("goal should still exist");
+    let thread_metadata = state_db
+        .get_thread(thread_id)
+        .await?
+        .expect("thread metadata should still exist");
 
     assert_eq!(persisted_goal.goal_id, updated_goal.goal_id);
+    assert_eq!(thread_metadata.preview.as_deref(), Some("keep polishing"));
     assert_eq!(edit.goal.objective, "keep polishing with clearer wording");
     assert_eq!(edit.goal.status, ThreadGoalStatus::BudgetLimited);
     assert_eq!(edit.goal.token_budget, Some(40));
@@ -1356,6 +1439,7 @@ async fn thread_resume_token_usage_replay_ignores_stale_interrupted_tail_turn() 
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: stale_turn_id.to_string(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
@@ -1443,6 +1527,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: interrupted_turn_id.to_string(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
@@ -1760,6 +1845,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
@@ -1851,7 +1937,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 }
 
 #[tokio::test]
-async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -> Result<()> {
+async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
@@ -1894,6 +1980,33 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 
     let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
     assert_eq!(after_modified, rollout.before_modified);
+
+    let unsubscribe_id = mcp
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(unsubscribe_id)),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: "not-a-valid-thread-id".to_string(),
+            path: Some(normalized_existing_path(&rollout.rollout_file_path)?),
+            cwd: Some(codex_home.path().to_string_lossy().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { cwd, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(cwd, AbsolutePathBuf::from_absolute_path(codex_home.path())?);
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -2133,7 +2246,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_uses_path_over_thread_id_when_thread_is_running() -> Result<()> {
+async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result<()> {
     let server = responses::start_mock_server().await;
     let first_body = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -2213,10 +2326,10 @@ async fn thread_resume_uses_path_over_thread_id_when_thread_is_running() -> Resu
     )
     .await??;
 
-    let other_thread_id = ThreadId::new().to_string();
-    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &thread_id);
+    let stale_thread_id = Uuid::new_v4().to_string();
+    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &stale_thread_id);
     std::fs::create_dir_all(stale_path.parent().expect("stale path parent"))?;
-    let thread_uuid = Uuid::parse_str(&thread_id)?;
+    let thread_uuid = Uuid::parse_str(&stale_thread_id)?;
     let mut stale_file = std::fs::File::create(&stale_path)?;
     let stale_meta = json!({
         "timestamp": "2025-01-01T00:00:00Z",
@@ -2245,7 +2358,7 @@ async fn thread_resume_uses_path_over_thread_id_when_thread_is_running() -> Resu
 
     let stale_resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: other_thread_id.clone(),
+            thread_id: thread_id.clone(),
             path: Some(stale_path),
             ..Default::default()
         })
@@ -2260,23 +2373,6 @@ async fn thread_resume_uses_path_over_thread_id_when_thread_is_running() -> Resu
         "unexpected resume error: {}",
         stale_resume_err.error.message
     );
-
-    let resume_by_path_id = primary
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: other_thread_id.clone(),
-            path: thread.path,
-            ..Default::default()
-        })
-        .await?;
-    let resume_by_path_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(resume_by_path_id)),
-    )
-    .await??;
-    let ThreadResumeResponse {
-        thread: resumed, ..
-    } = to_response::<ThreadResumeResponse>(resume_by_path_resp)?;
-    assert_eq!(resumed.id, thread_id);
 
     primary
         .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
@@ -2974,53 +3070,22 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_uses_path_over_invalid_thread_id() -> Result<()> {
+async fn thread_resume_uses_path_over_non_running_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let RestartedThreadFixture {
+        mut mcp,
+        thread_id,
+        rollout_file_path,
+        ..
+    } = start_materialized_thread_and_restart(codex_home.path(), "materialize").await?;
 
-    let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
-
-    let turn_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "materialize".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    let thread_path = thread.path.clone().expect("thread path");
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: "not-a-valid-thread-id".to_string(),
-            path: Some(thread_path.to_path_buf()),
+            thread_id: ThreadId::new().to_string(),
+            path: Some(rollout_file_path),
             ..Default::default()
         })
         .await?;
@@ -3033,7 +3098,7 @@ async fn thread_resume_uses_path_over_invalid_thread_id() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed.id, thread.id);
+    assert_eq!(resumed.id, thread_id);
 
     Ok(())
 }

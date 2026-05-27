@@ -1,6 +1,8 @@
 [profile.default]
 # Retry once so one transient failure does not fail full-CI outright.
-slow-timeout = { period = "15s", terminate-after = 2 }
+# Fanout keeps the full-CI shards moving without treating every >30s test as
+# stuck. Keep this aligned with the broader timeout budget we give sharded CI.
+slow-timeout = { period = "30s", terminate-after = 2 }
 retries = 1
 
 [profile.default.junit]

@@ -187,6 +187,7 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
         RolloutItem::ResponseItem(assistant_msg("a1")),
         RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn-2".to_string(),
+            trace_id: None,
             started_at: None,
             model_context_window: None,
             collaboration_mode_kind: Default::default(),
@@ -309,7 +310,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
     let environment_manager = Arc::new(
         codex_exec_server::EnvironmentManager::create_for_tests(
             Some("none".to_string()),
-            runtime_paths,
+            Some(runtime_paths),
         )
         .await,
     );
@@ -373,7 +374,7 @@ args = ["dev", "cd /tmp && true"]
     let environment_manager = Arc::new(
         codex_exec_server::EnvironmentManager::from_codex_home(
             config.codex_home.clone(),
-            runtime_paths,
+            Some(runtime_paths),
         )
         .await
         .expect("environment manager"),
@@ -1307,6 +1308,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             InitialHistory::Forked(vec![
                 RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                     turn_id: "turn-explicit".to_string(),
+                    trace_id: None,
                     started_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),

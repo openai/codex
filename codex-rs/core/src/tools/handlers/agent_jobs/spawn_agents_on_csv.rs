@@ -20,8 +20,8 @@ impl ToolExecutor<ToolInvocation> for SpawnAgentsOnCsvHandler {
         ToolName::plain("spawn_agents_on_csv")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_spawn_agents_on_csv_tool())
+    fn spec(&self) -> ToolSpec {
+        create_spawn_agents_on_csv_tool()
     }
 
     async fn handle(

@@ -36,7 +36,6 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
-use codex_app_server_protocol::ThreadSourceKind;
 use codex_config::types::SessionPickerViewMode;
 use codex_protocol::ThreadId;
 use codex_utils_path as path_utils;
@@ -272,7 +271,6 @@ struct PickerPage {
 #[derive(Clone)]
 struct SessionPickerViewPersistence {
     codex_home: PathBuf,
-    active_profile: Option<String>,
 }
 
 struct SessionPickerRunOptions {
@@ -349,15 +347,15 @@ async fn run_resume_picker_with_launch_context(
     launch_context: SessionPickerLaunchContext,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
-    let is_remote = app_server.is_remote();
+    let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
         /*show_all*/ false,
-        is_remote,
+        uses_remote_workspace,
         app_server.remote_cwd_override(),
     );
-    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
-    let provider_filter = picker_provider_filter(config, is_remote);
+    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_workspace);
+    let provider_filter = picker_provider_filter(config, uses_remote_workspace);
     let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
@@ -369,7 +367,6 @@ async fn run_resume_picker_with_launch_context(
         initial_density: SessionListDensity::from(config.tui_session_picker_view),
         view_persistence: Some(SessionPickerViewPersistence {
             codex_home: config.codex_home.to_path_buf(),
-            active_profile: config.active_profile.clone(),
         }),
         pager_keymap: runtime_keymap.pager,
         list_keymap: runtime_keymap.list,
@@ -395,15 +392,15 @@ pub async fn run_fork_picker_with_app_server(
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
-    let is_remote = app_server.is_remote();
+    let uses_remote_workspace = app_server.uses_remote_workspace();
     let cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
         /*show_all*/ false,
-        is_remote,
+        uses_remote_workspace,
         app_server.remote_cwd_override(),
     );
-    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, is_remote);
-    let provider_filter = picker_provider_filter(config, is_remote);
+    let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_workspace);
+    let provider_filter = picker_provider_filter(config, uses_remote_workspace);
     let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
@@ -415,7 +412,6 @@ pub async fn run_fork_picker_with_app_server(
         initial_density: SessionListDensity::from(config.tui_session_picker_view),
         view_persistence: Some(SessionPickerViewPersistence {
             codex_home: config.codex_home.to_path_buf(),
-            active_profile: config.active_profile.clone(),
         }),
         pager_keymap: runtime_keymap.pager,
         list_keymap: runtime_keymap.list,
@@ -513,12 +509,19 @@ fn raw_reasoning_visibility(config: &Config) -> RawReasoningVisibility {
     }
 }
 
-fn local_picker_cwd_filter(cwd_filter: &Option<PathBuf>, is_remote: bool) -> Option<PathBuf> {
-    if is_remote { None } else { cwd_filter.clone() }
+fn local_picker_cwd_filter(
+    cwd_filter: &Option<PathBuf>,
+    uses_remote_workspace: bool,
+) -> Option<PathBuf> {
+    if uses_remote_workspace {
+        None
+    } else {
+        cwd_filter.clone()
+    }
 }
 
-fn picker_provider_filter(config: &Config, is_remote: bool) -> ProviderFilter {
-    if is_remote {
+fn picker_provider_filter(config: &Config, uses_remote_workspace: bool) -> ProviderFilter {
+    if uses_remote_workspace {
         ProviderFilter::Any
     } else {
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
@@ -533,12 +536,12 @@ fn picker_runtime_keymap(config: &Config) -> Result<RuntimeKeymap> {
 fn picker_cwd_filter(
     config_cwd: &Path,
     show_all: bool,
-    is_remote: bool,
+    uses_remote_workspace: bool,
     remote_cwd_override: Option<&Path>,
 ) -> Option<PathBuf> {
     if show_all {
         None
-    } else if is_remote {
+    } else if uses_remote_workspace {
         remote_cwd_override.map(Path::to_path_buf)
     } else {
         Some(config_cwd.to_path_buf())
@@ -1672,7 +1675,6 @@ impl PickerState {
         };
 
         ConfigEditsBuilder::new(&persistence.codex_home)
-            .with_profile(persistence.active_profile.as_deref())
             .set_session_picker_view(SessionPickerViewMode::from(self.density))
             .apply()
             .await
@@ -1826,8 +1828,7 @@ fn thread_list_params(
             ProviderFilter::Any => None,
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
         },
-        source_kinds: (!include_non_interactive)
-            .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+        source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
         use_state_db_only: false,
@@ -3204,6 +3205,7 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_app_server_protocol::ThreadSourceKind;
     use codex_config::CONFIG_TOML_FILE;
     use codex_protocol::ThreadId;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -3309,7 +3311,7 @@ mod tests {
         let cwd_filter = picker_cwd_filter(
             Path::new("/tmp/project"),
             /*show_all*/ false,
-            /*is_remote*/ false,
+            /*uses_remote_workspace*/ false,
             /*remote_cwd_override*/ None,
         );
         let params = thread_list_params(
@@ -3569,7 +3571,8 @@ mod tests {
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
         assert_eq!(params.model_providers, None);
-        assert_eq!(params.source_kinds, None);
+        let source_kinds = crate::resume_source_kinds(/*include_non_interactive*/ true);
+        assert_eq!(params.source_kinds, Some(source_kinds));
     }
 
     #[test]
@@ -3588,7 +3591,8 @@ mod tests {
             remote_cwd.clone(),
             SessionPickerAction::Resume,
         );
-        state.local_filter_cwd = local_picker_cwd_filter(&remote_cwd, /*is_remote*/ true);
+        state.local_filter_cwd =
+            local_picker_cwd_filter(&remote_cwd, /*uses_remote_workspace*/ true);
 
         state.start_initial_load();
 
@@ -4436,7 +4440,6 @@ mod tests {
         );
         state.view_persistence = Some(SessionPickerViewPersistence {
             codex_home: tmp.path().to_path_buf(),
-            active_profile: None,
         });
 
         state
@@ -4450,39 +4453,6 @@ mod tests {
         assert_eq!(
             contents,
             r#"[tui]
-session_picker_view = "dense"
-"#
-        );
-    }
-
-    #[tokio::test]
-    async fn ctrl_o_persists_density_preference_for_active_profile() {
-        let tmp = tempdir().expect("tmpdir");
-        let loader = page_only_loader(|_| {});
-        let mut state = PickerState::new(
-            FrameRequester::test_dummy(),
-            loader,
-            ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
-            /*filter_cwd*/ None,
-            SessionPickerAction::Resume,
-        );
-        state.view_persistence = Some(SessionPickerViewPersistence {
-            codex_home: tmp.path().to_path_buf(),
-            active_profile: Some(String::from("work")),
-        });
-
-        state
-            .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
-            .await
-            .unwrap();
-
-        assert_eq!(state.density, SessionListDensity::Dense);
-        let contents =
-            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
-        assert_eq!(
-            contents,
-            r#"[profiles.work.tui]
 session_picker_view = "dense"
 "#
         );
@@ -4504,7 +4474,6 @@ session_picker_view = "dense"
         );
         state.view_persistence = Some(SessionPickerViewPersistence {
             codex_home: codex_home_file,
-            active_profile: None,
         });
 
         state

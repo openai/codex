@@ -1,4 +1,6 @@
 use crate::config::find_codex_home;
+use crate::config::is_builtin_permission_profile_name;
+use crate::config::reject_unknown_builtin_permission_profile;
 use crate::config::resolve_permission_profile;
 use crate::exec_policy::ExecPolicyError;
 use crate::exec_policy::format_exec_policy_error_with_source;
@@ -13,12 +15,17 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
 use codex_config::loader::load_config_layers_state;
+use codex_config::merge_toml_values;
+use codex_config::permissions_toml::NetworkMitmActionToml;
+use codex_config::permissions_toml::NetworkMitmHookToml;
+use codex_config::permissions_toml::NetworkMitmToml;
 use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::overlay_network_domain_permissions;
 use codex_exec_server::LOCAL_FS;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
+use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraintError;
 use codex_network_proxy::NetworkProxyConstraints;
@@ -27,6 +34,7 @@ use codex_network_proxy::build_config_state;
 use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use indexmap::IndexMap;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -117,6 +125,7 @@ fn network_constraints_from_trusted_layers(
     layers: &ConfigLayerStack,
 ) -> Result<NetworkProxyConstraints> {
     let mut constraints = NetworkProxyConstraints::default();
+    let mut merged = toml::Value::Table(toml::map::Map::new());
     for layer in layers.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
@@ -125,10 +134,12 @@ fn network_constraints_from_trusted_layers(
             continue;
         }
 
-        let parsed = network_tables_from_toml(&layer.config)?;
-        if let Some(network) = selected_network_from_tables(parsed)? {
-            apply_network_constraints(network, &mut constraints);
-        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+
+    let parsed = network_tables_from_toml(&merged)?;
+    if let Some(network) = selected_network_from_tables(parsed)? {
+        apply_network_constraints(network, &mut constraints);
     }
     Ok(constraints)
 }
@@ -189,15 +200,20 @@ fn selected_network_from_tables(parsed: NetworkTablesToml) -> Result<Option<Netw
     let Some(default_permissions) = parsed.default_permissions else {
         return Ok(None);
     };
+    if is_builtin_permission_profile_name(&default_permissions) {
+        return Ok(None);
+    }
+    reject_unknown_builtin_permission_profile(&default_permissions)?;
 
     let permissions = parsed
         .permissions
         .context("default_permissions requires a `[permissions]` table for network settings")?;
     let profile = resolve_permission_profile(&permissions, &default_permissions)
         .map_err(anyhow::Error::from)?;
-    Ok(profile.network.clone())
+    Ok(profile.profile.network)
 }
 
+#[cfg(test)]
 fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesToml) -> Result<()> {
     if let Some(network) = selected_network_from_tables(parsed)? {
         network.apply_to_network_proxy_config(config);
@@ -205,18 +221,68 @@ fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesTo
     Ok(())
 }
 
+#[derive(Default)]
+struct NetworkConfigAccumulator {
+    config: NetworkProxyConfig,
+    mitm_hooks: IndexMap<String, NetworkMitmHookToml>,
+    mitm_actions: IndexMap<String, NetworkMitmActionToml>,
+}
+
+impl NetworkConfigAccumulator {
+    fn apply_network_tables(&mut self, parsed: NetworkTablesToml) -> Result<()> {
+        if let Some(network) = selected_network_from_tables(parsed)? {
+            self.apply_network(network);
+        }
+        Ok(())
+    }
+
+    fn apply_network(&mut self, mut network: NetworkToml) {
+        let mitm = network.mitm.take();
+        network.apply_to_network_proxy_config(&mut self.config);
+
+        if let Some(mitm) = mitm {
+            if let Some(actions) = mitm.actions {
+                self.mitm_actions.extend(actions);
+            }
+            if let Some(hooks) = mitm.hooks {
+                self.mitm_hooks.extend(hooks);
+            }
+        }
+    }
+
+    fn finish(mut self) -> Result<NetworkProxyConfig> {
+        if !self.mitm_hooks.is_empty() {
+            let actions = self.mitm_actions;
+            let mitm = NetworkMitmToml {
+                hooks: Some(self.mitm_hooks),
+                actions: Some(actions.clone()),
+            };
+            mitm.validate_action_references(&actions)
+                .map_err(anyhow::Error::msg)?;
+            self.config.network.mitm_hooks = mitm.to_runtime_hooks(Some(&actions));
+        }
+
+        self.config.network.mitm = self.config.network.mode == NetworkMode::Limited
+            || !self.config.network.mitm_hooks.is_empty();
+        Ok(self.config)
+    }
+}
+
 fn config_from_layers(
     layers: &ConfigLayerStack,
     exec_policy: &codex_execpolicy::Policy,
 ) -> Result<NetworkProxyConfig> {
-    let mut config = NetworkProxyConfig::default();
+    let mut merged = toml::Value::Table(toml::map::Map::new());
     for layer in layers.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
     ) {
-        let parsed = network_tables_from_toml(&layer.config)?;
-        apply_network_tables(&mut config, parsed)?;
+        merge_toml_values(&mut merged, &layer.config);
     }
+    let parsed = network_tables_from_toml(&merged)?;
+    let mut accumulator = NetworkConfigAccumulator::default();
+    accumulator.apply_network_tables(parsed)?;
+    let mut config = accumulator.finish()?;
     apply_exec_policy_network_rules(&mut config, exec_policy);
     Ok(config)
 }

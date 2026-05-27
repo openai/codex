@@ -21,6 +21,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
@@ -41,6 +42,7 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,7 +65,9 @@ pub struct ThreadConfigSnapshot {
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
     pub personality: Option<Personality>,
+    pub collaboration_mode: CollaborationMode,
     pub session_source: SessionSource,
     pub thread_source: Option<ThreadSource>,
 }
@@ -234,12 +238,29 @@ impl CodexThread {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.codex
-            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .steer_input(
+                input,
+                additional_context,
+                expected_turn_id,
+                responsesapi_client_metadata,
+            )
             .await
+    }
+
+    /// Injects hidden model-visible items into the currently active turn.
+    ///
+    /// This is the runtime-owned counterpart to user-facing `steer_input`.
+    /// It returns the unchanged items when this thread has no active turn.
+    pub async fn inject_response_items_into_active_turn(
+        &self,
+        items: Vec<ResponseInputItem>,
+    ) -> Result<(), Vec<ResponseInputItem>> {
+        self.codex.session.inject_response_items(items).await
     }
 
     pub async fn set_app_server_client_info(
@@ -257,11 +278,19 @@ impl CodexThread {
             .await
     }
 
-    /// Validate persistent thread settings overrides without committing them.
-    pub async fn validate_thread_settings_overrides(
+    /// Preview persistent thread settings overrides without committing them.
+    pub async fn preview_thread_settings_overrides(
         &self,
         overrides: CodexThreadSettingsOverrides,
-    ) -> ConstraintResult<()> {
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
+        let updates = self.thread_settings_update(overrides).await;
+        self.codex.session.preview_settings(&updates).await
+    }
+
+    async fn thread_settings_update(
+        &self,
+        overrides: CodexThreadSettingsOverrides,
+    ) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
             cwd,
             workspace_roots,
@@ -289,7 +318,7 @@ impl CodexThread {
                 .with_updates(model, effort, /*developer_instructions*/ None)
         };
 
-        let updates = SessionSettingsUpdate {
+        SessionSettingsUpdate {
             cwd,
             workspace_roots,
             profile_workspace_roots,
@@ -304,8 +333,7 @@ impl CodexThread {
             service_tier,
             personality,
             ..Default::default()
-        };
-        self.codex.session.validate_settings(&updates).await
+        }
     }
 
     /// Use sparingly: this is intended to be removed soon.

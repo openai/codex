@@ -720,6 +720,22 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 }
 
 #[tokio::test]
+async fn unified_exec_empty_poll_for_finished_process_does_not_show_waiting_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+
+    terminal_interaction(&mut chat, "call-finished", "proc-finished", "");
+
+    assert_eq!(chat.status_state.current_status.header, "Working");
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("task status indicator should remain visible");
+    assert_eq!(status.header(), "Working");
+    assert!(chat.unified_exec_wait_streak.is_none());
+}
+
+#[tokio::test]
 async fn unified_exec_waiting_multiple_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
@@ -960,6 +976,8 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         runtime_workspace_roots: Vec::new(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
