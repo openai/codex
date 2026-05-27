@@ -38,8 +38,8 @@ from ._run import (
     _collect_turn_result,
 )
 from ._sandbox import Sandbox as Sandbox, _sandbox_mode, _sandbox_policy
-from .async_client import AsyncAppServerClient
-from .client import AppServerClient, AppServerConfig
+from .async_client import AsyncCodexClient
+from .client import CodexClient, CodexConfig
 from .generated.v2_all import (
     ApiKeyLoginAccountParams,
     GetAccountParams,
@@ -73,10 +73,10 @@ from .models import InitializeResponse, JsonObject, Notification
 
 
 class Codex:
-    """Typed Python client for app-server v2 workflows."""
+    """Typed Python client for Codex workflows."""
 
-    def __init__(self, config: AppServerConfig | None = None) -> None:
-        self._client = AppServerClient(config=config)
+    def __init__(self, config: CodexConfig | None = None) -> None:
+        self._client = CodexClient(config=config)
         try:
             self._client.start()
             self._init = validate_initialize_metadata(self._client.initialize())
@@ -98,7 +98,7 @@ class Codex:
         self._client.close()
 
     def login_api_key(self, api_key: str) -> None:
-        """Authenticate app-server with an API key."""
+        """Authenticate Codex with an API key."""
         self._client.account_login_start(
             LoginAccountParams(
                 root=ApiKeyLoginAccountParams(
@@ -117,11 +117,11 @@ class Codex:
         return start_device_code_login(self._client)
 
     def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
-        """Read the current app-server account state."""
+        """Read the current Codex account state."""
         return self._client.account_read(GetAccountParams(refresh_token=refresh_token))
 
     def logout(self) -> None:
-        """Clear the current app-server account session."""
+        """Clear the current Codex account session."""
         self._client.account_logout()
 
     # BEGIN GENERATED: Codex.flat_methods
@@ -281,8 +281,8 @@ class AsyncCodex:
     or first awaited API use.
     """
 
-    def __init__(self, config: AppServerConfig | None = None) -> None:
-        self._client = AsyncAppServerClient(config=config)
+    def __init__(self, config: CodexConfig | None = None) -> None:
+        self._client = AsyncCodexClient(config=config)
         self._init: InitializeResponse | None = None
         self._initialized = False
         self._init_lock = asyncio.Lock()
@@ -326,7 +326,7 @@ class AsyncCodex:
         self._initialized = False
 
     async def login_api_key(self, api_key: str) -> None:
-        """Authenticate app-server with an API key."""
+        """Authenticate Codex with an API key."""
         await self._ensure_initialized()
         await self._client.account_login_start(
             LoginAccountParams(
@@ -348,12 +348,12 @@ class AsyncCodex:
         return await async_start_device_code_login(self)
 
     async def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
-        """Read the current app-server account state."""
+        """Read the current Codex account state."""
         await self._ensure_initialized()
         return await self._client.account_read(GetAccountParams(refresh_token=refresh_token))
 
     async def logout(self) -> None:
-        """Clear the current app-server account session."""
+        """Clear the current Codex account session."""
         await self._ensure_initialized()
         await self._client.account_logout()
 
@@ -515,7 +515,7 @@ class AsyncCodex:
 
 @dataclass(slots=True)
 class Thread:
-    _client: AppServerClient
+    _client: CodexClient
     id: str
 
     def run(
@@ -689,7 +689,7 @@ class AsyncThread:
 
 @dataclass(slots=True)
 class TurnHandle:
-    _client: AppServerClient
+    _client: CodexClient
     thread_id: str
     id: str
 

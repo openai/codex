@@ -52,7 +52,7 @@ def test_codex_init_failure_closes_client(monkeypatch: pytest.MonkeyPatch) -> No
             self._closed = True
             closed.append(True)
 
-    monkeypatch.setattr(public_api_module, "AppServerClient", FakeClient)
+    monkeypatch.setattr(public_api_module, "CodexClient", FakeClient)
 
     with pytest.raises(RuntimeError, match="missing required metadata"):
         Codex()

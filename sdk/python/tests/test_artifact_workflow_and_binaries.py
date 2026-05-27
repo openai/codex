@@ -673,7 +673,7 @@ def test_default_runtime_is_resolved_from_installed_runtime_package(
         path_exists=lambda path: path == fake_binary,
     )
 
-    config = client_module.AppServerConfig()
+    config = client_module.CodexConfig()
     assert config.codex_bin is None
     assert client_module.resolve_codex_bin(config, ops) == fake_binary
 
@@ -721,7 +721,7 @@ def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
         path_exists=lambda path: path == explicit_binary,
     )
 
-    config = client_module.AppServerConfig(codex_bin=str(explicit_binary))
+    config = client_module.CodexConfig(codex_bin=str(explicit_binary))
     assert client_module.resolve_codex_bin(config, ops) == explicit_binary
 
 
@@ -736,7 +736,7 @@ def test_missing_runtime_package_requires_explicit_codex_bin() -> None:
     )
 
     with pytest.raises(FileNotFoundError, match="missing packaged runtime"):
-        client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
+        client_module.resolve_codex_bin(client_module.CodexConfig(), ops)
 
 
 def test_broken_runtime_package_does_not_fall_back() -> None:
@@ -750,6 +750,6 @@ def test_broken_runtime_package_does_not_fall_back() -> None:
     )
 
     with pytest.raises(FileNotFoundError) as exc_info:
-        client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
+        client_module.resolve_codex_bin(client_module.CodexConfig(), ops)
 
     assert str(exc_info.value) == ("missing packaged binary")

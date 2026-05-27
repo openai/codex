@@ -300,13 +300,7 @@ pub async fn read_mcp_resource(
     .await;
 
     let result = manager
-        .read_resource(
-            server,
-            ReadResourceRequestParams {
-                meta: None,
-                uri: uri.to_string(),
-            },
-        )
+        .read_resource(server, ReadResourceRequestParams::new(uri))
         .await;
     cancel_token.cancel();
     result
