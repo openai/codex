@@ -78,6 +78,8 @@ pub(crate) struct AppKeymap {
 /// handler code, not here.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatKeymap {
+    /// Interrupt the active turn.
+    pub(crate) interrupt_turn: Vec<KeyBinding>,
     /// Decrease the active reasoning effort.
     pub(crate) decrease_reasoning_effort: Vec<KeyBinding>,
     /// Increase the active reasoning effort.
@@ -420,6 +422,11 @@ impl RuntimeKeymap {
         };
 
         let chat = ChatKeymap {
+            interrupt_turn: resolve_bindings(
+                keymap.chat.interrupt_turn.as_ref(),
+                &defaults.chat.interrupt_turn,
+                "tui.keymap.chat.interrupt_turn",
+            )?,
             decrease_reasoning_effort: resolve_bindings(
                 keymap.chat.decrease_reasoning_effort.as_ref(),
                 &defaults.chat.decrease_reasoning_effort,
@@ -878,6 +885,7 @@ impl RuntimeKeymap {
                 toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
             },
             chat: ChatKeymap {
+                interrupt_turn: default_bindings![plain(KeyCode::Esc)],
                 decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
                 increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
                 edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
@@ -1127,6 +1135,7 @@ impl RuntimeKeymap {
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -1169,6 +1178,7 @@ impl RuntimeKeymap {
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -1197,6 +1207,11 @@ impl RuntimeKeymap {
                 ),
             ],
             MAIN_RESERVED_BINDINGS,
+            [(
+                "chat.interrupt_turn",
+                "fixed.backtrack",
+                key_hint::plain(KeyCode::Esc),
+            )],
         )?;
 
         validate_no_shadow_with_allowed_overlaps(
@@ -1249,6 +1264,18 @@ impl RuntimeKeymap {
             )],
         )?;
 
+        // The request-user-input overlay consumes turn interruption before
+        // configurable question navigation reaches its list handler.
+        validate_no_shadow_with_allowed_overlaps(
+            "request_user_input",
+            [("chat.interrupt_turn", self.chat.interrupt_turn.as_slice())],
+            [
+                ("list.move_left", self.list.move_left.as_slice()),
+                ("list.move_right", self.list.move_right.as_slice()),
+            ],
+            [],
+        )?;
+
         // While the composer is focused, these main-surface handlers always
         // consume matching keys before the event reaches the textarea editor.
         validate_no_shadow_with_allowed_overlaps(
@@ -1261,6 +1288,7 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -1522,6 +1550,7 @@ impl RuntimeKeymap {
                 ("close_transcript", self.pager.close_transcript.as_slice()),
             ],
             TRANSCRIPT_BACKTRACK_RESERVED_BINDINGS,
+            [],
         )?;
 
         validate_unique(
@@ -1675,10 +1704,11 @@ See the Codex keymap documentation for supported actions and examples."
     Ok(())
 }
 
-fn validate_no_reserved<const N: usize>(
+fn validate_no_reserved<const N: usize, const A: usize>(
     context: &str,
     pairs: [(&'static str, &[KeyBinding]); N],
     reserved: &[(&'static str, KeyBinding)],
+    allowed_overlaps: [(&'static str, &'static str, KeyBinding); A],
 ) -> Result<(), String> {
     for (action, bindings) in pairs {
         for binding in bindings {
@@ -1687,6 +1717,15 @@ fn validate_no_reserved<const N: usize>(
                 .iter()
                 .find(|(_, reserved_binding)| reserved_binding.parts() == key)
             {
+                if allowed_overlaps.iter().any(
+                    |(allowed_action, allowed_reserved_action, allowed_binding)| {
+                        *allowed_action == action
+                            && *allowed_reserved_action == *reserved_action
+                            && allowed_binding.parts() == key
+                    },
+                ) {
+                    continue;
+                }
                 return Err(format!(
                     "Ambiguous `tui.keymap.{context}` bindings: `{action}` uses a key reserved by `{reserved_action}`. \
 Set a different key in `~/.codex/config.toml` and retry. \
@@ -2076,6 +2115,10 @@ mod tests {
             vec![key_hint::ctrl(KeyCode::Char('l'))]
         );
         assert_eq!(runtime.app.toggle_fast_mode, Vec::new());
+        assert_eq!(
+            runtime.chat.interrupt_turn,
+            vec![key_hint::plain(KeyCode::Esc)]
+        );
         assert_eq!(
             runtime.chat.decrease_reasoning_effort,
             vec![key_hint::alt(KeyCode::Char(','))]
@@ -2496,6 +2539,44 @@ mod tests {
         keymap.composer.submit = Some(one("ctrl-v"));
 
         expect_conflict(&keymap, "composer.submit", "fixed.paste_image");
+    }
+
+    #[test]
+    fn interrupt_turn_allows_backtrack_escape_and_can_be_remapped_or_unbound() {
+        let mut keymap = TuiKeymap::default();
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("default keymap should parse");
+        assert_eq!(
+            runtime.chat.interrupt_turn,
+            vec![key_hint::plain(KeyCode::Esc)]
+        );
+
+        keymap.chat.interrupt_turn = Some(one("f12"));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("remapped keymap should parse");
+        assert_eq!(
+            runtime.chat.interrupt_turn,
+            vec![key_hint::plain(KeyCode::F(12))]
+        );
+
+        keymap.chat.interrupt_turn = Some(KeybindingsSpec::Many(vec![]));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("unbound keymap should parse");
+        assert!(runtime.chat.interrupt_turn.is_empty());
+    }
+
+    #[test]
+    fn interrupt_turn_rejects_other_fixed_shortcuts() {
+        let mut keymap = TuiKeymap::default();
+        keymap.chat.interrupt_turn = Some(one("ctrl-v"));
+
+        expect_conflict(&keymap, "chat.interrupt_turn", "fixed.paste_image");
+    }
+
+    #[test]
+    fn interrupt_turn_rejects_request_user_input_question_navigation_bindings() {
+        let mut keymap = TuiKeymap::default();
+        keymap.chat.interrupt_turn = Some(one("f12"));
+        keymap.list.move_right = Some(one("f12"));
+
+        expect_conflict(&keymap, "chat.interrupt_turn", "list.move_right");
     }
 
     #[test]

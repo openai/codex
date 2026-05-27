@@ -115,6 +115,8 @@ pub struct TuiGlobalKeymap {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiChatKeymap {
+    /// Interrupt the active turn.
+    pub interrupt_turn: Option<KeybindingsSpec>,
     /// Decrease the active reasoning effort.
     pub decrease_reasoning_effort: Option<KeybindingsSpec>,
     /// Increase the active reasoning effort.

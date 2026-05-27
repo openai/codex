@@ -2766,7 +2766,8 @@
             "chat": {
               "decrease_reasoning_effort": null,
               "edit_queued_message": null,
-              "increase_reasoning_effort": null
+              "increase_reasoning_effort": null,
+              "interrupt_turn": null
             },
             "composer": {
               "history_search_next": null,
@@ -3094,6 +3095,14 @@
             }
           ],
           "description": "Increase the active reasoning effort."
+        },
+        "interrupt_turn": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Interrupt the active turn."
         }
       },
       "type": "object"
@@ -3405,7 +3414,8 @@
           "default": {
             "decrease_reasoning_effort": null,
             "edit_queued_message": null,
-            "increase_reasoning_effort": null
+            "increase_reasoning_effort": null,
+            "interrupt_turn": null
           }
         },
         "composer": {
