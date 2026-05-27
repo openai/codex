@@ -142,13 +142,11 @@ pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<Too
         .collect()
 }
 
-pub(crate) fn filter_tools_for_model(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
-    tools
-        .into_iter()
-        .filter(|tool| tool_is_model_visible(&tool.tool))
-        .collect()
-}
-
+/// Returns whether a tool may be included in model-facing tool declarations.
+///
+/// Tools without visibility metadata remain visible.
+/// Tools marked visible to the app are hidden unless they are also explicitly
+/// visible to the model.
 fn tool_is_model_visible(tool: &Tool) -> bool {
     let Some(visibility) = tool
         .meta
@@ -169,7 +167,7 @@ fn tool_is_model_visible(tool: &Tool) -> bool {
             .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
 }
 
-/// Returns MCP tools with model-visible names normalized.
+/// Returns the model-visible subset of MCP tools with names normalized.
 ///
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
 /// `callable_namespace` / `callable_name` are sanitized and, when necessary, hashed so
@@ -187,6 +185,10 @@ where
     let mut seen_raw_names = HashSet::new();
     let mut candidates = Vec::new();
     for tool in tools {
+        if !tool_is_model_visible(&tool.tool) {
+            continue;
+        }
+
         let raw_namespace_identity = format!(
             "{}\0{}\0{}",
             tool.server_name,

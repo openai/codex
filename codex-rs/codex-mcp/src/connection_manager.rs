@@ -33,7 +33,6 @@ use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
-use crate::tools::filter_tools_for_model;
 use crate::tools::normalize_tools_for_model_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Context;
@@ -381,8 +380,10 @@ impl McpConnectionManager {
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
-        let tools = filter_tools_for_model(self.list_all_tools_for_inventory().await);
-        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+        normalize_tools_for_model_with_prefix(
+            self.list_all_tools_for_inventory().await,
+            self.prefix_mcp_tool_names,
+        )
     }
 
     /// Returns all listed tools with raw MCP names for app-server inventory consumers.
@@ -444,7 +445,7 @@ impl McpConnectionManager {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        let tools = filter_tools_for_model(filter_tools(tools, &managed_client.tool_filter))
+        let tools = filter_tools(tools, &managed_client.tool_filter)
             .into_iter()
             .map(|mut tool| {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
