@@ -1810,13 +1810,36 @@
     },
     "NetworkProxyMode": {
       "description": "How Codex should choose an outbound proxy when a future resolver is available.\n\nThis is intentionally configuration-only for now: it establishes the stable spelling used by the resolver work without changing any HTTP routing by itself.",
-      "enum": [
-        "auto",
-        "env",
-        "system",
-        "direct"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "description": "Prefer explicit proxy configuration, then OS/system discovery, then direct.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Only honor conventional environment/configured proxy values.",
+          "enum": [
+            "env"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Prefer OS/system proxy discovery (for example PAC/WPAD) when supported.",
+          "enum": [
+            "system"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Do not use a proxy for Codex-managed outbound clients.",
+          "enum": [
+            "direct"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "NetworkProxyModeToml": {
       "enum": [
