@@ -53,6 +53,7 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
     }
+    linux_cmd.push("--allow-detached-children".to_string());
     linux_cmd.push("--".to_string());
     linux_cmd.extend(command);
     linux_cmd

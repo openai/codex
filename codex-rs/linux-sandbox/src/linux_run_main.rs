@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
+use crate::bwrap::BwrapProcessLifetime;
 use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
@@ -122,6 +123,11 @@ pub struct LandlockCommand {
     #[arg(long = "allow-network-for-proxy", hide = true, default_value_t = false)]
     pub allow_network_for_proxy: bool,
 
+    /// Internal: permit intentionally detached command descendants to outlive
+    /// the one-shot sandbox helper invocation.
+    #[arg(long = "allow-detached-children", hide = true, default_value_t = false)]
+    pub allow_detached_children: bool,
+
     /// Internal route spec used for managed proxy routing in bwrap mode.
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
@@ -152,6 +158,7 @@ pub fn run_main() -> ! {
         use_legacy_landlock,
         apply_seccomp_then_exec,
         allow_network_for_proxy,
+        allow_detached_children,
         proxy_route_spec,
         no_proc,
         command,
@@ -238,6 +245,11 @@ pub fn run_main() -> ! {
             inner,
             !no_proc,
             allow_network_for_proxy,
+            if allow_detached_children {
+                BwrapProcessLifetime::AllowDetachedChildren
+            } else {
+                BwrapProcessLifetime::TerminateWithParent
+            },
         );
     }
 
@@ -322,6 +334,7 @@ fn run_bwrap_with_proc_fallback(
     inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
+    process_lifetime: BwrapProcessLifetime,
 ) -> ! {
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
@@ -344,6 +357,7 @@ fn run_bwrap_with_proc_fallback(
     let options = BwrapOptions {
         mount_proc,
         network_mode,
+        process_lifetime,
         ..Default::default()
     };
     let mut bwrap_args = build_bwrap_argv(

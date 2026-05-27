@@ -65,6 +65,8 @@ pub(crate) struct BwrapOptions {
     pub mount_proc: bool,
     /// How networking should be configured inside the bubblewrap sandbox.
     pub network_mode: BwrapNetworkMode,
+    /// How the sandbox lifetime should relate to the initial command process.
+    pub process_lifetime: BwrapProcessLifetime,
     /// Optional maximum depth for expanding unreadable glob patterns with ripgrep.
     ///
     /// Keep this uncapped by default so existing nested deny-read matches are
@@ -77,9 +79,20 @@ impl Default for BwrapOptions {
         Self {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
             glob_scan_max_depth: None,
         }
     }
+}
+
+/// Lifetime behavior for descendants running inside bubblewrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BwrapProcessLifetime {
+    /// Ask bubblewrap to kill the sandbox when its parent exits.
+    #[default]
+    TerminateWithParent,
+    /// Allow intentionally detached children to keep running in the sandbox.
+    AllowDetachedChildren,
 }
 
 /// Network policy modes for bubblewrap.
@@ -265,9 +278,11 @@ pub(crate) fn create_bwrap_command_args(
 }
 
 fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> BwrapArgs {
-    let mut args = vec![
-        "--new-session".to_string(),
-        "--die-with-parent".to_string(),
+    let mut args = vec!["--new-session".to_string()];
+    if options.process_lifetime == BwrapProcessLifetime::TerminateWithParent {
+        args.push("--die-with-parent".to_string());
+    }
+    args.extend([
         "--bind".to_string(),
         "/".to_string(),
         "/".to_string(),
@@ -275,7 +290,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
-    ];
+    ]);
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -316,7 +331,9 @@ fn create_bwrap_flags(
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
-    args.push("--die-with-parent".to_string());
+    if options.process_lifetime == BwrapProcessLifetime::TerminateWithParent {
+        args.push("--die-with-parent".to_string());
+    }
     args.extend(filesystem_args);
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
@@ -1409,6 +1426,31 @@ mod tests {
                 "/bin/true".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn allow_detached_children_omits_die_with_parent_but_keeps_pid_namespace() {
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        }]);
+        let args = create_bwrap_command_args(
+            vec!["/bin/true".to_string()],
+            &policy,
+            Path::new("/"),
+            Path::new("/"),
+            BwrapOptions {
+                process_lifetime: BwrapProcessLifetime::AllowDetachedChildren,
+                ..Default::default()
+            },
+        )
+        .expect("create bwrap args");
+
+        assert!(!args.args.contains(&"--die-with-parent".to_string()));
+        assert!(args.args.contains(&"--unshare-pid".to_string()));
+        assert!(args.args.contains(&"--unshare-user".to_string()));
     }
 
     #[test]

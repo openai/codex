@@ -21,6 +21,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 use tempfile::NamedTempFile;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
@@ -391,6 +392,47 @@ async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
 
     assert_eq!(output.exit_code, 0);
     assert_eq!(output.stdout.text, "sandbox-ok");
+}
+
+#[tokio::test]
+async fn detached_children_survive_parent_exit_under_bwrap() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let log_path = tempdir.path().join("detached.log");
+    let command = format!(
+        "nohup sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do printf x >> \"{log}\"; sleep 0.2; done' >/dev/null 2>&1 </dev/null &",
+        log = log_path.to_string_lossy(),
+    );
+
+    let output = run_cmd_result_with_writable_roots(
+        &["bash", "-lc", &command],
+        &[tempdir.path().to_path_buf()],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let first_len = std::fs::metadata(&log_path)
+        .expect("detached child should create log file")
+        .len();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let second_len = std::fs::metadata(&log_path)
+        .expect("detached child log file should still exist")
+        .len();
+    assert!(
+        second_len > first_len,
+        "detached child should keep writing after the parent exits",
+    );
 }
 
 #[tokio::test]

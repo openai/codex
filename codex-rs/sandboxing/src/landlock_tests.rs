@@ -77,6 +77,7 @@ fn permission_profile_flag_is_included() {
             .any(|window| window[0] == "--command-cwd" && window[1] == "/tmp/link"),
         true
     );
+    assert!(args.contains(&"--allow-detached-children".to_string()));
 }
 
 #[test]
