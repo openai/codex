@@ -126,10 +126,6 @@ pub struct LandlockCommand {
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
 
-    /// Internal managed MITM CA cert to add to bubblewrap trust bundles.
-    #[arg(long = "mitm-ca-cert", hide = true)]
-    pub mitm_ca_cert_path: Option<PathBuf>,
-
     /// Internal managed MITM CA trust bundle to expose inside bubblewrap.
     #[arg(long = "mitm-ca-trust-bundle", hide = true)]
     pub mitm_ca_trust_bundle_path: Option<PathBuf>,
@@ -161,7 +157,6 @@ pub fn run_main() -> ! {
         apply_seccomp_then_exec,
         allow_network_for_proxy,
         proxy_route_spec,
-        mitm_ca_cert_path,
         mitm_ca_trust_bundle_path,
         no_proc,
         command,
@@ -248,7 +243,6 @@ pub fn run_main() -> ! {
             inner,
             mount_proc: !no_proc,
             allow_network_for_proxy,
-            mitm_ca_cert_path: mitm_ca_cert_path.as_deref(),
             mitm_ca_trust_bundle_path: mitm_ca_trust_bundle_path.as_deref(),
         });
     }
@@ -334,7 +328,6 @@ struct RunBwrapWithProcFallbackArgs<'a> {
     inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
-    mitm_ca_cert_path: Option<&'a Path>,
     mitm_ca_trust_bundle_path: Option<&'a Path>,
 }
 
@@ -347,7 +340,6 @@ fn run_bwrap_with_proc_fallback(args: RunBwrapWithProcFallbackArgs<'_>) -> ! {
         inner,
         mount_proc,
         allow_network_for_proxy,
-        mitm_ca_cert_path,
         mitm_ca_trust_bundle_path,
     } = args;
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
@@ -360,7 +352,6 @@ fn run_bwrap_with_proc_fallback(args: RunBwrapWithProcFallbackArgs<'_>) -> ! {
             command_cwd,
             file_system_sandbox_policy,
             network_mode,
-            mitm_ca_cert_path,
             mitm_ca_trust_bundle_path,
         )
         .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
@@ -373,7 +364,6 @@ fn run_bwrap_with_proc_fallback(args: RunBwrapWithProcFallbackArgs<'_>) -> ! {
     let options = BwrapOptions {
         mount_proc,
         network_mode,
-        mitm_ca_cert_path: mitm_ca_cert_path.map(Path::to_path_buf),
         mitm_ca_trust_bundle_path: mitm_ca_trust_bundle_path.map(Path::to_path_buf),
         ..Default::default()
     };
@@ -477,7 +467,6 @@ fn preflight_proc_mount_support(
     command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
-    mitm_ca_cert_path: Option<&Path>,
     mitm_ca_trust_bundle_path: Option<&Path>,
 ) -> CodexResult<bool> {
     let preflight_argv = build_preflight_bwrap_argv(
@@ -485,7 +474,6 @@ fn preflight_proc_mount_support(
         command_cwd,
         file_system_sandbox_policy,
         network_mode,
-        mitm_ca_cert_path,
         mitm_ca_trust_bundle_path,
     )?;
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
@@ -497,7 +485,6 @@ fn build_preflight_bwrap_argv(
     command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
-    mitm_ca_cert_path: Option<&Path>,
     mitm_ca_trust_bundle_path: Option<&Path>,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
     let preflight_command = vec![resolve_true_command()];
@@ -509,7 +496,6 @@ fn build_preflight_bwrap_argv(
         BwrapOptions {
             mount_proc: true,
             network_mode,
-            mitm_ca_cert_path: mitm_ca_cert_path.map(Path::to_path_buf),
             mitm_ca_trust_bundle_path: mitm_ca_trust_bundle_path.map(Path::to_path_buf),
             ..Default::default()
         },

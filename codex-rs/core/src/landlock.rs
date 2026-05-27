@@ -34,7 +34,8 @@ where
     P: AsRef<Path>,
 {
     let network_sandbox_policy = permission_profile.network_sandbox_policy();
-    let managed_mitm_ca_paths = network.and_then(NetworkProxy::managed_mitm_ca_paths);
+    let managed_mitm_ca_trust_bundle_path =
+        network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
     let args = create_linux_sandbox_command_args_for_permission_profile(
         command,
         command_cwd.as_path(),
@@ -42,7 +43,7 @@ where
         sandbox_policy_cwd,
         use_legacy_landlock,
         allow_network_for_proxy(/*enforce_managed_network*/ false),
-        managed_mitm_ca_paths.as_ref(),
+        managed_mitm_ca_trust_bundle_path.as_deref(),
     );
     let codex_linux_sandbox_exe = codex_linux_sandbox_exe.as_ref();
     // Preserve the helper alias when we already have it; otherwise force argv0

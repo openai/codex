@@ -301,40 +301,26 @@ struct NetworkProxyRuntimeSettings {
     allow_local_binding: bool,
     allow_unix_sockets: Arc<[String]>,
     dangerously_allow_all_unix_sockets: bool,
-    mitm_ca_cert_path: Option<PathBuf>,
     mitm_ca_trust_bundle_path: Option<PathBuf>,
 }
 
 impl NetworkProxyRuntimeSettings {
     fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
-        let (mitm_ca_cert_path, mitm_ca_trust_bundle_path) = if config.network.mitm {
+        let mitm_ca_trust_bundle_path = if config.network.mitm {
             let env = std::env::vars().collect();
             let cwd = std::env::current_dir()
                 .context("failed to resolve current dir for managed MITM CA")?;
-            (
-                Some(crate::certs::managed_ca_cert_path()?),
-                Some(crate::certs::managed_ca_trust_bundle_path(&env, &cwd)?),
-            )
+            Some(crate::certs::managed_ca_trust_bundle_path(&env, &cwd)?)
         } else {
-            (None, None)
+            None
         };
         Ok(Self {
             allow_local_binding: config.network.allow_local_binding,
             allow_unix_sockets: config.network.allow_unix_sockets().into(),
             dangerously_allow_all_unix_sockets: config.network.dangerously_allow_all_unix_sockets,
-            mitm_ca_cert_path,
             mitm_ca_trust_bundle_path,
         })
     }
-}
-
-/// Managed CA artifacts child sandboxes need for MITM TLS trust.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagedMitmCaPaths {
-    /// Managed CA certificate appended to native Linux trust stores.
-    pub cert_path: PathBuf,
-    /// Managed trust bundle exported through child CA environment variables.
-    pub trust_bundle_path: PathBuf,
 }
 
 #[derive(Clone)]
@@ -631,13 +617,9 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
-    /// Returns the managed CA files child sandboxes should expose to TLS clients.
-    pub fn managed_mitm_ca_paths(&self) -> Option<ManagedMitmCaPaths> {
-        let runtime_settings = self.runtime_settings();
-        Some(ManagedMitmCaPaths {
-            cert_path: runtime_settings.mitm_ca_cert_path?,
-            trust_bundle_path: runtime_settings.mitm_ca_trust_bundle_path?,
-        })
+    /// Returns the managed CA bundle child sandboxes should expose to TLS clients.
+    pub fn managed_mitm_ca_trust_bundle_path(&self) -> Option<PathBuf> {
+        self.runtime_settings().mitm_ca_trust_bundle_path
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>, cwd: &Path) {

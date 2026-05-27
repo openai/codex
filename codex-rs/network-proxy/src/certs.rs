@@ -125,10 +125,6 @@ fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
     ))
 }
 
-pub(crate) fn managed_ca_cert_path() -> Result<PathBuf> {
-    managed_ca_paths().map(|(cert_path, _)| cert_path)
-}
-
 pub(crate) fn managed_ca_trust_bundle_path(
     env: &HashMap<String, String>,
     cwd: &Path,
