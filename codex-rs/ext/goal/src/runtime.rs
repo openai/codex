@@ -306,6 +306,7 @@ impl GoalRuntimeHandle {
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
     ) -> Result<Option<AccountedGoalProgress>, String> {
         let accounting = self.accounting_state();
+        let _accounting_permit = accounting.accounting_permit().await?;
         let Some(snapshot) = accounting.progress_snapshot(turn_id) else {
             return Ok(None);
         };
@@ -356,6 +357,7 @@ impl GoalRuntimeHandle {
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
     ) -> Result<Option<AccountedGoalProgress>, String> {
         let accounting = self.accounting_state();
+        let _accounting_permit = accounting.accounting_permit().await?;
         let Some(snapshot) = accounting.idle_progress_snapshot() else {
             return Ok(None);
         };

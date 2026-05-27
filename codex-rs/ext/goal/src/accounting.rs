@@ -6,9 +6,12 @@ use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct GoalAccountingState {
+    accounting_lock: Semaphore,
     inner: Mutex<GoalAccountingInner>,
 }
 
@@ -61,6 +64,13 @@ pub(crate) struct RecordedTokenDelta {
 }
 
 impl GoalAccountingState {
+    pub(crate) async fn accounting_permit(&self) -> Result<SemaphorePermit<'_>, String> {
+        self.accounting_lock
+            .acquire()
+            .await
+            .map_err(|_| "goal accounting semaphore closed".to_string())
+    }
+
     pub(crate) fn start_turn(
         &self,
         turn_id: impl Into<String>,
@@ -316,6 +326,15 @@ impl Default for GoalAccountingInner {
             turns: HashMap::new(),
             wall_clock: GoalWallClockAccounting::new(),
             budget_limit_reported_goal_id: None,
+        }
+    }
+}
+
+impl Default for GoalAccountingState {
+    fn default() -> Self {
+        Self {
+            accounting_lock: Semaphore::new(/*permits*/ 1),
+            inner: Mutex::new(GoalAccountingInner::default()),
         }
     }
 }

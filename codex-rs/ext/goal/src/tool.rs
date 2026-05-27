@@ -291,6 +291,11 @@ impl GoalToolExecutor {
         let Some(turn_id) = self.accounting_state.current_turn_id() else {
             return Ok(None);
         };
+        let _accounting_permit = self
+            .accounting_state
+            .accounting_permit()
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
         let Some(snapshot) = self.accounting_state.progress_snapshot(turn_id.as_str()) else {
             return Ok(None);
         };
