@@ -1,12 +1,14 @@
 use std::sync::Arc;
+use std::sync::Weak;
 
 use async_trait::async_trait;
+use codex_core::ThreadManager;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ResponseItemInjector;
 use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCallOutcome;
@@ -18,18 +20,19 @@ use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsageInfo;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
+use crate::metrics::GoalMetrics;
+use crate::runtime::GoalRuntimeHandle;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
-use crate::tool::protocol_goal_from_state;
 
 #[derive(Clone, Debug)]
 pub struct GoalExtensionConfig {
@@ -46,13 +49,9 @@ impl GoalExtensionConfig {
 pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
-    response_item_injector: Arc<dyn ResponseItemInjector>,
+    metrics: GoalMetrics,
+    thread_manager: Weak<ThreadManager>,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
-}
-
-struct AccountedGoalProgress {
-    goal: ThreadGoal,
-    goal_id: String,
 }
 
 impl<C> std::fmt::Debug for GoalExtension<C> {
@@ -65,13 +64,15 @@ impl<C> GoalExtension<C> {
     pub(crate) fn new_with_host_capabilities(
         state_dbs: Arc<codex_state::StateRuntime>,
         event_sink: Arc<dyn ExtensionEventSink>,
-        response_item_injector: Arc<dyn ResponseItemInjector>,
+        metrics_client: Option<MetricsClient>,
+        thread_manager: Weak<ThreadManager>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
             state_dbs,
             event_emitter: GoalEventEmitter::new(event_sink),
-            response_item_injector,
+            metrics: GoalMetrics::new(metrics_client),
+            thread_manager,
             goals_enabled: Arc::new(goals_enabled),
         }
     }
@@ -83,14 +84,41 @@ where
     C: Send + Sync + 'static,
 {
     async fn on_thread_start(&self, input: ThreadStartInput<'_, C>) {
+        let enabled = (self.goals_enabled)(input.config);
         input
             .thread_store
-            .insert(GoalExtensionConfig::from_enabled((self.goals_enabled)(
-                input.config,
-            )));
-        input
+            .insert(GoalExtensionConfig::from_enabled(enabled));
+        let accounting_state = input
             .thread_store
             .get_or_init::<GoalAccountingState>(GoalAccountingState::default);
+        let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
+            return;
+        };
+        let runtime = input.thread_store.get_or_init::<GoalRuntimeHandle>(|| {
+            GoalRuntimeHandle::new(
+                thread_id,
+                Arc::clone(&self.state_dbs),
+                self.event_emitter.clone(),
+                self.metrics.clone(),
+                self.thread_manager.clone(),
+                accounting_state,
+                enabled,
+            )
+        });
+        runtime.set_enabled(enabled);
+    }
+
+    async fn on_thread_resume(&self, input: ThreadResumeInput<'_>) {
+        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+            return;
+        };
+
+        if let Err(err) = runtime.restore_after_resume().await {
+            tracing::warn!(
+                "failed to restore goal runtime after thread resume for {}: {err}",
+                runtime.thread_id()
+            );
+        }
     }
 }
 
@@ -105,9 +133,11 @@ where
         _previous_config: &C,
         new_config: &C,
     ) {
-        thread_store.insert(GoalExtensionConfig::from_enabled((self.goals_enabled)(
-            new_config,
-        )));
+        let enabled = (self.goals_enabled)(new_config);
+        thread_store.insert(GoalExtensionConfig::from_enabled(enabled));
+        if let Some(runtime) = goal_runtime_handle(thread_store) {
+            runtime.set_enabled(enabled);
+        }
     }
 }
 
@@ -117,11 +147,14 @@ where
     C: Send + Sync + 'static,
 {
     async fn on_turn_start(&self, input: TurnStartInput<'_>) {
-        if !goal_enabled(input.thread_store) {
+        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+            return;
+        };
+        if !runtime.is_enabled() {
             return;
         }
 
-        let accounting = accounting_state(input.thread_store);
+        let accounting = runtime.accounting_state();
         accounting.start_turn(
             input.turn_id,
             input.collaboration_mode.mode,
@@ -134,13 +167,10 @@ where
             accounting.clear_current_turn_goal();
             return;
         }
-        let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
-            return;
-        };
         let Ok(goal) = self
             .state_dbs
             .thread_goals()
-            .get_thread_goal(thread_id)
+            .get_thread_goal(runtime.thread_id())
             .await
         else {
             return;
@@ -157,14 +187,16 @@ where
     }
 
     async fn on_turn_stop(&self, input: TurnStopInput<'_>) {
-        if !goal_enabled(input.thread_store) {
+        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+            return;
+        };
+        if !runtime.is_enabled() {
             return;
         }
 
         let turn_id = input.turn_store.level_id();
-        if let Err(err) = self
+        if let Err(err) = runtime
             .account_active_goal_progress(
-                input.thread_store,
                 turn_id,
                 &format!("{turn_id}:turn-stop"),
                 codex_state::GoalAccountingMode::ActiveOnly,
@@ -177,18 +209,20 @@ where
             );
             return;
         }
-        accounting_state(input.thread_store).finish_turn(turn_id);
+        runtime.accounting_state().finish_turn(turn_id);
     }
 
     async fn on_turn_abort(&self, input: TurnAbortInput<'_>) {
-        if !goal_enabled(input.thread_store) {
+        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+            return;
+        };
+        if !runtime.is_enabled() {
             return;
         }
 
         let turn_id = input.turn_store.level_id();
-        if let Err(err) = self
+        if let Err(err) = runtime
             .account_active_goal_progress(
-                input.thread_store,
                 turn_id,
                 &format!("{turn_id}:turn-abort"),
                 codex_state::GoalAccountingMode::ActiveOnly,
@@ -201,7 +235,7 @@ where
             );
             return;
         }
-        accounting_state(input.thread_store).finish_turn(turn_id);
+        runtime.accounting_state().finish_turn(turn_id);
     }
 }
 
@@ -217,11 +251,15 @@ where
         turn_store: &ExtensionData,
         token_usage: &TokenUsageInfo,
     ) {
-        if !goal_enabled(thread_store) {
+        let Some(runtime) = goal_runtime_handle(thread_store) else {
+            return;
+        };
+        if !runtime.is_enabled() {
             return;
         }
 
-        let Some(_recorded) = accounting_state(thread_store)
+        let Some(_recorded) = runtime
+            .accounting_state()
             .record_token_usage(turn_store.level_id(), &token_usage.total_token_usage)
         else {
             return;
@@ -235,7 +273,10 @@ where
 {
     fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
-            let should_count_for_goal_progress = goal_enabled(input.thread_store)
+            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+                return;
+            };
+            let should_count_for_goal_progress = runtime.is_enabled()
                 && tool_attempt_counts_for_goal_progress(input.outcome)
                 && !(input.tool_name.namespace.is_none()
                     && input.tool_name.name == UPDATE_GOAL_TOOL_NAME);
@@ -243,9 +284,8 @@ where
                 return;
             }
             let turn_id = input.turn_id;
-            let progress = match self
+            let progress = match runtime
                 .account_active_goal_progress(
-                    input.thread_store,
                     turn_id,
                     input.call_id,
                     codex_state::GoalAccountingMode::ActiveOnly,
@@ -266,29 +306,17 @@ where
             if goal.status != ThreadGoalStatus::BudgetLimited {
                 return;
             }
-            if !accounting_state(input.thread_store)
+            if !runtime
+                .accounting_state()
                 .mark_budget_limit_reported_if_new(progress.goal_id.as_str())
             {
                 return;
             }
             let item = budget_limit_steering_item(&goal);
-            if self
-                .response_item_injector
-                .inject_response_items(vec![item])
-                .await
-                .is_err()
-            {
-                tracing::debug!("skipping budget-limit goal steering because no turn is active");
-            }
+            runtime.inject_active_turn_steering(item).await;
         })
     }
 }
-
-// TODO: app-server initiated goal set/clear operations need a contributor or
-// backend callback here. They currently happen outside thread/turn/token
-// lifecycle, but the goal extension must observe them to account before
-// mutation, refresh active-goal accounting, emit objective-update steering, and
-// clear runtime state when a goal is removed.
 
 impl<C> ToolContributor for GoalExtension<C>
 where
@@ -299,31 +327,34 @@ where
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
-        if !goal_enabled(thread_store) {
+        let Some(runtime) = goal_runtime_handle(thread_store) else {
+            return Vec::new();
+        };
+        if !runtime.is_enabled() {
             return Vec::new();
         }
 
-        let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
-            return Vec::new();
-        };
         vec![
             Arc::new(GoalToolExecutor::get(
-                thread_id,
+                runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
-                accounting_state(thread_store),
+                runtime.accounting_state(),
                 self.event_emitter.clone(),
+                self.metrics.clone(),
             )),
             Arc::new(GoalToolExecutor::create(
-                thread_id,
+                runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
-                accounting_state(thread_store),
+                runtime.accounting_state(),
                 self.event_emitter.clone(),
+                self.metrics.clone(),
             )),
             Arc::new(GoalToolExecutor::update(
-                thread_id,
+                runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
-                accounting_state(thread_store),
+                runtime.accounting_state(),
                 self.event_emitter.clone(),
+                self.metrics.clone(),
             )),
         ]
     }
@@ -332,7 +363,8 @@ where
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
-    response_item_injector: Arc<dyn ResponseItemInjector>,
+    metrics_client: Option<MetricsClient>,
+    thread_manager: Weak<ThreadManager>,
     goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
 ) where
     C: Send + Sync + 'static,
@@ -340,7 +372,8 @@ pub fn install_with_backend<C>(
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
         registry.event_sink(),
-        response_item_injector,
+        metrics_client,
+        thread_manager,
         goals_enabled,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
@@ -351,14 +384,8 @@ pub fn install_with_backend<C>(
     registry.tool_contributor(extension);
 }
 
-fn goal_enabled(thread_store: &ExtensionData) -> bool {
-    thread_store
-        .get::<GoalExtensionConfig>()
-        .is_some_and(|config| config.enabled)
-}
-
-fn accounting_state(thread_store: &ExtensionData) -> Arc<GoalAccountingState> {
-    thread_store.get_or_init::<GoalAccountingState>(GoalAccountingState::default)
+fn goal_runtime_handle(thread_store: &ExtensionData) -> Option<Arc<GoalRuntimeHandle>> {
+    thread_store.get::<GoalRuntimeHandle>()
 }
 
 fn tool_attempt_counts_for_goal_progress(outcome: ToolCallOutcome) -> bool {
@@ -372,55 +399,5 @@ fn tool_attempt_counts_for_goal_progress(outcome: ToolCallOutcome) -> bool {
             handler_executed: false,
         }
         | ToolCallOutcome::Aborted => false,
-    }
-}
-
-impl<C> GoalExtension<C> {
-    async fn account_active_goal_progress(
-        &self,
-        thread_store: &ExtensionData,
-        turn_id: &str,
-        event_id: &str,
-        mode: codex_state::GoalAccountingMode,
-        budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
-    ) -> Result<Option<AccountedGoalProgress>, String> {
-        let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
-            return Ok(None);
-        };
-        let accounting = accounting_state(thread_store);
-        let Some(snapshot) = accounting.progress_snapshot(turn_id) else {
-            return Ok(None);
-        };
-        let outcome = self
-            .state_dbs
-            .thread_goals()
-            .account_thread_goal_usage(
-                thread_id,
-                snapshot.time_delta_seconds,
-                snapshot.token_delta,
-                mode,
-                Some(snapshot.expected_goal_id.as_str()),
-            )
-            .await
-            .map_err(|err| err.to_string())?;
-        Ok(match outcome {
-            codex_state::GoalAccountingOutcome::Updated(goal) => {
-                let goal_id = goal.goal_id.clone();
-                accounting.mark_progress_accounted_for_status(
-                    turn_id,
-                    &snapshot,
-                    goal.status,
-                    budget_limited_goal_disposition,
-                );
-                let goal = protocol_goal_from_state(goal);
-                self.event_emitter.thread_goal_updated(
-                    event_id.to_string(),
-                    Some(turn_id.to_string()),
-                    goal.clone(),
-                );
-                Some(AccountedGoalProgress { goal, goal_id })
-            }
-            codex_state::GoalAccountingOutcome::Unchanged(_) => None,
-        })
     }
 }

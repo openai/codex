@@ -692,6 +692,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
         )),
+        forked_from_thread_id: None,
         thread_source: None,
         agent_control: AgentControl::default(),
         dynamic_tools: Vec::new(),

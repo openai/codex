@@ -6,6 +6,7 @@ use self::activation::installed_marketplace_metadata_matches;
 use self::activation::write_installed_marketplace_metadata;
 use self::git::clone_git_source;
 use self::git::git_remote_revision;
+use crate::marketplace::find_marketplace_manifest_path;
 use crate::marketplace::validate_marketplace_root;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerStack;
@@ -176,9 +177,7 @@ fn upgrade_configured_git_marketplace(
         MARKETPLACE_UPGRADE_GIT_TIMEOUT,
     )?;
     let destination = install_root.join(&marketplace.name);
-    if destination
-        .join(".agents/plugins/marketplace.json")
-        .is_file()
+    if find_marketplace_manifest_path(&destination).is_some()
         && marketplace.last_revision.as_deref() == Some(remote_revision.as_str())
         && installed_marketplace_metadata_matches(&destination, marketplace, &remote_revision)
     {

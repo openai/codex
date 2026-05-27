@@ -35,6 +35,8 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
+use crate::responses_retry::ResponsesStreamRequest;
+use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -48,6 +50,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item_with_finalized_facts;
+use crate::tasks::emit_compact_metric;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -58,7 +61,6 @@ use crate::tools::spec_plan::search_tool_enabled;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
-use crate::util::backoff;
 use crate::util::error_or_panic;
 use codex_analytics::AppInvocation;
 use codex_analytics::CompactionPhase;
@@ -405,14 +407,16 @@ async fn run_hooks_and_record_inputs(
     input: &[TurnInput],
 ) -> bool {
     let mut blocked_input = false;
-    let mut accepted_input = false;
+    let mut accepted_user_input = false;
     for input_item in input {
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            accepted_input = true;
+            if matches!(input_item, TurnInput::UserInput(items) if !items.is_empty()) {
+                accepted_user_input = true;
+            }
             record_pending_input(
                 sess,
                 turn_context,
@@ -422,7 +426,7 @@ async fn run_hooks_and_record_inputs(
             .await;
         }
     }
-    blocked_input && !accepted_input
+    blocked_input && !accepted_user_input
 }
 
 #[expect(
@@ -777,6 +781,11 @@ async fn run_auto_compact(
 ) -> CodexResult<()> {
     if should_use_remote_compact_task(turn_context.provider.info()) {
         if turn_context.features.enabled(Feature::RemoteCompactionV2) {
+            emit_compact_metric(
+                &sess.services.session_telemetry,
+                "remote_v2",
+                /*manual*/ false,
+            );
             run_inline_remote_auto_compact_task_v2(
                 Arc::clone(sess),
                 Arc::clone(turn_context),
@@ -788,6 +797,11 @@ async fn run_auto_compact(
             .await?;
             return Ok(());
         }
+        emit_compact_metric(
+            &sess.services.session_telemetry,
+            "remote",
+            /*manual*/ false,
+        );
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
@@ -797,6 +811,11 @@ async fn run_auto_compact(
         )
         .await?;
     } else {
+        emit_compact_metric(
+            &sess.services.session_telemetry,
+            "local",
+            /*manual*/ false,
+        );
         run_inline_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
@@ -919,6 +938,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
         )
         .await;
+    let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut initial_input = Some(input);
     loop {
@@ -969,56 +989,16 @@ async fn run_sampling_request(
             return Err(err);
         }
 
-        // Use the configured provider-specific stream retry budget.
-        let max_retries = turn_context.provider.info().stream_max_retries();
-        if retries >= max_retries
-            && client_session.try_switch_fallback_transport(
-                &turn_context.session_telemetry,
-                &turn_context.model_info,
-            )
-        {
-            sess.send_event(
-                &turn_context,
-                EventMsg::Warning(WarningEvent {
-                    message: format!("Falling back from WebSockets to HTTPS transport. {err:#}"),
-                }),
-            )
-            .await;
-            retries = 0;
-            continue;
-        }
-        if retries < max_retries {
-            retries += 1;
-            let delay = match &err {
-                CodexErr::Stream(_, requested_delay) => {
-                    requested_delay.unwrap_or_else(|| backoff(retries))
-                }
-                _ => backoff(retries),
-            };
-            warn!(
-                "stream disconnected - retrying sampling request ({retries}/{max_retries} in {delay:?})...",
-            );
-
-            // In release builds, hide the first websocket retry notification to reduce noisy
-            // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
-            let report_error = retries > 1
-                || cfg!(debug_assertions)
-                || !sess.services.model_client.responses_websocket_enabled();
-            if report_error {
-                // Surface retry information to any UI/front‑end so the
-                // user understands what is happening instead of staring
-                // at a seemingly frozen screen.
-                sess.notify_stream_error(
-                    &turn_context,
-                    format!("Reconnecting... {retries}/{max_retries}"),
-                    err,
-                )
-                .await;
-            }
-            tokio::time::sleep(delay).await;
-        } else {
-            return Err(err);
-        }
+        handle_retryable_response_stream_error(
+            &mut retries,
+            max_retries,
+            err,
+            client_session,
+            &sess,
+            &turn_context,
+            ResponsesStreamRequest::Sampling,
+        )
+        .await?;
     }
 }
 
@@ -1026,12 +1006,25 @@ async fn run_sampling_request(
     clippy::await_holding_invalid_type,
     reason = "tool router construction reads through the session-owned manager guard"
 )]
+#[instrument(level = "trace",
+    skip_all,
+    fields(
+        turn_id = %turn_context.sub_id,
+        model = %turn_context.model_info.slug,
+        apps_enabled = turn_context.apps_enabled()
+    )
+)]
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
-    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+    let mcp_connection_manager = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .instrument(trace_span!("read_mcp_connection_manager"))
+        .await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
         .list_all_tools()

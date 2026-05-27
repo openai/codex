@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -71,6 +72,7 @@ use codex_network_proxy::normalize_host;
 use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -97,6 +99,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -398,6 +401,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
+    pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
@@ -462,6 +466,7 @@ impl Codex {
             extensions,
             conversation_history,
             session_source,
+            forked_from_thread_id,
             thread_source,
             agent_control,
             dynamic_tools,
@@ -617,6 +622,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            forked_from_thread_id,
             thread_source,
             dynamic_tools,
             persist_extended_history,
@@ -742,11 +748,17 @@ impl Codex {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.session
-            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .steer_input(
+                input,
+                additional_context,
+                expected_turn_id,
+                responsesapi_client_metadata,
+            )
             .await
     }
 
@@ -1086,6 +1098,7 @@ impl Session {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                additional_context: Default::default(),
                 thread_settings: Default::default(),
             },
             /*mirror_user_text_to_realtime*/ None,
@@ -1832,7 +1845,8 @@ impl Session {
         let active = self.active_turn.lock().await;
         active
             .as_ref()
-            .and_then(|turn| turn.tasks.get(sub_id))
+            .and_then(|turn| turn.task.as_ref())
+            .filter(|task| task.turn_context.sub_id == sub_id)
             .map(|task| Arc::clone(&task.turn_context))
     }
 
@@ -1840,7 +1854,7 @@ impl Session {
         &self,
     ) -> Option<(Arc<TurnContext>, CancellationToken)> {
         let active = self.active_turn.lock().await;
-        let (_, task) = active.as_ref()?.tasks.first()?;
+        let task = active.as_ref()?.task.as_ref()?;
         Some((
             Arc::clone(&task.turn_context),
             task.cancellation_token.child_token(),
@@ -3151,6 +3165,7 @@ impl Session {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
@@ -3159,9 +3174,10 @@ impl Session {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+        let Some(active_task) = active_turn.task.as_ref() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
+        let active_turn_id = &active_task.turn_context.sub_id;
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
@@ -3172,38 +3188,45 @@ impl Session {
             });
         }
 
-        match active_turn.tasks.first().map(|(_, task)| task.kind) {
-            Some(crate::state::TaskKind::Regular) => {}
-            Some(crate::state::TaskKind::Review) => {
+        match active_task.kind {
+            crate::state::TaskKind::Regular => {}
+            crate::state::TaskKind::Review => {
                 return Err(SteerInputError::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Review,
                 });
             }
-            Some(crate::state::TaskKind::Compact) => {
+            crate::state::TaskKind::Compact => {
                 return Err(SteerInputError::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Compact,
                 });
             }
-            None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
         }
 
-        if let Some(responsesapi_client_metadata) = responsesapi_client_metadata
-            && let Some((_, active_task)) = active_turn.tasks.first()
-        {
+        let additional_context_input = {
+            let mut state = self.state.lock().await;
+            state.additional_context.merge(additional_context)
+        };
+
+        if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
             active_task
                 .turn_context
                 .turn_metadata_state
                 .set_responsesapi_client_metadata(responsesapi_client_metadata);
         }
 
+        let mut pending_input = additional_context_input
+            .into_iter()
+            .map(TurnInput::ResponseInputItem)
+            .collect::<Vec<_>>();
+        pending_input.push(TurnInput::UserInput(input));
         self.input_queue
-            .push_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 active_turn.turn_state.as_ref(),
-                TurnInput::UserInput(input),
+                pending_input,
             )
             .await;
         Ok(active_turn_id.clone())
@@ -3280,6 +3303,7 @@ impl Session {
 pub(crate) fn emit_subagent_session_started(
     analytics_events_client: &AnalyticsEventsClient,
     client_metadata: AppServerClientMetadata,
+    session_id: SessionId,
     thread_id: ThreadId,
     parent_thread_id: Option<ThreadId>,
     thread_config: ThreadConfigSnapshot,
@@ -3298,6 +3322,7 @@ pub(crate) fn emit_subagent_session_started(
         .unwrap_or_default()
         .as_secs();
     analytics_events_client.track_subagent_thread_started(SubAgentThreadStartedInput {
+        session_id: session_id.to_string(),
         thread_id: thread_id.to_string(),
         parent_thread_id: parent_thread_id.map(|thread_id| thread_id.to_string()),
         product_client_id: client_name.clone(),

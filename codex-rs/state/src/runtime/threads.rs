@@ -971,6 +971,7 @@ ON CONFLICT(thread_id, position) DO NOTHING
             .execute(self.pool.as_ref())
             .await?;
         let rows_affected = result.rows_affected();
+        self.memories.delete_thread_memory(thread_id).await?;
         if rows_affected > 0 {
             self.thread_goals.delete_thread_goal(thread_id).await?;
         }

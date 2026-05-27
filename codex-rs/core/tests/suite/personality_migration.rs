@@ -253,7 +253,7 @@ async fn no_marker_explicit_global_personality_skips_migration() -> io::Result<(
 }
 
 #[tokio::test]
-async fn no_marker_profile_personality_skips_migration() -> io::Result<()> {
+async fn no_marker_profile_personality_does_not_skip_migration() -> io::Result<()> {
     let temp = TempDir::new()?;
     write_session_with_user_event(temp.path()).await?;
     let config_toml = parse_config_toml(
@@ -267,23 +267,22 @@ personality = "friendly"
 
     let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
-    assert_eq!(
-        status,
-        PersonalityMigrationStatus::SkippedExplicitPersonality
-    );
+    assert_eq!(status, PersonalityMigrationStatus::Applied);
     assert_eq!(
         tokio::fs::try_exists(temp.path().join(PERSONALITY_MIGRATION_FILENAME)).await?,
         true
     );
     assert_eq!(
         tokio::fs::try_exists(temp.path().join("config.toml")).await?,
-        false
+        true
     );
+    let persisted = read_config_toml(temp.path()).await?;
+    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
     Ok(())
 }
 
 #[tokio::test]
-async fn marker_short_circuits_invalid_profile_resolution() -> io::Result<()> {
+async fn marker_short_circuits_migration_with_legacy_profile() -> io::Result<()> {
     let temp = TempDir::new()?;
     tokio::fs::write(temp.path().join(PERSONALITY_MIGRATION_FILENAME), "v1\n").await?;
     let config_toml = parse_config_toml("profile = \"missing\"\n")?;
@@ -295,18 +294,16 @@ async fn marker_short_circuits_invalid_profile_resolution() -> io::Result<()> {
 }
 
 #[tokio::test]
-async fn invalid_selected_profile_returns_error_and_does_not_write_marker() -> io::Result<()> {
+async fn missing_legacy_profile_does_not_block_migration() -> io::Result<()> {
     let temp = TempDir::new()?;
     let config_toml = parse_config_toml("profile = \"missing\"\n")?;
 
-    let err = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None)
-        .await
-        .expect_err("missing profile should fail");
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
-    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(status, PersonalityMigrationStatus::SkippedNoSessions);
     assert_eq!(
         tokio::fs::try_exists(temp.path().join(PERSONALITY_MIGRATION_FILENAME)).await?,
-        false
+        true
     );
     Ok(())
 }

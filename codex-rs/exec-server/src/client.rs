@@ -218,7 +218,7 @@ impl LazyRemoteExecServerClient {
         }
 
         let next_client = match self.cached_client() {
-            Some(client)
+            Some(_client)
                 if matches!(
                     &self.transport_params,
                     ExecServerTransportParams::WebSocketUrl { .. }
