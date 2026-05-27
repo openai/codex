@@ -8,7 +8,6 @@ use super::ExtensionContext;
 use super::FragmentRegistration;
 use super::FragmentRegistrationProxy;
 use super::LegacyApplyPatchExecCommandWarning;
-use super::LegacyGoalContext;
 use super::LegacyModelMismatchWarning;
 use super::LegacyUnifiedExecProcessLimitWarning;
 use super::SkillInstructions;
@@ -39,8 +38,6 @@ static LEGACY_UNIFIED_EXEC_PROCESS_LIMIT_WARNING_REGISTRATION: FragmentRegistrat
 static LEGACY_APPLY_PATCH_EXEC_COMMAND_WARNING_REGISTRATION: FragmentRegistrationProxy<
     LegacyApplyPatchExecCommandWarning,
 > = FragmentRegistrationProxy::new();
-static LEGACY_GOAL_CONTEXT_REGISTRATION: FragmentRegistrationProxy<LegacyGoalContext> =
-    FragmentRegistrationProxy::new();
 static LEGACY_MODEL_MISMATCH_WARNING_REGISTRATION: FragmentRegistrationProxy<
     LegacyModelMismatchWarning,
 > = FragmentRegistrationProxy::new();
@@ -56,7 +53,6 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &SUBAGENT_NOTIFICATION_REGISTRATION,
     &LEGACY_UNIFIED_EXEC_PROCESS_LIMIT_WARNING_REGISTRATION,
     &LEGACY_APPLY_PATCH_EXEC_COMMAND_WARNING_REGISTRATION,
-    &LEGACY_GOAL_CONTEXT_REGISTRATION,
     &LEGACY_MODEL_MISMATCH_WARNING_REGISTRATION,
 ];
 

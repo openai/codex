@@ -14,7 +14,7 @@ use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
-use crate::steering::continuation_steering_prompt;
+use crate::steering::continuation_steering_request;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 
@@ -284,9 +284,7 @@ impl GoalRuntimeHandle {
             .mark_idle_goal_active(goal.goal_id.clone());
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
-        let request =
-            codex_extension_api::ThreadIdleRequest::new(continuation_steering_prompt(&goal))
-                .with_validation_key(goal_id);
+        let request = continuation_steering_request(&goal).with_validation_key(goal_id);
         Ok(Some(request))
     }
 

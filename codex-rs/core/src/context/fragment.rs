@@ -97,7 +97,7 @@ pub trait ContextualUserFragment {
     }
 }
 
-fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
+pub(crate) fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
     if start_marker.is_empty() || end_marker.is_empty() {
         return false;
     }

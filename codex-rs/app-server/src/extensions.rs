@@ -118,29 +118,6 @@ mod tests {
     use crate::outgoing_message::OutgoingMessage;
 
     #[tokio::test]
-    async fn app_server_event_sink_forwards_thread_goal_updates() {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
-        let outgoing = Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-            AnalyticsEventsClient::disabled(),
-        ));
-        let sink = app_server_extension_event_sink(outgoing);
-        let thread_id = ThreadId::default();
-
-        sink.emit(thread_goal_update_event(
-            thread_id,
-            "wire extension events",
-            "turn-1",
-        ));
-        let notification = recv_goal_update(&mut outgoing_rx).await;
-
-        assert_eq!(
-            app_server_goal_update(thread_id, "wire extension events", "turn-1"),
-            notification
-        );
-    }
-
-    #[tokio::test]
     async fn app_server_event_sink_waits_for_outgoing_capacity() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(1);
         let outgoing = Arc::new(OutgoingMessageSender::new(
@@ -170,7 +147,10 @@ mod tests {
         let _prefill = recv_goal_update(&mut outgoing_rx).await;
         let notification = recv_goal_update(&mut outgoing_rx).await;
 
-        assert_eq!(Some("turn-1".to_string()), notification.turn_id);
+        assert_eq!(
+            app_server_goal_update(thread_id, "wait for capacity", "turn-1"),
+            notification
+        );
     }
 
     fn thread_goal_update_event(thread_id: ThreadId, objective: &str, turn_id: &str) -> Event {

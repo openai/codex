@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use codex_extension_api::ThreadIdleRequest;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 
 use crate::context::ContextualUserFragment;
@@ -211,13 +213,20 @@ fn idle_extension_input(prompt: String) -> TurnInput {
         MAX_IDLE_EXTENSION_PROMPT_TOKENS,
     )
     .0;
+    if ExtensionContext::matches_text(&prompt) {
+        return TurnInput::ResponseInputItem(ResponseInputItem::Message {
+            role: ExtensionContext::role().to_string(),
+            content: vec![ContentItem::InputText { text: prompt }],
+            phase: None,
+        });
+    }
+
     TurnInput::ResponseInputItem(ExtensionContext::new(prompt).into_response_input_item())
 }
 
 #[cfg(test)]
 mod tests {
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseInputItem;
+    use crate::context::ExtensionContextTag;
 
     use super::*;
 
@@ -229,6 +238,7 @@ mod tests {
         );
         let original_len = prompt.len();
 
+        let prompt = ExtensionContext::with_tag(ExtensionContextTag::GOAL, prompt).render();
         let TurnInput::ResponseInputItem(ResponseInputItem::Message { content, .. }) =
             idle_extension_input(prompt)
         else {
@@ -238,7 +248,7 @@ mod tests {
             panic!("expected one text content item");
         };
 
-        assert!(text.starts_with("<extension_context>"));
+        assert!(text.starts_with("<goal_context>"));
         assert!(text.contains("start"));
         assert!(text.contains("end"));
         assert!(text.len() < original_len);

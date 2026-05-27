@@ -361,13 +361,7 @@ async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Resul
 async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    create_config_toml_with_goals(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -803,13 +797,7 @@ async fn thread_resume_can_skip_turns_for_metadata_only_resume() -> Result<()> {
 async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    create_config_toml_with_goals(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -920,13 +908,7 @@ async fn thread_goal_status_resume_does_not_inject_objective_update_prompt() -> 
     )
     .await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    create_config_toml_with_goals(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1065,13 +1047,7 @@ async fn thread_goal_status_resume_does_not_inject_objective_update_prompt() -> 
 async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    create_config_toml_with_goals(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1163,13 +1139,7 @@ async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()>
 async fn thread_goal_set_persists_resumable_stopped_statuses() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    create_config_toml_with_goals(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1249,13 +1219,7 @@ async fn thread_goal_set_persists_resumable_stopped_statuses() -> Result<()> {
 async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    create_config_toml_with_goals(codex_home.path(), &server.uri())?;
     let thread_id = create_fake_rollout(
         codex_home.path(),
         "2025-01-05T12-00-00",
@@ -1358,13 +1322,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
 async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    create_config_toml_with_goals(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -3612,6 +3570,16 @@ request_max_retries = 0
 stream_max_retries = 0
 "#
         ),
+    )
+}
+
+fn create_config_toml_with_goals(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    create_config_toml(codex_home, server_uri)?;
+    let config_path = codex_home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
     )
 }
 
