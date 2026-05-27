@@ -4903,6 +4903,57 @@ mod tests {
     }
 
     #[test]
+    fn plugin_at_mentions_render_with_plugin_accent_snapshot() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content_with_mention_bindings(
+            "@sample plugin".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![MentionBinding {
+                sigil: '@',
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        );
+
+        let area = Rect::new(0, 0, 40, 5);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let textarea_row = 1;
+        let mut text = String::new();
+        let mut magenta = String::new();
+        for x in 0..area.width {
+            let cell = &buf[(x, textarea_row)];
+            text.push(cell.symbol().chars().next().unwrap_or(' '));
+            magenta.push(if cell.style().fg == Some(Color::Magenta) {
+                '^'
+            } else {
+                ' '
+            });
+        }
+        while text.ends_with(' ') {
+            text.pop();
+        }
+        while magenta.ends_with(' ') {
+            magenta.pop();
+        }
+
+        insta::assert_snapshot!(
+            "plugin_at_mentions_render_with_plugin_accent",
+            format!("text:    {text}\nmagenta: {magenta}")
+        );
+    }
+
+    #[test]
     fn recalled_plugin_at_mentions_keep_plugin_accent_style() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
