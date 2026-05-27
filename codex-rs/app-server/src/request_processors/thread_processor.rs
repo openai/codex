@@ -2489,7 +2489,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
             exclude_turns,
-            include_turns_page,
+            initial_turns_page,
             persist_extended_history: _persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
@@ -2648,12 +2648,13 @@ impl ThreadRequestProcessor {
                     redact_thread_resume_payloads(&mut thread);
                 }
 
-                let initial_turns_page = if include_turns_page {
+                let initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
                     match build_thread_resume_initial_turns_page(
                         &response_history.get_rollout_items(),
                         thread.status.clone(),
                         /*has_live_running_thread*/ false,
                         /*active_turn*/ None,
+                        params,
                     ) {
                         Ok(page) => Some(page),
                         Err(error) => {
@@ -2903,7 +2904,7 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
-                    include_turns_page: params.include_turns_page,
+                    initial_turns_page: params.initial_turns_page.clone(),
                     redact_resume_payloads,
                 }),
             );
@@ -3718,7 +3719,8 @@ pub(super) fn build_thread_resume_initial_turns_page(
     loaded_status: ThreadStatus,
     has_live_running_thread: bool,
     active_turn: Option<Turn>,
-) -> Result<codex_app_server_protocol::ThreadResumeInitialTurnsPage, JSONRPCErrorError> {
+    params: &ThreadResumeInitialTurnsPageParams,
+) -> Result<codex_app_server_protocol::TurnsPage, JSONRPCErrorError> {
     build_thread_turns_page_response(
         items,
         loaded_status,
@@ -3726,9 +3728,9 @@ pub(super) fn build_thread_resume_initial_turns_page(
         active_turn,
         ThreadTurnsPageOptions {
             cursor: None,
-            limit: None,
-            sort_direction: SortDirection::Desc,
-            items_view: TurnItemsView::Summary,
+            limit: params.limit,
+            sort_direction: params.sort_direction.unwrap_or(SortDirection::Desc),
+            items_view: params.items_view.unwrap_or(TurnItemsView::Summary),
         },
     )
     .map(Into::into)

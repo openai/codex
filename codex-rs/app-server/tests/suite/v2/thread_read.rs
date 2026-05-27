@@ -24,6 +24,7 @@ use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
@@ -632,7 +633,7 @@ async fn thread_read_can_return_archived_threads_by_id() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_initial_turns_page_matches_default_turns_list_page() -> Result<()> {
+async fn thread_resume_initial_turns_page_matches_requested_turns_list_page() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -658,9 +659,9 @@ async fn thread_resume_initial_turns_page_matches_default_turns_list_page() -> R
         .send_thread_turns_list_request(ThreadTurnsListParams {
             thread_id: conversation_id.clone(),
             cursor: None,
-            limit: None,
-            sort_direction: None,
-            items_view: None,
+            limit: Some(2),
+            sort_direction: Some(SortDirection::Asc),
+            items_view: Some(TurnItemsView::NotLoaded),
         })
         .await?;
     let turns_list_resp: JSONRPCResponse = timeout(
@@ -674,7 +675,11 @@ async fn thread_resume_initial_turns_page_matches_default_turns_list_page() -> R
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id,
             exclude_turns: true,
-            include_turns_page: true,
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: Some(2),
+                sort_direction: Some(SortDirection::Asc),
+                items_view: Some(TurnItemsView::NotLoaded),
+            }),
             ..Default::default()
         })
         .await?;
@@ -692,7 +697,7 @@ async fn thread_resume_initial_turns_page_matches_default_turns_list_page() -> R
     assert!(thread.turns.is_empty());
     assert_eq!(
         initial_turns_page,
-        Some(codex_app_server_protocol::ThreadResumeInitialTurnsPage::from(expected_page))
+        Some(codex_app_server_protocol::TurnsPage::from(expected_page))
     );
 
     Ok(())

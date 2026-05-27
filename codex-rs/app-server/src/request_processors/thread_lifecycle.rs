@@ -568,12 +568,13 @@ pub(super) async fn handle_pending_thread_resume_request(
     if pending.redact_resume_payloads {
         redact_thread_resume_payloads(&mut thread);
     }
-    let initial_turns_page = if pending.include_turns_page {
+    let initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
         match super::thread_processor::build_thread_resume_initial_turns_page(
             &pending.history_items,
             thread.status.clone(),
             has_live_in_progress_turn,
             active_turn,
+            params,
         ) {
             Ok(page) => Some(page),
             Err(error) => {

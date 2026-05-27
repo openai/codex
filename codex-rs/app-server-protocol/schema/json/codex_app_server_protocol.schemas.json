@@ -17150,30 +17150,40 @@
         "title": "ThreadRealtimeTranscriptDoneNotification",
         "type": "object"
       },
-      "ThreadResumeInitialTurnsPage": {
+      "ThreadResumeInitialTurnsPageParams": {
         "properties": {
-          "backwardsCursor": {
+          "itemsView": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TurnItemsView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How much item detail to include for each returned turn; defaults to summary."
+          },
+          "limit": {
+            "description": "Optional turn page size.",
+            "format": "uint32",
+            "minimum": 0.0,
             "type": [
-              "string",
+              "integer",
               "null"
             ]
           },
-          "data": {
-            "items": {
-              "$ref": "#/definitions/v2/Turn"
-            },
-            "type": "array"
-          },
-          "nextCursor": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "sortDirection": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SortDirection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional turn pagination direction; defaults to descending."
           }
         },
-        "required": [
-          "data"
-        ],
         "type": "object"
       },
       "ThreadResumeParams": {
@@ -18512,6 +18522,32 @@
           "turnId"
         ],
         "title": "TurnSteerResponse",
+        "type": "object"
+      },
+      "TurnsPage": {
+        "properties": {
+          "backwardsCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/Turn"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
         "type": "object"
       },
       "UserInput": {

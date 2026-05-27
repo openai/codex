@@ -115,12 +115,23 @@ fn thread_turns_list_params_accepts_items_view() {
 fn thread_resume_params_accept_turns_page_bootstrap() {
     let params = serde_json::from_value::<ThreadResumeParams>(json!({
         "threadId": "thr_123",
-        "includeTurnsPage": true,
+        "initialTurnsPage": {
+            "limit": 25,
+            "sortDirection": "asc",
+            "itemsView": "full",
+        },
     }))
     .expect("thread resume params should deserialize");
 
     assert_eq!(params.thread_id, "thr_123");
-    assert!(params.include_turns_page);
+    assert_eq!(
+        params.initial_turns_page,
+        Some(ThreadResumeInitialTurnsPageParams {
+            limit: Some(25),
+            sort_direction: Some(SortDirection::Asc),
+            items_view: Some(TurnItemsView::Full),
+        })
+    );
 }
 
 #[test]
@@ -158,7 +169,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         sandbox: SandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
-        initial_turns_page: Some(ThreadResumeInitialTurnsPage {
+        initial_turns_page: Some(TurnsPage {
             data: Vec::new(),
             next_cursor: Some("cursor_next".to_string()),
             backwards_cursor: Some("cursor_back".to_string()),

@@ -1783,32 +1783,6 @@
         }
       ]
     },
-    "ThreadResumeInitialTurnsPage": {
-      "properties": {
-        "backwardsCursor": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "data": {
-          "items": {
-            "$ref": "#/definitions/Turn"
-          },
-          "type": "array"
-        },
-        "nextCursor": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "data"
-      ],
-      "type": "object"
-    },
     "ThreadSource": {
       "enum": [
         "user",
@@ -2020,6 +1994,32 @@
         "inProgress"
       ],
       "type": "string"
+    },
+    "TurnsPage": {
+      "properties": {
+        "backwardsCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "items": {
+            "$ref": "#/definitions/Turn"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
     },
     "UserInput": {
       "oneOf": [

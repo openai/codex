@@ -281,7 +281,7 @@ To continue a stored session, call `thread/resume` with the `thread.id` you prev
 
 By default, `thread/resume` includes the reconstructed turn history in `thread.turns`. Experimental clients can pass `excludeTurns: true` to return only thread metadata and live resume state, then call `thread/turns/list` separately if they want to page the turn history over the network. In that mode the server also skips replaying restored `thread/tokenUsage/updated`, which avoids rebuilding turns just to attribute historical usage.
 
-Experimental clients that want the live resume subscription plus the newest default turns page in one round trip can pass `includeTurnsPage: true`. The response then includes `initialTurnsPage`, shaped like the default first `thread/turns/list` result: newest-first summary turns with `nextCursor` and `backwardsCursor` for follow-up pagination. This flag is intentionally fixed-shape; use `thread/turns/list` when the client needs custom page controls.
+Experimental clients that want the live resume subscription plus a turns page in one round trip can pass `initialTurnsPage`. It accepts the same `limit`, `sortDirection`, and `itemsView` controls as `thread/turns/list`; omitted controls use its defaults. The response includes `initialTurnsPage` with `nextCursor` and `backwardsCursor` for follow-up pagination.
 
 By default, resume uses the latest persisted `model` and `reasoningEffort` values associated with the thread. Supplying any of `model`, `modelProvider`, `config.model`, or `config.model_reasoning_effort` disables that persisted fallback and uses the explicit overrides plus normal config resolution instead.
 
@@ -303,7 +303,11 @@ Example:
 { "method": "thread/resume", "id": 13, "params": {
     "threadId": "thr_123",
     "excludeTurns": true,
-    "includeTurnsPage": true
+    "initialTurnsPage": {
+        "limit": 20,
+        "sortDirection": "desc",
+        "itemsView": "summary"
+    }
 } }
 { "id": 13, "result": {
     "thread": { "id": "thr_123", "turns": [], … },
