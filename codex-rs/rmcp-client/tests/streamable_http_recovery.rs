@@ -16,7 +16,10 @@ async fn streamable_http_404_session_expiry_recovers_and_retries_once() -> anyho
     let warmup = call_echo_tool(&client, "warmup").await?;
     assert_eq!(warmup, expected_echo_result("warmup"));
 
-    arm_session_post_failure(&base_url, /*status*/ 404, /*remaining*/ 1).await?;
+    arm_session_post_failure(
+        &base_url, /*status*/ 404, /*remaining*/ 1, /*www_authenticate_header*/ None,
+    )
+    .await?;
 
     let recovered = call_echo_tool(&client, "recovered").await?;
     assert_eq!(recovered, expected_echo_result("recovered"));
@@ -32,7 +35,10 @@ async fn streamable_http_401_does_not_trigger_recovery() -> anyhow::Result<()> {
     let warmup = call_echo_tool(&client, "warmup").await?;
     assert_eq!(warmup, expected_echo_result("warmup"));
 
-    arm_session_post_failure(&base_url, /*status*/ 401, /*remaining*/ 2).await?;
+    arm_session_post_failure(
+        &base_url, /*status*/ 401, /*remaining*/ 2, /*www_authenticate_header*/ None,
+    )
+    .await?;
 
     let first_error = call_echo_tool(&client, "unauthorized").await.unwrap_err();
     assert!(first_error.to_string().contains("401"));
@@ -46,6 +52,32 @@ async fn streamable_http_401_does_not_trigger_recovery() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_403_scope_challenge_returns_insufficient_scope() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let client = create_client(&base_url).await?;
+
+    let warmup = call_echo_tool(&client, "warmup").await?;
+    assert_eq!(warmup, expected_echo_result("warmup"));
+
+    arm_session_post_failure(
+        &base_url,
+        /*status*/ 403,
+        /*remaining*/ 1,
+        /*www_authenticate_header*/
+        Some(r#"Bearer error="insufficient_scope", scope="files:read files:write""#),
+    )
+    .await?;
+
+    let error = call_echo_tool(&client, "forbidden").await.unwrap_err();
+    assert!(
+        error.to_string().contains("Insufficient scope"),
+        "expected insufficient-scope transport error, got: {error:#}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn streamable_http_404_recovery_only_retries_once() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server().await?;
     let client = create_client(&base_url).await?;
@@ -53,7 +85,10 @@ async fn streamable_http_404_recovery_only_retries_once() -> anyhow::Result<()> 
     let warmup = call_echo_tool(&client, "warmup").await?;
     assert_eq!(warmup, expected_echo_result("warmup"));
 
-    arm_session_post_failure(&base_url, /*status*/ 404, /*remaining*/ 2).await?;
+    arm_session_post_failure(
+        &base_url, /*status*/ 404, /*remaining*/ 2, /*www_authenticate_header*/ None,
+    )
+    .await?;
 
     let error = call_echo_tool(&client, "double-404").await.unwrap_err();
     assert!(
@@ -77,7 +112,10 @@ async fn streamable_http_non_session_failure_does_not_trigger_recovery() -> anyh
     let warmup = call_echo_tool(&client, "warmup").await?;
     assert_eq!(warmup, expected_echo_result("warmup"));
 
-    arm_session_post_failure(&base_url, /*status*/ 500, /*remaining*/ 2).await?;
+    arm_session_post_failure(
+        &base_url, /*status*/ 500, /*remaining*/ 2, /*www_authenticate_header*/ None,
+    )
+    .await?;
 
     let first_error = call_echo_tool(&client, "server-error").await.unwrap_err();
     assert!(first_error.to_string().contains("500"));

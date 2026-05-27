@@ -30,6 +30,7 @@ use reqwest::header::HeaderName;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::ServerJsonRpcMessage;
 use rmcp::transport::streamable_http_client::AuthRequiredError;
+use rmcp::transport::streamable_http_client::InsufficientScopeError;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
@@ -143,6 +144,15 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             return Err(StreamableHttpError::AuthRequired(AuthRequiredError::new(
                 header,
             )));
+        }
+        if response.status == StatusCode::FORBIDDEN.as_u16()
+            && let Some(header) =
+                response_header(&response.headers, reqwest::header::WWW_AUTHENTICATE)
+        {
+            let required_scope = extract_scope_from_www_authenticate(&header);
+            return Err(StreamableHttpError::InsufficientScope(
+                InsufficientScopeError::new(header, required_scope),
+            ));
         }
         if matches!(
             StatusCode::from_u16(response.status).ok(),
@@ -383,6 +393,58 @@ fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<Stri
         .map(|header| header.value.clone())
 }
 
+/// Extracts the `scope` auth-param without inspecting text inside other parameter values.
+/// RMCP has an equivalent helper, but it is private to that crate.
+fn extract_scope_from_www_authenticate(header: &str) -> Option<String> {
+    let scope_from_segment = |segment: &str| {
+        let (name, value) = segment.split_once('=')?;
+        if !name
+            .split_ascii_whitespace()
+            .last()?
+            .eq_ignore_ascii_case("scope")
+        {
+            return None;
+        }
+
+        let value = value.trim();
+        if let Some(quoted_value) = value.strip_prefix('"') {
+            return quoted_value.strip_suffix('"').map(str::to_string);
+        }
+        value
+            .split_ascii_whitespace()
+            .next()
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let mut segment_start = 0;
+    let mut in_quotes = false;
+    let mut escaped = false;
+
+    for (position, character) in header.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' if in_quotes => escaped = true,
+            '"' => in_quotes = !in_quotes,
+            ',' | ';' if !in_quotes => {
+                if let Some(scope) = scope_from_segment(&header[segment_start..position]) {
+                    return Some(scope);
+                }
+                segment_start = position + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    if in_quotes {
+        None
+    } else {
+        scope_from_segment(&header[segment_start..])
+    }
+}
+
 fn status_is_success(status: u16) -> bool {
     StatusCode::from_u16(status).is_ok_and(|status| status.is_success())
 }
@@ -413,4 +475,66 @@ fn sse_stream_from_body(
         }
     }))
     .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::extract_scope_from_www_authenticate;
+
+    #[test]
+    fn extracts_scope_authentication_parameters() {
+        let cases = [
+            (
+                r#"Bearer error="insufficient_scope", scope="files:read files:write""#,
+                "files:read files:write",
+            ),
+            (
+                r#"Bearer scope=read:data, error="insufficient_scope""#,
+                "read:data",
+            ),
+            (
+                r#"Bearer error="insufficient_scope", ScOpE = "files:read""#,
+                "files:read",
+            ),
+        ];
+
+        for (header, expected_scope) in cases {
+            assert_eq!(
+                extract_scope_from_www_authenticate(header),
+                Some(expected_scope.to_string()),
+                "header: {header}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_scope_text_outside_a_scope_parameter() {
+        let cases = [
+            r#"Bearer error_description="request scope=admin""#,
+            r#"Bearer resource_scope="admin""#,
+            r#"Bearer "scope=admin""#,
+            r#"Bearer error="insufficient_scope", scope="#,
+            r#"Bearer error_description="unterminated scope=admin"#,
+        ];
+
+        for header in cases {
+            assert_eq!(
+                extract_scope_from_www_authenticate(header),
+                None,
+                "header: {header}"
+            );
+        }
+    }
+
+    #[test]
+    fn skips_scope_text_in_quoted_values_before_the_scope_parameter() {
+        assert_eq!(
+            extract_scope_from_www_authenticate(
+                r#"Bearer error_description="request scope=admin, not \"root\"", scope="files:read""#
+            ),
+            Some("files:read".to_string())
+        );
+    }
 }

@@ -162,12 +162,14 @@ pub(crate) async fn arm_session_post_failure(
     base_url: &str,
     status: u16,
     remaining: usize,
+    www_authenticate_header: Option<&str>,
 ) -> anyhow::Result<()> {
     let response = reqwest::Client::new()
         .post(format!("{base_url}{SESSION_POST_FAILURE_CONTROL_PATH}"))
         .json(&json!({
             "status": status,
             "remaining": remaining,
+            "www_authenticate_header": www_authenticate_header,
         }))
         .send()
         .await?;
