@@ -12,6 +12,7 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
+use anyhow::Context;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
@@ -153,7 +154,9 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
     if let Some(cache_context) = cache_context {
         let cache_write_start = Instant::now();
         write_cached_codex_apps_tools(cache_context, tools);
-        write_cached_codex_apps_server_info(cache_context, server_info);
+        if let Err(err) = write_cached_codex_apps_server_info(cache_context, server_info) {
+            tracing::warn!("failed to write Codex Apps server info cache: {err:#}");
+        }
         emit_duration(
             MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
             cache_write_start.elapsed(),
@@ -252,20 +255,28 @@ pub(crate) fn load_cached_codex_apps_server_info(
 fn write_cached_codex_apps_server_info(
     cache_context: &CodexAppsToolsCacheContext,
     server_info: &McpServerInfo,
-) {
+) -> anyhow::Result<()> {
     let cache_path = cache_context.server_info_cache_path();
-    if let Some(parent) = cache_path.parent()
-        && std::fs::create_dir_all(parent).is_err()
-    {
-        return;
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create Codex Apps server info cache directory `{}`",
+                parent.display()
+            )
+        })?;
     }
-    let Ok(bytes) = serde_json::to_vec_pretty(&CodexAppsServerInfoDiskCache {
+    let bytes = serde_json::to_vec_pretty(&CodexAppsServerInfoDiskCache {
         schema_version: CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION,
         server_info: server_info.clone(),
-    }) else {
-        return;
-    };
-    let _ = std::fs::write(cache_path, bytes);
+    })
+    .context("failed to serialize Codex Apps server info cache")?;
+    std::fs::write(&cache_path, bytes).with_context(|| {
+        format!(
+            "failed to write Codex Apps server info cache `{}`",
+            cache_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 pub(crate) fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
