@@ -8269,6 +8269,48 @@ async fn start_task_does_not_overwrite_racing_active_task() {
 }
 
 #[tokio::test]
+async fn start_task_does_not_drain_input_while_another_start_is_claiming_turn() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let mut active_turn = ActiveTurn::default();
+    active_turn.task_starting = true;
+    *sess.active_turn.lock().await = Some(active_turn);
+
+    let queued_item = ResponseInputItem::Message {
+        role: "assistant".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued before wake".to_string(),
+        }],
+        phase: None,
+    };
+    sess.input_queue
+        .queue_response_items_for_next_turn(vec![queued_item])
+        .await;
+
+    sess.start_task(
+        tc,
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    assert!(
+        sess.input_queue
+            .has_queued_response_items_for_next_turn()
+            .await
+    );
+    assert!(
+        sess.active_turn
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|active_turn| active_turn.task.is_none())
+    );
+}
+
+#[tokio::test]
 async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let queued_item = ResponseInputItem::Message {

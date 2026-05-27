@@ -28,6 +28,8 @@ use codex_protocol::protocol::TokenUsage;
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
     pub(crate) task: Option<RunningTask>,
+    /// A task claimed this turn state and is still wiring up turn-start side effects.
+    pub(crate) task_starting: bool,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
 }
 
@@ -56,6 +58,7 @@ impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
             task: None,
+            task_starting: false,
             turn_state: Arc::new(Mutex::new(TurnState::default())),
         }
     }

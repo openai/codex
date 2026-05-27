@@ -320,6 +320,15 @@ impl Session {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
+        let turn_state = {
+            let mut active = self.active_turn.lock().await;
+            let turn = active.get_or_insert_with(ActiveTurn::default);
+            if turn.task.is_some() || turn.task_starting {
+                return;
+            }
+            turn.task_starting = true;
+            Arc::clone(&turn.turn_state)
+        };
         let started_at = Instant::now();
         let turn_started_at_unix_ms = turn_context
             .turn_timing_state
@@ -339,14 +348,6 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
-        let turn_state = {
-            let mut active = self.active_turn.lock().await;
-            let turn = active.get_or_insert_with(ActiveTurn::default);
-            if turn.task.is_some() {
-                return;
-            }
-            Arc::clone(&turn.turn_state)
-        };
         let queued_response_items = self
             .input_queue
             .take_queued_response_items_for_next_turn()
@@ -366,8 +367,11 @@ impl Session {
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
-        let turn = active.get_or_insert_with(ActiveTurn::default);
-        if turn.task.is_some() {
+        let Some(turn) = active.as_mut() else {
+            return;
+        };
+        if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.task_starting || turn.task.is_some()
+        {
             return;
         }
         let done_clone = Arc::clone(&done);
@@ -443,6 +447,7 @@ impl Session {
             turn_extension_data,
             _timer: timer,
         };
+        turn.task_starting = false;
         turn.task = Some(running_task);
     }
 
