@@ -869,8 +869,8 @@ impl ChatComposer {
     ///
     /// - If the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a placeholder
     ///   element (expanded on submit) and stores the full text in `pending_pastes`.
-    /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
-    ///   trailing space so the user can keep typing naturally.
+    /// - Otherwise, if the paste looks like an image path outside shell mode, attaches the image
+    ///   and inserts a trailing space so the user can keep typing naturally.
     /// - Otherwise, inserts the pasted text directly into the textarea.
     ///
     /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
@@ -884,6 +884,7 @@ impl ChatComposer {
             self.draft.pending_pastes.push((placeholder, pasted));
         } else if char_count > 1
             && self.image_paste_enabled()
+            && !self.draft.is_bash_mode
             && self.handle_paste_image_path(pasted.clone())
         {
             self.draft.textarea.insert_str(" ");
@@ -9717,6 +9718,36 @@ mod tests {
 
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs, vec![tmp_path]);
+    }
+
+    #[test]
+    fn pasting_filepath_in_shell_mode_keeps_literal_text() {
+        let tmp = tempdir().expect("create TempDir");
+        let tmp_path: PathBuf = tmp.path().join("codex_tui_test_paste_image.png");
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(3, 2, |_x, _y| Rgba([1, 2, 3, 255]));
+        img.save(&tmp_path).expect("failed to write temp png");
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['!']);
+        assert!(composer.draft.is_bash_mode);
+
+        let path = tmp_path.to_string_lossy().to_string();
+        let needs_redraw = composer.handle_paste(path.clone());
+
+        assert!(needs_redraw);
+        assert_eq!(composer.draft.textarea.text(), path);
+        assert_eq!(composer.current_text(), format!("!{path}"));
+        assert!(composer.local_image_paths().is_empty());
     }
 
     #[test]

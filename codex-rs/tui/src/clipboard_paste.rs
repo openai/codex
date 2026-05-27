@@ -46,6 +46,28 @@ pub struct PastedImageInfo {
     pub encoded_format: EncodedImageFormat, // Always PNG for now.
 }
 
+#[cfg(not(target_os = "android"))]
+pub fn paste_text_or_file_path() -> Result<Option<String>, String> {
+    let mut cb = arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+
+    if let Ok(text) = cb.get_text()
+        && !text.is_empty()
+    {
+        return Ok(Some(text));
+    }
+
+    let files = cb.get().file_list().unwrap_or_default();
+    Ok(files
+        .into_iter()
+        .next()
+        .map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[cfg(target_os = "android")]
+pub fn paste_text_or_file_path() -> Result<Option<String>, String> {
+    Ok(None)
+}
+
 /// Capture image from system clipboard, encode to PNG, and return bytes + info.
 #[cfg(not(target_os = "android"))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {

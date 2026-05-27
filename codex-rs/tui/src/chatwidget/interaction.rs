@@ -72,23 +72,7 @@ impl ChatWidget {
             } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
                 && c.eq_ignore_ascii_case(&'v') =>
             {
-                match paste_image_to_temp_png() {
-                    Ok((path, info)) => {
-                        tracing::debug!(
-                            "pasted image size={}x{} format={}",
-                            info.width,
-                            info.height,
-                            info.encoded_format.label()
-                        );
-                        self.attach_image(path);
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to paste image: {err}");
-                        self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to paste image: {err}",
-                        )));
-                    }
-                }
+                self.handle_paste_image_shortcut(paste_text_or_file_path, paste_image_to_temp_png);
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -154,6 +138,41 @@ impl ChatWidget {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
                 let input_result = self.bottom_pane.handle_key_event(key_event);
                 self.handle_composer_input_result(input_result, had_modal_or_popup);
+            }
+        }
+    }
+
+    pub(crate) fn handle_paste_image_shortcut(
+        &mut self,
+        paste_text_or_file_path: impl FnOnce() -> Result<Option<String>, String>,
+        paste_image_to_temp_png: impl FnOnce() -> Result<(PathBuf, PastedImageInfo), PasteImageError>,
+    ) {
+        if self.bottom_pane.composer_text().starts_with('!') {
+            match paste_text_or_file_path() {
+                Ok(Some(text)) => self.handle_paste(text),
+                Ok(None) => tracing::debug!(
+                    "clipboard did not contain text or a file path to paste in shell mode"
+                ),
+                Err(err) => tracing::warn!("failed to paste text in shell mode: {err}"),
+            }
+            return;
+        }
+
+        match paste_image_to_temp_png() {
+            Ok((path, info)) => {
+                tracing::debug!(
+                    "pasted image size={}x{} format={}",
+                    info.width,
+                    info.height,
+                    info.encoded_format.label()
+                );
+                self.attach_image(path);
+            }
+            Err(err) => {
+                tracing::warn!("failed to paste image: {err}");
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Failed to paste image: {err}",
+                )));
             }
         }
     }

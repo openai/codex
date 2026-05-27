@@ -986,6 +986,24 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
 }
 
 #[tokio::test]
+async fn paste_image_shortcut_in_shell_mode_pastes_clipboard_text() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane
+        .set_composer_text("!ls ".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_paste_image_shortcut(
+        || Ok(Some("/tmp/from-clipboard.png".to_string())),
+        || panic!("shell mode should not read image clipboard"),
+    );
+
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "!ls /tmp/from-clipboard.png"
+    );
+    assert!(chat.bottom_pane.take_recent_submission_images().is_empty());
+}
+
+#[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.edit_queued_message = vec![crate::key_hint::alt(KeyCode::Up)];
