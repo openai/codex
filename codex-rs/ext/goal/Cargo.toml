@@ -21,6 +21,7 @@ codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 codex-tools = { workspace = true }
+codex-utils-template = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
