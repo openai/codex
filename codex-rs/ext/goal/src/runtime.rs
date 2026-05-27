@@ -197,6 +197,14 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
+        if !self
+            .inner
+            .accounting_state
+            .turn_is_current_active_goal(turn_id)
+        {
+            return Ok(());
+        }
+
         let progress_event_id = format!("{turn_id}:usage-limit-progress");
         self.account_active_goal_progress(
             turn_id,
