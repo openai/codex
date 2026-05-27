@@ -213,18 +213,9 @@ struct McpStatusServer {
 
 impl ServerHandler for McpStatusServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "lookup-server".to_string(),
-                title: Some("Lookup Server".to_string()),
-                version: "1.0.0".to_string(),
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-            ..ServerInfo::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+            Implementation::new("lookup-server", "1.0.0").with_title("Lookup Server"),
+        )
     }
 
     async fn list_tools(
@@ -260,13 +251,12 @@ struct SlowInventoryServer {
 
 impl ServerHandler for SlowInventoryServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-            ..ServerInfo::default()
-        }
+        )
     }
 
     async fn list_tools(

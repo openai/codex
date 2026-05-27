@@ -209,9 +209,9 @@ async fn run_command_under_sandbox(
     // does not support `--cwd`, but let's use the config value for consistency.
     let cwd = config.cwd.clone();
     // For now, we always use the same cwd for both the command and the
-    // sandbox policy. In the future, we could add a CLI option to set them
+    // permission profile. In the future, we could add a CLI option to set them
     // separately.
-    let sandbox_policy_cwd = cwd.clone();
+    let permission_profile_cwd = cwd.clone();
 
     let env = create_env(
         &config.permissions.shell_environment_policy,
@@ -222,7 +222,8 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            run_command_under_windows_session(&config, command, cwd, sandbox_policy_cwd, env).await;
+            run_command_under_windows_session(&config, command, cwd, permission_profile_cwd, env)
+                .await;
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -265,7 +266,7 @@ async fn run_command_under_sandbox(
                 command,
                 file_system_sandbox_policy: &file_system_sandbox_policy,
                 network_sandbox_policy,
-                sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
+                sandbox_policy_cwd: permission_profile_cwd.as_path(),
                 enforce_managed_network: false,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,
@@ -297,7 +298,7 @@ async fn run_command_under_sandbox(
                 command,
                 cwd.as_path(),
                 &config.permissions.effective_permission_profile(),
-                sandbox_policy_cwd.as_path(),
+                permission_profile_cwd.as_path(),
                 use_legacy_landlock,
                 allow_network_for_proxy(managed_network_requirements_enabled),
             );
@@ -349,24 +350,15 @@ async fn run_command_under_windows_session(
     config: &Config,
     command: Vec<String>,
     cwd: AbsolutePathBuf,
-    sandbox_policy_cwd: AbsolutePathBuf,
+    permission_profile_cwd: AbsolutePathBuf,
     env: std::collections::HashMap<String, String>,
 ) -> ! {
     use codex_core::windows_sandbox::WindowsSandboxLevelExt;
     use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_windows_sandbox::spawn_windows_sandbox_session_elevated;
+    use codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile;
     use codex_windows_sandbox::spawn_windows_sandbox_session_legacy;
 
-    let sandbox_policy = config
-        .permissions
-        .legacy_sandbox_policy(sandbox_policy_cwd.as_path());
-    let policy_str = match serde_json::to_string(&sandbox_policy) {
-        Ok(policy_str) => policy_str,
-        Err(err) => {
-            eprintln!("windows sandbox failed to serialize policy: {err}");
-            std::process::exit(1);
-        }
-    };
+    let permission_profile = config.permissions.effective_permission_profile();
 
     let use_elevated = matches!(
         WindowsSandboxLevel::from_config(config),
@@ -374,9 +366,9 @@ async fn run_command_under_windows_session(
     );
 
     let spawned = if use_elevated {
-        spawn_windows_sandbox_session_elevated(
-            policy_str.as_str(),
-            sandbox_policy_cwd.as_path(),
+        spawn_windows_sandbox_session_elevated_for_permission_profile(
+            &permission_profile,
+            permission_profile_cwd.as_path(),
             config.codex_home.as_path(),
             command,
             cwd.as_path(),
@@ -394,8 +386,8 @@ async fn run_command_under_windows_session(
         .await
     } else {
         spawn_windows_sandbox_session_legacy(
-            policy_str.as_str(),
-            sandbox_policy_cwd.as_path(),
+            &permission_profile,
+            permission_profile_cwd.as_path(),
             config.codex_home.as_path(),
             command,
             cwd.as_path(),

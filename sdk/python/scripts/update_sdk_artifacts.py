@@ -875,7 +875,41 @@ def _approval_mode_model_arg_lines(*, indent: str = "            ") -> list[str]
 
 
 def _model_arg_lines(fields: list[PublicFieldSpec], *, indent: str = "            ") -> list[str]:
-    return [f"{indent}{field.wire_name}={field.py_name}," for field in fields]
+    lines: list[str] = []
+    for field in fields:
+        arg = field.py_name
+        if field.wire_name == "sandbox":
+            arg = "_sandbox_mode(sandbox)"
+        elif field.wire_name == "sandbox_policy":
+            arg = "_sandbox_policy(sandbox)"
+        lines.append(f"{indent}{field.wire_name}={arg},")
+    return lines
+
+
+def _replace_public_sandbox_field(
+    fields: list[PublicFieldSpec], *, wire_name: str
+) -> list[PublicFieldSpec]:
+    """Expose stable wire sandbox settings through one public enum parameter."""
+    public_fields: list[PublicFieldSpec] = []
+    replaced = False
+    for field in fields:
+        if field.wire_name != wire_name:
+            public_fields.append(field)
+            continue
+        if replaced:
+            raise RuntimeError(f"Found more than one generated sandbox field named {wire_name}")
+        public_fields.append(
+            PublicFieldSpec(
+                wire_name=wire_name,
+                py_name="sandbox",
+                annotation="Sandbox | None",
+                required=False,
+            )
+        )
+        replaced = True
+    if not replaced:
+        raise RuntimeError(f"Could not find generated sandbox field named {wire_name}")
+    return public_fields
 
 
 def _replace_generated_block(source: str, block_name: str, body: str) -> str:
@@ -1113,6 +1147,7 @@ def generate_public_api_flat_methods() -> None:
         "ThreadStartParams",
         exclude=approval_fields,
     )
+    thread_start_fields = _replace_public_sandbox_field(thread_start_fields, wire_name="sandbox")
     thread_list_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "ThreadListParams",
@@ -1122,16 +1157,19 @@ def generate_public_api_flat_methods() -> None:
         "ThreadResumeParams",
         exclude={"thread_id", *approval_fields},
     )
+    thread_resume_fields = _replace_public_sandbox_field(thread_resume_fields, wire_name="sandbox")
     thread_fork_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "ThreadForkParams",
         exclude={"thread_id", *approval_fields},
     )
+    thread_fork_fields = _replace_public_sandbox_field(thread_fork_fields, wire_name="sandbox")
     turn_start_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "TurnStartParams",
         exclude={"thread_id", "input", *approval_fields},
     )
+    turn_start_fields = _replace_public_sandbox_field(turn_start_fields, wire_name="sandbox_policy")
 
     source = public_api_path.read_text()
     source = _replace_generated_block(

@@ -861,7 +861,7 @@ fn project_config_for_lookup_key(
         .iter()
         .filter(|(key, _)| normalize_project_lookup_key((*key).clone()) == lookup_key)
         .collect();
-    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches.sort_by_key(|(key, _)| *key);
     normalized_matches
         .first()
         .map(|(_, project_config)| (**project_config).clone())

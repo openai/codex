@@ -66,7 +66,10 @@ use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use tracing::instrument;
+use tracing::trace;
+use tracing::trace_span;
 use tracing::warn;
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
@@ -380,13 +383,37 @@ impl McpConnectionManager {
     }
 
     /// Returns all tools with model-visible names normalized.
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
-        for managed_client in self.clients.values() {
-            let Some(server_tools) = managed_client.listed_tools().await else {
+        for (server_name, managed_client) in &self.clients {
+            let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
+            let startup_complete = managed_client
+                .startup_complete
+                .load(std::sync::atomic::Ordering::Acquire);
+            trace!(
+                server_name = %server_name,
+                has_cached_tool_info_snapshot,
+                startup_complete,
+                "waiting for MCP server tools while building tool list"
+            );
+            let Some(server_tools) = managed_client
+                .listed_tools()
+                .instrument(trace_span!(
+                    "list_tools_for_server",
+                    server_name = %server_name,
+                    has_cached_tool_info_snapshot,
+                    startup_complete
+                ))
+                .await
+            else {
                 continue;
             };
+            trace!(
+                server_name = %server_name,
+                tool_count = server_tools.len(),
+                "listed MCP server tools while building tool list"
+            );
             tools.extend(
                 server_tools
                     .into_iter()
@@ -511,9 +538,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
-                        meta: None,
-                        cursor: Some(next.clone()),
+                    let params = cursor.as_ref().map(|next| {
+                        PaginatedRequestParams::default().with_cursor(Some(next.clone()))
                     });
                     let response = match client.list_resources(params, timeout).await {
                         Ok(result) => result,
@@ -577,9 +603,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
-                        meta: None,
-                        cursor: Some(next.clone()),
+                    let params = cursor.as_ref().map(|next| {
+                        PaginatedRequestParams::default().with_cursor(Some(next.clone()))
                     });
                     let response = match client.list_resource_templates(params, timeout).await {
                         Ok(result) => result,

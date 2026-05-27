@@ -48,7 +48,26 @@ If you are migrating older code, update these names:
 - `sortKey` -> `sort_key`
 - `sourceKinds` -> `source_kinds`
 - `outputSchema` -> `output_schema`
-- `sandboxPolicy` -> `sandbox_policy`
+
+## How do I choose sandbox access?
+
+Use the same `sandbox=` keyword for threads and turns:
+
+```python
+from openai_codex import Sandbox
+
+thread = codex.thread_start(sandbox=Sandbox.workspace_write)
+result = thread.run("Review only.", sandbox=Sandbox.read_only)
+```
+
+The presets are:
+
+- `Sandbox.read_only`: read files without allowing writes.
+- `Sandbox.workspace_write`: the normal default for projects with a recorded trust decision; read files and write inside the workspace and configured writable roots.
+- `Sandbox.full_access`: run without filesystem access restrictions.
+
+When `sandbox=` is omitted, app-server uses its configured default. A turn
+sandbox override applies to that turn and subsequent turns.
 
 ## Why only `thread_start(...)` and `thread_resume(...)`?
 

@@ -52,7 +52,8 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             .width()
             .min(usize::from(width.saturating_sub(4)))
             .max(1);
-        with_border_with_inner_width(content.lines, inner_width)
+        let lines = adaptive_wrap_lines(content.lines, RtOptions::new(inner_width));
+        with_border_with_inner_width(lines, inner_width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -69,6 +70,14 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             Line::from("See full release notes:"),
             Line::from("https://github.com/openai/codex/releases/latest"),
         ]
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        crate::terminal_hyperlinks::annotate_web_urls(self.display_lines(width))
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 }
 #[allow(clippy::disallowed_methods)]
@@ -127,6 +136,14 @@ impl HistoryCell for CyberPolicyNoticeCell {
             ),
             Line::from(TRUSTED_ACCESS_FOR_CYBER_URL),
         ]
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        crate::terminal_hyperlinks::annotate_web_urls(self.display_lines(width))
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 }
 

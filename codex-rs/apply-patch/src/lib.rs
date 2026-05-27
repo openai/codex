@@ -776,7 +776,7 @@ fn compute_replacements(
         }
     }
 
-    replacements.sort_by(|(lhs_idx, _, _), (rhs_idx, _, _)| lhs_idx.cmp(rhs_idx));
+    replacements.sort_by_key(|(index, _, _)| *index);
 
     Ok(replacements)
 }

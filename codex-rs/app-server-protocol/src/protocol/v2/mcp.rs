@@ -692,6 +692,7 @@ impl From<McpServerElicitationRequestResponse> for rmcp::model::CreateElicitatio
         Self {
             action: value.action.into(),
             content: value.content,
+            meta: None,
         }
     }
 }
