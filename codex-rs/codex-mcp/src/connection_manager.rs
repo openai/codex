@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -395,13 +396,26 @@ impl McpConnectionManager {
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
-    pub async fn list_server_infos(&self) -> HashMap<String, McpServerInfo> {
+    /// Returns presentation metadata without waiting for uncached clients still initializing.
+    pub async fn list_available_server_infos(&self) -> HashMap<String, McpServerInfo> {
         let mut server_infos = HashMap::new();
         for (server_name, client) in &self.clients {
-            let Ok(managed_client) = client.client().await else {
+            if !client.startup_complete.load(Ordering::Acquire) {
+                if let Some(server_info) = client.startup_server_info.clone() {
+                    server_infos.insert(server_name.clone(), server_info);
+                }
                 continue;
-            };
-            server_infos.insert(server_name.clone(), managed_client.server_info);
+            }
+            match client.client().await {
+                Ok(managed_client) => {
+                    server_infos.insert(server_name.clone(), managed_client.server_info);
+                }
+                Err(_) => {
+                    if let Some(server_info) = client.startup_server_info.clone() {
+                        server_infos.insert(server_name.clone(), server_info);
+                    }
+                }
+            }
         }
         server_infos
     }
@@ -441,6 +455,7 @@ impl McpConnectionManager {
         write_cached_codex_apps_tools_if_needed(
             CODEX_APPS_MCP_SERVER_NAME,
             managed_client.codex_apps_tools_cache_context.as_ref(),
+            &managed_client.server_info,
             &tools,
         );
         emit_duration(

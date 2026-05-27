@@ -13,6 +13,7 @@ use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
 use codex_login::CodexAuth;
+use codex_protocol::mcp::McpServerInfo;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
 use serde::Deserialize;
@@ -54,7 +55,10 @@ impl CodexAppsToolsCacheContext {
 }
 
 pub(crate) enum CachedCodexAppsToolsLoad {
-    Hit(Vec<ToolInfo>),
+    Hit {
+        tools: Vec<ToolInfo>,
+        server_info: Option<McpServerInfo>,
+    },
     Missing,
     Invalid,
 }
@@ -136,6 +140,7 @@ pub(crate) fn normalize_codex_apps_callable_namespace(
 pub(crate) fn write_cached_codex_apps_tools_if_needed(
     server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
+    server_info: &McpServerInfo,
     tools: &[ToolInfo],
 ) {
     if server_name != CODEX_APPS_MCP_SERVER_NAME {
@@ -144,7 +149,7 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
 
     if let Some(cache_context) = cache_context {
         let cache_write_start = Instant::now();
-        write_cached_codex_apps_tools(cache_context, tools);
+        write_cached_codex_apps_tools(cache_context, server_info, tools);
         emit_duration(
             MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
             cache_write_start.elapsed(),
@@ -156,7 +161,7 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
 pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
     server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
-) -> Option<Vec<ToolInfo>> {
+) -> Option<(Vec<ToolInfo>, Option<McpServerInfo>)> {
     if server_name != CODEX_APPS_MCP_SERVER_NAME {
         return None;
     }
@@ -164,7 +169,7 @@ pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
     let cache_context = cache_context?;
 
     match load_cached_codex_apps_tools(cache_context) {
-        CachedCodexAppsToolsLoad::Hit(tools) => Some(tools),
+        CachedCodexAppsToolsLoad::Hit { tools, server_info } => Some((tools, server_info)),
         CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => None,
     }
 }
@@ -174,7 +179,7 @@ pub(crate) fn read_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> Option<Vec<ToolInfo>> {
     match load_cached_codex_apps_tools(cache_context) {
-        CachedCodexAppsToolsLoad::Hit(tools) => Some(tools),
+        CachedCodexAppsToolsLoad::Hit { tools, .. } => Some(tools),
         CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => None,
     }
 }
@@ -197,11 +202,15 @@ pub(crate) fn load_cached_codex_apps_tools(
     if cache.schema_version != CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION {
         return CachedCodexAppsToolsLoad::Invalid;
     }
-    CachedCodexAppsToolsLoad::Hit(filter_disallowed_codex_apps_tools(cache.tools))
+    CachedCodexAppsToolsLoad::Hit {
+        tools: filter_disallowed_codex_apps_tools(cache.tools),
+        server_info: cache.server_info,
+    }
 }
 
 pub(crate) fn write_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
+    server_info: &McpServerInfo,
     tools: &[ToolInfo],
 ) {
     let cache_path = cache_context.cache_path();
@@ -213,6 +222,7 @@ pub(crate) fn write_cached_codex_apps_tools(
     let tools = filter_disallowed_codex_apps_tools(tools.to_vec());
     let Ok(bytes) = serde_json::to_vec_pretty(&CodexAppsToolsDiskCache {
         schema_version: CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION,
+        server_info: Some(server_info.clone()),
         tools,
     }) else {
         return;
@@ -234,6 +244,8 @@ pub(crate) fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<To
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexAppsToolsDiskCache {
     schema_version: u8,
+    #[serde(default)]
+    server_info: Option<McpServerInfo>,
     tools: Vec<ToolInfo>,
 }
 

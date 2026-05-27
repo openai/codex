@@ -99,7 +99,7 @@ impl ManagedClient {
     fn listed_tools(&self) -> Vec<ToolInfo> {
         let total_start = Instant::now();
         if let Some(cache_context) = self.codex_apps_tools_cache_context.as_ref()
-            && let CachedCodexAppsToolsLoad::Hit(tools) =
+            && let CachedCodexAppsToolsLoad::Hit { tools, .. } =
                 load_cached_codex_apps_tools(cache_context)
         {
             emit_duration(
@@ -126,6 +126,7 @@ impl ManagedClient {
 pub(crate) struct AsyncManagedClient {
     pub(crate) client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
     pub(crate) startup_snapshot: Option<Vec<ToolInfo>>,
+    pub(crate) startup_server_info: Option<McpServerInfo>,
     pub(crate) startup_complete: Arc<AtomicBool>,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
@@ -155,8 +156,11 @@ impl AsyncManagedClient {
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
-        )
-        .map(|tools| filter_tools(tools, &tool_filter));
+        );
+        let (startup_snapshot, startup_server_info) = startup_snapshot
+            .map_or((None, None), |(tools, server_info)| {
+                (Some(filter_tools(tools, &tool_filter)), server_info)
+            });
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
@@ -219,6 +223,7 @@ impl AsyncManagedClient {
         Self {
             client,
             startup_snapshot,
+            startup_server_info,
             startup_complete,
             tool_plugin_provenance,
             cancel_token,
@@ -521,9 +526,11 @@ async fn start_server_task(
         fetch_start.elapsed(),
         &[],
     );
+    let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
     write_cached_codex_apps_tools_if_needed(
         &server_name,
         codex_apps_tools_cache_context.as_ref(),
+        &server_info,
         &tools,
     );
     if server_name == CODEX_APPS_MCP_SERVER_NAME {
@@ -537,7 +544,7 @@ async fn start_server_task(
 
     let managed = ManagedClient {
         client: Arc::clone(&client),
-        server_info: mcp_server_info_from_implementation(initialize_result.server_info),
+        server_info,
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,

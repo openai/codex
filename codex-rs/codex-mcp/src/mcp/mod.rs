@@ -591,8 +591,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
     server_names: Vec<String>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
-    let (server_infos, tools, resources, resource_templates) = tokio::join!(
-        mcp_connection_manager.list_server_infos(),
+    let (tools, resources, resource_templates) = tokio::join!(
         mcp_connection_manager.list_all_tools(),
         async {
             if detail.include_resources() {
@@ -609,6 +608,7 @@ async fn collect_mcp_server_status_snapshot_from_manager(
             }
         },
     );
+    let server_infos = mcp_connection_manager.list_available_server_infos().await;
 
     let mut tools_by_server = HashMap::<String, HashMap<String, Tool>>::new();
     for tool_info in tools {
