@@ -453,6 +453,7 @@ fn legacy_capture_powershell_emits_output() {
 #[test]
 fn legacy_capture_cancellation_is_not_reported_as_timeout() {
     let Some(pwsh) = pwsh_path() else {
+        eprintln!("skipping cancellation regression test: PowerShell 7 is not installed");
         return;
     };
     let _guard = legacy_process_test_guard();

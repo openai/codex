@@ -59,6 +59,9 @@ mod windows_impl {
 
     pub use crate::windows_impl::CaptureResult;
 
+    /// Polls for cancellation and sends the runner's terminate IPC frame when requested.
+    ///
+    /// The 50 ms park bounds cancellation latency without busy-waiting.
     fn spawn_cancel_writer(
         pipe_write: &File,
         cancellation: Option<crate::WindowsSandboxCancellationToken>,
