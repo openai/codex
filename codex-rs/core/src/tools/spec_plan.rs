@@ -278,6 +278,10 @@ fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.provider.capabilities().namespace_tools
 }
 
+fn tool_search_available(turn_context: &TurnContext) -> bool {
+    search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context)
+}
+
 fn code_mode_enabled(turn_context: &TurnContext) -> bool {
     turn_context.features.get().enabled(Feature::CodeMode)
 }
@@ -681,12 +685,11 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
-            let exposure =
-                if search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context) {
-                    ToolExposure::Deferred
-                } else {
-                    ToolExposure::Direct
-                };
+            let exposure = if tool_search_available(turn_context) {
+                ToolExposure::Deferred
+            } else {
+                ToolExposure::Direct
+            };
             planned_tools.add_with_exposure(
                 SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
@@ -746,8 +749,18 @@ fn add_mcp_runtime_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut 
 }
 
 fn add_dynamic_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let can_use_tool_search = tool_search_available(context.turn_context);
     for tool in context.dynamic_tools {
-        let Some(handler) = DynamicToolHandler::new(tool) else {
+        let direct_tool = (tool.defer_loading && !can_use_tool_search).then(|| {
+            // A deferred tool must stay visible when tool_search cannot expose it.
+            DynamicToolSpec {
+                defer_loading: false,
+                ..tool.clone()
+            }
+        });
+        let effective_tool = direct_tool.as_ref().unwrap_or(tool);
+
+        let Some(handler) = DynamicToolHandler::new(effective_tool) else {
             tracing::error!(
                 "Failed to convert dynamic tool {:?} to OpenAI tool",
                 tool.name
@@ -774,7 +787,7 @@ fn append_tool_search_executor(
     planned_tools: &mut PlannedTools,
 ) {
     let turn_context = context.turn_context;
-    if !(search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context)) {
+    if !tool_search_available(turn_context) {
         return;
     }
 
@@ -827,8 +840,7 @@ fn append_extension_tool_executors(
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
     }
-    if search_tool_enabled(turn_context)
-        && namespace_tools_enabled(turn_context)
+    if tool_search_available(turn_context)
         && planned_tools
             .runtimes()
             .iter()

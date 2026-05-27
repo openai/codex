@@ -6,6 +6,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -958,6 +959,74 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         !third_request_tools.iter().any(|name| name == tool_name),
         "post-tool follow-up should rely on tool_search_output history, not tool injection: {third_request_tools:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_dynamic_tool_is_direct_without_tool_search_support() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let dynamic_tool = DynamicToolSpec {
+        namespace: Some("codex_app".to_string()),
+        name: "automation_update".to_string(),
+        description: "Manage automations.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        }),
+        defer_loading: true,
+    };
+
+    let mut builder = test_codex().with_config(|config| {
+        let mut model_catalog = bundled_models_response()
+            .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+        let model = model_catalog
+            .models
+            .iter_mut()
+            .find(|model| model.slug == "gpt-5.4")
+            .expect("gpt-5.4 exists in bundled models.json");
+        model.supports_search_tool = false;
+        config.model = Some("gpt-5.4".to_string());
+        config.model_catalog = Some(model_catalog);
+    });
+    let base_test = builder.build(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread_with_tools(
+            base_test.config.clone(),
+            vec![dynamic_tool],
+            /*persist_extended_history*/ false,
+        )
+        .await?;
+    let mut test = base_test;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+
+    test.submit_turn("Use the automation tool").await?;
+
+    let body = mock.single_request().body_json();
+    assert!(
+        !tool_names(&body)
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "tool_search should be absent for a model without tool-search support"
+    );
+    let direct_tool = namespace_child_tool(&body, "codex_app", "automation_update")
+        .expect("deferred dynamic tool should be exposed directly");
+    assert_eq!(direct_tool.get("defer_loading"), None);
 
     Ok(())
 }

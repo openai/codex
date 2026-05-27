@@ -246,7 +246,8 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
 
 #[tokio::test]
 async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
-    let (_, turn) = make_session_and_context().await;
+    let (_, mut turn) = make_session_and_context().await;
+    turn.model_info.supports_search_tool = true;
     let hidden_tool = "hidden_dynamic_tool";
     let visible_tool = "visible_dynamic_tool";
     let dynamic_tools = vec![

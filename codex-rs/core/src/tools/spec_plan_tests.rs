@@ -554,6 +554,35 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 }
 
 #[tokio::test]
+async fn deferred_plain_dynamic_tool_is_direct_without_namespace_support() {
+    let plan = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+            use_bedrock_provider(turn);
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                None,
+                "plain_lookup",
+                /*defer_loading*/ true,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_lacks(&["tool_search"]);
+    assert_eq!(plan.exposure("plain_lookup"), ToolExposure::Direct);
+    let ToolSpec::Function(tool) = plan.visible_spec("plain_lookup") else {
+        panic!("expected visible plain dynamic tool");
+    };
+    assert_eq!(
+        (tool.name.as_str(), tool.defer_loading),
+        ("plain_lookup", None)
+    );
+}
+
+#[tokio::test]
 async fn invalid_mcp_tools_are_not_registered() {
     let plan = probe_with(
         |_| {},
