@@ -397,6 +397,7 @@ impl McpConnectionManager {
     }
 
     /// Returns presentation metadata without waiting for uncached clients still initializing.
+    /// Cached values will be used if available and the server is still starting up.
     pub async fn list_available_server_infos(&self) -> HashMap<String, McpServerInfo> {
         let mut server_infos = HashMap::new();
         for (server_name, client) in &self.clients {
