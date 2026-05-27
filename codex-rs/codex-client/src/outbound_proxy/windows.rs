@@ -48,7 +48,11 @@ use windows_sys::Win32::Networking::WinHttp::WinHttpGetProxyForUrl;
 use windows_sys::Win32::Networking::WinHttp::WinHttpOpen;
 use windows_sys::core::PWSTR;
 
-pub(super) fn resolve(request_url: &str, origin: &RequestOrigin) -> SystemProxyDecision {
+pub(super) fn resolve(
+    request_url: &str,
+    origin: &RequestOrigin,
+    include_auto_detect: bool,
+) -> SystemProxyDecision {
     let ie_config = match current_user_ie_proxy_config() {
         Ok(config) => config,
         Err(failure) => {
@@ -66,7 +70,7 @@ pub(super) fn resolve(request_url: &str, origin: &RequestOrigin) -> SystemProxyD
         }
     }
 
-    if ie_config.auto_detect {
+    if include_auto_detect && ie_config.auto_detect {
         let decision = resolve_with_auto_detect(request_url, origin);
         if !matches!(decision, SystemProxyDecision::Unavailable { .. }) {
             return decision;
@@ -86,7 +90,7 @@ pub(super) fn resolve(request_url: &str, origin: &RequestOrigin) -> SystemProxyD
         return proxy_list_decision(proxy, origin, RouteSource::WindowsStatic);
     }
 
-    if ie_config.auto_config_url.is_some() || ie_config.auto_detect {
+    if ie_config.auto_config_url.is_some() || (include_auto_detect && ie_config.auto_detect) {
         SystemProxyDecision::Unavailable {
             source: RouteSource::WindowsWinHttpPac,
             failure: RouteFailureClass::PacUnavailable,

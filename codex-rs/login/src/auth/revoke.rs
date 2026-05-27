@@ -53,12 +53,6 @@ struct RevokeTokenRequest<'a> {
     client_id: Option<&'static str>,
 }
 
-pub(crate) async fn revoke_auth_tokens(
-    auth_dot_json: Option<&AuthDotJson>,
-) -> Result<(), std::io::Error> {
-    revoke_auth_tokens_with_proxy_config(auth_dot_json, /*outbound_proxy_config*/ None).await
-}
-
 pub(crate) async fn revoke_auth_tokens_with_proxy_config(
     auth_dot_json: Option<&AuthDotJson>,
     outbound_proxy_config: Option<&OutboundProxyConfig>,

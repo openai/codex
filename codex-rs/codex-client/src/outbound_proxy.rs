@@ -32,12 +32,12 @@ mod windows;
 /// How a resolver-aware client should choose an outbound proxy.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum OutboundProxyMode {
-    /// Preserve explicit env proxy behavior, then use supported system discovery.
+    /// Preserve explicit env proxy behavior, then use explicit system proxy/PAC settings.
     #[default]
     Auto,
     /// Preserve only the existing reqwest/env proxy path.
     Env,
-    /// Require supported system discovery after explicit config/env handling.
+    /// Require supported system discovery, including WPAD auto-detect on supported platforms.
     System,
     /// Disable proxy use for this client.
     Direct,
@@ -60,12 +60,6 @@ impl fmt::Debug for OutboundProxyConfig {
             )
             .finish()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProxyCacheMode {
-    Use,
-    Bypass,
 }
 
 /// Error while building a resolver-aware reqwest client.
@@ -101,8 +95,7 @@ pub fn build_reqwest_client_for_route(
     target: RouteTarget,
     config: Option<&OutboundProxyConfig>,
 ) -> Result<reqwest::Client, BuildProxiedHttpClientError> {
-    let builder =
-        configure_proxy_for_route(builder, request_url, target, config, ProxyCacheMode::Use)?;
+    let builder = configure_proxy_for_route(builder, request_url, target, config)?;
     build_reqwest_client_with_custom_ca(builder).map_err(Into::into)
 }
 
@@ -111,7 +104,6 @@ fn configure_proxy_for_route(
     request_url: &str,
     target: RouteTarget,
     config: Option<&OutboundProxyConfig>,
-    cache_mode: ProxyCacheMode,
 ) -> Result<reqwest::ClientBuilder, BuildProxiedHttpClientError> {
     let config = config.cloned().unwrap_or_default();
     let custom_ca_configured = custom_ca_env_configured();
@@ -196,7 +188,8 @@ fn configure_proxy_for_route(
         };
     };
 
-    match resolve_system_proxy(request_url, &origin, cache_mode) {
+    let include_auto_detect = config.mode == OutboundProxyMode::System;
+    match resolve_system_proxy(request_url, &origin, include_auto_detect) {
         SystemProxyDecision::Direct { source } => {
             RouteDiagnostic::direct(target, source, custom_ca_configured).emit_opt_in();
             Ok(builder)
@@ -262,8 +255,11 @@ impl RequestOrigin {
         Some(Self { scheme, host, port })
     }
 
-    fn cache_key(&self) -> String {
-        format!("{}://{}:{}", self.scheme, self.host, self.port)
+    fn cache_key(&self, include_auto_detect: bool) -> String {
+        format!(
+            "{}://{}:{}:auto_detect={include_auto_detect}",
+            self.scheme, self.host, self.port
+        )
     }
 }
 
@@ -293,28 +289,31 @@ enum SystemProxyDecision {
 fn resolve_system_proxy(
     request_url: &str,
     origin: &RequestOrigin,
-    cache_mode: ProxyCacheMode,
+    include_auto_detect: bool,
 ) -> SystemProxyDecision {
-    if cache_mode == ProxyCacheMode::Use
-        && let Some(decision) = cached_system_proxy_decision(origin)
-    {
+    if let Some(decision) = cached_system_proxy_decision(origin, include_auto_detect) {
         return decision;
     }
 
-    let decision = resolve_platform_system_proxy(request_url, origin);
-    cache_system_proxy_decision(origin, decision.clone());
+    let decision = resolve_platform_system_proxy(request_url, origin, include_auto_detect);
+    cache_system_proxy_decision(origin, include_auto_detect, decision.clone());
     decision
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_platform_system_proxy(request_url: &str, origin: &RequestOrigin) -> SystemProxyDecision {
-    windows::resolve(request_url, origin)
+fn resolve_platform_system_proxy(
+    request_url: &str,
+    origin: &RequestOrigin,
+    include_auto_detect: bool,
+) -> SystemProxyDecision {
+    windows::resolve(request_url, origin, include_auto_detect)
 }
 
 #[cfg(not(target_os = "windows"))]
 fn resolve_platform_system_proxy(
     _request_url: &str,
     _origin: &RequestOrigin,
+    _include_auto_detect: bool,
 ) -> SystemProxyDecision {
     SystemProxyDecision::Unavailable {
         source: RouteSource::Unavailable,
@@ -331,10 +330,13 @@ struct CachedSystemProxyDecision {
 static SYSTEM_PROXY_CACHE: OnceLock<Mutex<HashMap<String, CachedSystemProxyDecision>>> =
     OnceLock::new();
 
-fn cached_system_proxy_decision(origin: &RequestOrigin) -> Option<SystemProxyDecision> {
+fn cached_system_proxy_decision(
+    origin: &RequestOrigin,
+    include_auto_detect: bool,
+) -> Option<SystemProxyDecision> {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().ok()?;
-    let key = origin.cache_key();
+    let key = origin.cache_key(include_auto_detect);
     let cached = cache.get(&key)?;
     if cached.expires_at > Instant::now() {
         return Some(cached.decision.clone());
@@ -343,11 +345,15 @@ fn cached_system_proxy_decision(origin: &RequestOrigin) -> Option<SystemProxyDec
     None
 }
 
-fn cache_system_proxy_decision(origin: &RequestOrigin, decision: SystemProxyDecision) {
+fn cache_system_proxy_decision(
+    origin: &RequestOrigin,
+    include_auto_detect: bool,
+    decision: SystemProxyDecision,
+) {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut cache) = cache.lock() {
         cache.insert(
-            origin.cache_key(),
+            origin.cache_key(include_auto_detect),
             CachedSystemProxyDecision {
                 decision,
                 expires_at: Instant::now() + SYSTEM_PROXY_CACHE_TTL,

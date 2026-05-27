@@ -25,7 +25,6 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::external_bearer::BearerTokenRefresher;
-use super::revoke::revoke_auth_tokens;
 use super::revoke::revoke_auth_tokens_with_proxy_config;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
