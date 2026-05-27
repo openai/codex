@@ -8239,6 +8239,36 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
+async fn start_task_does_not_overwrite_racing_active_task() {
+    let (sess, first_context, _rx) = make_session_and_context_with_rx().await;
+    let task = NeverEndingTask {
+        kind: TaskKind::Regular,
+        listen_to_cancellation_token: true,
+    };
+    sess.start_task(Arc::clone(&first_context), Vec::new(), task)
+        .await;
+
+    let second_context = sess
+        .new_default_turn_with_sub_id("racing-turn".to_string())
+        .await;
+    sess.start_task(second_context, Vec::new(), task).await;
+
+    let active_turn_id = {
+        let active_turn = sess.active_turn.lock().await;
+        active_turn
+            .as_ref()
+            .and_then(|active_turn| active_turn.task.as_ref())
+            .map(|task| task.turn_context.sub_id.clone())
+    };
+    assert_eq!(
+        active_turn_id.as_deref(),
+        Some(first_context.sub_id.as_str())
+    );
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
 async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let queued_item = ResponseInputItem::Message {

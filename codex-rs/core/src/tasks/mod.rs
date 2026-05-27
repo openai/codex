@@ -339,17 +339,19 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
+        let turn_state = {
+            let mut active = self.active_turn.lock().await;
+            let turn = active.get_or_insert_with(ActiveTurn::default);
+            if turn.task.is_some() {
+                return;
+            }
+            Arc::clone(&turn.turn_state)
+        };
         let queued_response_items = self
             .input_queue
             .take_queued_response_items_for_next_turn()
             .await;
         let mailbox_items = self.input_queue.get_pending_input(&self.active_turn).await;
-        let turn_state = {
-            let mut active = self.active_turn.lock().await;
-            let turn = active.get_or_insert_with(ActiveTurn::default);
-            debug_assert!(turn.task.is_none());
-            Arc::clone(&turn.turn_state)
-        };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
         let mut pending_items = queued_response_items
             .into_iter()
@@ -365,7 +367,9 @@ impl Session {
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
-        debug_assert!(turn.task.is_none());
+        if turn.task.is_some() {
+            return;
+        }
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
