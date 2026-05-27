@@ -5,9 +5,8 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 use codex_protocol::ThreadId;
+use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 use tempfile::TempPath;
-
-pub(crate) const CODEX_ENV_FILE_ENV_VAR: &str = "CODEX_ENV_FILE";
 
 /// Session-owned script that hooks can populate with exported shell state.
 ///

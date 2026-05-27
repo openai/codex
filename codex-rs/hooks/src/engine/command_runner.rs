@@ -8,6 +8,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
@@ -115,7 +116,8 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
         command.arg(&handler.command);
     }
     command.envs(&handler.env);
-    // CODEX_ENV_FILE is only available for SessionStart hook types
+    // Only SessionStart hooks receive CODEX_ENV_FILE.
+    command.env_remove(CODEX_ENV_FILE_ENV_VAR);
     if handler.event_name == HookEventName::SessionStart {
         command.envs(&shell.env);
     }
@@ -137,5 +139,72 @@ fn default_shell_command() -> Command {
         let mut command = Command::new(shell);
         command.arg("-lc");
         command
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::ffi::OsStr;
+
+    use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookSource;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+    use tokio::process::Command;
+
+    use super::CODEX_ENV_FILE_ENV_VAR;
+    use super::CommandShell;
+    use super::ConfiguredHandler;
+    use super::build_command;
+
+    fn shell() -> CommandShell {
+        CommandShell {
+            program: "hook-shell".to_string(),
+            args: Vec::new(),
+            env: HashMap::from([(
+                CODEX_ENV_FILE_ENV_VAR.to_string(),
+                "session-owned-env-file".to_string(),
+            )]),
+        }
+    }
+
+    fn handler(event_name: HookEventName) -> ConfiguredHandler {
+        ConfiguredHandler {
+            event_name,
+            matcher: None,
+            command: "echo hook".to_string(),
+            timeout_sec: 10,
+            status_message: None,
+            source_path: AbsolutePathBuf::current_dir().expect("current dir"),
+            source: HookSource::User,
+            display_order: 0,
+            env: HashMap::new(),
+        }
+    }
+
+    fn command_env<'a>(command: &'a Command, name: &str) -> Option<Option<&'a OsStr>> {
+        command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| key == &OsStr::new(name))
+            .map(|(_, value)| value)
+    }
+
+    #[test]
+    fn non_session_start_hook_masks_inherited_codex_env_file() {
+        let command = build_command(&shell(), &handler(HookEventName::PreToolUse));
+
+        assert_eq!(command_env(&command, CODEX_ENV_FILE_ENV_VAR), Some(None));
+    }
+
+    #[test]
+    fn session_start_hook_receives_session_owned_codex_env_file() {
+        let command = build_command(&shell(), &handler(HookEventName::SessionStart));
+
+        assert_eq!(
+            command_env(&command, CODEX_ENV_FILE_ENV_VAR),
+            Some(Some(OsStr::new("session-owned-env-file")))
+        );
     }
 }
