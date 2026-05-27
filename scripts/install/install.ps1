@@ -51,7 +51,7 @@ function Normalize-Version {
         [string]$RawVersion
     )
 
-    if ([string]::IsNullOrWhiteSpace($RawVersion) -or $RawVersion -ceq "latest") {
+    if ([string]::IsNullOrWhiteSpace($RawVersion) -or $RawVersion -eq "latest") {
         return "latest"
     }
 
@@ -219,7 +219,7 @@ function Remove-StaleInstallArtifacts {
 function Resolve-Version {
     $normalizedVersion = Normalize-Version -RawVersion $Release
     Assert-ValidReleaseVersion -Version $normalizedVersion
-    if ($normalizedVersion -cne "latest") {
+    if ($normalizedVersion -ne "latest") {
         return $normalizedVersion
     }
 
