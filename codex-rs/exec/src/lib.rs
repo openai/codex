@@ -62,6 +62,7 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::auth_keyring_backend_kind_from_config_toml;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_and_load_options;
 use codex_core::config::resolve_oss_provider;
@@ -351,6 +352,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         bootstrap_config_toml
             .cli_auth_credentials_store
             .unwrap_or_default(),
+        auth_keyring_backend_kind_from_config_toml(&bootstrap_config_toml),
         chatgpt_base_url,
     )
     .await;

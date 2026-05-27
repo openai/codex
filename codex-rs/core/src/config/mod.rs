@@ -1357,11 +1357,9 @@ impl Config {
     }
 
     pub fn auth_keyring_backend_kind(&self) -> AuthKeyringBackendKind {
-        if self.features.enabled(Feature::SecretAuthStorage) {
-            AuthKeyringBackendKind::Secrets
-        } else {
-            AuthKeyringBackendKind::Direct
-        }
+        auth_keyring_backend_kind_from_secret_auth_storage(
+            self.features.enabled(Feature::SecretAuthStorage),
+        )
     }
 
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
@@ -1657,6 +1655,34 @@ pub async fn load_config_as_toml_with_cli_and_load_options(
     })?;
 
     Ok(cfg)
+}
+
+/// Resolve the auth keyring backend from a partially loaded config.
+///
+/// This is intended for startup paths that must read auth before managed cloud
+/// requirements can be loaded and before a full [`Config`] exists.
+pub fn auth_keyring_backend_kind_from_config_toml(
+    config_toml: &ConfigToml,
+) -> AuthKeyringBackendKind {
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: config_toml.features.as_ref(),
+            experimental_use_unified_exec_tool: config_toml.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    auth_keyring_backend_kind_from_secret_auth_storage(features.enabled(Feature::SecretAuthStorage))
+}
+
+fn auth_keyring_backend_kind_from_secret_auth_storage(
+    secret_auth_storage_enabled: bool,
+) -> AuthKeyringBackendKind {
+    if secret_auth_storage_enabled {
+        AuthKeyringBackendKind::Secrets
+    } else {
+        AuthKeyringBackendKind::Direct
+    }
 }
 
 pub fn deserialize_config_toml_with_base(

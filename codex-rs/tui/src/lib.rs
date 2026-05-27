@@ -7,6 +7,7 @@ use crate::legacy_core::check_execpolicy_for_warnings;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::auth_keyring_backend_kind_from_config_toml;
 use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
@@ -1028,6 +1029,7 @@ pub async fn run_main(
         bootstrap_config_toml
             .cli_auth_credentials_store
             .unwrap_or_default(),
+        auth_keyring_backend_kind_from_config_toml(&bootstrap_config_toml),
         chatgpt_base_url,
     )
     .await;
@@ -1496,6 +1498,7 @@ async fn run_ratatui_app(
                 initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
+                initial_config.auth_keyring_backend_kind(),
                 initial_config.chatgpt_base_url.clone(),
             )
             .await;

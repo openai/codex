@@ -9,6 +9,7 @@ use crate::Cli;
 use crate::app_server_session::AppServerSession;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::auth_keyring_backend_kind_from_config_toml;
 use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
@@ -265,6 +266,7 @@ async fn start_app_server_for_archive_command(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
+        auth_keyring_backend_kind_from_config_toml(&config_toml),
         chatgpt_base_url,
     )
     .await;

@@ -34,6 +34,7 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::BundledSkillsConfig;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
@@ -5104,6 +5105,33 @@ async fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
     assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
 
     Ok(())
+}
+
+#[test]
+fn auth_keyring_backend_kind_from_config_toml_uses_secret_auth_storage_feature() {
+    let config_toml = ConfigToml {
+        features: Some(FeaturesToml::from(BTreeMap::from([(
+            "secret_auth_storage".to_string(),
+            true,
+        )]))),
+        ..Default::default()
+    };
+    assert_eq!(
+        auth_keyring_backend_kind_from_config_toml(&config_toml),
+        AuthKeyringBackendKind::Secrets
+    );
+
+    let config_toml = ConfigToml {
+        features: Some(FeaturesToml::from(BTreeMap::from([(
+            "secret_auth_storage".to_string(),
+            false,
+        )]))),
+        ..Default::default()
+    };
+    assert_eq!(
+        auth_keyring_backend_kind_from_config_toml(&config_toml),
+        AuthKeyringBackendKind::Direct
+    );
 }
 
 #[tokio::test]
