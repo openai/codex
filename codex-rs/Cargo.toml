@@ -47,6 +47,7 @@ members = [
     "ext/extension-api",
     "ext/goal",
     "ext/guardian",
+    "ext/image-generation",
     "ext/memories",
     "ext/web-search",
     "external-agent-migration",
@@ -165,6 +166,7 @@ codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
 codex-goal-extension = { path = "ext/goal" }
 codex-guardian = { path = "ext/guardian" }
+codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }

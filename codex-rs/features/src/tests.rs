@@ -245,6 +245,13 @@ fn image_generation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn image_generation_extension_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::ImageGenExt.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::ImageGenExt.default_enabled(), false);
+    assert_eq!(feature_for_key("imagegenext"), Some(Feature::ImageGenExt));
+}
+
+#[test]
 fn use_legacy_landlock_config_records_deprecation_notice() {
     let mut entries = BTreeMap::new();
     entries.insert("use_legacy_landlock".to_string(), true);

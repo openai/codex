@@ -288,6 +288,37 @@ impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
     }
 }
 
+struct ImagegenExtensionTool;
+
+#[async_trait::async_trait]
+impl ToolExecutor<ExtensionToolCall> for ImagegenExtensionTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced("image_gen", "imagegen")
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
+            name: "image_gen".to_string(),
+            description: "Test image-generation namespace.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                name: "imagegen".to_string(),
+                description: "Test standalone image-generation tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })],
+        })
+    }
+
+    async fn handle(
+        &self,
+        _call: ExtensionToolCall,
+    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
+        Ok(Box::new(codex_tools::JsonToolOutput::new(json!({}))))
+    }
+}
+
 fn duplicate_primary_environment(turn: &mut TurnContext) {
     let mut second_environment = turn.environments.turn_environments[0].clone();
     second_environment.environment_id = "secondary".to_string();
@@ -965,6 +996,84 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     })
     .await;
     image_generation.assert_visible_contains(&["image_generation"]);
+
+    let extension_flag_without_imagegen_tool = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    extension_flag_without_imagegen_tool.assert_visible_contains(&["image_generation"]);
+    extension_flag_without_imagegen_tool.assert_visible_lacks(&["image_gen"]);
+
+    let standalone_image_generation = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+            set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
+            turn.model_info.input_modalities = vec![InputModality::Image];
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(ImagegenExtensionTool)],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    standalone_image_generation.assert_visible_lacks(&["image_generation"]);
+    assert_eq!(
+        standalone_image_generation.namespace_function_names("image_gen"),
+        &["imagegen".to_string()]
+    );
+
+    let standalone_without_flag = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+            turn.model_info.input_modalities = vec![InputModality::Image];
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(ImagegenExtensionTool)],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    standalone_without_flag.assert_visible_contains(&["image_generation"]);
+    standalone_without_flag.assert_visible_lacks(&["image_gen"]);
+    standalone_without_flag.assert_registered_lacks(&["image_gen.imagegen"]);
+
+    let standalone_with_text_only_model = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
+            set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
+            turn.model_info.input_modalities.clear();
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(ImagegenExtensionTool)],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    standalone_with_text_only_model.assert_visible_lacks(&["image_generation", "image_gen"]);
+    standalone_with_text_only_model.assert_registered_lacks(&["image_gen.imagegen"]);
+
+    let standalone_with_unsupported_provider = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
+            set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
+            turn.model_info.input_modalities = vec![InputModality::Image];
+            use_bedrock_provider(turn);
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(ImagegenExtensionTool)],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    standalone_with_unsupported_provider.assert_visible_lacks(&["image_generation", "image_gen"]);
+    standalone_with_unsupported_provider.assert_registered_lacks(&["image_gen.imagegen"]);
 
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);

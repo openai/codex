@@ -170,6 +170,8 @@ pub enum Feature {
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
+    /// Replace hosted image generation with the standalone image-generation extension.
+    ImageGenExt,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Removed compatibility flag for deleted skill env var dependency prompting.
@@ -1052,6 +1054,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "image_generation",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ImageGenExt,
+        key: "imagegenext",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,
