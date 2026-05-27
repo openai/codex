@@ -191,15 +191,15 @@ Use `sandbox=` consistently on thread lifecycle methods and turns:
 from openai_codex import Codex, Sandbox
 
 with Codex() as codex:
-    thread = codex.thread_start(sandbox=Sandbox.workspace)
+    thread = codex.thread_start(sandbox=Sandbox.workspace_write)
     result = thread.run("Review the diff only.", sandbox=Sandbox.read_only)
 ```
 
 Presets:
 
-- `Sandbox.read_only`
-- `Sandbox.workspace`
-- `Sandbox.full_access`
+- `Sandbox.read_only`: read files without allowing writes.
+- `Sandbox.workspace_write`: read files and write inside the workspace and configured writable roots.
+- `Sandbox.full_access`: run without filesystem access restrictions.
 
 A sandbox passed to `run(...)` or `turn(...)` applies to that turn and
 subsequent turns.

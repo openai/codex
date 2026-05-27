@@ -28,7 +28,7 @@ from openai_codex import Codex, Sandbox
 with Codex() as codex:
     # Call login_api_key(...) first when this app-server session is not
     # already authenticated.
-    thread = codex.thread_start(model="gpt-5", sandbox=Sandbox.workspace)
+    thread = codex.thread_start(model="gpt-5", sandbox=Sandbox.workspace_write)
     result = thread.run("Say hello in one sentence.")
     print(result.final_response)
     print(len(result.items))
@@ -46,14 +46,19 @@ Use the same enum when creating a thread or changing its sandbox for a turn:
 from openai_codex import Codex, Sandbox
 
 with Codex() as codex:
-    thread = codex.thread_start(sandbox=Sandbox.workspace)
+    thread = codex.thread_start(sandbox=Sandbox.workspace_write)
     thread.run("Make the requested change.")
     review = thread.run("Review the diff only.", sandbox=Sandbox.read_only)
 ```
 
-Available presets are `Sandbox.read_only`, `Sandbox.workspace`, and
-`Sandbox.full_access`. A sandbox passed to `run(...)` or `turn(...)` applies
-to that turn and subsequent turns on the thread.
+Available presets:
+
+- `Sandbox.read_only`: read files without allowing writes.
+- `Sandbox.workspace_write`: read files and write inside the workspace and configured writable roots.
+- `Sandbox.full_access`: run without filesystem access restrictions.
+
+A sandbox passed to `run(...)` or `turn(...)` applies to that turn and
+subsequent turns on the thread.
 
 ## Login
 

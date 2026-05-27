@@ -197,7 +197,7 @@ def test_root_exports_sandbox_presets() -> None:
     """The friendly sandbox API should expose only obvious named presets."""
     assert [(sandbox.name, sandbox.value) for sandbox in Sandbox] == [
         ("read_only", "read-only"),
-        ("workspace", "workspace"),
+        ("workspace_write", "workspace-write"),
         ("full_access", "full-access"),
     ]
 

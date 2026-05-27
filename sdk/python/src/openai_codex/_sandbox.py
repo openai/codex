@@ -13,10 +13,15 @@ from .generated.v2_all import (
 
 
 class Sandbox(str, Enum):
-    """High-level sandbox presets for threads and turns."""
+    """Preset filesystem access levels for threads and turns.
+
+    `read_only` allows file reads without writes. `workspace_write` allows
+    writes inside the workspace and configured writable roots. `full_access`
+    removes filesystem access restrictions.
+    """
 
     read_only = "read-only"
-    workspace = "workspace"
+    workspace_write = "workspace-write"
     full_access = "full-access"
 
 
@@ -36,7 +41,7 @@ def _sandbox_mode(sandbox: Sandbox | None) -> SandboxMode | None:
     match sandbox:
         case Sandbox.read_only:
             return SandboxMode.read_only
-        case Sandbox.workspace:
+        case Sandbox.workspace_write:
             return SandboxMode.workspace_write
         case Sandbox.full_access:
             return SandboxMode.danger_full_access
@@ -55,7 +60,7 @@ def _sandbox_policy(sandbox: Sandbox | None) -> SandboxPolicy | None:
             return SandboxPolicy(
                 root=ReadOnlySandboxPolicy(type="readOnly"),
             )
-        case Sandbox.workspace:
+        case Sandbox.workspace_write:
             return SandboxPolicy(
                 root=WorkspaceWriteSandboxPolicy(type="workspaceWrite"),
             )

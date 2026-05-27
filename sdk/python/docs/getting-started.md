@@ -61,7 +61,7 @@ with Codex() as codex:
     thread = codex.thread_start(
         model="gpt-5.4",
         config={"model_reasoning_effort": "high"},
-        sandbox=Sandbox.workspace,
+        sandbox=Sandbox.workspace_write,
     )
     result = thread.run("Say hello in one sentence.")
 
@@ -88,14 +88,18 @@ Use one enum for the initial sandbox and for later turn overrides:
 from openai_codex import Codex, Sandbox
 
 with Codex() as codex:
-    thread = codex.thread_start(sandbox=Sandbox.workspace)
+    thread = codex.thread_start(sandbox=Sandbox.workspace_write)
     thread.run("Make the requested changes.")
     review = thread.run("Review the diff only.", sandbox=Sandbox.read_only)
 ```
 
-Available presets are `Sandbox.read_only`, `Sandbox.workspace`, and
-`Sandbox.full_access`. A turn override also becomes the sandbox for subsequent
-turns on that thread.
+Available presets:
+
+- `Sandbox.read_only`: read files without allowing writes.
+- `Sandbox.workspace_write`: read files and write inside the workspace and configured writable roots.
+- `Sandbox.full_access`: run without filesystem access restrictions.
+
+A turn override also becomes the sandbox for subsequent turns on that thread.
 
 ## 5) Continue the same thread (multi-turn)
 

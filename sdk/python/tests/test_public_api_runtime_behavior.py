@@ -165,7 +165,7 @@ def test_sandbox_presets_serialize_for_threads_and_turns() -> None:
         sandbox.name: public_api_module._sandbox_mode(sandbox).value for sandbox in Sandbox
     } == {
         "read_only": "read-only",
-        "workspace": "workspace-write",
+        "workspace_write": "workspace-write",
         "full_access": "danger-full-access",
     }
     assert {
@@ -176,7 +176,7 @@ def test_sandbox_presets_serialize_for_threads_and_turns() -> None:
         for sandbox in Sandbox
     } == {
         "read_only": {"networkAccess": False, "type": "readOnly"},
-        "workspace": {
+        "workspace_write": {
             "excludeSlashTmp": False,
             "excludeTmpdirEnvVar": False,
             "networkAccess": False,
@@ -189,7 +189,7 @@ def test_sandbox_presets_serialize_for_threads_and_turns() -> None:
 
 def test_raw_sandbox_strings_are_rejected() -> None:
     """Callers should use the discoverable enum rather than memorizing values."""
-    with pytest.raises(ValueError, match="Sandbox\\.workspace"):
+    with pytest.raises(ValueError, match="Sandbox\\.workspace_write"):
         public_api_module._sandbox_mode("workspace")  # type: ignore[arg-type]
 
 
