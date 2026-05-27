@@ -392,7 +392,7 @@ WHERE cumulative_estimated_bytes <= ?
 ORDER BY ts DESC, ts_nanos DESC, id DESC
 "#
         );
-        let mut sql = sqlx::query_as::<_, FeedbackLogRow>(query.as_str());
+        let mut sql = sqlx::query_as::<_, FeedbackLogRow>(sqlx::AssertSqlSafe(query));
         for thread_id in thread_ids {
             sql = sql.bind(thread_id);
         }
@@ -463,7 +463,7 @@ fn format_feedback_log_line(
     line
 }
 
-fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQuery) {
+fn push_log_filters(builder: &mut QueryBuilder<Sqlite>, query: &LogQuery) {
     if !query.levels_upper.is_empty() {
         builder.push(" AND UPPER(level) IN (");
         {
@@ -511,11 +511,7 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     }
 }
 
-fn push_like_filters<'a>(
-    builder: &mut QueryBuilder<'a, Sqlite>,
-    column: &str,
-    filters: &'a [String],
-) {
+fn push_like_filters(builder: &mut QueryBuilder<Sqlite>, column: &str, filters: &[String]) {
     if filters.is_empty() {
         return;
     }
@@ -613,6 +609,8 @@ mod tests {
             ignore_missing: false,
             locking: true,
             no_tx: false,
+            table_name: Cow::Borrowed("_sqlx_migrations"),
+            create_schemas: Cow::Borrowed(&[]),
         };
         let pool = SqlitePool::connect_with(
             SqliteConnectOptions::new()

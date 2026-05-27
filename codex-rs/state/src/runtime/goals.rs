@@ -450,7 +450,7 @@ RETURNING
             "#,
         );
 
-        let mut query = sqlx::query(&query)
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(query))
             .bind(time_delta_seconds)
             .bind(token_delta)
             .bind(token_delta)
