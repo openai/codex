@@ -252,6 +252,7 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let dynamic_tools = vec![
         DynamicToolSpec {
             namespace: Some("codex_app".to_string()),
+            namespace_description: None,
             name: hidden_tool.to_string(),
             description: "Hidden until discovered.".to_string(),
             input_schema: json!({
@@ -263,6 +264,7 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
         },
         DynamicToolSpec {
             namespace: Some("codex_app".to_string()),
+            namespace_description: None,
             name: visible_tool.to_string(),
             description: "Visible immediately.".to_string(),
             input_schema: json!({

@@ -1407,6 +1407,7 @@ Dynamic tool identifiers follow the same constraints as Responses function tools
 - `name` must match `^[a-zA-Z0-9_-]+$` and be between 1 and 128 characters.
 - `namespace`, when present, must match `^[a-zA-Z0-9_-]+$` and be between 1 and 64 characters.
 - `namespace` must not collide with reserved Responses runtime namespaces such as `functions`, `multi_tool_use`, `file_search`, `web`, `browser`, `image_gen`, `computer`, `container`, `terminal`, `python`, `python_user_visible`, `api_tool`, `tool_search`, or `submodel_delegator`.
+- `namespaceDescription`, when present on a namespaced tool, is surfaced with that namespace and, for deferred tools, in `tool_search` discovery metadata. Without it, Codex generates a generic namespace description.
 
 Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `code_mode`, while excluding it from the model-facing tool list sent on ordinary turns. When `tool_search` is available, deferred dynamic tools are searchable and can be exposed by a matching search result.
 

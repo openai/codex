@@ -3297,6 +3297,8 @@ fn dynamic_tool_response_serializes_text_and_image_content_items() {
 #[test]
 fn dynamic_tool_spec_deserializes_defer_loading() {
     let value = json!({
+        "namespace": "tickets",
+        "namespaceDescription": "Read and update tickets.",
         "name": "lookup_ticket",
         "description": "Fetch a ticket",
         "inputSchema": {
@@ -3313,7 +3315,8 @@ fn dynamic_tool_spec_deserializes_defer_loading() {
     assert_eq!(
         actual,
         DynamicToolSpec {
-            namespace: None,
+            namespace: Some("tickets".to_string()),
+            namespace_description: Some("Read and update tickets.".to_string()),
             name: "lookup_ticket".to_string(),
             description: "Fetch a ticket".to_string(),
             input_schema: json!({

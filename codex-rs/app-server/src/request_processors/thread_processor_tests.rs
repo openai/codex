@@ -92,6 +92,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: None,
+            namespace_description: None,
             name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({"type": "null"}),
@@ -105,6 +106,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_accepts_sanitizable_input_schema() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: None,
+            namespace_description: None,
             name: "my_tool".to_string(),
             description: "test".to_string(),
             // Missing `type` is common; core sanitizes these to a supported schema.
@@ -118,6 +120,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_accepts_nullable_field_schema() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: None,
+            namespace_description: None,
             name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({
@@ -138,6 +141,7 @@ mod thread_processor_behavior_tests {
         let tools = vec![
             ApiDynamicToolSpec {
                 namespace: Some("codex_app".to_string()),
+                namespace_description: None,
                 name: "my_tool".to_string(),
                 description: "test".to_string(),
                 input_schema: json!({
@@ -149,6 +153,7 @@ mod thread_processor_behavior_tests {
             },
             ApiDynamicToolSpec {
                 namespace: Some("other_app".to_string()),
+                namespace_description: None,
                 name: "my_tool".to_string(),
                 description: "test".to_string(),
                 input_schema: json!({
@@ -166,6 +171,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_accepts_responses_compatible_identifiers() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some("Codex-App_2".to_string()),
+            namespace_description: None,
             name: "lookup-ticket_2".to_string(),
             description: "test".to_string(),
             input_schema: json!({
@@ -183,6 +189,7 @@ mod thread_processor_behavior_tests {
         let tools = vec![
             ApiDynamicToolSpec {
                 namespace: Some("codex_app".to_string()),
+                namespace_description: None,
                 name: "my_tool".to_string(),
                 description: "test".to_string(),
                 input_schema: json!({
@@ -194,6 +201,7 @@ mod thread_processor_behavior_tests {
             },
             ApiDynamicToolSpec {
                 namespace: Some("codex_app".to_string()),
+                namespace_description: None,
                 name: "my_tool".to_string(),
                 description: "test".to_string(),
                 input_schema: json!({
@@ -251,6 +259,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_rejects_empty_namespace() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some("".to_string()),
+            namespace_description: None,
             name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({
@@ -269,6 +278,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_rejects_reserved_namespace() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some("mcp__server__".to_string()),
+            namespace_description: None,
             name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({
@@ -287,6 +297,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_rejects_name_not_supported_by_responses() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: None,
+            namespace_description: None,
             name: "lookup.ticket".to_string(),
             description: "test".to_string(),
             input_schema: json!({
@@ -308,6 +319,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_rejects_namespace_not_supported_by_responses() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some("codex.app".to_string()),
+            namespace_description: None,
             name: "lookup_ticket".to_string(),
             description: "test".to_string(),
             input_schema: json!({
@@ -330,6 +342,7 @@ mod thread_processor_behavior_tests {
         let long_name = "a".repeat(129);
         let tools = vec![ApiDynamicToolSpec {
             namespace: None,
+            namespace_description: None,
             name: long_name.clone(),
             description: "test".to_string(),
             input_schema: json!({
@@ -349,6 +362,7 @@ mod thread_processor_behavior_tests {
         let long_namespace = "a".repeat(65);
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some(long_namespace.clone()),
+            namespace_description: None,
             name: "lookup_ticket".to_string(),
             description: "test".to_string(),
             input_schema: json!({
@@ -367,6 +381,7 @@ mod thread_processor_behavior_tests {
     fn validate_dynamic_tools_rejects_reserved_responses_namespace() {
         let tools = vec![ApiDynamicToolSpec {
             namespace: Some("functions".to_string()),
+            namespace_description: None,
             name: "lookup_ticket".to_string(),
             description: "test".to_string(),
             input_schema: json!({

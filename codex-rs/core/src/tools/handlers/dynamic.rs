@@ -32,6 +32,7 @@ use tracing::warn;
 pub struct DynamicToolHandler {
     tool_name: ToolName,
     spec: ToolSpec,
+    search_source_info: ToolSearchSourceInfo,
     exposure: ToolExposure,
     search_text: String,
 }
@@ -40,17 +41,49 @@ impl DynamicToolHandler {
     pub fn new(tool: &DynamicToolSpec) -> Option<Self> {
         let tool_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
         let output_tool = dynamic_tool_to_responses_api_tool(tool).ok()?;
-        let spec = match tool.namespace.as_ref() {
-            Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
-                name: namespace.clone(),
-                description: default_namespace_description(namespace),
-                tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
-            }),
-            None => ToolSpec::Function(output_tool),
+        let (spec, search_source_info) = match tool.namespace.as_ref() {
+            Some(namespace) => {
+                let custom_description = tool
+                    .namespace_description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|description| !description.is_empty());
+                let description = custom_description
+                    .map(str::to_string)
+                    .unwrap_or_else(|| default_namespace_description(namespace));
+                let search_source_info = custom_description.map_or_else(
+                    || ToolSearchSourceInfo {
+                        name: "Dynamic tools".to_string(),
+                        description: Some(
+                            "Tools provided by the current Codex thread.".to_string(),
+                        ),
+                    },
+                    |description| ToolSearchSourceInfo {
+                        name: namespace.clone(),
+                        description: Some(description.to_string()),
+                    },
+                );
+                (
+                    ToolSpec::Namespace(ResponsesApiNamespace {
+                        name: namespace.clone(),
+                        description,
+                        tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
+                    }),
+                    search_source_info,
+                )
+            }
+            None => (
+                ToolSpec::Function(output_tool),
+                ToolSearchSourceInfo {
+                    name: "Dynamic tools".to_string(),
+                    description: Some("Tools provided by the current Codex thread.".to_string()),
+                },
+            ),
         };
         Some(Self {
             tool_name,
             spec,
+            search_source_info,
             exposure: if tool.defer_loading {
                 ToolExposure::Deferred
             } else {
@@ -131,10 +164,7 @@ impl CoreToolRuntime for DynamicToolHandler {
         ToolSearchInfo::from_spec(
             self.search_text.clone(),
             self.spec(),
-            Some(ToolSearchSourceInfo {
-                name: "Dynamic tools".to_string(),
-                description: Some("Tools provided by the current Codex thread.".to_string()),
-            }),
+            Some(self.search_source_info.clone()),
         )
     }
 }
@@ -228,6 +258,14 @@ fn build_dynamic_search_text(tool: &DynamicToolSpec) -> String {
     ];
     if let Some(namespace) = &tool.namespace {
         parts.push(namespace.clone());
+        if let Some(namespace_description) = tool
+            .namespace_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+        {
+            parts.push(namespace_description.to_string());
+        }
     }
     parts.extend(schema_properties);
     parts.join(" ")

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 fn parse_dynamic_tool_sanitizes_input_schema() {
     let tool = DynamicToolSpec {
         namespace: None,
+        namespace_description: None,
         name: "lookup_ticket".to_string(),
         description: "Fetch a ticket".to_string(),
         input_schema: serde_json::json!({
@@ -41,6 +42,7 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
 fn parse_dynamic_tool_preserves_defer_loading() {
     let tool = DynamicToolSpec {
         namespace: None,
+        namespace_description: None,
         name: "lookup_ticket".to_string(),
         description: "Fetch a ticket".to_string(),
         input_schema: serde_json::json!({

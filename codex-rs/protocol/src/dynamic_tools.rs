@@ -10,6 +10,8 @@ use ts_rs::TS;
 pub struct DynamicToolSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_description: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
@@ -51,6 +53,7 @@ pub enum DynamicToolCallOutputContentItem {
 #[serde(rename_all = "camelCase")]
 struct DynamicToolSpecDe {
     namespace: Option<String>,
+    namespace_description: Option<String>,
     name: String,
     description: String,
     input_schema: JsonValue,
@@ -65,6 +68,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
     {
         let DynamicToolSpecDe {
             namespace,
+            namespace_description,
             name,
             description,
             input_schema,
@@ -74,6 +78,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
 
         Ok(Self {
             namespace,
+            namespace_description,
             name,
             description,
             input_schema,
@@ -92,6 +97,8 @@ mod tests {
     #[test]
     fn dynamic_tool_spec_deserializes_defer_loading() {
         let value = json!({
+            "namespace": "tickets",
+            "namespaceDescription": "Read and update tickets.",
             "name": "lookup_ticket",
             "description": "Fetch a ticket",
             "inputSchema": {
@@ -108,7 +115,8 @@ mod tests {
         assert_eq!(
             actual,
             DynamicToolSpec {
-                namespace: None,
+                namespace: Some("tickets".to_string()),
+                namespace_description: Some("Read and update tickets.".to_string()),
                 name: "lookup_ticket".to_string(),
                 description: "Fetch a ticket".to_string(),
                 input_schema: json!({

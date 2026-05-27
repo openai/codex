@@ -1079,6 +1079,7 @@ impl ThreadRequestProcessor {
                 .into_iter()
                 .map(|tool| CoreDynamicToolSpec {
                     namespace: tool.namespace,
+                    namespace_description: tool.namespace_description,
                     name: tool.name,
                     description: tool.description,
                     input_schema: tool.input_schema,

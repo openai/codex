@@ -128,6 +128,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
             model: Some("mock-model".to_string()),
             dynamic_tools: Some(vec![DynamicToolSpec {
                 namespace: None,
+                namespace_description: None,
                 name: tool_name.to_string(),
                 description: "Deterministic wait tool".to_string(),
                 input_schema: json!({

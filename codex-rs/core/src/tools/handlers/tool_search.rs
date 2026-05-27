@@ -151,6 +151,7 @@ mod tests {
     fn mixed_search_results_coalesce_mcp_namespaces() {
         let dynamic_tools = [DynamicToolSpec {
             namespace: Some("codex_app".to_string()),
+            namespace_description: None,
             name: "automation_update".to_string(),
             description: "Create, update, view, or delete recurring automations.".to_string(),
             input_schema: serde_json::json!({

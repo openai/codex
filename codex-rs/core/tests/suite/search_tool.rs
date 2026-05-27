@@ -788,6 +788,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     let dynamic_call_id = "dyn-search-call-1";
     let tool_name = "automation_update";
     let tool_description = "Create, update, view, or delete recurring automations.";
+    let namespace_description = "Create and update Codex automations.";
     let tool_args = json!({ "mode": "create" });
     let tool_call_arguments = serde_json::to_string(&tool_args)?;
     let mock = mount_sse_sequence(
@@ -837,6 +838,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     });
     let dynamic_tool = DynamicToolSpec {
         namespace: Some("codex_app".to_string()),
+        namespace_description: Some(namespace_description.to_string()),
         name: tool_name.to_string(),
         description: tool_description.to_string(),
         input_schema: input_schema.clone(),
@@ -915,6 +917,11 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         !first_request_tools.iter().any(|name| name == tool_name),
         "deferred dynamic tool should be hidden before search: {first_request_tools:?}"
     );
+    assert!(
+        tool_search_description(&first_request_body)
+            .is_some_and(|description| description.contains(namespace_description)),
+        "tool_search should advertise the dynamic namespace description"
+    );
 
     let tools = tool_search_output_tools(&requests[1], search_call_id);
     assert_eq!(
@@ -922,7 +929,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         vec![json!({
             "type": "namespace",
             "name": "codex_app",
-            "description": "Tools in the codex_app namespace.",
+            "description": namespace_description,
             "tools": [{
                 "type": "function",
                 "name": tool_name,
@@ -1459,6 +1466,7 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
 
     let dynamic_tool = DynamicToolSpec {
         namespace: Some("orbit_ops".to_string()),
+        namespace_description: None,
         name: "quasar_ping_beacon".to_string(),
         description: "Trigger the saffron metronome workflow for reminder follow-ups.".to_string(),
         input_schema: json!({

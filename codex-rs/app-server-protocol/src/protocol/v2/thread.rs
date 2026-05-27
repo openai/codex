@@ -42,6 +42,8 @@ pub enum ThreadStartSource {
 pub struct DynamicToolSpec {
     #[ts(optional)]
     pub namespace: Option<String>,
+    #[ts(optional)]
+    pub namespace_description: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
@@ -53,6 +55,7 @@ pub struct DynamicToolSpec {
 #[serde(rename_all = "camelCase")]
 struct DynamicToolSpecDe {
     namespace: Option<String>,
+    namespace_description: Option<String>,
     name: String,
     description: String,
     input_schema: JsonValue,
@@ -67,6 +70,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
     {
         let DynamicToolSpecDe {
             namespace,
+            namespace_description,
             name,
             description,
             input_schema,
@@ -76,6 +80,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
 
         Ok(Self {
             namespace,
+            namespace_description,
             name,
             description,
             input_schema,

@@ -334,6 +334,7 @@ fn invalid_mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
 fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> DynamicToolSpec {
     DynamicToolSpec {
         namespace: namespace.map(str::to_string),
+        namespace_description: None,
         name: name.to_string(),
         description: format!("{name} dynamic tool"),
         input_schema: json!({

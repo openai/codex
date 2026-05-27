@@ -52,6 +52,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
 fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
     let tool = DynamicToolSpec {
         namespace: None,
+        namespace_description: None,
         name: "lookup_order".to_string(),
         description: "Look up an order".to_string(),
         input_schema: json!({

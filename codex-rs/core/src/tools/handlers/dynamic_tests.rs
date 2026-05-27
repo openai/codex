@@ -7,6 +7,7 @@ use serde_json::json;
 fn search_info_uses_dynamic_tool_metadata_and_parameter_names() {
     let handler = DynamicToolHandler::new(&DynamicToolSpec {
         namespace: Some("codex_app".to_string()),
+        namespace_description: Some("Create and update Codex automations.".to_string()),
         name: "automation_update".to_string(),
         description: "Create or update automations.".to_string(),
         input_schema: json!({
@@ -24,13 +25,13 @@ fn search_info_uses_dynamic_tool_metadata_and_parameter_names() {
 
     assert_eq!(
         search_info.entry.search_text,
-        "automation_update automation update Create or update automations. codex_app mode timezone"
+        "automation_update automation update Create or update automations. codex_app Create and update Codex automations. mode timezone"
     );
     assert_eq!(
         search_info.source_info,
         Some(ToolSearchSourceInfo {
-            name: "Dynamic tools".to_string(),
-            description: Some("Tools provided by the current Codex thread.".to_string()),
+            name: "codex_app".to_string(),
+            description: Some("Create and update Codex automations.".to_string()),
         })
     );
 }

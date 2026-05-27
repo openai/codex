@@ -4614,6 +4614,12 @@
             "string",
             "null"
           ]
+        },
+        "namespaceDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

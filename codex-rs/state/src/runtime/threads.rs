@@ -81,7 +81,7 @@ WHERE id = ? AND preview = ''
     ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
         let rows = sqlx::query(
             r#"
-SELECT namespace, name, description, input_schema, defer_loading
+SELECT namespace, namespace_description, name, description, input_schema, defer_loading
 FROM thread_dynamic_tools
 WHERE thread_id = ?
 ORDER BY position ASC
@@ -99,6 +99,7 @@ ORDER BY position ASC
             let input_schema = serde_json::from_str::<Value>(input_schema.as_str())?;
             tools.push(DynamicToolSpec {
                 namespace: row.try_get("namespace")?,
+                namespace_description: row.try_get("namespace_description")?,
                 name: row.try_get("name")?,
                 description: row.try_get("description")?,
                 input_schema,
@@ -839,17 +840,19 @@ INSERT INTO thread_dynamic_tools (
     thread_id,
     position,
     namespace,
+    namespace_description,
     name,
     description,
     input_schema,
     defer_loading
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id, position) DO NOTHING
                 "#,
             )
             .bind(thread_id.as_str())
             .bind(position)
             .bind(tool.namespace.as_deref())
+            .bind(tool.namespace_description.as_deref())
             .bind(tool.name.as_str())
             .bind(tool.description.as_str())
             .bind(input_schema)

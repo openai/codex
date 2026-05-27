@@ -65,6 +65,7 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
     });
     let dynamic_tool = DynamicToolSpec {
         namespace: None,
+        namespace_description: None,
         name: "demo_tool".to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: input_schema.clone(),
@@ -139,6 +140,7 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
 
     let dynamic_tool = DynamicToolSpec {
         namespace: Some("codex_app".to_string()),
+        namespace_description: None,
         name: "hidden_tool".to_string(),
         description: "Hidden dynamic tool".to_string(),
         input_schema: json!({
@@ -211,6 +213,7 @@ async fn thread_start_rejects_hidden_dynamic_tools_without_namespace() -> Result
 
     let dynamic_tool = DynamicToolSpec {
         namespace: None,
+        namespace_description: None,
         name: "hidden_tool".to_string(),
         description: "Hidden dynamic tool".to_string(),
         input_schema: json!({
@@ -251,6 +254,7 @@ async fn thread_start_rejects_dynamic_tools_not_supported_by_responses() -> Resu
 
     let dynamic_tool = DynamicToolSpec {
         namespace: Some("codex.app".to_string()),
+        namespace_description: None,
         name: "lookup.ticket".to_string(),
         description: "Invalid dynamic tool".to_string(),
         input_schema: json!({
@@ -316,6 +320,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
 
     let dynamic_tool = DynamicToolSpec {
         namespace: Some(tool_namespace.to_string()),
+        namespace_description: None,
         name: tool_name.to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: json!({
@@ -491,6 +496,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
 
     let dynamic_tool = DynamicToolSpec {
         namespace: None,
+        namespace_description: None,
         name: tool_name.to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: json!({

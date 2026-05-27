@@ -1048,6 +1048,7 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
     let dynamic_tools = vec![
         DynamicToolSpec {
             namespace: Some("codex_app".to_string()),
+            namespace_description: None,
             name: hidden_tool.to_string(),
             description: "Hidden until discovered.".to_string(),
             input_schema: input_schema.clone(),
@@ -1055,6 +1056,7 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
         },
         DynamicToolSpec {
             namespace: Some("codex_app".to_string()),
+            namespace_description: None,
             name: visible_tool.to_string(),
             description: "Visible immediately.".to_string(),
             input_schema,
