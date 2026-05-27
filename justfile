@@ -2,6 +2,7 @@ set working-directory := "codex-rs"
 set positional-arguments
 
 rust_min_stack := "8388608" # 8 MiB
+e2e_benchmark_packages := "codex-app-server-start-bench"
 
 # Display help
 help:
@@ -33,7 +34,7 @@ app-server-test-client *args:
 # Run end-to-end performance benchmarks that require a built Codex binary.
 bench-e2e *args:
     cargo build --release -p codex-cli --bin codex
-    CODEX_BIN="$PWD/target/release/codex" cargo bench -p codex-app-server-start-bench --bench startup -- "$@" --ignored
+    for package in {{ e2e_benchmark_packages }}; do CODEX_BIN="$PWD/target/release/codex" cargo run --release -p "$package" -- --bench "$@"; done
 
 # Format Rust and Python SDK code.
 fmt:
@@ -64,9 +65,13 @@ test *args:
 bench-unit *args:
     cargo bench --workspace --bench '*' "$@"
 
-# Run benchmark targets once to ensure they start successfully.
+# Smoke Cargo-managed benchmarks and compile e2e runners without measured binaries.
 bench-smoke:
     just bench-unit -- --test
+    for package in {{ e2e_benchmark_packages }}; do cargo build -p "$package" --bin "$package"; done
+
+# Run end-to-end performance benchmark targets once.
+bench-e2e-smoke:
     just bench-e2e --test
 
 # Build and run Codex from source using Bazel.

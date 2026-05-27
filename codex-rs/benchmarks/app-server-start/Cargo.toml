@@ -8,13 +8,9 @@ publish = false
 [lints]
 workspace = true
 
-[dev-dependencies]
+[dependencies]
 anyhow = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 serde_json = { workspace = true }
 divan = { workspace = true }
 tempfile = { workspace = true }
-
-[[bench]]
-name = "startup"
-harness = false
