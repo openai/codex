@@ -464,21 +464,30 @@ impl App {
             }
         };
         if write_response.status == WriteStatus::OkOverridden {
-            let message = overridden_write_message(&write_response);
-            tracing::warn!(
-                message,
-                "feature flag config write was overridden by effective config"
-            );
-            self.chat_widget.add_error_message(format!(
-                "Experimental feature changes were saved but not applied: {message}"
-            ));
-            if let Some(effective_config) = self
+            let Some(effective_config) = self
                 .read_effective_config_after_overridden_write(
                     app_server,
                     "Experimental feature changes",
                 )
                 .await
-            {
+            else {
+                return;
+            };
+            if !feature_flag_write_matches_effective_config(
+                &effective_config,
+                &feature_updates_to_apply,
+                approvals_reviewer_override,
+                approval_policy_override,
+                permission_profile_override.as_ref(),
+            ) {
+                let message = overridden_write_message(&write_response);
+                tracing::warn!(
+                    message,
+                    "feature flag config write was overridden by effective config"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Experimental feature changes were saved but not applied: {message}"
+                ));
                 self.sync_feature_state_from_effective_config(
                     &effective_config,
                     &feature_updates_to_apply,
@@ -491,8 +500,8 @@ impl App {
                 if windows_sandbox_changed {
                     self.propagate_windows_sandbox_turn_context();
                 }
+                return;
             }
-            return;
         }
 
         let memory_tool_was_enabled = self.config.features.enabled(Feature::MemoryTool);
@@ -981,6 +990,38 @@ fn feature_enabled_from_effective_config(
         .as_ref()
         .and_then(|features| features.entries().get(feature.key()).copied())
         .unwrap_or_else(|| feature.default_enabled())
+}
+
+fn feature_flag_write_matches_effective_config(
+    effective_config: &ConfigReadResponse,
+    feature_updates: &[(Feature, bool)],
+    approvals_reviewer_override: Option<ApprovalsReviewer>,
+    approval_policy_override: Option<AskForApproval>,
+    permission_profile_override: Option<&PermissionProfile>,
+) -> bool {
+    let features_match = feature_updates.iter().all(|(feature, enabled)| {
+        feature_enabled_from_effective_config(effective_config, *feature) == *enabled
+    });
+    let guardian_disabled = feature_updates
+        .iter()
+        .any(|(feature, enabled)| *feature == Feature::GuardianApproval && !*enabled)
+        && !feature_enabled_from_effective_config(effective_config, Feature::GuardianApproval);
+    let effective_approvals_reviewer = if guardian_disabled {
+        ApprovalsReviewer::User
+    } else {
+        approvals_reviewer_from_effective_config(effective_config)
+            .unwrap_or(ApprovalsReviewer::User)
+    };
+    let approvals_reviewer_matches =
+        approvals_reviewer_override.is_none_or(|reviewer| effective_approvals_reviewer == reviewer);
+    let approval_policy_matches = approval_policy_override.is_none_or(|policy| {
+        approval_policy_from_effective_config(effective_config) == Some(policy)
+    });
+
+    features_match
+        && approvals_reviewer_matches
+        && approval_policy_matches
+        && permission_profile_override.is_none()
 }
 
 fn approvals_reviewer_from_effective_config(
