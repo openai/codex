@@ -281,7 +281,7 @@ async fn run_command_under_sandbox(
                 |env_map| {
                     env_map.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
                     if let Some(network) = network.as_ref() {
-                        network.apply_to_env(env_map);
+                        network.apply_to_env(env_map, cwd.as_path());
                     }
                 },
             )
@@ -301,7 +301,7 @@ async fn run_command_under_sandbox(
                 permission_profile_cwd.as_path(),
                 use_legacy_landlock,
                 allow_network_for_proxy(managed_network_requirements_enabled),
-                /*mitm_ca_cert_path*/ None,
+                /*managed_mitm_ca_paths*/ None,
             );
             spawn_debug_sandbox_child(
                 codex_linux_sandbox_exe,
@@ -312,7 +312,7 @@ async fn run_command_under_sandbox(
                 env,
                 |env_map| {
                     if let Some(network) = network.as_ref() {
-                        network.apply_to_env(env_map);
+                        network.apply_to_env(env_map, cwd.as_path());
                     }
                 },
             )

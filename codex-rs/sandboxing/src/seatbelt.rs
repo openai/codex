@@ -114,7 +114,7 @@ fn proxy_policy_inputs(
     match network {
         Some(network) => {
             let mut env = HashMap::new();
-            network.apply_to_env(&mut env);
+            network.apply_to_env(&mut env, Path::new("/"));
             let unix_domain_socket_policy = if network.dangerously_allow_all_unix_sockets() {
                 UnixDomainSocketPolicy::AllowAll
             } else {

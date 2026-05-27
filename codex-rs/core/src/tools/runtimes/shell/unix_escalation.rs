@@ -934,7 +934,7 @@ impl CoreShellCommandExecutor {
             self.sandbox_policy_cwd.clone(),
         );
         if let Some(network) = exec_request.network.as_ref() {
-            network.apply_to_env(&mut exec_request.env);
+            network.apply_to_env(&mut exec_request.env, exec_request.cwd.as_path());
         }
 
         Ok(PreparedExec {

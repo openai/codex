@@ -269,6 +269,7 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
         &FileSystemSandboxPolicy::unrestricted(),
         mode,
         /*mitm_ca_cert_path*/ None,
+        /*mitm_ca_trust_bundle_path*/ None,
     )
     .expect("build preflight argv")
     .args;

@@ -129,13 +129,16 @@ pub(crate) fn managed_ca_cert_path() -> Result<PathBuf> {
     managed_ca_paths().map(|(cert_path, _)| cert_path)
 }
 
-pub(crate) fn managed_ca_trust_bundle_path(env: &HashMap<String, String>) -> Result<PathBuf> {
+pub(crate) fn managed_ca_trust_bundle_path(
+    env: &HashMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf> {
     let (cert_path, _) = managed_ca_paths()?;
     let trust_bundle_path = cert_path
         .parent()
         .ok_or_else(|| anyhow!("managed MITM CA cert path is missing a parent"))?
         .join(MANAGED_MITM_CA_TRUST_BUNDLE);
-    let trust_bundle = build_managed_ca_trust_bundle(&cert_path, &trust_bundle_path, env)?;
+    let trust_bundle = build_managed_ca_trust_bundle(&cert_path, &trust_bundle_path, env, cwd)?;
     write_atomic_replace(
         &trust_bundle_path,
         trust_bundle.as_bytes(),
@@ -154,6 +157,7 @@ fn build_managed_ca_trust_bundle(
     managed_ca_cert_path: &Path,
     trust_bundle_path: &Path,
     env: &HashMap<String, String>,
+    cwd: &Path,
 ) -> Result<String> {
     let mut trust_bundle = String::new();
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
@@ -173,7 +177,7 @@ fn build_managed_ca_trust_bundle(
         let Some(path) = env.get(key).filter(|path| !path.is_empty()) else {
             continue;
         };
-        let path = PathBuf::from(path);
+        let path = resolve_ca_bundle_path(path, cwd);
         if path == managed_ca_cert_path
             || path == trust_bundle_path
             || custom_ca_paths.contains(&path)
@@ -192,6 +196,15 @@ fn build_managed_ca_trust_bundle(
     }
     append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
     Ok(trust_bundle)
+}
+
+fn resolve_ca_bundle_path(path: &str, cwd: &Path) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
 }
 
 fn append_pem_file(bundle: &mut String, path: &Path) -> Result<()> {
@@ -475,8 +488,13 @@ mod tests {
             dir.path().join("missing.pem").display().to_string(),
         )]);
 
-        let trust_bundle =
-            build_managed_ca_trust_bundle(&managed_ca_cert_path, &trust_bundle_path, &env).unwrap();
+        let trust_bundle = build_managed_ca_trust_bundle(
+            &managed_ca_cert_path,
+            &trust_bundle_path,
+            &env,
+            dir.path(),
+        )
+        .unwrap();
 
         assert!(trust_bundle.contains("managed ca"));
     }
@@ -493,8 +511,13 @@ mod tests {
             trust_bundle_path.display().to_string(),
         )]);
 
-        let trust_bundle =
-            build_managed_ca_trust_bundle(&managed_ca_cert_path, &trust_bundle_path, &env).unwrap();
+        let trust_bundle = build_managed_ca_trust_bundle(
+            &managed_ca_cert_path,
+            &trust_bundle_path,
+            &env,
+            dir.path(),
+        )
+        .unwrap();
 
         assert!(trust_bundle.contains("managed ca"));
         assert!(!trust_bundle.contains("stale managed bundle"));
@@ -513,8 +536,39 @@ mod tests {
             inherited_bundle_path.display().to_string(),
         )]);
 
-        let trust_bundle =
-            build_managed_ca_trust_bundle(&managed_ca_cert_path, &trust_bundle_path, &env).unwrap();
+        let trust_bundle = build_managed_ca_trust_bundle(
+            &managed_ca_cert_path,
+            &trust_bundle_path,
+            &env,
+            dir.path(),
+        )
+        .unwrap();
+
+        assert!(trust_bundle.contains("inherited ca"));
+        assert!(trust_bundle.contains("managed ca"));
+    }
+
+    #[test]
+    fn build_managed_ca_trust_bundle_resolves_relative_inherited_bundle_against_cwd() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let trust_bundle_path = dir.path().join("ca-bundle.pem");
+        let inherited_bundle_path = dir.path().join("certs/inherited.pem");
+        fs::create_dir_all(inherited_bundle_path.parent().unwrap()).unwrap();
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        fs::write(&inherited_bundle_path, "inherited ca\n").unwrap();
+        let env = HashMap::from([(
+            "SSL_CERT_FILE".to_string(),
+            "certs/inherited.pem".to_string(),
+        )]);
+
+        let trust_bundle = build_managed_ca_trust_bundle(
+            &managed_ca_cert_path,
+            &trust_bundle_path,
+            &env,
+            dir.path(),
+        )
+        .unwrap();
 
         assert!(trust_bundle.contains("inherited ca"));
         assert!(trust_bundle.contains("managed ca"));

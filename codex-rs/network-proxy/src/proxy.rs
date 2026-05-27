@@ -309,9 +309,11 @@ impl NetworkProxyRuntimeSettings {
     fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
         let (mitm_ca_cert_path, mitm_ca_trust_bundle_path) = if config.network.mitm {
             let env = std::env::vars().collect();
+            let cwd = std::env::current_dir()
+                .context("failed to resolve current dir for managed MITM CA")?;
             (
                 Some(crate::certs::managed_ca_cert_path()?),
-                Some(crate::certs::managed_ca_trust_bundle_path(&env)?),
+                Some(crate::certs::managed_ca_trust_bundle_path(&env, &cwd)?),
             )
         } else {
             (None, None)
@@ -324,6 +326,15 @@ impl NetworkProxyRuntimeSettings {
             mitm_ca_trust_bundle_path,
         })
     }
+}
+
+/// Managed CA artifacts child sandboxes need for MITM TLS trust.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedMitmCaPaths {
+    /// Managed CA certificate appended to native Linux trust stores.
+    pub cert_path: PathBuf,
+    /// Managed trust bundle exported through child CA environment variables.
+    pub trust_bundle_path: PathBuf,
 }
 
 #[derive(Clone)]
@@ -620,12 +631,16 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
-    /// Returns the managed CA cert child sandboxes should add to native trust paths.
-    pub fn mitm_ca_cert_path(&self) -> Option<PathBuf> {
-        self.runtime_settings().mitm_ca_cert_path
+    /// Returns the managed CA files child sandboxes should expose to TLS clients.
+    pub fn managed_mitm_ca_paths(&self) -> Option<ManagedMitmCaPaths> {
+        let runtime_settings = self.runtime_settings();
+        Some(ManagedMitmCaPaths {
+            cert_path: runtime_settings.mitm_ca_cert_path?,
+            trust_bundle_path: runtime_settings.mitm_ca_trust_bundle_path?,
+        })
     }
 
-    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+    pub fn apply_to_env(&self, env: &mut HashMap<String, String>, cwd: &Path) {
         let runtime_settings = self.runtime_settings();
         // Fold command-level CA overrides into our replacement bundle before overwriting them.
         let mitm_ca_trust_bundle_path =
@@ -633,7 +648,7 @@ impl NetworkProxy {
                 .mitm_ca_trust_bundle_path
                 .as_ref()
                 .map(|fallback_path| {
-                    crate::certs::managed_ca_trust_bundle_path(env).unwrap_or_else(|err| {
+                    crate::certs::managed_ca_trust_bundle_path(env, cwd).unwrap_or_else(|err| {
                         warn!(
                             "failed to refresh managed MITM CA trust bundle from child env; using startup bundle: {err}"
                         );
