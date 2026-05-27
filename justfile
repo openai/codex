@@ -3,6 +3,7 @@ set positional-arguments
 
 rust_min_stack := "8388608" # 8 MiB
 e2e_benchmark_packages := "codex-app-server-start-bench"
+e2e_codex_bin := if os() == "windows" { "./target/release/codex.exe" } else { "./target/release/codex" }
 
 # Display help
 help:
@@ -34,7 +35,7 @@ app-server-test-client *args:
 # Run end-to-end performance benchmarks that require a built Codex binary.
 bench-e2e *args:
     cargo build --release -p codex-cli --bin codex
-    for package in {{ e2e_benchmark_packages }}; do CODEX_BIN="$PWD/target/release/codex" cargo run --release -p "$package" -- --bench "$@"; done
+    for package in {{ e2e_benchmark_packages }}; do CODEX_BIN="{{ e2e_codex_bin }}" cargo run --release -p "$package" -- --bench "$@"; done
 
 # Format Rust and Python SDK code.
 fmt:
