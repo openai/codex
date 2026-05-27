@@ -65,7 +65,10 @@ use rmcp::model::ResourceTemplate;
 use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use tracing::instrument;
+use tracing::trace;
+use tracing::trace_span;
 use tracing::warn;
 
 const MCP_UI_META_KEY: &str = "ui";
@@ -405,7 +408,7 @@ impl McpConnectionManager {
     }
 
     /// Returns all tools with callable names normalized.
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         normalize_tools_for_model_with_prefix(
             self.list_all_tools_unprocessed().await,
@@ -414,7 +417,7 @@ impl McpConnectionManager {
     }
 
     /// Returns the tools exposed to the model with callable names normalized.
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools_for_model(&self) -> Vec<ToolInfo> {
         normalize_tools_for_model_with_prefix(
             self.list_all_tools_unprocessed()
@@ -427,10 +430,34 @@ impl McpConnectionManager {
 
     async fn list_all_tools_unprocessed(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
-        for managed_client in self.clients.values() {
-            let Some(server_tools) = managed_client.listed_tools().await else {
+        for (server_name, managed_client) in &self.clients {
+            let has_startup_snapshot = managed_client.startup_snapshot.is_some();
+            let startup_complete = managed_client
+                .startup_complete
+                .load(std::sync::atomic::Ordering::Acquire);
+            trace!(
+                server_name = %server_name,
+                has_startup_snapshot,
+                startup_complete,
+                "waiting for MCP server tools while building tool list"
+            );
+            let Some(server_tools) = managed_client
+                .listed_tools()
+                .instrument(trace_span!(
+                    "list_tools_for_server",
+                    server_name = %server_name,
+                    has_startup_snapshot,
+                    startup_complete
+                ))
+                .await
+            else {
                 continue;
             };
+            trace!(
+                server_name = %server_name,
+                tool_count = server_tools.len(),
+                "listed MCP server tools while building tool list"
+            );
             tools.extend(
                 server_tools
                     .into_iter()

@@ -444,6 +444,7 @@ async fn send_input_submits_user_message() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         },
     );
@@ -598,6 +599,7 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         },
     );
@@ -770,6 +772,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         },
     );

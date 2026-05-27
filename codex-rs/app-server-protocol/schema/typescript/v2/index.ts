@@ -7,6 +7,8 @@ export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { ActivePermissionProfile } from "./ActivePermissionProfile";
 export type { AddCreditsNudgeCreditType } from "./AddCreditsNudgeCreditType";
 export type { AddCreditsNudgeEmailStatus } from "./AddCreditsNudgeEmailStatus";
+export type { AdditionalContextEntry } from "./AdditionalContextEntry";
+export type { AdditionalContextKind } from "./AdditionalContextKind";
 export type { AdditionalFileSystemPermissions } from "./AdditionalFileSystemPermissions";
 export type { AdditionalNetworkPermissions } from "./AdditionalNetworkPermissions";
 export type { AdditionalPermissionProfile } from "./AdditionalPermissionProfile";

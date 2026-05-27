@@ -50,7 +50,6 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
-use codex_protocol::user_input::UserInput;
 
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
@@ -303,7 +302,7 @@ impl Session {
     pub async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
@@ -314,7 +313,7 @@ impl Session {
     pub(crate) async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         task: T,
     ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
@@ -382,11 +381,7 @@ impl Session {
         ));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
-        let task_input = if input.is_empty() {
-            Vec::new()
-        } else {
-            vec![TurnInput::UserInput(input)]
-        };
+        let task_input = input;
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.

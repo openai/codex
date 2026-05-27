@@ -2287,6 +2287,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2333,6 +2334,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: ThreadSettingsOverrides {
                 approval_policy: Some(AskForApproval::Never),
                 collaboration_mode: Some(collaboration_mode),
@@ -2999,6 +3001,7 @@ async fn set_rate_limits_retains_previous_credits() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -3103,6 +3106,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -3630,6 +3634,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -4373,6 +4378,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -4482,6 +4488,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -4716,6 +4723,7 @@ async fn make_session_with_config_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -4819,6 +4827,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: session_source.clone(),
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
@@ -5430,6 +5439,7 @@ fn op_kind_for_input_and_context_ops() {
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         }
         .kind(),
@@ -5460,6 +5470,7 @@ async fn user_turn_updates_approvals_reviewer() {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(config.cwd.to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
@@ -5781,10 +5792,10 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     async {
         sess.spawn_task(
             Arc::clone(&tc),
-            vec![UserInput::Text {
+            vec![TurnInput::UserInput(vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
-            }],
+            }])],
             TraceCaptureTask {
                 captured_trace: Arc::clone(&captured_trace),
             },
@@ -6312,6 +6323,7 @@ where
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
         thread_source: None,
         dynamic_tools,
         persist_extended_history: false,
@@ -6592,10 +6604,10 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     sess.set_previous_turn_settings(/*previous_turn_settings*/ None)
         .await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
 
     sess.spawn_task(
         Arc::clone(&tc),
@@ -7861,10 +7873,10 @@ impl SessionTask for GuardianDeniedApprovalTask {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "trigger guardian denials".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(Arc::clone(&tc), input, GuardianDeniedApprovalTask)
         .await;
 
@@ -7892,10 +7904,10 @@ async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "keep turn active for helper reviews".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -7952,10 +7964,10 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
 #[test_log::test]
 async fn abort_regular_task_emits_turn_aborted_only() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -7985,10 +7997,10 @@ async fn abort_regular_task_emits_turn_aborted_only() {
 #[tokio::test]
 async fn abort_gracefully_emits_turn_aborted_only() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8018,10 +8030,10 @@ async fn abort_gracefully_emits_turn_aborted_only() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8044,6 +8056,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     }];
     sess.steer_input(
         pending_user_input.clone(),
+        /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
     )
@@ -8140,7 +8153,10 @@ async fn steer_input_requires_active_turn() {
 
     let err = sess
         .steer_input(
-            input, /*expected_turn_id*/ None, /*responsesapi_client_metadata*/ None,
+            input,
+            /*additional_context*/ Default::default(),
+            /*expected_turn_id*/ None,
+            /*responsesapi_client_metadata*/ None,
         )
         .await
         .expect_err("steering without active turn should fail");
@@ -8151,10 +8167,10 @@ async fn steer_input_requires_active_turn() {
 #[tokio::test]
 async fn steer_input_enforces_expected_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8172,6 +8188,7 @@ async fn steer_input_enforces_expected_turn_id() {
     let err = sess
         .steer_input(
             steer_input,
+            /*additional_context*/ Default::default(),
             Some("different-turn-id"),
             /*responsesapi_client_metadata*/ None,
         )
@@ -8196,10 +8213,10 @@ async fn steer_input_rejects_non_regular_turns() {
         (TaskKind::Compact, NonSteerableTurnKind::Compact),
     ] {
         let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
-        let input = vec![UserInput::Text {
+        let input = vec![TurnInput::UserInput(vec![UserInput::Text {
             text: "hello".to_string(),
             text_elements: Vec::new(),
-        }];
+        }])];
         let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
         sess.spawn_task(
             turn_context,
@@ -8218,6 +8235,7 @@ async fn steer_input_rejects_non_regular_turns() {
         let err = sess
             .steer_input(
                 steer_input,
+                /*additional_context*/ Default::default(),
                 /*expected_turn_id*/ None,
                 /*responsesapi_client_metadata*/ None,
             )
@@ -8233,10 +8251,10 @@ async fn steer_input_rejects_non_regular_turns() {
 #[tokio::test]
 async fn steer_input_returns_active_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8254,6 +8272,7 @@ async fn steer_input_returns_active_turn_id() {
     let turn_id = sess
         .steer_input(
             steer_input,
+            /*additional_context*/ Default::default(),
             Some(&tc.sub_id),
             /*responsesapi_client_metadata*/ None,
         )
@@ -8478,6 +8497,7 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -8583,6 +8603,7 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -9130,6 +9151,7 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -9296,6 +9318,7 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
             text: "follow up".to_string(),
             text_elements: Vec::new(),
         }],
+        /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
     )
@@ -9345,6 +9368,7 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
             text: "follow up".to_string(),
             text_elements: Vec::new(),
         }],
+        /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
         /*responsesapi_client_metadata*/ None,
     )
@@ -9426,10 +9450,10 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
+    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
         text: "start review".to_string(),
         text_elements: Vec::new(),
-    }];
+    }])];
     sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
         .await;
 

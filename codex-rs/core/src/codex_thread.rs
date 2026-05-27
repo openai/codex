@@ -21,6 +21,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
@@ -41,6 +42,7 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -236,11 +238,17 @@ impl CodexThread {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.codex
-            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .steer_input(
+                input,
+                additional_context,
+                expected_turn_id,
+                responsesapi_client_metadata,
+            )
             .await
     }
 
