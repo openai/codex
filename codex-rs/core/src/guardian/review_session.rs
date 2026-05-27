@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -20,6 +21,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use serde_json::Value;
@@ -181,6 +183,31 @@ impl GuardianReviewSessionReuseKey {
             use_experimental_unified_exec_tool: spawn_config.use_experimental_unified_exec_tool,
         }
     }
+
+    fn prompt_cache_key(&self, parent_thread_id: ThreadId) -> String {
+        use sha1::Digest;
+
+        let fingerprint = sha1::Sha1::digest(format!("{parent_thread_id}:{self:?}").as_bytes());
+        format!("guardian:{fingerprint:x}")
+    }
+}
+
+pub(crate) fn prompt_cache_key_override_for_review_session(
+    session_source: &SessionSource,
+    parent_thread_id: Option<ThreadId>,
+    spawn_config: &Config,
+) -> Option<String> {
+    let SessionSource::SubAgent(SubAgentSource::Other(name)) = session_source else {
+        return None;
+    };
+    if name != GUARDIAN_REVIEWER_NAME {
+        return None;
+    }
+    let parent_thread_id = parent_thread_id?;
+    Some(
+        GuardianReviewSessionReuseKey::from_spawn_config(spawn_config)
+            .prompt_cache_key(parent_thread_id),
+    )
 }
 
 impl GuardianReviewSession {
@@ -1157,6 +1184,76 @@ mod tests {
         assert_eq!(
             cached_reuse_key,
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
+        );
+    }
+
+    #[tokio::test]
+    async fn guardian_prompt_cache_key_is_scoped_to_parent_and_reuse_key() {
+        let parent_config = crate::config::test_config().await;
+        let cached_spawn_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("cached guardian config");
+        let session_source =
+            SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()));
+        let parent_thread_id = ThreadId::new();
+        let key = prompt_cache_key_override_for_review_session(
+            &session_source,
+            Some(parent_thread_id),
+            &cached_spawn_config,
+        )
+        .expect("guardian prompt cache key");
+
+        assert!(key.starts_with("guardian:"));
+        assert!(
+            key.len() <= 64,
+            "guardian prompt cache key should fit the Responses API limit"
+        );
+        assert_eq!(
+            key,
+            prompt_cache_key_override_for_review_session(
+                &session_source,
+                Some(parent_thread_id),
+                &cached_spawn_config,
+            )
+            .expect("same guardian prompt cache key")
+        );
+        assert_ne!(
+            key,
+            prompt_cache_key_override_for_review_session(
+                &session_source,
+                Some(ThreadId::new()),
+                &cached_spawn_config,
+            )
+            .expect("different parent guardian prompt cache key")
+        );
+
+        let next_spawn_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "other-active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("next guardian config");
+        assert_ne!(
+            key,
+            prompt_cache_key_override_for_review_session(
+                &session_source,
+                Some(parent_thread_id),
+                &next_spawn_config,
+            )
+            .expect("different reuse key guardian prompt cache key")
+        );
+        assert_eq!(
+            None,
+            prompt_cache_key_override_for_review_session(
+                &SessionSource::Cli,
+                Some(parent_thread_id),
+                &cached_spawn_config,
+            )
         );
     }
 
