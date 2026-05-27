@@ -10157,15 +10157,12 @@ while :; do sleep 1; done"#,
         cleanup_marker.display(),
         ready_marker.display(),
     );
-    #[allow(deprecated)]
-    let workdir = turn_context.cwd.to_string_lossy().to_string();
     let item = ResponseItem::FunctionCall {
         id: None,
         name: "shell_command".to_string(),
         namespace: None,
         arguments: serde_json::json!({
             "command": command,
-            "workdir": workdir,
             "timeout_ms": 60_000,
         })
         .to_string(),
