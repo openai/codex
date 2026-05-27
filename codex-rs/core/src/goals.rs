@@ -15,6 +15,10 @@ use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
+use codex_analytics::CodexGoalEvent;
+use codex_analytics::GoalEventKind;
+use codex_analytics::GoalEventSource;
+use codex_analytics::GoalStatus as AnalyticsGoalStatus;
 use codex_features::Feature;
 use codex_otel::GOAL_BLOCKED_METRIC;
 use codex_otel::GOAL_BUDGET_LIMITED_METRIC;
@@ -549,6 +553,17 @@ impl Session {
         }
         self.emit_goal_resumed_metric_if_status_changed(previous_status_for_goal, goal_status);
         self.emit_goal_terminal_metrics_if_status_changed(previous_status_for_goal, &goal);
+        self.track_goal_analytics_event(
+            Some(turn_context.sub_id.clone()),
+            if replacing_goal {
+                GoalEventKind::Created
+            } else {
+                GoalEventKind::Updated
+            },
+            GoalEventSource::GoalTool,
+            goal_status,
+            previous_status_for_goal,
+        );
         let goal = protocol_goal_from_state(goal);
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         let newly_active_goal = goal_status == codex_state::ThreadGoalStatus::Active
@@ -626,6 +641,13 @@ impl Session {
         .await;
         let goal_id = goal.goal_id.clone();
         self.emit_goal_created_metric();
+        self.track_goal_analytics_event(
+            Some(turn_context.sub_id.clone()),
+            GoalEventKind::Created,
+            GoalEventSource::GoalTool,
+            goal.status,
+            /*previous_goal_status*/ None,
+        );
         let goal = protocol_goal_from_state(goal);
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
 
@@ -748,6 +770,26 @@ impl Session {
             }
         }
         accounting.wall_clock.mark_active_goal(goal_id);
+    }
+
+    fn track_goal_analytics_event(
+        &self,
+        turn_id: Option<String>,
+        goal_event_kind: GoalEventKind,
+        goal_event_source: GoalEventSource,
+        goal_status: codex_state::ThreadGoalStatus,
+        previous_goal_status: Option<codex_state::ThreadGoalStatus>,
+    ) {
+        self.services
+            .analytics_events_client
+            .track_goal_event(CodexGoalEvent {
+                thread_id: self.conversation_id.to_string(),
+                turn_id,
+                goal_event_kind,
+                goal_event_source,
+                goal_status: analytics_goal_status(goal_status),
+                previous_goal_status: previous_goal_status.map(analytics_goal_status),
+            });
     }
 
     fn emit_goal_created_metric(&self) {
@@ -1053,6 +1095,15 @@ impl Session {
             }
             codex_state::GoalAccountingOutcome::Unchanged(_) => return Ok(()),
         };
+        if previous_status.is_some_and(|previous_status| previous_status != goal.status) {
+            self.track_goal_analytics_event(
+                Some(turn_context.sub_id.clone()),
+                GoalEventKind::RuntimeStatusChanged,
+                GoalEventSource::RuntimeAccounting,
+                goal.status,
+                previous_status,
+            );
+        }
         let should_steer_budget_limit =
             matches!(budget_limit_steering, BudgetLimitSteering::Allowed)
                 && goal.status == codex_state::ThreadGoalStatus::BudgetLimited
@@ -1203,6 +1254,15 @@ impl Session {
             return Ok(());
         };
         self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);
+        if previous_status.is_some_and(|previous_status| previous_status != goal.status) {
+            self.track_goal_analytics_event(
+                Some(turn_context.sub_id.clone()),
+                GoalEventKind::RuntimeStatusChanged,
+                GoalEventSource::UsageLimit,
+                goal.status,
+                previous_status,
+            );
+        }
         let goal = protocol_goal_from_state(goal);
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         self.clear_active_goal_accounting(turn_context).await;
@@ -1635,6 +1695,17 @@ pub(crate) fn protocol_goal_status_from_state(
         codex_state::ThreadGoalStatus::UsageLimited => ThreadGoalStatus::UsageLimited,
         codex_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
+    }
+}
+
+fn analytics_goal_status(status: codex_state::ThreadGoalStatus) -> AnalyticsGoalStatus {
+    match status {
+        codex_state::ThreadGoalStatus::Active => AnalyticsGoalStatus::Active,
+        codex_state::ThreadGoalStatus::Paused => AnalyticsGoalStatus::Paused,
+        codex_state::ThreadGoalStatus::Blocked => AnalyticsGoalStatus::Blocked,
+        codex_state::ThreadGoalStatus::UsageLimited => AnalyticsGoalStatus::UsageLimited,
+        codex_state::ThreadGoalStatus::BudgetLimited => AnalyticsGoalStatus::BudgetLimited,
+        codex_state::ThreadGoalStatus::Complete => AnalyticsGoalStatus::Complete,
     }
 }
 

@@ -8,6 +8,7 @@ use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCommandExecutionEventParams;
 use crate::events::CodexCommandExecutionEventRequest;
 use crate::events::CodexCompactionEventRequest;
+use crate::events::CodexGoalEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
@@ -43,6 +44,7 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -50,6 +52,9 @@ use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::GoalEventKind;
+use crate::facts::GoalEventSource;
+use crate::facts::GoalStatus;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::InputError;
@@ -1266,6 +1271,63 @@ fn compaction_event_serializes_expected_shape() {
 }
 
 #[test]
+fn goal_event_serializes_expected_shape() {
+    let event = TrackEventRequest::Goal(Box::new(CodexGoalEventRequest {
+        event_type: "codex_goal_event",
+        event_params: crate::events::codex_goal_event_params(
+            CodexGoalEvent {
+                thread_id: "thread-1".to_string(),
+                turn_id: None,
+                goal_event_kind: GoalEventKind::RuntimeStatusChanged,
+                goal_event_source: GoalEventSource::RuntimeAccounting,
+                goal_status: GoalStatus::BudgetLimited,
+                previous_goal_status: Some(GoalStatus::Active),
+            },
+            "session-thread-1".to_string(),
+            sample_app_server_client_metadata(),
+            sample_runtime_metadata(),
+            Some(ThreadSource::User),
+            /*subagent_source*/ None,
+            /*parent_thread_id*/ None,
+        ),
+    }));
+
+    let payload = serde_json::to_value(&event).expect("serialize goal event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_goal_event",
+            "event_params": {
+                "thread_id": "thread-1",
+                "session_id": "session-thread-1",
+                "turn_id": null,
+                "app_server_client": {
+                    "product_client_id": DEFAULT_ORIGINATOR,
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "stdio",
+                    "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "thread_source": "user",
+                "subagent_source": null,
+                "parent_thread_id": null,
+                "goal_event_kind": "runtime_status_changed",
+                "goal_event_source": "runtime_accounting",
+                "goal_status": "budget_limited",
+                "previous_goal_status": "active"
+            }
+        })
+    );
+}
+
+#[test]
 fn compaction_implementation_serializes_remote_v2() {
     let payload = serde_json::to_value(CompactionImplementation::ResponsesCompactionV2)
         .expect("serialize compaction implementation");
@@ -1820,6 +1882,77 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_params"]["phase"], "standalone_turn");
     assert_eq!(payload[0]["event_params"]["strategy"], "memento");
     assert_eq!(payload[0]["event_params"]["status"], "failed");
+}
+
+#[tokio::test]
+async fn goal_event_ingests_custom_fact_with_turn_attribution() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_initialize(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                response: Box::new(sample_thread_resume_response(
+                    "thread-1", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    events.clear();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Goal(Box::new(CodexGoalEvent {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-goal".to_string()),
+                goal_event_kind: GoalEventKind::Created,
+                goal_event_source: GoalEventSource::GoalTool,
+                goal_status: GoalStatus::Active,
+                previous_goal_status: None,
+            }))),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_goal_event");
+    assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
+    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
+    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-goal");
+    assert_eq!(payload[0]["event_params"]["goal_event_kind"], "created");
+    assert_eq!(payload[0]["event_params"]["goal_event_source"], "goal_tool");
+    assert_eq!(payload[0]["event_params"]["goal_status"], "active");
+    assert_eq!(
+        payload[0]["event_params"]["previous_goal_status"],
+        json!(null)
+    );
+}
+
+#[tokio::test]
+async fn goal_event_without_thread_context_is_dropped() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Goal(Box::new(CodexGoalEvent {
+                thread_id: "thread-missing".to_string(),
+                turn_id: Some("turn-missing".to_string()),
+                goal_event_kind: GoalEventKind::Created,
+                goal_event_source: GoalEventSource::GoalTool,
+                goal_status: GoalStatus::Active,
+                previous_goal_status: None,
+            }))),
+            &mut events,
+        )
+        .await;
+
+    assert!(events.is_empty());
 }
 
 #[tokio::test]
