@@ -1,8 +1,8 @@
-//! Extension crate sketch for the `/goal` feature.
+//! Extension crate for persisted thread goals.
 //!
-//! This crate is intentionally not wired into the host yet. It contains the
-//! goal tool specs, extension registration shape, and the parts of runtime
-//! accounting that can be represented with today's extension API.
+//! The app-server host installs this extension to contribute goal tools,
+//! lifecycle accounting, and idle continuation work without teaching
+//! `codex-core` session code about goal-specific runtime state.
 
 mod accounting;
 mod events;

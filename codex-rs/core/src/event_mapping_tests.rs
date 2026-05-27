@@ -1,6 +1,4 @@
 use super::parse_turn_item;
-use crate::context::ContextualUserFragment;
-use crate::context::GoalContext;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::TurnItem;
@@ -314,20 +312,6 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
         }
         other => panic!("expected TurnItem::HookPrompt, got {other:?}"),
     }
-}
-
-#[test]
-fn goal_context_does_not_parse_as_visible_turn_item() {
-    let item = ResponseItem::Message {
-        id: Some("msg-1".to_string()),
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: GoalContext::new("Continue working toward the active thread goal.").render(),
-        }],
-        phase: None,
-    };
-
-    assert!(parse_turn_item(&item).is_none());
 }
 
 #[test]

@@ -271,8 +271,6 @@ use codex_config::loader::project_trust_key;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::CodexThreadSettingsOverrides;
-use codex_core::ExternalGoalPreviousStatus;
-use codex_core::ExternalGoalSet;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 #[cfg(test)]
@@ -335,6 +333,8 @@ use codex_feedback::FeedbackAttachmentPath;
 use codex_feedback::FeedbackUploadOptions;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_goal_extension::GoalRuntimeHandle;
+use codex_goal_extension::PreviousGoalSnapshot;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;

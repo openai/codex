@@ -66,10 +66,8 @@ impl ThreadGoalRequestProcessor {
         }
         self.emit_thread_goal_snapshot(thread_id).await;
         // App-server owns resume response and snapshot ordering, so wait until
-        // those are sent before letting core start goal continuation.
-        if let Err(err) = thread.continue_active_goal_if_idle().await {
-            tracing::warn!("failed to continue active goal after resume: {err}");
-        }
+        // those are sent before letting extensions start idle work.
+        thread.continue_idle_extension_work().await;
     }
 
     pub(crate) async fn pending_resume_goal_state(
@@ -144,19 +142,17 @@ impl ThreadGoalRequestProcessor {
             validate_goal_budget(params.token_budget.flatten()).map_err(invalid_request)?;
         }
 
-        if let Some(thread) = running_thread.as_ref() {
-            thread.prepare_external_goal_mutation().await;
-        }
+        prepare_external_goal_mutation(running_thread.as_deref()).await;
 
         let should_set_thread_preview = objective.is_some();
-        let (goal, previous_status) = (if let Some(objective) = objective {
+        let (goal, previous_goal) = (if let Some(objective) = objective {
             let existing_goal = state_db
                 .thread_goals()
                 .get_thread_goal(thread_id)
                 .await
                 .map_err(|err| invalid_request(err.to_string()))?;
             if let Some(goal) = existing_goal.as_ref() {
-                let previous_status = ExternalGoalPreviousStatus::from(goal);
+                let previous_goal = PreviousGoalSnapshot::from(goal);
                 state_db
                     .thread_goals()
                     .update_thread_goal(
@@ -176,9 +172,8 @@ impl ThreadGoalRequestProcessor {
                             )
                         })
                     })
-                    .map(|goal| (goal, previous_status))
+                    .map(|goal| (goal, Some(previous_goal)))
             } else {
-                let previous_status = ExternalGoalPreviousStatus::NewGoal;
                 state_db
                     .thread_goals()
                     .replace_thread_goal(
@@ -188,7 +183,7 @@ impl ThreadGoalRequestProcessor {
                         params.token_budget.flatten(),
                     )
                     .await
-                    .map(|goal| (goal, previous_status))
+                    .map(|goal| (goal, None))
             }
         } else {
             let existing_goal = state_db
@@ -201,7 +196,7 @@ impl ThreadGoalRequestProcessor {
                     "cannot update goal for thread {thread_id}: no goal exists"
                 )));
             };
-            let previous_status = ExternalGoalPreviousStatus::from(&existing_goal);
+            let previous_goal = PreviousGoalSnapshot::from(&existing_goal);
             state_db
                 .thread_goals()
                 .update_thread_goal(
@@ -219,7 +214,7 @@ impl ThreadGoalRequestProcessor {
                         anyhow::anyhow!("cannot update goal for thread {thread_id}: no goal exists")
                     })
                 })
-                .map(|goal| (goal, previous_status))
+                .map(|goal| (goal, Some(previous_goal)))
         })
         .map_err(|err| invalid_request(err.to_string()))?;
         if should_set_thread_preview
@@ -229,10 +224,7 @@ impl ThreadGoalRequestProcessor {
         {
             warn!("failed to set empty thread preview from goal objective for {thread_id}: {err}");
         }
-        let external_goal_set = ExternalGoalSet {
-            goal: goal.clone(),
-            previous_status,
-        };
+        let goal_state = goal.clone();
         let goal = api_thread_goal_from_state(goal);
         self.outgoing
             .send_response(
@@ -242,9 +234,7 @@ impl ThreadGoalRequestProcessor {
             .await;
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
-        if let Some(thread) = running_thread.as_ref() {
-            thread.apply_external_goal_set(external_goal_set).await;
-        }
+        apply_external_goal_set(running_thread.as_deref(), goal_state, previous_goal).await;
         Ok(())
     }
 
@@ -307,9 +297,7 @@ impl ThreadGoalRequestProcessor {
         )
         .await;
 
-        if let Some(thread) = running_thread.as_ref() {
-            thread.prepare_external_goal_mutation().await;
-        }
+        prepare_external_goal_mutation(running_thread.as_deref()).await;
 
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
@@ -322,8 +310,8 @@ impl ThreadGoalRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to clear thread goal: {err}")))?;
 
-        if cleared && let Some(thread) = running_thread.as_ref() {
-            thread.apply_external_goal_clear().await;
+        if cleared {
+            apply_external_goal_clear(running_thread.as_deref()).await;
         }
 
         self.outgoing
@@ -446,6 +434,45 @@ impl ThreadGoalRequestProcessor {
                 },
             ))
             .await;
+    }
+}
+
+fn goal_runtime_handle(thread: &CodexThread) -> Option<Arc<GoalRuntimeHandle>> {
+    thread.thread_extension_data().get::<GoalRuntimeHandle>()
+}
+
+async fn prepare_external_goal_mutation(thread: Option<&CodexThread>) {
+    let Some(runtime) = thread.and_then(goal_runtime_handle) else {
+        return;
+    };
+    if let Err(err) = runtime.prepare_external_goal_mutation().await {
+        tracing::warn!("failed to prepare external goal mutation: {err}");
+    }
+}
+
+async fn apply_external_goal_set(
+    thread: Option<&CodexThread>,
+    goal: codex_state::ThreadGoal,
+    previous_goal: Option<PreviousGoalSnapshot>,
+) {
+    let Some(thread) = thread else {
+        return;
+    };
+    let Some(runtime) = goal_runtime_handle(thread) else {
+        return;
+    };
+    if let Err(err) = runtime.apply_external_goal_set(goal, previous_goal).await {
+        tracing::warn!("failed to apply external goal status runtime effects: {err}");
+    }
+    thread.continue_idle_extension_work().await;
+}
+
+async fn apply_external_goal_clear(thread: Option<&CodexThread>) {
+    let Some(runtime) = thread.and_then(goal_runtime_handle) else {
+        return;
+    };
+    if let Err(err) = runtime.apply_external_goal_clear().await {
+        tracing::warn!("failed to apply external goal clear runtime effects: {err}");
     }
 }
 

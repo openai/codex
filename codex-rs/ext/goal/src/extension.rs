@@ -7,21 +7,30 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::IdleTurnContributor;
+use codex_extension_api::IdleTurnFuture;
+use codex_extension_api::IdleTurnInput;
+use codex_extension_api::IdleTurnRequest;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCallOutcome;
+use codex_extension_api::ToolContributionInput;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::TurnAbortInput;
+use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsageInfo;
 
@@ -237,6 +246,28 @@ where
         }
         runtime.accounting_state().finish_turn(turn_id);
     }
+
+    async fn on_turn_error(&self, input: TurnErrorInput<'_>) {
+        if input.error != CodexErrorInfo::UsageLimitExceeded {
+            return;
+        }
+        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+            return;
+        };
+        if !runtime.is_enabled() {
+            return;
+        }
+
+        if let Err(err) = runtime
+            .usage_limit_active_goal_for_turn(input.turn_id)
+            .await
+        {
+            tracing::warn!(
+                "failed to usage-limit active goal after usage-limit error for {}: {err}",
+                input.turn_id
+            );
+        }
+    }
 }
 
 #[async_trait]
@@ -327,6 +358,33 @@ where
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
+        self.goal_tools_for_thread(thread_store)
+    }
+
+    fn tools_for_turn(
+        &self,
+        input: ToolContributionInput<'_>,
+    ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
+        if !input.persistent_thread
+            || matches!(
+                input.session_source,
+                SessionSource::SubAgent(SubAgentSource::Review)
+            )
+        {
+            return Vec::new();
+        }
+        self.goal_tools_for_thread(input.thread_store)
+    }
+}
+
+impl<C> GoalExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn goal_tools_for_thread(
+        &self,
+        thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
         let Some(runtime) = goal_runtime_handle(thread_store) else {
             return Vec::new();
         };
@@ -360,6 +418,28 @@ where
     }
 }
 
+impl<C> IdleTurnContributor for GoalExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn next_idle_turn<'a>(&'a self, input: IdleTurnInput<'a>) -> IdleTurnFuture<'a> {
+        Box::pin(async move {
+            let runtime = goal_runtime_handle(input.thread_store)?;
+            match runtime
+                .idle_continuation_items(input.collaboration_mode.mode)
+                .await
+            {
+                Ok(Some(items)) => Some(IdleTurnRequest { items }),
+                Ok(None) => None,
+                Err(err) => {
+                    tracing::warn!("failed to request idle goal continuation: {err}");
+                    None
+                }
+            }
+        })
+    }
+}
+
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
@@ -381,7 +461,8 @@ pub fn install_with_backend<C>(
     registry.turn_lifecycle_contributor(extension.clone());
     registry.token_usage_contributor(extension.clone());
     registry.tool_lifecycle_contributor(extension.clone());
-    registry.tool_contributor(extension);
+    registry.tool_contributor(extension.clone());
+    registry.idle_turn_contributor(extension);
 }
 
 fn goal_runtime_handle(thread_store: &ExtensionData) -> Option<Arc<GoalRuntimeHandle>> {

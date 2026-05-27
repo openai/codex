@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
 
@@ -12,6 +13,7 @@ use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::steering::continuation_steering_item;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 
@@ -214,6 +216,76 @@ impl GoalRuntimeHandle {
             Some(_) | None => self.inner.accounting_state.clear_active_goal(),
         }
         Ok(())
+    }
+
+    pub async fn usage_limit_active_goal_for_turn(&self, turn_id: &str) -> Result<(), String> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        self.account_active_goal_progress(
+            turn_id,
+            &format!("{turn_id}:usage-limit"),
+            codex_state::GoalAccountingMode::ActiveOnly,
+            BudgetLimitedGoalDisposition::ClearActive,
+        )
+        .await?;
+        let previous_status = self
+            .current_goal_status_for_metrics(/*expected_goal_id*/ None)
+            .await?;
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .usage_limit_active_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            self.inner.accounting_state.finish_turn(turn_id);
+            return Ok(());
+        };
+        self.inner
+            .metrics
+            .record_terminal_if_status_changed(previous_status, &goal);
+        self.inner.accounting_state.finish_turn(turn_id);
+        let goal = protocol_goal_from_state(goal);
+        self.inner.event_emitter.thread_goal_updated(
+            format!("{turn_id}:usage-limit"),
+            Some(turn_id.to_string()),
+            goal,
+        );
+        Ok(())
+    }
+
+    pub async fn idle_continuation_items(
+        &self,
+        collaboration_mode: ModeKind,
+    ) -> Result<Option<Vec<ResponseInputItem>>, String> {
+        if !self.is_enabled() || matches!(collaboration_mode, ModeKind::Plan) {
+            return Ok(None);
+        }
+
+        let goal = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?;
+        let Some(goal) = goal else {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(None);
+        };
+        if goal.status != codex_state::ThreadGoalStatus::Active {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(None);
+        }
+
+        self.inner
+            .accounting_state
+            .mark_idle_goal_active(goal.goal_id.clone());
+        let goal = protocol_goal_from_state(goal);
+        Ok(Some(vec![continuation_steering_item(&goal)]))
     }
 
     pub(crate) async fn inject_active_turn_steering(&self, item: ResponseInputItem) {
