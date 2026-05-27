@@ -324,7 +324,9 @@ add_to_path() {
 
   case ":$PATH:" in
     *":$BIN_DIR:"*)
-      return
+      if [ -z "$conflict_manager" ]; then
+        return
+      fi
       ;;
   esac
 

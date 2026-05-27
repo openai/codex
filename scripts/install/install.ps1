@@ -162,6 +162,22 @@ function Path-Contains {
     return $false
 }
 
+function Prepend-PathEntry {
+    param(
+        [string]$PathValue,
+        [string]$Entry
+    )
+
+    $needle = $Entry.TrimEnd("\")
+    $segments = @($Entry)
+    if (-not [string]::IsNullOrWhiteSpace($PathValue)) {
+        $segments += $PathValue.Split(";", [System.StringSplitOptions]::RemoveEmptyEntries) |
+            Where-Object { $_.TrimEnd("\") -ine $needle }
+    }
+
+    return ($segments -join ";")
+}
+
 function Invoke-WithInstallLock {
     param(
         [string]$LockPath,
@@ -863,7 +879,16 @@ try {
 Maybe-HandleConflictingInstall -Conflict $conflictingInstall
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
+$prioritizeVisibleBin = $null -ne $conflictingInstall
+if ($prioritizeVisibleBin) {
+    $newUserPath = Prepend-PathEntry -PathValue $userPath -Entry $visibleBinDir
+    if ($newUserPath -cne $userPath) {
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        Write-Step "PATH updated for future PowerShell sessions."
+    } else {
+        Write-Step "$visibleBinDir is already first on PATH."
+    }
+} elseif (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
     if ([string]::IsNullOrWhiteSpace($userPath)) {
         $newUserPath = $visibleBinDir
     } else {
@@ -878,7 +903,9 @@ if (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
     Write-Step "PATH is already configured for future PowerShell sessions."
 }
 
-if (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
+if ($prioritizeVisibleBin) {
+    $env:Path = Prepend-PathEntry -PathValue $env:Path -Entry $visibleBinDir
+} elseif (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
     if ([string]::IsNullOrWhiteSpace($env:Path)) {
         $env:Path = $visibleBinDir
     } else {
