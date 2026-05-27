@@ -13,6 +13,14 @@ pub struct ThreadStartInput<'a, C> {
 
 /// Input supplied when the host resumes an existing thread.
 pub struct ThreadResumeInput<'a> {
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+}
+
+/// Settings-aware input supplied when the host resumes an existing thread.
+pub struct ThreadResumeWithSettingsInput<'a> {
     /// Current host-owned thread settings at resume time.
     pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Store scoped to the host session runtime.
@@ -21,14 +29,40 @@ pub struct ThreadResumeInput<'a> {
     pub thread_store: &'a ExtensionData,
 }
 
+impl<'a> ThreadResumeWithSettingsInput<'a> {
+    pub fn without_settings(&self) -> ThreadResumeInput<'a> {
+        ThreadResumeInput {
+            session_store: self.session_store,
+            thread_store: self.thread_store,
+        }
+    }
+}
+
 /// Input supplied when the host has no immediately pending thread work.
 pub struct ThreadIdleInput<'a> {
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+}
+
+/// Settings-aware input supplied when the host has no immediately pending thread work.
+pub struct ThreadIdleWithSettingsInput<'a> {
     /// Current host-owned thread settings for the idle thread.
     pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.
     pub thread_store: &'a ExtensionData,
+}
+
+impl<'a> ThreadIdleWithSettingsInput<'a> {
+    pub fn without_settings(&self) -> ThreadIdleInput<'a> {
+        ThreadIdleInput {
+            session_store: self.session_store,
+            thread_store: self.thread_store,
+        }
+    }
 }
 
 /// Extension request to start a new idle turn.

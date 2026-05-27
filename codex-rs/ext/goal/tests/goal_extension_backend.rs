@@ -8,10 +8,10 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
-use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadIdleRequest;
 use codex_extension_api::ThreadIdleTurnStartInput;
-use codex_extension_api::ThreadResumeInput;
+use codex_extension_api::ThreadIdleWithSettingsInput;
+use codex_extension_api::ThreadResumeWithSettingsInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
@@ -1272,7 +1272,7 @@ impl GoalExtensionHarness {
         let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_lifecycle_contributors() {
             contributor
-                .on_thread_resume(ThreadResumeInput {
+                .on_thread_resume_with_settings(ThreadResumeWithSettingsInput {
                     thread_settings: &thread_settings,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
@@ -1319,7 +1319,7 @@ impl GoalExtensionHarness {
         let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_idle_turn_contributors() {
             if let Some(request) = contributor
-                .request_thread_idle_turn(ThreadIdleInput {
+                .request_thread_idle_turn_with_settings(ThreadIdleWithSettingsInput {
                     thread_settings: &thread_settings,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,

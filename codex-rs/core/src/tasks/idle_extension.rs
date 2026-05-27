@@ -108,7 +108,7 @@ async fn notify_thread_idle(session: &Session) {
     let thread_settings = thread_settings_snapshot(session).await;
     for contributor in session.services.extensions.thread_lifecycle_contributors() {
         contributor
-            .on_thread_idle(codex_extension_api::ThreadIdleInput {
+            .on_thread_idle_with_settings(codex_extension_api::ThreadIdleWithSettingsInput {
                 thread_settings: &thread_settings,
                 session_store: &session.services.session_extension_data,
                 thread_store: &session.services.thread_extension_data,
@@ -144,11 +144,13 @@ async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate
         .enumerate()
     {
         let Some(request) = contributor
-            .request_thread_idle_turn(codex_extension_api::ThreadIdleInput {
-                thread_settings: &thread_settings,
-                session_store: &session.services.session_extension_data,
-                thread_store: &session.services.thread_extension_data,
-            })
+            .request_thread_idle_turn_with_settings(
+                codex_extension_api::ThreadIdleWithSettingsInput {
+                    thread_settings: &thread_settings,
+                    session_store: &session.services.session_extension_data,
+                    thread_store: &session.services.thread_extension_data,
+                },
+            )
             .await
         else {
             continue;

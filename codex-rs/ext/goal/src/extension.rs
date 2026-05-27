@@ -7,13 +7,13 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadIdleTurnContributor;
 use codex_extension_api::ThreadIdleTurnRequestFuture;
 use codex_extension_api::ThreadIdleTurnStartFuture;
 use codex_extension_api::ThreadIdleTurnStartInput;
+use codex_extension_api::ThreadIdleWithSettingsInput;
 use codex_extension_api::ThreadLifecycleContributor;
-use codex_extension_api::ThreadResumeInput;
+use codex_extension_api::ThreadResumeWithSettingsInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCallOutcome;
@@ -118,7 +118,7 @@ where
         runtime.set_enabled(enabled);
     }
 
-    async fn on_thread_resume(&self, input: ThreadResumeInput<'_>) {
+    async fn on_thread_resume_with_settings(&self, input: ThreadResumeWithSettingsInput<'_>) {
         let Some(runtime) = goal_runtime_handle(input.thread_store) else {
             return;
         };
@@ -136,9 +136,9 @@ impl<C> ThreadIdleTurnContributor for GoalExtension<C>
 where
     C: Send + Sync + 'static,
 {
-    fn request_thread_idle_turn<'a>(
+    fn request_thread_idle_turn_with_settings<'a>(
         &'a self,
-        input: ThreadIdleInput<'a>,
+        input: ThreadIdleWithSettingsInput<'a>,
     ) -> ThreadIdleTurnRequestFuture<'a> {
         Box::pin(async move {
             let runtime = goal_runtime_handle(input.thread_store)?;
