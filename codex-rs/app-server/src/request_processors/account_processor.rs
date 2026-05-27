@@ -327,6 +327,8 @@ impl AccountRequestProcessor {
                 config.cli_auth_credentials_store_mode,
             )
         };
+        let mut opts = opts;
+        opts.set_network_config(config.network.as_ref());
         #[cfg(debug_assertions)]
         let opts = {
             let mut opts = opts;

@@ -26,10 +26,11 @@ use std::time::Duration;
 
 use crate::auth::AuthDotJson;
 use crate::auth::load_auth_dot_json;
-use crate::auth::revoke_auth_tokens;
+use crate::auth::revoke_auth_tokens_with_proxy_config;
 use crate::auth::save_auth;
 use crate::auth::should_revoke_auth_tokens;
 use crate::default_client::originator;
+use crate::outbound_proxy::outbound_proxy_config_from_network_config;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use crate::token_data::TokenData;
@@ -37,11 +38,14 @@ use crate::token_data::parse_chatgpt_jwt_claims;
 use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
-use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::OutboundProxyConfig;
+use codex_client::RouteTarget;
+use codex_client::build_reqwest_client_for_route;
 use codex_client::emit_auth_http_status;
 use codex_client::emit_auth_network_environment_snapshot;
 use codex_client::emit_auth_transport_failure;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_config::types::NetworkConfigToml;
 use codex_utils_template::Template;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
@@ -75,6 +79,7 @@ pub struct ServerOptions {
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    pub outbound_proxy_config: Option<OutboundProxyConfig>,
 }
 
 impl ServerOptions {
@@ -95,7 +100,12 @@ impl ServerOptions {
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
+            outbound_proxy_config: None,
         }
+    }
+
+    pub fn set_network_config(&mut self, network: Option<&NetworkConfigToml>) {
+        self.outbound_proxy_config = network.map(outbound_proxy_config_from_network_config);
     }
 }
 
@@ -338,8 +348,15 @@ async fn process_request(
                 }
             };
 
-            match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
-                .await
+            match exchange_code_for_tokens(
+                &opts.issuer,
+                &opts.client_id,
+                redirect_uri,
+                pkce,
+                &code,
+                opts.outbound_proxy_config.as_ref(),
+            )
+            .await
             {
                 Ok(tokens) => {
                     if let Err(message) = ensure_workspace_allowed(
@@ -355,9 +372,14 @@ async fn process_request(
                         );
                     }
                     // Obtain API key via token-exchange and persist
-                    let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
-                        .await
-                        .ok();
+                    let api_key = obtain_api_key(
+                        &opts.issuer,
+                        &opts.client_id,
+                        &tokens.id_token,
+                        opts.outbound_proxy_config.as_ref(),
+                    )
+                    .await
+                    .ok();
                     if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
                         api_key.clone(),
@@ -365,6 +387,7 @@ async fn process_request(
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
                         opts.cli_auth_credentials_store_mode,
+                        opts.outbound_proxy_config.as_ref(),
                     )
                     .await
                     {
@@ -720,6 +743,7 @@ pub(crate) async fn exchange_code_for_tokens(
     redirect_uri: &str,
     pkce: &PkceCodes,
     code: &str,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
 ) -> io::Result<ExchangedTokens> {
     #[derive(serde::Deserialize)]
     struct TokenResponse {
@@ -728,9 +752,14 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    emit_auth_network_environment_snapshot(/*operation*/ "oauth_token_exchange");
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
+    emit_auth_network_environment_snapshot(/*operation*/ "oauth_token_exchange");
+    let client = build_reqwest_client_for_route(
+        reqwest::Client::builder(),
+        &token_endpoint,
+        RouteTarget::Auth,
+        outbound_proxy_config,
+    )?;
     info!(
         issuer = %sanitize_url_for_logging(issuer),
         token_endpoint = %sanitize_url_for_logging(&token_endpoint),
@@ -799,6 +828,7 @@ pub(crate) async fn persist_tokens_async(
     access_token: String,
     refresh_token: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
@@ -836,7 +866,9 @@ pub(crate) async fn persist_tokens_async(
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))??;
 
     if should_revoke_auth_tokens(previous_auth.as_ref(), &auth)
-        && let Err(err) = revoke_auth_tokens(previous_auth.as_ref()).await
+        && let Err(err) =
+            revoke_auth_tokens_with_proxy_config(previous_auth.as_ref(), outbound_proxy_config)
+                .await
     {
         warn!("failed to revoke superseded auth tokens after login: {err}");
     }
@@ -1128,15 +1160,21 @@ pub(crate) async fn obtain_api_key(
     issuer: &str,
     client_id: &str,
     id_token: &str,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
 ) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
     struct ExchangeResp {
         access_token: String,
     }
-    emit_auth_network_environment_snapshot(/*operation*/ "api_key_exchange");
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
+    emit_auth_network_environment_snapshot(/*operation*/ "api_key_exchange");
+    let client = build_reqwest_client_for_route(
+        reqwest::Client::builder(),
+        &token_endpoint,
+        RouteTarget::Auth,
+        outbound_proxy_config,
+    )?;
     let resp = client
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -1241,6 +1279,7 @@ mod tests {
             "new-access".to_string(),
             "new-refresh".to_string(),
             AuthCredentialsStoreMode::File,
+            /*outbound_proxy_config*/ None,
         )
         .await?;
 
@@ -1301,6 +1340,7 @@ mod tests {
             "new-access".to_string(),
             "shared-refresh".to_string(),
             AuthCredentialsStoreMode::File,
+            /*outbound_proxy_config*/ None,
         )
         .await?;
 

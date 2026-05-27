@@ -187,9 +187,12 @@ pub enum RouteSource {
     ConfigOverride,
     Env,
     System,
+    WindowsWinHttpPac,
+    WindowsStatic,
     Direct,
     Disabled,
     Unavailable,
+    Error,
 }
 
 impl fmt::Display for RouteSource {
@@ -198,9 +201,12 @@ impl fmt::Display for RouteSource {
             Self::ConfigOverride => "config_override",
             Self::Env => "env",
             Self::System => "system",
+            Self::WindowsWinHttpPac => "windows_winhttp_pac",
+            Self::WindowsStatic => "windows_static",
             Self::Direct => "direct",
             Self::Disabled => "disabled",
             Self::Unavailable => "unavailable",
+            Self::Error => "error",
         })
     }
 }
@@ -399,6 +405,25 @@ impl RouteDiagnostic {
             failure = %failure,
             custom_ca_configured = self.custom_ca_configured,
             "outbound route diagnostic"
+        );
+    }
+
+    /// Emit a redacted structured info event when diagnostics are explicitly enabled.
+    pub fn emit_opt_in(&self) {
+        if !network_diagnostics_enabled() {
+            return;
+        }
+        let failure = self
+            .failure
+            .map(|failure| failure.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        tracing::info!(
+            route_target = %self.target,
+            source = %self.source,
+            decision = %self.decision,
+            failure = %failure,
+            custom_ca_configured = self.custom_ca_configured,
+            "opt-in outbound route diagnostic"
         );
     }
 }

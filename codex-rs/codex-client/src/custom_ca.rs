@@ -182,6 +182,11 @@ pub fn build_reqwest_client_with_custom_ca(
     build_reqwest_client_with_env(&ProcessEnv, builder)
 }
 
+/// Returns whether process environment selects a Codex custom CA bundle.
+pub(crate) fn custom_ca_env_configured() -> bool {
+    ProcessEnv.configured_ca_bundle().is_some()
+}
+
 /// Builds a rustls client config when a Codex custom CA bundle is configured.
 ///
 /// This is the websocket-facing sibling of [`build_reqwest_client_with_custom_ca`]. When

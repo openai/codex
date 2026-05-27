@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_client::CodexHttpClient;
+use codex_client::OutboundProxyConfig;
 
 use super::manager::CLIENT_ID;
 use super::manager::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -17,7 +18,7 @@ use super::manager::REVOKE_TOKEN_URL;
 use super::manager::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::storage::AuthDotJson;
 use super::util::try_parse_error_message;
-use crate::default_client::create_client;
+use crate::default_client::create_client_with_proxy_config;
 use crate::token_data::TokenData;
 
 const REVOKE_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -55,11 +56,18 @@ struct RevokeTokenRequest<'a> {
 pub(crate) async fn revoke_auth_tokens(
     auth_dot_json: Option<&AuthDotJson>,
 ) -> Result<(), std::io::Error> {
+    revoke_auth_tokens_with_proxy_config(auth_dot_json, /*outbound_proxy_config*/ None).await
+}
+
+pub(crate) async fn revoke_auth_tokens_with_proxy_config(
+    auth_dot_json: Option<&AuthDotJson>,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
+) -> Result<(), std::io::Error> {
     let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
         return Ok(());
     };
 
-    let client = create_client();
+    let client = create_client_with_proxy_config(outbound_proxy_config);
     let endpoint = revoke_token_endpoint();
     revoke_oauth_token(&client, endpoint.as_str(), token, kind, REVOKE_HTTP_TIMEOUT).await
 }

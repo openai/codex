@@ -8,7 +8,8 @@ use std::time::Instant;
 
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
-use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::RouteTarget;
+use codex_client::build_reqwest_client_for_route;
 use std::io;
 
 const ANSI_BLUE: &str = "\x1b[94m";
@@ -157,9 +158,15 @@ fn print_device_code_prompt(verification_url: &str, code: &str) {
 }
 
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{base_url}/api/accounts");
+    let user_code_endpoint = format!("{api_base_url}/deviceauth/usercode");
+    let client = build_reqwest_client_for_route(
+        reqwest::Client::builder(),
+        &user_code_endpoint,
+        RouteTarget::Auth,
+        opts.outbound_proxy_config.as_ref(),
+    )?;
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
 
     Ok(DeviceCode {
@@ -174,9 +181,15 @@ pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{base_url}/api/accounts");
+    let token_endpoint = format!("{api_base_url}/deviceauth/token");
+    let client = build_reqwest_client_for_route(
+        reqwest::Client::builder(),
+        &token_endpoint,
+        RouteTarget::Auth,
+        opts.outbound_proxy_config.as_ref(),
+    )?;
 
     let code_resp = poll_for_token(
         &client,
@@ -199,6 +212,7 @@ pub async fn complete_device_code_login(
         &redirect_uri,
         &pkce,
         &code_resp.authorization_code,
+        opts.outbound_proxy_config.as_ref(),
     )
     .await
     .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;
@@ -217,6 +231,7 @@ pub async fn complete_device_code_login(
         tokens.access_token,
         tokens.refresh_token,
         opts.cli_auth_credentials_store_mode,
+        opts.outbound_proxy_config.as_ref(),
     )
     .await
 }

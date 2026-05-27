@@ -3,10 +3,11 @@ pub mod auth_env_telemetry;
 pub mod token_data;
 
 mod device_code_auth;
+mod outbound_proxy;
 mod pkce;
 mod server;
 
-pub use codex_client::BuildCustomCaTransportError as BuildLoginHttpClientError;
+pub use codex_client::BuildProxiedHttpClientError as BuildLoginHttpClientError;
 pub use codex_config::types::AuthCredentialsStoreMode;
 pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;

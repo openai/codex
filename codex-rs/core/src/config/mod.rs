@@ -43,6 +43,7 @@ use codex_config::types::McpServerDisabledReason;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_config::types::NetworkConfigToml;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::SessionPickerViewMode;
@@ -928,6 +929,9 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Host outbound proxy selection settings for resolver-aware clients.
+    pub network: Option<NetworkConfigToml>,
+
     /// Optional path override for the host-owned apps MCP server.
     pub apps_mcp_path_override: Option<String>,
 
@@ -1102,6 +1106,10 @@ impl AuthManagerConfig for Config {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn network_config(&self) -> Option<NetworkConfigToml> {
+        self.network.clone()
     }
 }
 
@@ -3527,6 +3535,7 @@ impl Config {
             chatgpt_base_url: cfg
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            network: cfg.network,
             apps_mcp_path_override,
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
             realtime_audio: cfg

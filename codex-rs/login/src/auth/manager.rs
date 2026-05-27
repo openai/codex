@@ -26,6 +26,7 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::external_bearer::BearerTokenRefresher;
 use super::revoke::revoke_auth_tokens;
+use super::revoke::revoke_auth_tokens_with_proxy_config;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
 pub use crate::auth::storage::AuthDotJson;
@@ -34,11 +35,15 @@ use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::build_reqwest_client;
 use crate::default_client::create_client;
+use crate::default_client::create_client_with_proxy_config;
+use crate::outbound_proxy::outbound_proxy_config_from_network_config;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
 use codex_client::CodexHttpClient;
+use codex_client::OutboundProxyConfig;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_config::types::NetworkConfigToml;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
@@ -203,9 +208,10 @@ impl CodexAuth {
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
+        outbound_proxy_config: Option<&OutboundProxyConfig>,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
-        let client = create_client();
+        let client = create_client_with_proxy_config(outbound_proxy_config);
         if auth_mode == ApiAuthMode::ApiKey {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
@@ -250,6 +256,7 @@ impl CodexAuth {
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
             chatgpt_base_url,
+            /*outbound_proxy_config*/ None,
         )
         .await
     }
@@ -622,6 +629,7 @@ pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<
         /*enable_codex_api_key_env*/ true,
         config.auth_credentials_store_mode,
         config.chatgpt_base_url.as_deref(),
+        /*outbound_proxy_config*/ None,
     )
     .await?
     else {
@@ -735,6 +743,7 @@ async fn load_auth(
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: Option<&str>,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
 ) -> std::io::Result<Option<CodexAuth>> {
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
@@ -753,6 +762,7 @@ async fn load_auth(
             auth_dot_json,
             AuthCredentialsStoreMode::Ephemeral,
             chatgpt_base_url,
+            outbound_proxy_config,
         )
         .await?;
         return Ok(Some(auth));
@@ -781,6 +791,7 @@ async fn load_auth(
         auth_dot_json,
         auth_credentials_store_mode,
         chatgpt_base_url,
+        outbound_proxy_config,
     )
     .await?;
     Ok(Some(auth))
@@ -1261,6 +1272,7 @@ pub struct AuthManager {
     chatgpt_base_url: Option<String>,
     refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
+    outbound_proxy_config: Option<OutboundProxyConfig>,
 }
 
 /// Configuration view required to construct a shared [`AuthManager`].
@@ -1281,6 +1293,11 @@ pub trait AuthManagerConfig {
 
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
+
+    /// Returns host outbound proxy settings for auth-owned HTTP clients.
+    fn network_config(&self) -> Option<NetworkConfigToml> {
+        None
+    }
 }
 
 impl Debug for AuthManager {
@@ -1298,6 +1315,7 @@ impl Debug for AuthManager {
                 &self.forced_chatgpt_workspace_id,
             )
             .field("chatgpt_base_url", &self.chatgpt_base_url)
+            .field("outbound_proxy_config", &self.outbound_proxy_config)
             .field("has_external_auth", &self.has_external_auth())
             .finish_non_exhaustive()
     }
@@ -1314,11 +1332,29 @@ impl AuthManager {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
     ) -> Self {
+        Self::new_with_proxy_config(
+            codex_home,
+            enable_codex_api_key_env,
+            auth_credentials_store_mode,
+            chatgpt_base_url,
+            /*outbound_proxy_config*/ None,
+        )
+        .await
+    }
+
+    pub async fn new_with_proxy_config(
+        codex_home: PathBuf,
+        enable_codex_api_key_env: bool,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<String>,
+        outbound_proxy_config: Option<OutboundProxyConfig>,
+    ) -> Self {
         let managed_auth = load_auth(
             &codex_home,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             chatgpt_base_url.as_deref(),
+            outbound_proxy_config.as_ref(),
         )
         .await
         .ok()
@@ -1337,6 +1373,7 @@ impl AuthManager {
             chatgpt_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            outbound_proxy_config,
         }
     }
 
@@ -1358,6 +1395,7 @@ impl AuthManager {
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            outbound_proxy_config: None,
         })
     }
 
@@ -1378,6 +1416,7 @@ impl AuthManager {
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
+            outbound_proxy_config: None,
         })
     }
 
@@ -1398,6 +1437,7 @@ impl AuthManager {
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
+            outbound_proxy_config: None,
         })
     }
 
@@ -1536,6 +1576,7 @@ impl AuthManager {
             self.enable_codex_api_key_env,
             self.auth_credentials_store_mode,
             self.chatgpt_base_url.as_deref(),
+            self.outbound_proxy_config.as_ref(),
         )
         .await
         .ok()
@@ -1626,13 +1667,19 @@ impl AuthManager {
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
-        let auth_manager = Self::shared(
-            config.codex_home(),
-            enable_codex_api_key_env,
-            config.cli_auth_credentials_store_mode(),
-            Some(config.chatgpt_base_url()),
-        )
-        .await;
+        let auth_manager = Arc::new(
+            Self::new_with_proxy_config(
+                config.codex_home(),
+                enable_codex_api_key_env,
+                config.cli_auth_credentials_store_mode(),
+                Some(config.chatgpt_base_url()),
+                config
+                    .network_config()
+                    .as_ref()
+                    .map(outbound_proxy_config_from_network_config),
+            )
+            .await,
+        );
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
         auth_manager
     }
@@ -1779,7 +1826,12 @@ impl AuthManager {
         let auth_dot_json = self
             .auth_cached()
             .and_then(|auth| auth.get_current_auth_json());
-        if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
+        if let Err(err) = revoke_auth_tokens_with_proxy_config(
+            auth_dot_json.as_ref(),
+            self.outbound_proxy_config.as_ref(),
+        )
+        .await
+        {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }
         let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;

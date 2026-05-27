@@ -117,13 +117,15 @@ pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    network: Option<&codex_config::types::NetworkConfigToml>,
 ) -> std::io::Result<()> {
-    let opts = ServerOptions::new(
+    let mut opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
     );
+    opts.set_network_config(network);
     let server = run_login_server(opts)?;
 
     print_login_server_start(server.actual_port, &server.auth_url);
@@ -147,6 +149,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
         config.codex_home.to_path_buf(),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
+        config.network.as_ref(),
     )
     .await
     {
@@ -283,6 +286,7 @@ pub async fn run_login_with_device_code(
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
     );
+    opts.set_network_config(config.network.as_ref());
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }
@@ -322,6 +326,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
     );
+    opts.set_network_config(config.network.as_ref());
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }

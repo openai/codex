@@ -4,9 +4,12 @@
 //! Use [`crate::default_client`] or [`codex_login::default_client`] from other crates in this
 //! workspace.
 
-use codex_client::BuildCustomCaTransportError;
+use codex_client::BuildProxiedHttpClientError;
 use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
+use codex_client::OutboundProxyConfig;
+use codex_client::RouteTarget;
+use codex_client::build_reqwest_client_for_route;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_terminal_detection::user_agent;
@@ -36,6 +39,7 @@ pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(||
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
+const DEFAULT_AUTH_ROUTE_URL: &str = "https://auth.openai.com/oauth/token";
 
 pub use codex_config::ResidencyRequirement;
 
@@ -194,6 +198,13 @@ pub fn create_client() -> CodexHttpClient {
     CodexHttpClient::new(inner)
 }
 
+pub fn create_client_with_proxy_config(
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
+) -> CodexHttpClient {
+    let inner = build_reqwest_client_with_proxy_config(outbound_proxy_config);
+    CodexHttpClient::new(inner)
+}
+
 /// Builds the default reqwest client used for ordinary Codex HTTP traffic.
 ///
 /// This starts from the standard Codex user agent, default headers, and sandbox-specific proxy
@@ -201,7 +212,13 @@ pub fn create_client() -> CodexHttpClient {
 /// `SSL_CERT_FILE`. The function remains infallible for compatibility with existing call sites, so
 /// a custom-CA or builder failure is logged and falls back to `reqwest::Client::new()`.
 pub fn build_reqwest_client() -> reqwest::Client {
-    try_build_reqwest_client().unwrap_or_else(|error| {
+    build_reqwest_client_with_proxy_config(/*outbound_proxy_config*/ None)
+}
+
+pub fn build_reqwest_client_with_proxy_config(
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
+) -> reqwest::Client {
+    try_build_reqwest_client_with_proxy_config(outbound_proxy_config).unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build default reqwest client");
         with_chatgpt_cloudflare_cookie_store(reqwest::Client::builder())
             .build()
@@ -219,14 +236,30 @@ pub fn build_reqwest_client() -> reqwest::Client {
 ///
 /// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use
 /// this method directly.
-pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
+pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildProxiedHttpClientError> {
+    try_build_reqwest_client_with_proxy_config(/*outbound_proxy_config*/ None)
+}
+
+pub fn try_build_reqwest_client_with_proxy_config(
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
+) -> Result<reqwest::Client, BuildProxiedHttpClientError> {
     let mut builder = reqwest::Client::builder().default_headers(default_headers());
-    if is_sandboxed() {
+    let sandboxed = is_sandboxed();
+    if sandboxed {
         builder = builder.no_proxy();
     }
     builder = with_chatgpt_cloudflare_cookie_store(builder);
 
-    build_reqwest_client_with_custom_ca(builder)
+    if sandboxed {
+        return build_reqwest_client_with_custom_ca(builder).map_err(Into::into);
+    }
+
+    build_reqwest_client_for_route(
+        builder,
+        DEFAULT_AUTH_ROUTE_URL,
+        RouteTarget::Auth,
+        outbound_proxy_config,
+    )
 }
 
 pub fn default_headers() -> HeaderMap {
