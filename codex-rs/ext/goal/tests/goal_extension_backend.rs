@@ -1,17 +1,17 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
-use std::sync::Weak;
 use std::time::Duration;
 
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
+use codex_extension_api::NoopResponseItemInjector;
+use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadIdleRequest;
 use codex_extension_api::ThreadIdleTurnStartInput;
-use codex_extension_api::ThreadIdleWithSettingsInput;
-use codex_extension_api::ThreadResumeWithSettingsInput;
+use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
@@ -507,14 +507,12 @@ async fn thread_idle_hook_requests_hidden_goal_continuation() -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("active goal should request idle continuation"))?;
 
     assert!(request.validation_key.is_some());
-    assert!(request.prompt.starts_with("<extension_context>"));
     assert!(
         request
             .prompt
             .contains("Continue working toward the active thread goal.")
     );
     assert!(request.prompt.contains("Completion audit:"));
-    assert!(request.prompt.ends_with("</extension_context>"));
     assert!(
         harness
             .should_start_idle_turn(ModeKind::Default, &request)
@@ -1114,7 +1112,7 @@ async fn installed_tools(
         &mut builder,
         runtime,
         /*metrics_client*/ None,
-        Weak::new(),
+        Arc::new(NoopResponseItemInjector),
         |_| true,
     );
     let registry = builder.build();
@@ -1163,7 +1161,7 @@ impl GoalExtensionHarness {
             &mut builder,
             runtime,
             /*metrics_client*/ None,
-            Weak::new(),
+            Arc::new(NoopResponseItemInjector),
             |_| true,
         );
         let registry = builder.build();
@@ -1272,7 +1270,7 @@ impl GoalExtensionHarness {
         let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_lifecycle_contributors() {
             contributor
-                .on_thread_resume_with_settings(ThreadResumeWithSettingsInput {
+                .on_thread_resume(ThreadResumeInput {
                     thread_settings: &thread_settings,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
@@ -1319,7 +1317,7 @@ impl GoalExtensionHarness {
         let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_idle_turn_contributors() {
             if let Some(request) = contributor
-                .request_thread_idle_turn_with_settings(ThreadIdleWithSettingsInput {
+                .request_thread_idle_turn(ThreadIdleInput {
                     thread_settings: &thread_settings,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,

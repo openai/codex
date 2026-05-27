@@ -1,19 +1,18 @@
 use std::sync::Arc;
-use std::sync::Weak;
 
 use async_trait::async_trait;
-use codex_core::ThreadManager;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ResponseItemInjector;
+use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadIdleTurnContributor;
 use codex_extension_api::ThreadIdleTurnRequestFuture;
 use codex_extension_api::ThreadIdleTurnStartFuture;
 use codex_extension_api::ThreadIdleTurnStartInput;
-use codex_extension_api::ThreadIdleWithSettingsInput;
 use codex_extension_api::ThreadLifecycleContributor;
-use codex_extension_api::ThreadResumeWithSettingsInput;
+use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCallOutcome;
@@ -49,7 +48,7 @@ pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
     metrics: GoalMetrics,
-    thread_manager: Weak<ThreadManager>,
+    response_item_injector: Arc<dyn ResponseItemInjector>,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
 }
 
@@ -64,14 +63,14 @@ impl<C> GoalExtension<C> {
         state_dbs: Arc<codex_state::StateRuntime>,
         event_sink: Arc<dyn ExtensionEventSink>,
         metrics_client: Option<MetricsClient>,
-        thread_manager: Weak<ThreadManager>,
+        response_item_injector: Arc<dyn ResponseItemInjector>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
             state_dbs,
             event_emitter: GoalEventEmitter::new(event_sink),
             metrics: GoalMetrics::new(metrics_client),
-            thread_manager,
+            response_item_injector,
             goals_enabled: Arc::new(goals_enabled),
         }
     }
@@ -96,7 +95,7 @@ where
                 Arc::clone(&self.state_dbs),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
-                self.thread_manager.clone(),
+                Arc::clone(&self.response_item_injector),
                 accounting_state,
                 enabled,
             )
@@ -104,7 +103,7 @@ where
         runtime.set_enabled(enabled);
     }
 
-    async fn on_thread_resume_with_settings(&self, input: ThreadResumeWithSettingsInput<'_>) {
+    async fn on_thread_resume(&self, input: ThreadResumeInput<'_>) {
         let Some(runtime) = goal_runtime_handle(input.thread_store) else {
             return;
         };
@@ -122,9 +121,9 @@ impl<C> ThreadIdleTurnContributor for GoalExtension<C>
 where
     C: Send + Sync + 'static,
 {
-    fn request_thread_idle_turn_with_settings<'a>(
+    fn request_thread_idle_turn<'a>(
         &'a self,
-        input: ThreadIdleWithSettingsInput<'a>,
+        input: ThreadIdleInput<'a>,
     ) -> ThreadIdleTurnRequestFuture<'a> {
         Box::pin(async move {
             let runtime = goal_runtime_handle(input.thread_store)?;
@@ -456,7 +455,7 @@ pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
     metrics_client: Option<MetricsClient>,
-    thread_manager: Weak<ThreadManager>,
+    response_item_injector: Arc<dyn ResponseItemInjector>,
     goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
 ) where
     C: Send + Sync + 'static,
@@ -465,7 +464,7 @@ pub fn install_with_backend<C>(
         state_dbs,
         registry.event_sink(),
         metrics_client,
-        thread_manager,
+        response_item_injector,
         goals_enabled,
     ));
     registry.thread_lifecycle_contributor(extension.clone());

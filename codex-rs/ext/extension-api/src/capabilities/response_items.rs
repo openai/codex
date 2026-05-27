@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseInputItem;
 
 /// Future returned when an extension asks the host to inject model-visible input.
@@ -15,6 +16,7 @@ pub type ResponseItemInjectionFuture<'a> =
 pub trait ResponseItemInjector: Send + Sync {
     fn inject_response_items<'a>(
         &'a self,
+        thread_id: ThreadId,
         items: Vec<ResponseInputItem>,
     ) -> ResponseItemInjectionFuture<'a>;
 }
@@ -26,6 +28,7 @@ pub struct NoopResponseItemInjector;
 impl ResponseItemInjector for NoopResponseItemInjector {
     fn inject_response_items<'a>(
         &'a self,
+        _thread_id: ThreadId,
         items: Vec<ResponseInputItem>,
     ) -> ResponseItemInjectionFuture<'a> {
         Box::pin(std::future::ready(Err(items)))

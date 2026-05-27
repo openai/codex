@@ -1,4 +1,5 @@
 use crate::ExtensionData;
+use crate::HiddenContextMarker;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 
 /// Input supplied when the host starts a runtime for a thread.
@@ -13,14 +14,6 @@ pub struct ThreadStartInput<'a, C> {
 
 /// Input supplied when the host resumes an existing thread.
 pub struct ThreadResumeInput<'a> {
-    /// Store scoped to the host session runtime.
-    pub session_store: &'a ExtensionData,
-    /// Store scoped to this thread runtime.
-    pub thread_store: &'a ExtensionData,
-}
-
-/// Settings-aware input supplied when the host resumes an existing thread.
-pub struct ThreadResumeWithSettingsInput<'a> {
     /// Current host-owned thread settings at resume time.
     pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Store scoped to the host session runtime.
@@ -29,25 +22,8 @@ pub struct ThreadResumeWithSettingsInput<'a> {
     pub thread_store: &'a ExtensionData,
 }
 
-impl<'a> ThreadResumeWithSettingsInput<'a> {
-    pub fn without_settings(&self) -> ThreadResumeInput<'a> {
-        ThreadResumeInput {
-            session_store: self.session_store,
-            thread_store: self.thread_store,
-        }
-    }
-}
-
 /// Input supplied when the host has no immediately pending thread work.
 pub struct ThreadIdleInput<'a> {
-    /// Store scoped to the host session runtime.
-    pub session_store: &'a ExtensionData,
-    /// Store scoped to this thread runtime.
-    pub thread_store: &'a ExtensionData,
-}
-
-/// Settings-aware input supplied when the host has no immediately pending thread work.
-pub struct ThreadIdleWithSettingsInput<'a> {
     /// Current host-owned thread settings for the idle thread.
     pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Store scoped to the host session runtime.
@@ -56,27 +32,21 @@ pub struct ThreadIdleWithSettingsInput<'a> {
     pub thread_store: &'a ExtensionData,
 }
 
-impl<'a> ThreadIdleWithSettingsInput<'a> {
-    pub fn without_settings(&self) -> ThreadIdleInput<'a> {
-        ThreadIdleInput {
-            session_store: self.session_store,
-            thread_store: self.thread_store,
-        }
-    }
-}
-
 /// Extension request to start a new idle turn.
 pub struct ThreadIdleRequest {
     /// Hidden prompt body that the host wraps as extension-owned context.
     pub prompt: String,
+    /// Marker pair used to wrap the prompt as hidden extension-owned context.
+    pub context_marker: HiddenContextMarker,
     /// Opaque extension-owned key used to reject stale requests before start.
     pub validation_key: Option<String>,
 }
 
 impl ThreadIdleRequest {
-    pub fn new(prompt: impl Into<String>) -> Self {
+    pub fn new(context_marker: HiddenContextMarker, prompt: impl Into<String>) -> Self {
         Self {
             prompt: prompt.into(),
+            context_marker,
             validation_key: None,
         }
     }

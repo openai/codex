@@ -4,9 +4,9 @@ use codex_protocol::models::ContentItem;
 
 use super::AdditionalContextUserFragment;
 use super::EnvironmentContext;
-use super::ExtensionContext;
 use super::FragmentRegistration;
 use super::FragmentRegistrationProxy;
+use super::GoalContext;
 use super::LegacyApplyPatchExecCommandWarning;
 use super::LegacyModelMismatchWarning;
 use super::LegacyUnifiedExecProcessLimitWarning;
@@ -22,7 +22,7 @@ static ENVIRONMENT_CONTEXT_REGISTRATION: FragmentRegistrationProxy<EnvironmentCo
     FragmentRegistrationProxy::new();
 static ADDITIONAL_CONTEXT_REGISTRATION: FragmentRegistrationProxy<AdditionalContextUserFragment> =
     FragmentRegistrationProxy::new();
-static EXTENSION_CONTEXT_REGISTRATION: FragmentRegistrationProxy<ExtensionContext> =
+static GOAL_CONTEXT_REGISTRATION: FragmentRegistrationProxy<GoalContext> =
     FragmentRegistrationProxy::new();
 static SKILL_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<SkillInstructions> =
     FragmentRegistrationProxy::new();
@@ -46,7 +46,7 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &USER_INSTRUCTIONS_REGISTRATION,
     &ENVIRONMENT_CONTEXT_REGISTRATION,
     &ADDITIONAL_CONTEXT_REGISTRATION,
-    &EXTENSION_CONTEXT_REGISTRATION,
+    &GOAL_CONTEXT_REGISTRATION,
     &SKILL_INSTRUCTIONS_REGISTRATION,
     &USER_SHELL_COMMAND_REGISTRATION,
     &TURN_ABORTED_REGISTRATION,

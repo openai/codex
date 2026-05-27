@@ -8271,8 +8271,10 @@ async fn start_task_does_not_overwrite_racing_active_task() {
 #[tokio::test]
 async fn start_task_does_not_drain_input_while_another_start_is_claiming_turn() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let mut active_turn = ActiveTurn::default();
-    active_turn.task_starting = true;
+    let active_turn = ActiveTurn {
+        task_starting: true,
+        ..Default::default()
+    };
     *sess.active_turn.lock().await = Some(active_turn);
 
     let queued_item = ResponseInputItem::Message {
@@ -8308,6 +8310,70 @@ async fn start_task_does_not_drain_input_while_another_start_is_claiming_turn() 
             .as_ref()
             .is_some_and(|active_turn| active_turn.task.is_none())
     );
+}
+
+#[tokio::test]
+async fn abort_during_turn_start_lifecycle_preserves_queued_input() {
+    struct BlockingTurnStart {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::TurnLifecycleContributor for BlockingTurnStart {
+        async fn on_turn_start(&self, _input: codex_extension_api::TurnStartInput<'_>) {
+            self.entered.notify_waiters();
+            self.release.notified().await;
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.turn_lifecycle_contributor(Arc::new(BlockingTurnStart {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    let sess = Arc::new(session);
+    let queued_item = ResponseInputItem::Message {
+        role: "assistant".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued before lifecycle".to_string(),
+        }],
+        phase: None,
+    };
+    sess.input_queue
+        .queue_response_items_for_next_turn(vec![queued_item])
+        .await;
+
+    let start_task = tokio::spawn({
+        let sess = Arc::clone(&sess);
+        async move {
+            sess.start_task(
+                Arc::new(turn_context),
+                Vec::new(),
+                NeverEndingTask {
+                    kind: TaskKind::Regular,
+                    listen_to_cancellation_token: true,
+                },
+            )
+            .await;
+        }
+    });
+
+    entered.notified().await;
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    release.notify_waiters();
+    start_task.await.expect("start task should finish");
+
+    assert!(
+        sess.input_queue
+            .has_queued_response_items_for_next_turn()
+            .await
+    );
+    assert!(sess.active_turn.lock().await.is_none());
 }
 
 #[tokio::test]

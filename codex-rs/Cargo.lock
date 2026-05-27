@@ -2970,7 +2970,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "codex-core",
  "codex-extension-api",
  "codex-otel",
  "codex-protocol",

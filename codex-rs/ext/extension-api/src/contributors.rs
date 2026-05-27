@@ -22,9 +22,7 @@ pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadIdleInput;
 pub use thread_lifecycle::ThreadIdleRequest;
 pub use thread_lifecycle::ThreadIdleTurnStartInput;
-pub use thread_lifecycle::ThreadIdleWithSettingsInput;
 pub use thread_lifecycle::ThreadResumeInput;
-pub use thread_lifecycle::ThreadResumeWithSettingsInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
 pub use tool_lifecycle::ToolCallOutcome;
@@ -60,20 +58,12 @@ pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
     /// Called after the host constructs a runtime from persisted history.
     async fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
 
-    /// Called after the host constructs a runtime from persisted history, with
-    /// a snapshot of host-owned thread settings.
-    async fn on_thread_resume_with_settings(&self, input: ThreadResumeWithSettingsInput<'_>) {
-        self.on_thread_resume(input.without_settings()).await;
-    }
-
     /// Called after the host has drained immediately pending thread work.
+    ///
+    /// Implementations may use host capabilities captured by the extension to
+    /// submit follow-up input. The host remains responsible for deciding
+    /// whether that input starts a turn, is queued, or is ignored.
     async fn on_thread_idle(&self, _input: ThreadIdleInput<'_>) {}
-
-    /// Called after the host has drained immediately pending thread work, with
-    /// a snapshot of host-owned thread settings.
-    async fn on_thread_idle_with_settings(&self, input: ThreadIdleWithSettingsInput<'_>) {
-        self.on_thread_idle(input.without_settings()).await;
-    }
 
     /// Called before the host drops the thread runtime and thread-scoped store.
     async fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
@@ -99,15 +89,6 @@ pub trait ThreadIdleTurnContributor: Send + Sync {
         _input: ThreadIdleInput<'a>,
     ) -> ThreadIdleTurnRequestFuture<'a> {
         Box::pin(std::future::ready(None))
-    }
-
-    /// Returns one hidden prompt body to start an idle turn, with a snapshot of
-    /// host-owned thread settings.
-    fn request_thread_idle_turn_with_settings<'a>(
-        &'a self,
-        input: ThreadIdleWithSettingsInput<'a>,
-    ) -> ThreadIdleTurnRequestFuture<'a> {
-        self.request_thread_idle_turn(input.without_settings())
     }
 
     /// Confirms that the idle-turn request is still current immediately before

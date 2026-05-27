@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::StateDbHandle;
@@ -7,11 +8,14 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ResponseItemInjectionFuture;
+use codex_extension_api::ResponseItemInjector;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use rmcp::model::CallToolRequestParams;
@@ -72,7 +76,9 @@ impl MessageProcessor {
                     &mut extensions,
                     state_db,
                     codex_otel::global(),
-                    thread_manager.clone(),
+                    Arc::new(ThreadManagerResponseItemInjector {
+                        thread_manager: thread_manager.clone(),
+                    }),
                     |config: &Config| config.features.enabled(Feature::Goals),
                 );
             }
@@ -620,5 +626,28 @@ impl MessageProcessor {
 
     fn handle_initialized_notification(&self) {
         tracing::info!("notifications/initialized");
+    }
+}
+
+struct ThreadManagerResponseItemInjector {
+    thread_manager: Weak<ThreadManager>,
+}
+
+impl ResponseItemInjector for ThreadManagerResponseItemInjector {
+    fn inject_response_items<'a>(
+        &'a self,
+        thread_id: ThreadId,
+        items: Vec<ResponseInputItem>,
+    ) -> ResponseItemInjectionFuture<'a> {
+        let thread_manager = self.thread_manager.clone();
+        Box::pin(async move {
+            let Some(thread_manager) = thread_manager.upgrade() else {
+                return Err(items);
+            };
+            let Ok(thread) = thread_manager.get_thread(thread_id).await else {
+                return Err(items);
+            };
+            thread.inject_response_items_into_active_turn(items).await
+        })
     }
 }

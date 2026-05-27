@@ -311,6 +311,10 @@ impl Session {
         self.start_task(turn_context, input, task).await;
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the active-turn guard must cover spawning until RunningTask is installed"
+    )]
     pub(crate) async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -348,32 +352,10 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
-        let queued_response_items = self
-            .input_queue
-            .take_queued_response_items_for_next_turn()
-            .await;
-        let mailbox_items = self.input_queue.get_pending_input(&self.active_turn).await;
-        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
-        let mut pending_items = queued_response_items
-            .into_iter()
-            .map(TurnInput::ResponseInputItem)
-            .collect::<Vec<_>>();
-        pending_items.extend(mailbox_items);
-        self.input_queue
-            .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
-            .await;
         self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
             .await;
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
-        let mut active = self.active_turn.lock().await;
-        let Some(turn) = active.as_mut() else {
-            return;
-        };
-        if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.task_starting || turn.task.is_some()
-        {
-            return;
-        }
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
@@ -400,43 +382,53 @@ impl Session {
             codex.turn.token_usage.reasoning_output_tokens = field::Empty,
             codex.turn.token_usage.total_tokens = field::Empty,
         );
-        let handle = tokio::spawn(
-            async move {
-                let ctx_for_finish = Arc::clone(&ctx);
-                let last_agent_message = task_for_run
-                    .run(
-                        Arc::clone(&session_ctx),
-                        ctx,
-                        task_input,
-                        task_cancellation_token.child_token(),
-                    )
-                    .await;
-                let sess = session_ctx.clone_session();
-                if let Err(err) = sess.flush_rollout().await {
-                    warn!("failed to flush rollout before completing turn: {err}");
-                    sess.send_event(
-                        ctx_for_finish.as_ref(),
-                        EventMsg::Warning(WarningEvent {
-                            message: format!(
-                                "Failed to save the conversation transcript; Codex will continue retrying. Error: {err}"
-                            ),
-                        }),
-                    )
-                    .await;
-                }
-                if !task_cancellation_token.is_cancelled() {
-                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                    sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
-                        .await;
-                }
-                done_clone.notify_waiters();
+        let task_future = async move {
+            let ctx_for_finish = Arc::clone(&ctx);
+            let last_agent_message = task_for_run
+                .run(
+                    Arc::clone(&session_ctx),
+                    ctx,
+                    task_input,
+                    task_cancellation_token.child_token(),
+                )
+                .await;
+            let sess = session_ctx.clone_session();
+            if let Err(err) = sess.flush_rollout().await {
+                warn!("failed to flush rollout before completing turn: {err}");
+                sess.send_event(
+                    ctx_for_finish.as_ref(),
+                    EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "Failed to save the conversation transcript; Codex will continue retrying. Error: {err}"
+                        ),
+                    }),
+                )
+                .await;
             }
-            .instrument(task_span),
-        );
+            if !task_cancellation_token.is_cancelled() {
+                // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
+                    .await;
+            }
+            done_clone.notify_waiters();
+        }
+        .instrument(task_span);
         let timer = turn_context
             .session_telemetry
             .start_timer(TURN_E2E_DURATION_METRIC, &[])
             .ok();
+        let mut active = self.active_turn.lock().await;
+        let Some(turn) = active.as_mut() else {
+            return;
+        };
+        if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.task_starting || turn.task.is_some()
+        {
+            return;
+        }
+        self.input_queue
+            .prepare_starting_turn_input(turn, token_usage_at_turn_start)
+            .await;
+        let handle = tokio::spawn(task_future);
         let running_task = RunningTask {
             done,
             handle: AbortOnDropHandle::new(handle),

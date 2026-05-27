@@ -176,13 +176,11 @@ impl CodexThread {
             .thread_lifecycle_contributors()
         {
             contributor
-                .on_thread_resume_with_settings(
-                    codex_extension_api::ThreadResumeWithSettingsInput {
-                        thread_settings: &thread_settings,
-                        session_store: &self.codex.session.services.session_extension_data,
-                        thread_store: &self.codex.session.services.thread_extension_data,
-                    },
-                )
+                .on_thread_resume(codex_extension_api::ThreadResumeInput {
+                    thread_settings: &thread_settings,
+                    session_store: &self.codex.session.services.session_extension_data,
+                    thread_store: &self.codex.session.services.thread_extension_data,
+                })
                 .await;
         }
     }

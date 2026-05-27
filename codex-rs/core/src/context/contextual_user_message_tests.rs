@@ -14,9 +14,16 @@ fn detects_environment_context_fragment() {
 }
 
 #[test]
-fn detects_extension_context_fragment() {
+fn detects_legacy_goal_context_fragment() {
     assert!(is_contextual_user_fragment(&ContentItem::InputText {
-        text: "<extension_context>\n<example>data</example>\n</extension_context>".to_string(),
+        text: "<goal_context>\nlegacy hidden goal prompt\n</goal_context>".to_string(),
+    }));
+}
+
+#[test]
+fn does_not_treat_generic_extension_context_as_hidden() {
+    assert!(!is_contextual_user_fragment(&ContentItem::InputText {
+        text: "<extension_context>\nuser-authored text\n</extension_context>".to_string(),
     }));
 }
 

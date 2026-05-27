@@ -1,10 +1,12 @@
-use codex_core::context::ContextualUserFragment;
-use codex_core::context::ExtensionContext;
+use codex_extension_api::HiddenContextMarker;
 use codex_extension_api::ThreadIdleRequest;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
 use codex_utils_template::Template;
 use std::sync::LazyLock;
+
+const GOAL_CONTEXT_MARKER: HiddenContextMarker =
+    HiddenContextMarker::new("<goal_context>", "</goal_context>");
 
 static CONTINUATION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
@@ -46,19 +48,19 @@ fn render_embedded_template<const N: usize>(
 }
 
 pub(crate) fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
-    extension_context_input_item(budget_limit_prompt(goal))
+    goal_context_input_item(budget_limit_prompt(goal))
 }
 
 pub(crate) fn continuation_steering_request(goal: &ThreadGoal) -> ThreadIdleRequest {
-    ThreadIdleRequest::new(ExtensionContext::new(continuation_prompt(goal)).render())
+    ThreadIdleRequest::new(GOAL_CONTEXT_MARKER, continuation_prompt(goal))
 }
 
 pub(crate) fn objective_updated_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
-    extension_context_input_item(objective_updated_prompt(goal))
+    goal_context_input_item(objective_updated_prompt(goal))
 }
 
-fn extension_context_input_item(prompt: String) -> ResponseInputItem {
-    ExtensionContext::new(prompt).into_response_input_item()
+fn goal_context_input_item(prompt: String) -> ResponseInputItem {
+    GOAL_CONTEXT_MARKER.response_input_item(prompt)
 }
 
 fn continuation_prompt(goal: &ThreadGoal) -> String {

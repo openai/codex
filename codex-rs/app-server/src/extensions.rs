@@ -13,10 +13,13 @@ use codex_extension_api::ExtensionEventFuture;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ResponseItemInjectionFuture;
+use codex_extension_api::ResponseItemInjector;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db::StateDbHandle;
@@ -40,13 +43,36 @@ where
             &mut builder,
             state_db,
             codex_otel::global(),
-            thread_manager,
+            Arc::new(ThreadManagerResponseItemInjector { thread_manager }),
             |config: &Config| config.features.enabled(Feature::Goals),
         );
     }
     codex_memories_extension::install(&mut builder, codex_otel::global());
     codex_web_search_extension::install(&mut builder, auth_manager);
     Arc::new(builder.build())
+}
+
+struct ThreadManagerResponseItemInjector {
+    thread_manager: Weak<ThreadManager>,
+}
+
+impl ResponseItemInjector for ThreadManagerResponseItemInjector {
+    fn inject_response_items<'a>(
+        &'a self,
+        thread_id: ThreadId,
+        items: Vec<ResponseInputItem>,
+    ) -> ResponseItemInjectionFuture<'a> {
+        let thread_manager = self.thread_manager.clone();
+        Box::pin(async move {
+            let Some(thread_manager) = thread_manager.upgrade() else {
+                return Err(items);
+            };
+            let Ok(thread) = thread_manager.get_thread(thread_id).await else {
+                return Err(items);
+            };
+            thread.inject_response_items_into_active_turn(items).await
+        })
+    }
 }
 
 pub(crate) fn app_server_extension_event_sink(

@@ -1,9 +1,8 @@
 use std::sync::Arc;
-use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use codex_core::ThreadManager;
+use codex_extension_api::ResponseItemInjector;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ResponseInputItem;
@@ -28,7 +27,7 @@ struct GoalRuntimeInner {
     state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
     metrics: GoalMetrics,
-    thread_manager: Weak<ThreadManager>,
+    response_item_injector: Arc<dyn ResponseItemInjector>,
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
 }
@@ -50,7 +49,7 @@ impl GoalRuntimeHandle {
         state_dbs: Arc<codex_state::StateRuntime>,
         event_emitter: GoalEventEmitter,
         metrics: GoalMetrics,
-        thread_manager: Weak<ThreadManager>,
+        response_item_injector: Arc<dyn ResponseItemInjector>,
         accounting_state: Arc<GoalAccountingState>,
         enabled: bool,
     ) -> Self {
@@ -60,7 +59,7 @@ impl GoalRuntimeHandle {
                 state_dbs,
                 event_emitter,
                 metrics,
-                thread_manager,
+                response_item_injector,
                 accounting_state,
                 enabled: AtomicBool::new(enabled),
             }),
@@ -325,16 +324,10 @@ impl GoalRuntimeHandle {
     }
 
     pub(crate) async fn inject_active_turn_steering(&self, item: ResponseInputItem) {
-        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
-            tracing::debug!("skipping goal steering because thread manager is unavailable");
-            return;
-        };
-        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
-            tracing::debug!("skipping goal steering because live thread is unavailable");
-            return;
-        };
-        if thread
-            .inject_response_items_into_active_turn(vec![item])
+        if self
+            .inner
+            .response_item_injector
+            .inject_response_items(self.inner.thread_id, vec![item])
             .await
             .is_err()
         {

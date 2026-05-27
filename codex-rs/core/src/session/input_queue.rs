@@ -3,6 +3,7 @@ use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -179,6 +180,42 @@ impl InputQueue {
         turn_state: &Mutex<TurnState>,
     ) -> Vec<TurnInput> {
         turn_state.lock().await.pending_input.items.split_off(0)
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "startup input must move only while the claimed active turn is still current"
+    )]
+    pub(crate) async fn prepare_starting_turn_input(
+        &self,
+        active_turn: &mut ActiveTurn,
+        token_usage_at_turn_start: TokenUsage,
+    ) {
+        let queued_response_items = self.take_queued_response_items_for_next_turn().await;
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+        let existing_pending_input = turn_state.pending_input.items.split_off(0);
+        let accepts_mailbox_delivery = turn_state.accepts_mailbox_delivery_for_current_turn();
+        turn_state.pending_input.items.extend(
+            queued_response_items
+                .into_iter()
+                .map(TurnInput::ResponseInputItem),
+        );
+        turn_state
+            .pending_input
+            .items
+            .extend(existing_pending_input);
+        drop(turn_state);
+        if accepts_mailbox_delivery {
+            let mailbox_items = self.drain_mailbox_input_items().await;
+            active_turn
+                .turn_state
+                .lock()
+                .await
+                .pending_input
+                .items
+                .extend(mailbox_items.into_iter().map(TurnInput::ResponseInputItem));
+        }
     }
 
     #[expect(

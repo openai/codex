@@ -3,12 +3,8 @@
 use std::sync::Arc;
 
 use codex_extension_api::ThreadIdleRequest;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 
-use crate::context::ContextualUserFragment;
-use crate::context::ExtensionContext;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::state::ActiveTurn;
@@ -89,7 +85,7 @@ pub(crate) async fn maybe_start_turn(session: Arc<Session>) {
         return;
     }
 
-    let input = vec![idle_extension_input(candidate.request.prompt)];
+    let input = vec![idle_extension_input(candidate.request)];
 
     // Treat extension-provided prompts as the new turn's initial input rather than stashing them
     // in turn-state pending input; this keeps rollback logic out of the scheduler.
@@ -108,7 +104,7 @@ async fn notify_thread_idle(session: &Session) {
     let thread_settings = thread_settings_snapshot(session).await;
     for contributor in session.services.extensions.thread_lifecycle_contributors() {
         contributor
-            .on_thread_idle_with_settings(codex_extension_api::ThreadIdleWithSettingsInput {
+            .on_thread_idle(codex_extension_api::ThreadIdleInput {
                 thread_settings: &thread_settings,
                 session_store: &session.services.session_extension_data,
                 thread_store: &session.services.thread_extension_data,
@@ -144,13 +140,11 @@ async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate
         .enumerate()
     {
         let Some(request) = contributor
-            .request_thread_idle_turn_with_settings(
-                codex_extension_api::ThreadIdleWithSettingsInput {
-                    thread_settings: &thread_settings,
-                    session_store: &session.services.session_extension_data,
-                    thread_store: &session.services.thread_extension_data,
-                },
-            )
+            .request_thread_idle_turn(codex_extension_api::ThreadIdleInput {
+                thread_settings: &thread_settings,
+                session_store: &session.services.session_extension_data,
+                thread_store: &session.services.thread_extension_data,
+            })
             .await
         else {
             continue;
@@ -209,25 +203,21 @@ async fn clear_reserved_idle_turn(session: &Session) {
     }
 }
 
-fn idle_extension_input(prompt: String) -> TurnInput {
+fn idle_extension_input(request: ThreadIdleRequest) -> TurnInput {
     let prompt = codex_utils_string::truncate_middle_with_token_budget(
-        &prompt,
+        &request.prompt,
         MAX_IDLE_EXTENSION_PROMPT_TOKENS,
     )
     .0;
-    if ExtensionContext::matches_text(&prompt) {
-        return TurnInput::ResponseInputItem(ResponseInputItem::Message {
-            role: ExtensionContext::role().to_string(),
-            content: vec![ContentItem::InputText { text: prompt }],
-            phase: None,
-        });
-    }
-
-    TurnInput::ResponseInputItem(ExtensionContext::new(prompt).into_response_input_item())
+    TurnInput::ResponseInputItem(request.context_marker.response_input_item(prompt))
 }
 
 #[cfg(test)]
 mod tests {
+    use codex_extension_api::HiddenContextMarker;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseInputItem;
+
     use super::*;
 
     #[test]
@@ -238,9 +228,12 @@ mod tests {
         );
         let original_len = prompt.len();
 
-        let prompt = ExtensionContext::new(prompt).render();
+        let request = ThreadIdleRequest::new(
+            HiddenContextMarker::new("<goal_context>", "</goal_context>"),
+            prompt,
+        );
         let TurnInput::ResponseInputItem(ResponseInputItem::Message { content, .. }) =
-            idle_extension_input(prompt)
+            idle_extension_input(request)
         else {
             panic!("expected message input");
         };
@@ -248,7 +241,7 @@ mod tests {
             panic!("expected one text content item");
         };
 
-        assert!(text.starts_with("<extension_context>"));
+        assert!(text.starts_with("<goal_context>"));
         assert!(text.contains("start"));
         assert!(text.contains("end"));
         assert!(text.len() < original_len);
