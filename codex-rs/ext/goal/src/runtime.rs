@@ -133,9 +133,7 @@ impl GoalRuntimeHandle {
             .metrics
             .record_terminal_if_status_changed(previous_status, &goal);
         let should_steer_active_turn = previous_goal.as_ref().is_none_or(|previous_goal| {
-            previous_goal.goal_id != goal.goal_id
-                || previous_goal.status != codex_state::ThreadGoalStatus::Active
-                || previous_goal.objective != goal.objective
+            previous_goal.goal_id != goal.goal_id || previous_goal.objective != goal.objective
         });
         match goal.status {
             codex_state::ThreadGoalStatus::Active => {

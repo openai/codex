@@ -194,7 +194,7 @@ impl ThreadGoalRequestProcessor {
                             objective: None,
                             status,
                             token_budget: params.token_budget,
-                            expected_goal_id: None,
+                            expected_goal_id: Some(existing_goal.goal_id.clone()),
                         },
                     )
                     .await

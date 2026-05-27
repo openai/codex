@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
@@ -77,21 +78,26 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::fs::FileTimes;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+use wiremock::matchers::path_regex;
 
 use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
@@ -136,6 +142,35 @@ async fn wait_for_responses_request_count(
     })
     .await??;
     Ok(())
+}
+
+async fn mount_response_template_sequence_unchecked(
+    server: &MockServer,
+    responses: Vec<ResponseTemplate>,
+) {
+    struct SeqResponder {
+        num_calls: AtomicUsize,
+        responses: Vec<ResponseTemplate>,
+    }
+
+    impl Respond for SeqResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            self.responses
+                .get(call_num)
+                .unwrap_or_else(|| panic!("no response for {call_num}"))
+                .clone()
+        }
+    }
+
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(SeqResponder {
+            num_calls: AtomicUsize::new(0),
+            responses,
+        })
+        .mount(server)
+        .await;
 }
 
 #[tokio::test]
@@ -863,6 +898,164 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
             .iter()
             .any(|method| method == "turn/started"),
         "paused goal should not continue after thread resume"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_goal_status_resume_does_not_inject_objective_update_prompt() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let materialize_body = create_final_assistant_message_sse_response("materialized")?;
+    let active_turn_body = create_final_assistant_message_sse_response("active turn complete")?;
+    let follow_up_body =
+        create_final_assistant_message_sse_response("unexpected follow-up complete")?;
+    mount_response_template_sequence_unchecked(
+        &server,
+        vec![
+            responses::sse_response(materialize_body),
+            responses::sse_response(active_turn_body).set_delay(Duration::from_millis(500)),
+            responses::sse_response(follow_up_body),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
+    )?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let materialize_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "materialize this thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(materialize_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id.clone(),
+                "objective": "keep polishing",
+                "status": "paused",
+            })),
+        )
+        .await?;
+    let goal_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
+    )
+    .await??;
+    let _goal: ThreadGoalSetResponse = to_response(goal_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+    mcp.clear_message_buffer();
+
+    let active_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "do a little work".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(active_turn_id)),
+    )
+    .await??;
+
+    let resume_goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id.clone(),
+                "status": "active",
+            })),
+        )
+        .await?;
+    let resume_goal_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_goal_id)),
+    )
+    .await??;
+    let _resume_goal: ThreadGoalSetResponse = to_response(resume_goal_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let mut saw_objective_steering = false;
+    for request in requests
+        .iter()
+        .filter(|request| request.url.path().ends_with("/responses"))
+    {
+        let body = request
+            .body_json::<Value>()
+            .context("request body should be JSON")?;
+        let Some(input) = body.get("input").and_then(Value::as_array) else {
+            continue;
+        };
+        if response_items_contain_text(
+            input,
+            "The active thread goal objective was edited by the user.",
+        ) {
+            saw_objective_steering = true;
+            break;
+        }
+    }
+    assert!(
+        !saw_objective_steering,
+        "status-only resume should not inject objective-edited steering"
     );
 
     Ok(())
@@ -3420,6 +3613,21 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn response_items_contain_text(items: &[Value], needle: &str) -> bool {
+    items.iter().any(|item| {
+        item.get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|content| {
+                content
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains(needle))
+            })
+    })
 }
 
 fn create_config_toml_with_chatgpt_base_url(
