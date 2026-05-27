@@ -540,13 +540,7 @@ impl CodexThread {
         let result = self
             .codex
             .session
-            .read_resource(
-                server,
-                ReadResourceRequestParams {
-                    meta: None,
-                    uri: uri.to_string(),
-                },
-            )
+            .read_resource(server, ReadResourceRequestParams::new(uri))
             .await?;
 
         Ok(serde_json::to_value(result)?)

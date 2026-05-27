@@ -16,6 +16,7 @@ from openai_codex import (
     AsyncThread,
     AsyncTurnHandle,
     Codex,
+    Sandbox,
     Thread,
     TurnHandle,
     TurnResult,
@@ -29,6 +30,7 @@ EXPECTED_ROOT_EXPORTS = [
     "Codex",
     "AsyncCodex",
     "ApprovalMode",
+    "Sandbox",
     "ChatgptLoginHandle",
     "DeviceCodeLoginHandle",
     "AsyncChatgptLoginHandle",
@@ -191,6 +193,15 @@ def test_root_exports_approval_mode() -> None:
     ]
 
 
+def test_root_exports_sandbox_presets() -> None:
+    """The friendly sandbox API should expose only obvious named presets."""
+    assert [(sandbox.name, sandbox.value) for sandbox in Sandbox] == [
+        ("read_only", "read-only"),
+        ("workspace_write", "workspace-write"),
+        ("full_access", "full-access"),
+    ]
+
+
 def test_package_and_default_client_versions_follow_project_version() -> None:
     """The importable package version should stay aligned with pyproject metadata."""
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
@@ -341,7 +352,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "model",
             "output_schema",
             "personality",
-            "sandbox_policy",
+            "sandbox",
             "service_tier",
             "summary",
         ],
@@ -352,7 +363,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "model",
             "output_schema",
             "personality",
-            "sandbox_policy",
+            "sandbox",
             "service_tier",
             "summary",
         ],
@@ -416,7 +427,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "model",
             "output_schema",
             "personality",
-            "sandbox_policy",
+            "sandbox",
             "service_tier",
             "summary",
         ],
@@ -427,7 +438,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "model",
             "output_schema",
             "personality",
-            "sandbox_policy",
+            "sandbox",
             "service_tier",
             "summary",
         ],

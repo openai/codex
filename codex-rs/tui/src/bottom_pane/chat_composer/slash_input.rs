@@ -126,7 +126,11 @@ impl<'a> SlashInput<'a> {
         self.enabled && !text.starts_with(' ') && text.trim().starts_with('/')
     }
 
-    pub(super) fn command_element_range(&self, first_line: &str) -> Option<Range<usize>> {
+    pub(super) fn command_element_range(
+        &self,
+        first_line: &str,
+        cursor: usize,
+    ) -> Option<Range<usize>> {
         if self.is_bash_mode {
             return None;
         }
@@ -135,6 +139,11 @@ impl<'a> SlashInput<'a> {
             return None;
         }
         let element_end = 1 + name.len();
+        // A draft tail can make an in-progress prefix look complete ("/re" + "view").
+        // Keep it editable until the cursor leaves the command name.
+        if cursor <= first_line.len() && (1..element_end).contains(&cursor) {
+            return None;
+        }
         let has_space_after = first_line
             .get(element_end..)
             .and_then(|tail| tail.chars().next())
@@ -159,7 +168,7 @@ impl<'a> SlashInput<'a> {
         has_slash_command_prefix(name, self.command_flags, self.service_tier_commands)
     }
 
-    pub(super) fn command_popup(&self, first_line: &str) -> CommandPopup {
+    pub(super) fn command_popup(&self, filter_text: &str) -> CommandPopup {
         let mut command_popup = CommandPopup::new(
             CommandPopupFlags {
                 collaboration_modes_enabled: self.command_flags.collaboration_modes_enabled,
@@ -175,7 +184,7 @@ impl<'a> SlashInput<'a> {
             },
             self.service_tier_commands.to_vec(),
         );
-        command_popup.on_composer_text_change(first_line.to_string());
+        command_popup.on_composer_text_change(filter_text.to_string());
         command_popup
     }
 
@@ -255,8 +264,12 @@ impl ChatComposer {
             } => {
                 // Ensure popup filtering/selection reflects the latest composer text
                 // before applying completion.
-                let first_line = self.draft.textarea.text().lines().next().unwrap_or("");
-                popup.on_composer_text_change(first_line.to_string());
+                let text = self.draft.textarea.text();
+                let first_line = text.lines().next().unwrap_or("").to_owned();
+                let cursor = self.draft.textarea.cursor();
+                let filter_text = command_popup_filter_text(&first_line, cursor)
+                    .unwrap_or_else(|| first_line.clone());
+                popup.on_composer_text_change(filter_text);
                 if let Some(selected_cmd) = popup.selected_item() {
                     if selected_command_dispatches_immediately_on_tab(&selected_cmd)
                         && let CommandItem::Builtin(cmd) = &selected_cmd
@@ -267,8 +280,16 @@ impl ChatComposer {
                         return (InputResult::Command(*cmd), true);
                     }
 
+                    if self
+                        .complete_selected_slash_command_preserving_existing_draft_tail_as_inline_args(
+                            &selected_cmd,
+                        )
+                    {
+                        return (InputResult::None, true);
+                    }
+
                     if let Some(completed_text) =
-                        selected_command_completion(first_line, &selected_cmd)
+                        selected_command_completion(&first_line, &selected_cmd)
                     {
                         self.draft
                             .textarea
@@ -293,11 +314,23 @@ impl ChatComposer {
             } => {
                 // Treat "/" as accepting the highlighted command as text completion
                 // while the slash-command popup is active.
-                let first_line = self.draft.textarea.text().lines().next().unwrap_or("");
-                popup.on_composer_text_change(first_line.to_string());
+                let text = self.draft.textarea.text();
+                let first_line = text.lines().next().unwrap_or("").to_owned();
+                let cursor = self.draft.textarea.cursor();
+                let filter_text = command_popup_filter_text(&first_line, cursor)
+                    .unwrap_or_else(|| first_line.clone());
+                popup.on_composer_text_change(filter_text);
                 if let Some(selected_cmd) = popup.selected_item() {
+                    if self
+                        .complete_selected_slash_command_preserving_existing_draft_tail_as_inline_args(
+                            &selected_cmd,
+                        )
+                    {
+                        return (InputResult::None, true);
+                    }
+
                     if let Some(completed_text) =
-                        selected_command_completion(first_line, &selected_cmd)
+                        selected_command_completion(&first_line, &selected_cmd)
                     {
                         self.draft
                             .textarea
@@ -318,6 +351,15 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
+                    if self
+                        .complete_selected_slash_command_preserving_existing_draft_tail_as_inline_args(
+                            &sel,
+                        )
+                        && let Some(result) = self.try_dispatch_slash_command_with_args()
+                    {
+                        return (result, true);
+                    }
+
                     self.stage_selected_slash_command_history(&sel);
                     self.draft.textarea.set_text_clearing_elements("");
                     self.draft.is_bash_mode = false;
@@ -338,6 +380,71 @@ impl ChatComposer {
         }
     }
 
+    fn complete_selected_slash_command_preserving_existing_draft_tail_as_inline_args(
+        &mut self,
+        selected_cmd: &CommandItem,
+    ) -> bool {
+        let CommandItem::Builtin(cmd) = selected_cmd else {
+            return false;
+        };
+        if !cmd.supports_inline_args() {
+            return false;
+        }
+
+        let text = self.draft.textarea.text();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let cursor = self.draft.textarea.cursor();
+        if cursor > first_line_end || !text.starts_with('/') || !text.is_char_boundary(cursor) {
+            return false;
+        }
+
+        let command_token_end = text[1..first_line_end]
+            .find(char::is_whitespace)
+            .map(|idx| 1 + idx)
+            .unwrap_or(first_line_end);
+        let typed_command_name = &text[1..command_token_end];
+        let rest_after_token_is_empty = text[command_token_end..].trim().is_empty();
+        if rest_after_token_is_empty && (cursor <= 1 || cursor >= command_token_end) {
+            return false;
+        }
+        let replace_end =
+            if cursor <= 1 || (typed_command_name == cmd.command() && rest_after_token_is_empty) {
+                command_token_end
+            } else {
+                cursor
+            };
+        let tail = &text[replace_end..];
+        let tail_starts_with_whitespace = tail.chars().next().is_some_and(char::is_whitespace);
+        let selected_command_text = format!("/{}", cmd.command());
+        let replacement = if tail_starts_with_whitespace {
+            selected_command_text
+        } else {
+            format!("{selected_command_text} ")
+        };
+
+        let ranges_to_unmark = self
+            .draft
+            .textarea
+            .text_elements()
+            .into_iter()
+            .filter_map(|element| {
+                let range = element.byte_range.start..element.byte_range.end;
+                (range.start < replace_end && replace_end < range.end).then_some(range)
+            })
+            .collect::<Vec<_>>();
+        for range in ranges_to_unmark {
+            self.draft.textarea.remove_element_range(range);
+        }
+        self.draft
+            .textarea
+            .replace_range(0..replace_end, &replacement);
+        self.draft.is_bash_mode = false;
+        self.draft
+            .textarea
+            .set_cursor(self.draft.textarea.text().len());
+        true
+    }
+
     /// Keep slash command elements aligned with the current first line.
     pub(super) fn sync_slash_command_elements(&mut self) {
         if !self.slash_commands_enabled() {
@@ -346,7 +453,8 @@ impl ChatComposer {
         let text = self.draft.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
         let first_line = &text[..first_line_end];
-        let desired_range = self.slash_input().command_element_range(first_line);
+        let cursor = self.draft.textarea.cursor();
+        let desired_range = self.slash_input().command_element_range(first_line, cursor);
         // Slash commands are only valid at byte 0 of the first line.
         // Any slash-shaped element not matching the current desired prefix is stale.
         let mut has_desired = false;
@@ -424,10 +532,18 @@ pub(super) fn args_elements(
         .collect()
 }
 
+pub(super) fn command_popup_filter_text(first_line: &str, cursor: usize) -> Option<String> {
+    let (name, _rest) = command_under_cursor(first_line, cursor)?;
+    Some(format!("/{name}"))
+}
+
 /// If the cursor is currently within a slash command on the first line,
-/// extract the command name and the rest of the line after it.
+/// extract the command fragment before the cursor and the rest of the line after it.
 fn command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)> {
     if !first_line.starts_with('/') {
+        return None;
+    }
+    if cursor > first_line.len() || !first_line.is_char_boundary(cursor) {
         return None;
     }
 
@@ -437,16 +553,99 @@ fn command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)>
         .map(|idx| name_start + idx)
         .unwrap_or_else(|| first_line.len());
 
+    let cursor = if cursor <= name_start {
+        name_end
+    } else {
+        cursor
+    };
     if cursor > name_end {
         return None;
     }
 
-    let name = &first_line[name_start..name_end];
-    let rest_start = first_line[name_end..]
-        .find(|c: char| !c.is_whitespace())
-        .map(|idx| name_end + idx)
-        .unwrap_or(name_end);
-    let rest = &first_line[rest_start..];
+    let name = &first_line[name_start..cursor];
+    let rest = &first_line[cursor..];
 
     Some((name, rest))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::bottom_pane::AppEventSender;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn test_composer() -> ChatComposer {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        ChatComposer::new(
+            /*has_input_focus*/ true,
+            AppEventSender::new(tx),
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        )
+    }
+
+    fn press(composer: &mut ChatComposer, code: KeyCode) -> InputResult {
+        composer
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
+            .0
+    }
+
+    fn composer_with_text_at_cursor(text: &str, cursor: usize) -> ChatComposer {
+        let mut composer = test_composer();
+        composer.draft.textarea.set_text_clearing_elements(text);
+        composer.draft.textarea.set_cursor(cursor);
+        composer.sync_popups();
+        composer
+    }
+
+    fn composer_with_draft_tail(prefix: &str, draft: &str) -> ChatComposer {
+        composer_with_text_at_cursor(&format!("{prefix}{draft}"), prefix.len())
+    }
+
+    #[test]
+    fn slash_completion_preserves_existing_draft_tail_for_inline_arg_commands() {
+        let draft = "view the diff";
+        let expected_text = "/review view the diff";
+
+        let mut composer = composer_with_draft_tail("/re", draft);
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), expected_text);
+        assert_eq!(composer.draft.textarea.cursor(), expected_text.len());
+
+        let mut composer = composer_with_draft_tail("/re", draft);
+        assert_eq!(
+            press(&mut composer, KeyCode::Enter),
+            InputResult::CommandWithArgs(SlashCommand::Review, draft.to_string(), Vec::new())
+        );
+        assert_eq!(composer.draft.textarea.text(), expected_text);
+    }
+
+    #[test]
+    fn slash_completion_does_not_preserve_existing_draft_tail_for_other_commands() {
+        let mut composer = composer_with_draft_tail(
+            "/mo",
+            "preserve this draft only for opted-in slash commands",
+        );
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/model ");
+        assert_eq!(composer.draft.textarea.cursor(), "/model ".len());
+    }
+
+    #[test]
+    fn slash_completion_does_not_turn_command_suffix_into_args() {
+        let mut composer = composer_with_text_at_cursor("/review", "/re".len());
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/review ");
+
+        let mut composer = composer_with_text_at_cursor("/review", "/re".len());
+        assert_eq!(
+            press(&mut composer, KeyCode::Enter),
+            InputResult::Command(SlashCommand::Review)
+        );
+        assert!(composer.draft.textarea.is_empty());
+    }
 }

@@ -1,0 +1,36 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: "plain_lines(&text).join(\"\\n\")"
+---
+ Issue       #24485: newline shortcut fails in PyCharm terminal on Windows
+             (https://github.com/openai/codex/issues/24485)
+ Activity    +1 0, substantive comments 0
+ Complexity  Low
+ Why start   New, deterministic regression range; localized composer/keymap
+             path.
+────────────────────────────────────────────────────────────────────────────
+ Issue       #23926: Vim composer e stalls at word end (https://github.com/
+             openai/codex/issues/23926)
+ Activity    +1 0, comments 0
+ Complexity  Low
+ Why start   Standing best quick win; deterministic motion bug.
+────────────────────────────────────────────────────────────────────────────
+ Issue       #23651: Zellij scrollback misses Codex transcript over SSH
+             (https://github.com/openai/codex/issues/23651)
+ Activity    +1 3, human comments 2
+ Complexity  Medium
+ Why start   Clear regression and strong scrollback evidence.
+────────────────────────────────────────────────────────────────────────────
+ Issue       #23740: raw ANSI/control sequences in Windows Terminal
+             (https://github.com/openai/codex/issues/23740)
+ Activity    +1 7, human comments 7
+ Complexity  Medium
+ Why start   Highest activity; established Windows rendering regression
+             family.
+────────────────────────────────────────────────────────────────────────────
+ Issue       #24527: typing lag increases with session length (https://
+             github.com/openai/codex/issues/24527)
+ Activity    +1 0, substantive comments 0
+ Complexity  Medium
+ Why start   New TUI-visible performance report; needs profiling before
+             implementation.

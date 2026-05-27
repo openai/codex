@@ -9,12 +9,12 @@ use super::*;
 /// preview-only during streaming.
 #[derive(Debug)]
 pub(crate) struct StreamingPlanTailCell {
-    lines: Vec<Line<'static>>,
+    lines: Vec<HyperlinkLine>,
     is_stream_continuation: bool,
 }
 
 impl StreamingPlanTailCell {
-    pub(crate) fn new(lines: Vec<Line<'static>>, is_stream_continuation: bool) -> Self {
+    pub(crate) fn new(lines: Vec<HyperlinkLine>, is_stream_continuation: bool) -> Self {
         Self {
             lines,
             is_stream_continuation,
@@ -24,11 +24,19 @@ impl StreamingPlanTailCell {
 
 impl HistoryCell for StreamingPlanTailCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.lines.clone())
+    }
+
+    fn display_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
         self.lines.clone()
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(self.lines.clone())
+        plain_lines(visible_lines(self.lines.clone()))
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -58,11 +66,11 @@ pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: &Path) -> ProposedPl
 /// Stream cells are display fragments, not source-backed history. They should be replaced by
 /// `ProposedPlanCell` during consolidation before relying on resize reflow for finalized history.
 pub(crate) fn new_proposed_plan_stream(
-    lines: Vec<Line<'static>>,
+    lines: Vec<impl Into<HyperlinkLine>>,
     is_stream_continuation: bool,
 ) -> ProposedPlanStreamCell {
     ProposedPlanStreamCell {
-        lines,
+        lines: lines.into_iter().map(Into::into).collect(),
         is_stream_continuation,
     }
 }
@@ -85,34 +93,41 @@ pub(crate) struct ProposedPlanCell {
 /// terminal resize.
 #[derive(Debug)]
 pub(crate) struct ProposedPlanStreamCell {
-    lines: Vec<Line<'static>>,
+    lines: Vec<HyperlinkLine>,
     is_stream_continuation: bool,
 }
 
 impl HistoryCell for ProposedPlanCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
-        lines.push(Line::from(" "));
+        visible_lines(self.display_hyperlink_lines(width))
+    }
 
-        let mut plan_lines: Vec<Line<'static>> = vec![Line::from(" ")];
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines = vec![
+            HyperlinkLine::new(vec!["• ".dim(), "Proposed Plan".bold()].into()),
+            HyperlinkLine::new(Line::from(" ")),
+        ];
+
+        let mut plan_lines = vec![HyperlinkLine::new(Line::from(" "))];
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
-        let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown_agent_with_cwd(
+        let mut body = crate::markdown::render_markdown_agent_with_links_and_cwd(
             &self.plan_markdown,
             Some(wrap_width),
             Some(self.cwd.as_path()),
-            &mut body,
         );
         if body.is_empty() {
-            body.push(Line::from("(empty)".dim().italic()));
+            body.push(HyperlinkLine::new(Line::from("(empty)".dim().italic())));
         }
-        plan_lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
-        plan_lines.push(Line::from(" "));
+        plan_lines.extend(prefix_hyperlink_lines(body, "  ".into(), "  ".into()));
+        plan_lines.push(HyperlinkLine::new(Line::from(" ")));
 
         lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
         lines
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -122,11 +137,19 @@ impl HistoryCell for ProposedPlanCell {
 
 impl HistoryCell for ProposedPlanStreamCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.lines.clone())
+    }
+
+    fn display_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
         self.lines.clone()
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(self.lines.clone())
+        plain_lines(visible_lines(self.lines.clone()))
     }
 
     fn is_stream_continuation(&self) -> bool {
