@@ -70,13 +70,12 @@ use tracing::warn;
 
 const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
-const MCP_UI_APP_VISIBILITY: &str = "app";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
 
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
-/// Tools without visibility metadata remain visible. Tools marked visible to
-/// the app are hidden unless they are also explicitly visible to the model.
+/// Tools without visibility metadata remain visible. Tools with visibility
+/// metadata are hidden unless they explicitly include the model.
 fn tool_is_model_visible(tool: &ToolInfo) -> bool {
     let Some(visibility) = tool
         .tool
@@ -90,12 +89,9 @@ fn tool_is_model_visible(tool: &ToolInfo) -> bool {
         return true;
     };
 
-    !visibility
+    visibility
         .iter()
-        .any(|target| target.as_str() == Some(MCP_UI_APP_VISIBILITY))
-        || visibility
-            .iter()
-            .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
+        .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.

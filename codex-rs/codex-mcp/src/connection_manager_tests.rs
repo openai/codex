@@ -729,7 +729,7 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
-async fn list_all_tools_for_model_hides_app_only_tools_but_regular_list_retains_them() {
+async fn list_all_tools_for_model_respects_visibility_but_regular_list_retains_all_tools() {
     let mut app_tool = create_test_tool("rmcp", "app_tool");
     app_tool.tool.meta = Some(Meta(
         serde_json::json!({ "ui": { "visibility": ["app"] } })
@@ -737,7 +737,26 @@ async fn list_all_tools_for_model_hides_app_only_tools_but_regular_list_retains_
             .expect("metadata object")
             .clone(),
     ));
-    let startup_tools = vec![create_test_tool("rmcp", "model_tool"), app_tool];
+    let mut empty_visibility_tool = create_test_tool("rmcp", "empty_visibility_tool");
+    empty_visibility_tool.tool.meta = Some(Meta(
+        serde_json::json!({ "ui": { "visibility": [] } })
+            .as_object()
+            .expect("metadata object")
+            .clone(),
+    ));
+    let mut app_and_model_tool = create_test_tool("rmcp", "app_and_model_tool");
+    app_and_model_tool.tool.meta = Some(Meta(
+        serde_json::json!({ "ui": { "visibility": ["app", "model"] } })
+            .as_object()
+            .expect("metadata object")
+            .clone(),
+    ));
+    let startup_tools = vec![
+        create_test_tool("rmcp", "model_tool"),
+        app_tool,
+        empty_visibility_tool,
+        app_and_model_tool,
+    ];
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -766,7 +785,7 @@ async fn list_all_tools_for_model_hides_app_only_tools_but_regular_list_retains_
             .into_iter()
             .map(|tool| tool.tool.name.to_string())
             .collect::<Vec<_>>(),
-        vec!["model_tool".to_string()]
+        vec!["app_and_model_tool".to_string(), "model_tool".to_string()]
     );
     assert_eq!(
         manager
@@ -775,7 +794,12 @@ async fn list_all_tools_for_model_hides_app_only_tools_but_regular_list_retains_
             .into_iter()
             .map(|tool| tool.tool.name.to_string())
             .collect::<Vec<_>>(),
-        vec!["app_tool".to_string(), "model_tool".to_string()]
+        vec![
+            "app_and_model_tool".to_string(),
+            "app_tool".to_string(),
+            "empty_visibility_tool".to_string(),
+            "model_tool".to_string(),
+        ]
     );
 }
 
