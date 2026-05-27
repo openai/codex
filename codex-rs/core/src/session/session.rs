@@ -31,6 +31,8 @@ pub(crate) struct Session {
     pub(super) features: ManagedFeatures,
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
+    /// Serializes turn admission policy without representing idle work as an active turn.
+    pub(crate) turn_admission_lock: Mutex<()>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) input_queue: InputQueue,
     pub(crate) goal_runtime: GoalRuntimeState,
@@ -1055,6 +1057,7 @@ impl Session {
                 features: config.features.clone(),
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
+                turn_admission_lock: Mutex::new(()),
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),
                 goal_runtime: GoalRuntimeState::new(),

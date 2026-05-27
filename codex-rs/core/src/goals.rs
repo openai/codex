@@ -10,8 +10,6 @@ use crate::context::GoalContext;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::state::ActiveTurn;
-use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
@@ -898,16 +896,6 @@ impl Session {
         }
     }
 
-    async fn clear_reserved_goal_continuation_turn(&self, turn_state: &Arc<Mutex<TurnState>>) {
-        let mut active_turn_guard = self.active_turn.lock().await;
-        if let Some(active_turn) = active_turn_guard.as_ref()
-            && active_turn.task.is_none()
-            && Arc::ptr_eq(&active_turn.turn_state, turn_state)
-        {
-            *active_turn_guard = None;
-        }
-    }
-
     async fn finish_thread_goal_turn(
         self: &Arc<Self>,
         turn_context: &TurnContext,
@@ -1281,14 +1269,6 @@ impl Session {
             return;
         };
 
-        let turn_state = {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
-                return;
-            }
-            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
-        };
         let goal_is_current = match self.state_db_for_thread_goals().await {
             Ok(Some(state_db)) => match state_db
                 .thread_goals()
@@ -1322,39 +1302,20 @@ impl Session {
             }
         };
         if !goal_is_current {
-            self.clear_reserved_goal_continuation_turn(&turn_state)
-                .await;
             return;
         }
-        self.input_queue
-            .extend_pending_input_for_turn_state(
-                turn_state.as_ref(),
-                candidate
-                    .items
-                    .into_iter()
-                    .map(TurnInput::ResponseInputItem)
-                    .collect(),
-            )
-            .await;
 
-        let turn_context = self
-            .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        let still_reserved = {
-            let active_turn = self.active_turn.lock().await;
-            active_turn.as_ref().is_some_and(|active_turn| {
-                active_turn.task.is_none() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
-            })
-        };
-        if !still_reserved {
-            self.clear_reserved_goal_continuation_turn(&turn_state)
-                .await;
-            return;
-        }
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
+        let turn_context = self.new_default_turn().await;
+        self.try_start_turn_if_idle(
+            turn_context,
+            candidate
+                .items
+                .into_iter()
+                .map(TurnInput::ResponseInputItem)
+                .collect(),
+            RegularTask::new(),
+        )
+        .await;
     }
 
     async fn goal_continuation_candidate_if_active(

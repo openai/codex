@@ -299,7 +299,7 @@ async fn regular_turn_emits_turn_started_with_trace_id_without_waiting_for_start
         ),
     )
     .await;
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         crate::tasks::RegularTask::new(),
@@ -380,7 +380,7 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
         ),
     )
     .await;
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         crate::tasks::RegularTask::new(),
@@ -2018,7 +2018,7 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
     };
 
     let sess = Arc::new(session);
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::new(turn_context),
         Vec::new(),
         NeverEndingTask {
@@ -4640,6 +4640,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
+        turn_admission_lock: Mutex::new(()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
         goal_runtime: crate::goals::GoalRuntimeState::new(),
@@ -5732,7 +5733,7 @@ async fn duplicate_turn_environment_returns_error_without_mutating_session() {
 }
 
 #[tokio::test]
-async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
+async fn try_start_turn_if_idle_turn_span_inherits_dispatch_trace_context() {
     struct TraceCaptureTask {
         captured_trace: Arc<std::sync::Mutex<Option<W3cTraceContext>>>,
     }
@@ -5790,7 +5791,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     let captured_trace = Arc::new(std::sync::Mutex::new(None));
 
     async {
-        sess.spawn_task(
+        sess.try_start_turn_if_idle(
             Arc::clone(&tc),
             vec![TurnInput::UserInput(vec![UserInput::Text {
                 text: "hello".to_string(),
@@ -5976,7 +5977,7 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
 
     let session = Arc::new(session);
     session
-        .spawn_task(
+        .try_start_turn_if_idle(
             Arc::new(turn_context),
             Vec::new(),
             NeverEndingTask {
@@ -6475,6 +6476,7 @@ where
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
+        turn_admission_lock: Mutex::new(()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
         goal_runtime: crate::goals::GoalRuntimeState::new(),
@@ -6600,7 +6602,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 }
 
 #[tokio::test]
-async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_tasks() {
+async fn try_start_turn_if_idle_does_not_update_previous_turn_settings_for_non_run_turn_tasks() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     sess.set_previous_turn_settings(/*previous_turn_settings*/ None)
         .await;
@@ -6609,7 +6611,7 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
         text_elements: Vec::new(),
     }])];
 
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         input,
         NeverEndingTask {
@@ -7877,7 +7879,7 @@ async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
         text: "trigger guardian denials".to_string(),
         text_elements: Vec::new(),
     }])];
-    sess.spawn_task(Arc::clone(&tc), input, GuardianDeniedApprovalTask)
+    sess.try_start_turn_if_idle(Arc::clone(&tc), input, GuardianDeniedApprovalTask)
         .await;
 
     let mut observed = Vec::new();
@@ -7908,7 +7910,7 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
         text: "keep turn active for helper reviews".to_string(),
         text_elements: Vec::new(),
     }])];
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         input,
         NeverEndingTask {
@@ -7968,7 +7970,7 @@ async fn abort_regular_task_emits_turn_aborted_only() {
         text: "hello".to_string(),
         text_elements: Vec::new(),
     }])];
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         input,
         NeverEndingTask {
@@ -8001,7 +8003,7 @@ async fn abort_gracefully_emits_turn_aborted_only() {
         text: "hello".to_string(),
         text_elements: Vec::new(),
     }])];
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         input,
         NeverEndingTask {
@@ -8034,7 +8036,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         text: "hello".to_string(),
         text_elements: Vec::new(),
     }])];
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         input,
         NeverEndingTask {
@@ -8171,7 +8173,7 @@ async fn steer_input_enforces_expected_turn_id() {
         text: "hello".to_string(),
         text_elements: Vec::new(),
     }])];
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         input,
         NeverEndingTask {
@@ -8218,7 +8220,7 @@ async fn steer_input_rejects_non_regular_turns() {
             text_elements: Vec::new(),
         }])];
         let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
-        sess.spawn_task(
+        sess.try_start_turn_if_idle(
             turn_context,
             input,
             NeverEndingTask {
@@ -8255,7 +8257,7 @@ async fn steer_input_returns_active_turn_id() {
         text: "hello".to_string(),
         text_elements: Vec::new(),
     }])];
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         input,
         NeverEndingTask {
@@ -8298,7 +8300,7 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
         .queue_response_items_for_next_turn(vec![queued_item.clone()])
         .await;
 
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -8385,7 +8387,7 @@ async fn interrupt_accounts_active_goal_without_pausing() -> anyhow::Result<()> 
     )
     .await?;
 
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -8764,7 +8766,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
         token_usage: TokenUsage::default(),
     })
     .await?;
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -8871,7 +8873,7 @@ async fn usage_limit_runtime_stops_active_goal_and_prevents_idle_continuation() 
         token_usage: TokenUsage::default(),
     })
     .await?;
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -8916,7 +8918,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         },
     )
     .await?;
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -8978,7 +8980,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
     let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -9044,7 +9046,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow::Result<()> {
     let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -9215,7 +9217,7 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
         "late queue-only update".to_string(),
         /*trigger_turn*/ false,
     );
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -9254,7 +9256,7 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 #[tokio::test]
 async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -9297,7 +9299,7 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
         "queued child update".to_string(),
         /*trigger_turn*/ false,
     );
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -9347,7 +9349,7 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
         "queued child update".to_string(),
         /*trigger_turn*/ false,
     );
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -9401,7 +9403,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         "queued child update".to_string(),
         /*trigger_turn*/ false,
     );
-    sess.spawn_task(
+    sess.try_start_turn_if_idle(
         Arc::clone(&tc),
         Vec::new(),
         NeverEndingTask {
@@ -9454,7 +9456,7 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         text: "start review".to_string(),
         text_elements: Vec::new(),
     }])];
-    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
+    sess.try_start_turn_if_idle(Arc::clone(&tc), input, ReviewTask::new())
         .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;

@@ -33,6 +33,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use crate::state::TurnState;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -299,26 +300,30 @@ where
 }
 
 impl Session {
-    pub async fn spawn_task<T: SessionTask>(
+    pub(crate) async fn replace_turn(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
-        task: T,
+        task: impl SessionTask,
     ) {
+        let _admission = self.turn_admission_lock.lock().await;
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.start_task(turn_context, input, task).await;
+        let mut active = self.active_turn.lock().await;
+        debug_assert!(active.is_none());
+        *active = Some(self.start_turn(turn_context, input, task));
     }
 
-    pub(crate) async fn start_task<T: SessionTask>(
-        self: &Arc<Self>,
+    async fn run_turn(
+        self: Arc<Self>,
         turn_context: Arc<TurnContext>,
-        input: Vec<TurnInput>,
-        task: T,
+        turn_state: Arc<tokio::sync::Mutex<TurnState>>,
+        task_for_run: Arc<dyn AnySessionTask>,
+        session_ctx: Arc<SessionTaskContext>,
+        task_input: Vec<TurnInput>,
+        task_cancellation_token: CancellationToken,
+        done_clone: Arc<Notify>,
     ) {
-        let task: Arc<dyn AnySessionTask> = Arc::new(task);
-        let task_kind = task.kind();
-        let span_name = task.span_name();
         let started_at = Instant::now();
         let turn_started_at_unix_ms = turn_context
             .turn_timing_state
@@ -328,9 +333,6 @@ impl Session {
             .turn_metadata_state
             .set_turn_started_at_unix_ms(turn_started_at_unix_ms);
         let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
-
-        let cancellation_token = CancellationToken::new();
-        let done = Arc::new(Notify::new());
 
         self.services
             .guardian_rejection_circuit_breaker
@@ -352,12 +354,6 @@ impl Session {
             .take_queued_response_items_for_next_turn()
             .await;
         let mailbox_items = self.input_queue.get_pending_input(&self.active_turn).await;
-        let turn_state = {
-            let mut active = self.active_turn.lock().await;
-            let turn = active.get_or_insert_with(ActiveTurn::default);
-            debug_assert!(turn.task.is_none());
-            Arc::clone(&turn.turn_state)
-        };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
         let mut pending_items = queued_response_items
             .into_iter()
@@ -369,17 +365,60 @@ impl Session {
             .await;
         self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
             .await;
+        if task_cancellation_token.is_cancelled() {
+            done_clone.notify_waiters();
+            return;
+        }
 
+        let ctx = turn_context;
+        let ctx_for_finish = Arc::clone(&ctx);
+        let last_agent_message = task_for_run
+            .run(
+                Arc::clone(&session_ctx),
+                ctx,
+                task_input,
+                task_cancellation_token.child_token(),
+            )
+            .await;
+        let sess = session_ctx.clone_session();
+        if let Err(err) = sess.flush_rollout().await {
+            warn!("failed to flush rollout before completing turn: {err}");
+            sess.send_event(
+                ctx_for_finish.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Failed to save the conversation transcript; Codex will continue retrying. Error: {err}"
+                    ),
+                }),
+            )
+            .await;
+        }
+        if !task_cancellation_token.is_cancelled() {
+            // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+            sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
+                .await;
+        }
+        done_clone.notify_waiters();
+    }
+
+    fn start_turn(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<TurnInput>,
+        task: impl SessionTask,
+    ) -> ActiveTurn {
+        let task: Arc<dyn AnySessionTask> = Arc::new(task);
+        let task_kind = task.kind();
+        let span_name = task.span_name();
+        let cancellation_token = CancellationToken::new();
+        let done = Arc::new(Notify::new());
+        let turn_state = Arc::new(tokio::sync::Mutex::new(TurnState::default()));
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
-        let mut active = self.active_turn.lock().await;
-        let turn = active.get_or_insert_with(ActiveTurn::default);
-        debug_assert!(turn.task.is_none());
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
             Arc::clone(&turn_extension_data),
         ));
-        let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
         let task_input = input;
         let task_cancellation_token = cancellation_token.child_token();
@@ -401,37 +440,17 @@ impl Session {
             codex.turn.token_usage.total_tokens = field::Empty,
         );
         let handle = tokio::spawn(
-            async move {
-                let ctx_for_finish = Arc::clone(&ctx);
-                let last_agent_message = task_for_run
-                    .run(
-                        Arc::clone(&session_ctx),
-                        ctx,
-                        task_input,
-                        task_cancellation_token.child_token(),
-                    )
-                    .await;
-                let sess = session_ctx.clone_session();
-                if let Err(err) = sess.flush_rollout().await {
-                    warn!("failed to flush rollout before completing turn: {err}");
-                    sess.send_event(
-                        ctx_for_finish.as_ref(),
-                        EventMsg::Warning(WarningEvent {
-                            message: format!(
-                                "Failed to save the conversation transcript; Codex will continue retrying. Error: {err}"
-                            ),
-                        }),
-                    )
-                    .await;
-                }
-                if !task_cancellation_token.is_cancelled() {
-                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                    sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
-                        .await;
-                }
-                done_clone.notify_waiters();
-            }
-            .instrument(task_span),
+            Arc::clone(self)
+                .run_turn(
+                    Arc::clone(&turn_context),
+                    Arc::clone(&turn_state),
+                    task_for_run,
+                    session_ctx,
+                    task_input,
+                    task_cancellation_token,
+                    done_clone,
+                )
+                .instrument(task_span),
         );
         let timer = turn_context
             .session_telemetry
@@ -447,30 +466,31 @@ impl Session {
             turn_extension_data,
             _timer: timer,
         };
-        turn.task = Some(running_task);
+        ActiveTurn {
+            task: Some(running_task),
+            turn_state,
+        }
     }
 
-    /// Starts a regular turn when the session is idle and pending work is waiting.
-    ///
-    /// Pending work currently includes queued next-turn items and mailbox mail marked with
-    /// `trigger_turn`.
-    ///
-    /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
-    /// explicit-sub-id variant.
-    pub(crate) async fn maybe_start_turn_for_pending_work(self: &Arc<Self>) {
-        self.maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
+    pub(crate) async fn try_start_turn_if_idle(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<TurnInput>,
+        task: impl SessionTask,
+    ) {
+        let _admission = self.turn_admission_lock.lock().await;
+        let mut active = self.active_turn.lock().await;
+        if active.is_some() {
+            return;
+        }
+        *active = Some(self.start_turn(turn_context, input, task));
     }
 
-    /// Starts a regular turn with the provided sub-id when pending work should wake an idle
-    /// session.
+    /// Starts a regular turn when pending work should wake an idle session.
     ///
     /// The turn is created only when there are queued next-turn items or mailbox mail marked with
     /// `trigger_turn`, and only if the session is currently idle.
-    pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
-        self: &Arc<Self>,
-        sub_id: String,
-    ) {
+    pub(crate) async fn maybe_start_turn_for_pending_work(self: &Arc<Self>) {
         if !self
             .input_queue
             .has_queued_response_items_for_next_turn()
@@ -480,18 +500,8 @@ impl Session {
             return;
         }
 
-        {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
-                return;
-            }
-            *active_turn = Some(ActiveTurn::default());
-        }
-
-        let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
+        let turn_context = self.new_default_turn().await;
+        self.try_start_turn_if_idle(turn_context, Vec::new(), RegularTask::new())
             .await;
     }
 

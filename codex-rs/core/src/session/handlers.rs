@@ -260,7 +260,7 @@ pub(super) async fn user_input_or_turn_inner(
             if !items.is_empty() {
                 task_input.push(TurnInput::UserInput(items));
             }
-            sess.spawn_task(
+            sess.replace_turn(
                 Arc::clone(&current_context),
                 task_input,
                 crate::tasks::RegularTask::new(),
@@ -308,7 +308,6 @@ async fn mirror_user_text_to_realtime(sess: &Arc<Session>, items: &[UserInput]) 
 /// decide whether an idle session should start a regular turn.
 pub async fn inter_agent_communication(
     sess: &Arc<Session>,
-    sub_id: String,
     communication: InterAgentCommunication,
 ) {
     let trigger_turn = communication.trigger_turn;
@@ -316,8 +315,7 @@ pub async fn inter_agent_communication(
         .enqueue_mailbox_communication(communication)
         .await;
     if trigger_turn {
-        sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
-            .await;
+        sess.maybe_start_turn_for_pending_work().await;
     }
 }
 
@@ -340,7 +338,7 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
     }
 
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    sess.spawn_task(
+    sess.replace_turn(
         Arc::clone(&turn_context),
         Vec::new(),
         UserShellCommandTask::new(command),
@@ -474,7 +472,7 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-    sess.spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
+    sess.replace_turn(Arc::clone(&turn_context), Vec::new(), CompactTask)
         .await;
 }
 
@@ -779,7 +777,7 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::InterAgentCommunication { communication } => {
-                    inter_agent_communication(&sess, sub.id.clone(), communication).await;
+                    inter_agent_communication(&sess, communication).await;
                     false
                 }
                 Op::ExecApproval {
