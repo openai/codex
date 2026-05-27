@@ -387,8 +387,7 @@ impl ChatComposer {
         let CommandItem::Builtin(cmd) = selected_cmd else {
             return false;
         };
-        let cmd = *cmd;
-        if !cmd.preserves_draft_tail_on_completion() {
+        if !cmd.supports_inline_args() {
             return false;
         }
 
@@ -405,6 +404,9 @@ impl ChatComposer {
             .unwrap_or(first_line_end);
         let typed_command_name = &text[1..command_token_end];
         let rest_after_token_is_empty = text[command_token_end..].trim().is_empty();
+        if rest_after_token_is_empty && (cursor <= 1 || cursor >= command_token_end) {
+            return false;
+        }
         let replace_end =
             if cursor <= 1 || (typed_command_name == cmd.command() && rest_after_token_is_empty) {
                 command_token_end
@@ -564,4 +566,86 @@ fn command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)>
     let rest = &first_line[cursor..];
 
     Some((name, rest))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::bottom_pane::AppEventSender;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn test_composer() -> ChatComposer {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        ChatComposer::new(
+            /*has_input_focus*/ true,
+            AppEventSender::new(tx),
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        )
+    }
+
+    fn press(composer: &mut ChatComposer, code: KeyCode) -> InputResult {
+        composer
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
+            .0
+    }
+
+    fn composer_with_text_at_cursor(text: &str, cursor: usize) -> ChatComposer {
+        let mut composer = test_composer();
+        composer.draft.textarea.set_text_clearing_elements(text);
+        composer.draft.textarea.set_cursor(cursor);
+        composer.sync_popups();
+        composer
+    }
+
+    fn composer_with_draft_tail(prefix: &str, draft: &str) -> ChatComposer {
+        composer_with_text_at_cursor(&format!("{prefix}{draft}"), prefix.len())
+    }
+
+    #[test]
+    fn slash_completion_preserves_existing_draft_tail_for_inline_arg_commands() {
+        let draft = "view the diff";
+        let expected_text = "/review view the diff";
+
+        let mut composer = composer_with_draft_tail("/re", draft);
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), expected_text);
+        assert_eq!(composer.draft.textarea.cursor(), expected_text.len());
+
+        let mut composer = composer_with_draft_tail("/re", draft);
+        assert_eq!(
+            press(&mut composer, KeyCode::Enter),
+            InputResult::CommandWithArgs(SlashCommand::Review, draft.to_string(), Vec::new())
+        );
+        assert_eq!(composer.draft.textarea.text(), expected_text);
+    }
+
+    #[test]
+    fn slash_completion_does_not_preserve_existing_draft_tail_for_other_commands() {
+        let mut composer = composer_with_draft_tail(
+            "/mo",
+            "preserve this draft only for opted-in slash commands",
+        );
+
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/model ");
+        assert_eq!(composer.draft.textarea.cursor(), "/model ".len());
+    }
+
+    #[test]
+    fn slash_completion_does_not_turn_command_suffix_into_args() {
+        let mut composer = composer_with_text_at_cursor("/review", "/re".len());
+        assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
+        assert_eq!(composer.draft.textarea.text(), "/review ");
+
+        let mut composer = composer_with_text_at_cursor("/review", "/re".len());
+        assert_eq!(
+            press(&mut composer, KeyCode::Enter),
+            InputResult::Command(SlashCommand::Review)
+        );
+        assert!(composer.draft.textarea.is_empty());
+    }
 }
