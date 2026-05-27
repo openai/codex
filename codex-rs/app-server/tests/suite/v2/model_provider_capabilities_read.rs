@@ -60,7 +60,7 @@ async fn read_amazon_bedrock_provider_capabilities() -> Result<()> {
     let received: ModelProviderCapabilitiesReadResponse = to_response(response)?;
 
     let expected = ModelProviderCapabilitiesReadResponse {
-        namespace_tools: false,
+        namespace_tools: true,
         image_generation: false,
         web_search: false,
     };
