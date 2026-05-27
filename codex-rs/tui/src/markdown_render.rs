@@ -22,9 +22,9 @@
 //!    alignment count.
 //! 3. **Compute column widths** -- allocate widths with content-aware
 //!    priority and iterative shrinking.
-//! 4. **Render row-separated layout** -- theme-accented bold headers, a
-//!    heavier segmented header rule, and low-contrast segmented body
-//!    separators, or fallback to pipe format when the minimum cannot fit.
+//! 4. **Choose presentation** -- render theme-accented row-separated columns
+//!    while values remain scannable, otherwise transpose body rows
+//!    into key/value records separated by muted rules.
 //! 5. **Append spillover** -- extracted spillover rows rendered as plain text
 //!    after the table.
 //!
@@ -34,8 +34,10 @@
 //! or hashes), or Compact (short values such as counts and status labels).
 //! Token-heavy columns give up excess width before narrative columns so an
 //! oversized path does not collapse readable prose; compact values are
-//! preserved last.  When even 3-char-wide columns cannot fit, the table falls
-//! back to pipe-delimited format.
+//! preserved last. When compact values split, token-heavy values collapse into
+//! unusably short chunks, expansive cells form tall narrow strips across enough
+//! body rows, or even 3-char-wide columns cannot fit, body rows render as
+//! key/value records.
 
 use crate::render::highlight::foreground_style_for_scopes;
 use crate::render::highlight::highlight_code_to_lines;
@@ -73,6 +75,8 @@ use std::sync::LazyLock;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
+
+mod table_key_value;
 
 const TABLE_COLUMN_GAP: usize = 2;
 const TABLE_CELL_PADDING: usize = 1;
@@ -233,8 +237,8 @@ impl TableState {
 
 /// Rendered table output split by wrapping behavior.
 ///
-/// `table_lines` are either prewrapped aligned rows or pipe
-/// fallback rows that should still pass through normal wrapping.
+/// `table_lines` are prewrapped aligned rows or key/value records, except
+/// header-only tables may retain pipe fallback rows for normal wrapping.
 /// `spillover_lines` are prose rows extracted from parser artifacts and should
 /// be routed through normal wrapping.
 struct RenderedTableLines {
@@ -285,11 +289,11 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 
 /// Render markdown constrained to a known terminal width.
 ///
-/// The renderer preserves table structure when possible and falls back to
-/// pipe-table output when an aligned table cannot fit the available width. Passing
-/// `None` keeps intrinsic line widths and disables width-driven wrapping in the
-/// markdown writer. Local file links render relative to the current process
-/// working directory.
+/// The renderer preserves columnar table structure while values remain
+/// scannable and falls back to key/value records when body rows cannot fit
+/// readably. Passing `None` keeps intrinsic line widths and disables
+/// width-driven wrapping in the markdown writer. Local file links render
+/// relative to the current process working directory.
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
     let cwd = std::env::current_dir().ok();
     render_markdown_text_with_width_and_cwd(input, width, cwd.as_deref())
@@ -1036,16 +1040,17 @@ where
         }
     }
 
-    /// Convert a completed `TableState` into styled, row-separated `Line`s.
+    /// Convert a completed `TableState` into styled table `Line`s.
     ///
     /// Pipeline: filter spillover rows -> normalize column counts -> compute
-    /// column widths -> render aligned rows (or fall back to pipe format if the
-    /// minimum column widths exceed available terminal width). Spillover rows
-    /// are appended as plain text after the table.
+    /// column widths -> render aligned rows or key/value records when values
+    /// systemically lose token readability or expansive cells become tall
+    /// narrow strips. Spillover rows are appended as plain text after the
+    /// table.
     ///
-    /// Falls back to `render_table_pipe_fallback` (raw `| A | B |` format)
-    /// when `compute_column_widths` returns `None` (terminal too narrow for
-    /// even 3-char-wide columns).
+    /// Falls back to key/value records when body rows cannot fit in the aligned
+    /// grid; header-only tables retain raw pipe output because they contain no
+    /// records to transpose.
     fn render_table_lines(&self, mut table_state: TableState) -> RenderedTableLines {
         let column_count = table_state.alignments.len();
         if column_count == 0 {
@@ -1081,6 +1086,7 @@ where
             Self::normalize_row(row, column_count);
         }
 
+        let metrics = Self::collect_table_column_metrics(&header, &rows, column_count);
         let available_width = self.available_table_width(column_count);
         let widths =
             self.compute_column_widths(&header, &rows, &table_state.alignments, available_width);
@@ -1088,8 +1094,27 @@ where
             .into_iter()
             .flat_map(|spillover| spillover.lines)
             .collect();
+        let header_style =
+            foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
+                .unwrap_or(self.styles.strong)
+                .bold();
+        let separator_style = table_separator_style();
 
         let Some(column_widths) = widths else {
+            if !rows.is_empty() {
+                return RenderedTableLines {
+                    table_lines: table_key_value::render_records(
+                        &header,
+                        &rows,
+                        &metrics,
+                        self.available_record_width(),
+                        header_style,
+                        separator_style,
+                    ),
+                    table_lines_prewrapped: true,
+                    spillover_lines,
+                };
+            }
             return RenderedTableLines {
                 table_lines: self.render_table_pipe_fallback(
                     &header,
@@ -1101,11 +1126,21 @@ where
             };
         };
 
-        let header_style =
-            foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
-                .unwrap_or(self.styles.strong)
-                .bold();
-        let separator_style = table_separator_style();
+        if table_key_value::should_render_records(&rows, &column_widths, &metrics) {
+            return RenderedTableLines {
+                table_lines: table_key_value::render_records(
+                    &header,
+                    &rows,
+                    &metrics,
+                    self.available_record_width(),
+                    header_style,
+                    separator_style,
+                ),
+                table_lines_prewrapped: true,
+                spillover_lines,
+            };
+        }
+
         let mut out = Vec::with_capacity(2 + rows.len() * 2);
         out.extend(self.render_table_row(
             &header,
@@ -1154,6 +1189,15 @@ where
                 + (column_count.saturating_sub(1) * TABLE_COLUMN_GAP)
                 + (column_count * TABLE_CELL_PADDING * 2);
             wrap_width.saturating_sub(reserved)
+        })
+    }
+
+    /// Return the full content budget for record fallback rendering.
+    fn available_record_width(&self) -> Option<usize> {
+        self.wrap_width.map(|wrap_width| {
+            let prefix_width =
+                Self::spans_display_width(&self.prefix_spans(self.pending_marker_line));
+            wrap_width.saturating_sub(prefix_width)
         })
     }
 
@@ -1447,11 +1491,11 @@ where
         out
     }
 
-    /// Render the table as raw pipe-delimited lines (`| A | B |`).
+    /// Render a header-only table as raw pipe-delimited lines (`| A | B |`).
     ///
-    /// Used when `compute_column_widths` returns `None` (terminal too narrow
-    /// for even 3-char-wide columns).  Pipe characters inside cell content are
-    /// escaped as `\|` so downstream parsers keep cell boundaries intact.
+    /// Used when `compute_column_widths` returns `None` and there are no body
+    /// records to transpose. Pipe characters inside cell content are escaped
+    /// as `\|` so downstream parsers keep cell boundaries intact.
     fn render_table_pipe_fallback(
         &self,
         header: &[TableCell],
