@@ -7,13 +7,17 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_app_server_protocol::WebSearchAction;
 use codex_config::types::AuthCredentialsStoreMode;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -103,6 +107,13 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
     .await??;
     let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
 
+    let started = timeout(DEFAULT_READ_TIMEOUT, wait_for_web_search_started(&mut mcp)).await??;
+    let completed = timeout(
+        DEFAULT_READ_TIMEOUT,
+        wait_for_web_search_completed(&mut mcp),
+    )
+    .await??;
+
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -159,8 +170,59 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
             }],
         })
     );
+    assert_eq!(
+        started.item,
+        ThreadItem::WebSearch {
+            id: call_id.to_string(),
+            query: String::new(),
+            action: Some(WebSearchAction::Other),
+        }
+    );
+    assert_eq!(
+        completed.item,
+        ThreadItem::WebSearch {
+            id: call_id.to_string(),
+            query: "standalone web search".to_string(),
+            action: Some(WebSearchAction::Search {
+                query: Some("standalone web search".to_string()),
+                queries: None,
+            }),
+        }
+    );
 
     Ok(())
+}
+
+async fn wait_for_web_search_started(mcp: &mut McpProcess) -> Result<ItemStartedNotification> {
+    loop {
+        let notification = mcp
+            .read_stream_until_notification_message("item/started")
+            .await?;
+        let started: ItemStartedNotification = serde_json::from_value(
+            notification
+                .params
+                .context("item/started notification should include params")?,
+        )?;
+        if matches!(&started.item, ThreadItem::WebSearch { .. }) {
+            return Ok(started);
+        }
+    }
+}
+
+async fn wait_for_web_search_completed(mcp: &mut McpProcess) -> Result<ItemCompletedNotification> {
+    loop {
+        let notification = mcp
+            .read_stream_until_notification_message("item/completed")
+            .await?;
+        let completed: ItemCompletedNotification = serde_json::from_value(
+            notification
+                .params
+                .context("item/completed notification should include params")?,
+        )?;
+        if matches!(&completed.item, ThreadItem::WebSearch { .. }) {
+            return Ok(completed);
+        }
+    }
 }
 
 async fn mount_search_response(server: &MockServer) {

@@ -1,6 +1,7 @@
 use codex_api::ReqwestTransport;
 use codex_api::SearchClient;
 use codex_api::SearchCommands;
+use codex_api::SearchQuery;
 use codex_api::SearchRequest;
 use codex_api::SearchSettings;
 use codex_extension_api::FunctionCallError;
@@ -13,24 +14,30 @@ use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema_without_compaction;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
+use codex_protocol::ThreadId;
+use codex_protocol::models::WebSearchAction;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExposure;
 use codex_tools::default_namespace_description;
 use http::HeaderMap;
+use url::Url;
 
+use crate::events::WebSearchEventEmitter;
 use crate::history::recent_input;
 use crate::output::EncryptedSearchOutput;
 use crate::schema::commands_schema;
 
-const WEB_NAMESPACE: &str = "web";
-const RUN_TOOL_NAME: &str = "run";
+pub(crate) const WEB_NAMESPACE: &str = "web";
+pub(crate) const RUN_TOOL_NAME: &str = "run";
 const WEB_RUN_DESCRIPTION: &str = include_str!("../web_run_description.md");
 
 pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
+    pub(crate) thread_id: Option<ThreadId>,
     pub(crate) provider: SharedModelProvider,
     pub(crate) settings: SearchSettings,
+    pub(crate) event_emitter: WebSearchEventEmitter,
 }
 
 #[async_trait::async_trait]
@@ -66,6 +73,7 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
 
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let commands = parse_commands(&call)?;
+        let command_action = command_action(&commands);
         let provider = self
             .provider
             .api_provider()
@@ -92,6 +100,10 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
                 u64::try_from(call.truncation_policy.token_budget()).unwrap_or(u64::MAX),
             ),
         };
+        let _activity = self.thread_id.map(|thread_id| {
+            self.event_emitter
+                .start(thread_id, &call.turn_id, &call.call_id, command_action)
+        });
         let response = client
             .search(&request, HeaderMap::new())
             .await
@@ -111,4 +123,98 @@ fn parse_commands(call: &ToolCall) -> Result<SearchCommands, FunctionCallError> 
 
     serde_json::from_str(arguments)
         .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
+}
+
+fn command_action(commands: &SearchCommands) -> WebSearchAction {
+    commands
+        .search_query
+        .as_deref()
+        .and_then(query_action)
+        .or_else(|| commands.image_query.as_deref().and_then(query_action))
+        .or_else(|| {
+            commands
+                .open
+                .as_deref()
+                .and_then(|operations| operations.first())
+                .and_then(|operation| {
+                    literal_url(&operation.ref_id)
+                        .map(|url| WebSearchAction::OpenPage { url: Some(url) })
+                })
+        })
+        .or_else(|| {
+            commands
+                .find
+                .as_deref()
+                .and_then(|operations| operations.first())
+                .and_then(|operation| {
+                    literal_url(&operation.ref_id).map(|url| WebSearchAction::FindInPage {
+                        url: Some(url),
+                        pattern: Some(operation.pattern.clone()),
+                    })
+                })
+        })
+        .unwrap_or(WebSearchAction::Other)
+}
+
+fn query_action(queries: &[SearchQuery]) -> Option<WebSearchAction> {
+    match queries {
+        [] => None,
+        [query] => Some(WebSearchAction::Search {
+            query: Some(query.q.clone()),
+            queries: None,
+        }),
+        queries => Some(WebSearchAction::Search {
+            query: None,
+            queries: Some(queries.iter().map(|query| query.q.clone()).collect()),
+        }),
+    }
+}
+
+fn literal_url(ref_id: &str) -> Option<String> {
+    Url::parse(ref_id).is_ok().then(|| ref_id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_api::SearchCommands;
+    use codex_protocol::models::WebSearchAction;
+    use pretty_assertions::assert_eq;
+
+    use super::command_action;
+
+    #[test]
+    fn command_action_reports_queries_and_literal_navigation_urls() {
+        let cases = [
+            (
+                r#"{"image_query":[{"q":"waterfalls"},{"q":"mountains"}]}"#,
+                WebSearchAction::Search {
+                    query: None,
+                    queries: Some(vec!["waterfalls".to_string(), "mountains".to_string()]),
+                },
+            ),
+            (
+                r#"{"open":[{"ref_id":"https://example.com/docs"}]}"#,
+                WebSearchAction::OpenPage {
+                    url: Some("https://example.com/docs".to_string()),
+                },
+            ),
+            (
+                r#"{"find":[{"ref_id":"https://example.com/docs","pattern":"install"}]}"#,
+                WebSearchAction::FindInPage {
+                    url: Some("https://example.com/docs".to_string()),
+                    pattern: Some("install".to_string()),
+                },
+            ),
+            (
+                r#"{"open":[{"ref_id":"turn0search0"}]}"#,
+                WebSearchAction::Other,
+            ),
+        ];
+
+        for (arguments, expected) in cases {
+            let commands: SearchCommands =
+                serde_json::from_str(arguments).expect("valid search command arguments");
+            assert_eq!(command_action(&commands), expected);
+        }
+    }
 }
