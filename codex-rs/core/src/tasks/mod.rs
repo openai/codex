@@ -174,13 +174,19 @@ fn bool_tag(value: bool) -> &'static str {
 pub(crate) struct SessionTaskContext {
     session: Arc<Session>,
     turn_extension_data: Arc<ExtensionData>,
+    turn_trace_id_override: Option<String>,
 }
 
 impl SessionTaskContext {
-    pub(crate) fn new(session: Arc<Session>, turn_extension_data: Arc<ExtensionData>) -> Self {
+    pub(crate) fn new(
+        session: Arc<Session>,
+        turn_extension_data: Arc<ExtensionData>,
+        turn_trace_id_override: Option<String>,
+    ) -> Self {
         Self {
             session,
             turn_extension_data,
+            turn_trace_id_override,
         }
     }
 
@@ -385,10 +391,6 @@ impl Session {
         let turn = active.get_or_insert_with(ActiveTurn::default);
         debug_assert!(turn.task.is_none());
         let done_clone = Arc::clone(&done);
-        let session_ctx = Arc::new(SessionTaskContext::new(
-            Arc::clone(self),
-            Arc::clone(&turn_extension_data),
-        ));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
         let task_input = input;
@@ -415,6 +417,17 @@ impl Session {
             codex.turn.token_usage.reasoning_output_tokens = field::Empty,
             codex.turn.token_usage.total_tokens = field::Empty,
         );
+        // A rooted automatic turn is created beneath the finishing turn, so its
+        // captured context trace must not override the task span's fresh trace.
+        let turn_trace_id_override = match span_parent {
+            TurnSpanParent::Current => None,
+            TurnSpanParent::Root => task_span.in_scope(codex_otel::current_span_trace_id),
+        };
+        let session_ctx = Arc::new(SessionTaskContext::new(
+            Arc::clone(self),
+            Arc::clone(&turn_extension_data),
+            turn_trace_id_override,
+        ));
         let handle = tokio::spawn(
             async move {
                 let ctx_for_finish = Arc::clone(&ctx);
@@ -873,6 +886,7 @@ impl Session {
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
             Arc::clone(&task.turn_extension_data),
+            /*turn_trace_id_override*/ None,
         ));
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))

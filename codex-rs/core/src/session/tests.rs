@@ -5892,7 +5892,7 @@ async fn root_task_turn_span_does_not_inherit_current_trace_context() {
     .instrument(request_span)
     .await;
 
-    let evt = tokio::time::timeout(StdDuration::from_secs(2), rx.recv())
+    let evt = tokio::time::timeout(StdDuration::from_secs(/*secs*/ 2), rx.recv())
         .await
         .expect("timeout waiting for turn completion")
         .expect("event");
@@ -5911,6 +5911,52 @@ async fn root_task_turn_span_does_not_inherit_current_trace_context() {
         task_context.span().span_context().trace_id(),
         request_context.span().span_context().trace_id()
     );
+}
+
+#[tokio::test]
+async fn rooted_regular_turn_does_not_emit_parent_trace_id() {
+    let _trace_test_context = install_test_tracing("codex-core-tests");
+    let request_parent = W3cTraceContext {
+        traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
+        tracestate: Some("vendor=value".into()),
+    };
+    let request_span = tracing::info_span!("completed_turn");
+    assert!(set_parent_from_w3c_trace_context(
+        &request_span,
+        &request_parent
+    ));
+
+    let (sess, tc, rx) = make_session_and_context_with_rx()
+        .instrument(request_span.clone())
+        .await;
+    assert_eq!(
+        tc.trace_id.as_deref(),
+        Some("00000000000000000000000000000011")
+    );
+
+    async {
+        sess.start_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            crate::tasks::RegularTask::new(),
+            TurnSpanParent::Root,
+        )
+        .await;
+    }
+    .instrument(request_span)
+    .await;
+
+    let first = tokio::time::timeout(StdDuration::from_secs(/*secs*/ 2), rx.recv())
+        .await
+        .expect("timeout waiting for turn start")
+        .expect("event");
+    let EventMsg::TurnStarted(turn_started) = first.msg else {
+        panic!("expected turn started event");
+    };
+    assert!(turn_started.trace_id.is_some());
+    assert_ne!(turn_started.trace_id, tc.trace_id);
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
 #[cfg(debug_assertions)]
