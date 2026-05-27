@@ -87,6 +87,16 @@ fn tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
         .collect()
 }
 
+fn with_visibility(mut tool: ToolInfo, visibility: &[&str]) -> ToolInfo {
+    tool.tool.meta = Some(Meta(
+        serde_json::json!({ "ui": { "visibility": visibility } })
+            .as_object()
+            .expect("metadata object")
+            .clone(),
+    ));
+    tool
+}
+
 #[tokio::test]
 async fn directly_exposes_small_effective_tool_sets() {
     let config = test_config().await;
@@ -111,35 +121,57 @@ async fn excludes_tools_hidden_from_model_exposure() {
         /*connector_id*/ None,
         /*connector_name*/ None,
     );
-    let mut hidden_tool = make_mcp_tool(
-        "rmcp",
-        "hidden_tool",
-        "mcp__rmcp",
-        "hidden_tool",
-        /*connector_id*/ None,
-        /*connector_name*/ None,
+    let hidden_tool = with_visibility(
+        make_mcp_tool(
+            "rmcp",
+            "hidden_tool",
+            "mcp__rmcp",
+            "hidden_tool",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+        ),
+        &["app"],
     );
-    hidden_tool.tool.meta = Some(Meta(
-        serde_json::json!({ "ui": { "visibility": ["app"] } })
-            .as_object()
-            .expect("metadata object")
-            .clone(),
-    ));
-    let mut hidden_app_tool = make_mcp_tool(
-        CODEX_APPS_MCP_SERVER_NAME,
-        "calendar_open",
-        "mcp__codex_apps__calendar",
-        "open",
-        Some("calendar"),
-        Some("Calendar"),
+    let empty_visibility_tool = with_visibility(
+        make_mcp_tool(
+            "rmcp",
+            "empty_visibility_tool",
+            "mcp__rmcp",
+            "empty_visibility_tool",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+        ),
+        &[],
     );
-    hidden_app_tool.tool.meta = Some(Meta(
-        serde_json::json!({ "ui": { "visibility": ["app"] } })
-            .as_object()
-            .expect("metadata object")
-            .clone(),
-    ));
-    let mcp_tools = vec![visible_tool.clone(), hidden_tool, hidden_app_tool];
+    let visible_app_tool = with_visibility(
+        make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_read",
+            "mcp__codex_apps__calendar",
+            "read",
+            Some("calendar"),
+            Some("Calendar"),
+        ),
+        &["app", "model"],
+    );
+    let hidden_app_tool = with_visibility(
+        make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_open",
+            "mcp__codex_apps__calendar",
+            "open",
+            Some("calendar"),
+            Some("Calendar"),
+        ),
+        &["app"],
+    );
+    let mcp_tools = vec![
+        visible_tool.clone(),
+        hidden_tool,
+        empty_visibility_tool,
+        visible_app_tool.clone(),
+        hidden_app_tool,
+    ];
     let connectors = vec![make_connector("calendar", "Calendar")];
 
     let exposure = build_mcp_tool_exposure(
@@ -151,7 +183,7 @@ async fn excludes_tools_hidden_from_model_exposure() {
 
     assert_eq!(
         tool_names(&exposure.direct_tools),
-        tool_names(&[visible_tool])
+        tool_names(&[visible_tool, visible_app_tool])
     );
     assert!(exposure.deferred_tools.is_none());
 }
