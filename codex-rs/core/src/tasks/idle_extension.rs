@@ -13,6 +13,8 @@ use crate::state::ActiveTurn;
 
 use super::RegularTask;
 
+const MAX_IDLE_EXTENSION_PROMPT_TOKENS: usize = 4_000;
+
 pub(super) fn schedule_turn(session: &Arc<Session>) {
     if session
         .services
@@ -85,9 +87,7 @@ pub(crate) async fn maybe_start_turn(session: Arc<Session>) {
         return;
     }
 
-    let input = vec![TurnInput::ResponseInputItem(
-        ExtensionContext::new(candidate.request.prompt).into_response_input_item(),
-    )];
+    let input = vec![idle_extension_input(candidate.request.prompt)];
 
     // Treat extension-provided prompts as the new turn's initial input rather than stashing them
     // in turn-state pending input; this keeps rollback logic out of the scheduler.
@@ -202,5 +202,45 @@ async fn clear_reserved_idle_turn(session: &Session) {
         .is_some_and(|active_turn| active_turn.task.is_none())
     {
         *active_turn = None;
+    }
+}
+
+fn idle_extension_input(prompt: String) -> TurnInput {
+    let prompt = codex_utils_string::truncate_middle_with_token_budget(
+        &prompt,
+        MAX_IDLE_EXTENSION_PROMPT_TOKENS,
+    )
+    .0;
+    TurnInput::ResponseInputItem(ExtensionContext::new(prompt).into_response_input_item())
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseInputItem;
+
+    use super::*;
+
+    #[test]
+    fn idle_extension_input_truncates_large_prompts() {
+        let prompt = format!(
+            "start {} end",
+            "repeat ".repeat(MAX_IDLE_EXTENSION_PROMPT_TOKENS * 3)
+        );
+        let original_len = prompt.len();
+
+        let TurnInput::ResponseInputItem(ResponseInputItem::Message { content, .. }) =
+            idle_extension_input(prompt)
+        else {
+            panic!("expected message input");
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected one text content item");
+        };
+
+        assert!(text.starts_with("<extension_context>"));
+        assert!(text.contains("start"));
+        assert!(text.contains("end"));
+        assert!(text.len() < original_len);
     }
 }
