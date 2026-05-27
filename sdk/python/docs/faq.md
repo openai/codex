@@ -63,10 +63,11 @@ result = thread.run("Review only.", sandbox=Sandbox.read_only)
 The presets are:
 
 - `Sandbox.read_only`: read files without allowing writes.
-- `Sandbox.workspace_write`: read files and write inside the workspace and configured writable roots.
+- `Sandbox.workspace_write`: the normal default for projects with a recorded trust decision; read files and write inside the workspace and configured writable roots.
 - `Sandbox.full_access`: run without filesystem access restrictions.
 
-A turn sandbox override applies to that turn and subsequent turns.
+When `sandbox=` is omitted, app-server uses its configured default. A turn
+sandbox override applies to that turn and subsequent turns.
 
 ## Why only `thread_start(...)` and `thread_resume(...)`?
 

@@ -15,7 +15,8 @@ from .generated.v2_all import (
 class Sandbox(str, Enum):
     """Preset filesystem access levels for threads and turns.
 
-    `read_only` allows file reads without writes. `workspace_write` allows
+    `read_only` allows file reads without writes. `workspace_write` is the
+    normal default for projects with a recorded trust decision and allows
     writes inside the workspace and configured writable roots. `full_access`
     removes filesystem access restrictions.
     """
