@@ -44,3 +44,12 @@ tempfile = { workspace = true }
 
 [target.'cfg(target_family = "unix")'.dependencies]
 rama-unix = { version = "=0.3.0-alpha.4" }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+openssl-probe = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+schannel = { workspace = true }

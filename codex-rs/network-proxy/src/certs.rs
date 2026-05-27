@@ -20,7 +20,19 @@ use rama_tls_rustls::dep::rcgen::PKCS_ECDSA_P256_SHA256;
 use rama_tls_rustls::dep::rcgen::SanType;
 use rama_tls_rustls::dep::rustls;
 use rama_tls_rustls::server::TlsAcceptorData;
+#[cfg(windows)]
+use schannel::cert_context::ValidUses;
+#[cfg(windows)]
+use schannel::cert_store::CertStore;
+#[cfg(target_os = "macos")]
+use security_framework::trust_settings::Domain;
+#[cfg(target_os = "macos")]
+use security_framework::trust_settings::TrustSettings;
+#[cfg(target_os = "macos")]
+use security_framework::trust_settings::TrustSettingsForCertificate;
 use std::collections::HashMap;
+#[cfg(any(target_os = "macos", windows))]
+use std::error::Error as StdError;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -156,8 +168,7 @@ fn build_managed_ca_trust_bundle(
     env: &HashMap<String, String>,
 ) -> Result<String> {
     let mut trust_bundle = String::new();
-    let rustls_native_certs::CertificateResult { certs, errors, .. } =
-        rustls_native_certs::load_native_certs();
+    let rustls_native_certs::CertificateResult { certs, errors, .. } = load_platform_native_certs();
     if !errors.is_empty() {
         warn!(
             native_root_error_count = errors.len(),
@@ -193,6 +204,205 @@ fn build_managed_ca_trust_bundle(
     append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
     Ok(trust_bundle)
 }
+
+// Match rustls-native-certs' platform loaders without honoring SSL_CERT_FILE / SSL_CERT_DIR.
+// Those inherited values are child custom roots, so append their bundle paths separately below.
+fn load_platform_native_certs() -> rustls_native_certs::CertificateResult {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let cert_file = NATIVE_CERTIFICATE_FILE_NAMES
+            .iter()
+            .copied()
+            .find_map(|path| Path::new(path).exists().then(|| PathBuf::from(path)));
+        let mut result = rustls_native_certs::load_certs_from_paths(cert_file.as_deref(), None);
+        for certs_dir in openssl_probe::candidate_cert_dirs() {
+            let dir_result = rustls_native_certs::load_certs_from_paths(None, Some(certs_dir));
+            result.certs.extend(dir_result.certs);
+            result.errors.extend(dir_result.errors);
+        }
+        result.certs.sort_unstable_by(|left, right| left.cmp(right));
+        result.certs.dedup();
+        return result;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut result = rustls_native_certs::CertificateResult::default();
+        let mut all_certs = HashMap::new();
+        for domain in &[Domain::User, Domain::Admin, Domain::System] {
+            let trust_settings = TrustSettings::new(*domain);
+            let iter = match trust_settings.iter() {
+                Ok(iter) => iter,
+                Err(err) => {
+                    push_native_cert_os_error(
+                        &mut result,
+                        err.into(),
+                        match domain {
+                            Domain::User => "failed to load user trust settings",
+                            Domain::Admin => "failed to load admin trust settings",
+                            Domain::System => "failed to load system trust settings",
+                        },
+                    );
+                    continue;
+                }
+            };
+
+            for cert in iter {
+                let der = cert.to_der();
+                let trusted = match trust_settings.tls_trust_settings_for_certificate(&cert) {
+                    Ok(trusted) => trusted.unwrap_or(TrustSettingsForCertificate::TrustRoot),
+                    Err(err) => {
+                        push_native_cert_os_error(
+                            &mut result,
+                            err.into(),
+                            "certificate not trusted",
+                        );
+                        continue;
+                    }
+                };
+                all_certs.entry(der).or_insert(trusted);
+            }
+        }
+
+        for (der, trusted) in all_certs {
+            if matches!(
+                trusted,
+                TrustSettingsForCertificate::TrustRoot | TrustSettingsForCertificate::TrustAsRoot
+            ) {
+                result.certs.push(CertificateDer::from(der));
+            }
+        }
+        return result;
+    }
+
+    #[cfg(windows)]
+    {
+        let mut result = rustls_native_certs::CertificateResult::default();
+        let current_user_store = match CertStore::open_current_user("ROOT") {
+            Ok(store) => store,
+            Err(err) => {
+                push_native_cert_os_error(
+                    &mut result,
+                    err.into(),
+                    "failed to open current user certificate store",
+                );
+                return result;
+            }
+        };
+
+        for cert in current_user_store.certs() {
+            let valid_uses = match cert.valid_uses() {
+                Ok(valid_uses) => valid_uses,
+                Err(err) => {
+                    push_native_cert_os_error(
+                        &mut result,
+                        err.into(),
+                        "failed to read certificate valid uses",
+                    );
+                    continue;
+                }
+            };
+            let is_time_valid = match cert.is_time_valid() {
+                Ok(is_time_valid) => is_time_valid,
+                Err(err) => {
+                    push_native_cert_os_error(
+                        &mut result,
+                        err.into(),
+                        "failed to read certificate validity",
+                    );
+                    continue;
+                }
+            };
+            if usable_for_rustls(valid_uses) && is_time_valid {
+                result
+                    .certs
+                    .push(CertificateDer::from(cert.to_der().to_vec()));
+            }
+        }
+        return result;
+    }
+
+    #[allow(unreachable_code)]
+    rustls_native_certs::load_native_certs()
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn push_native_cert_os_error(
+    result: &mut rustls_native_certs::CertificateResult,
+    err: Box<dyn StdError + Send + Sync + 'static>,
+    context: &'static str,
+) {
+    result.errors.push(rustls_native_certs::Error {
+        context,
+        kind: rustls_native_certs::ErrorKind::Os(err),
+    });
+}
+
+#[cfg(windows)]
+fn usable_for_rustls(uses: ValidUses) -> bool {
+    match uses {
+        ValidUses::All => true,
+        ValidUses::Oids(oids) => oids.iter().any(|oid| oid == PKIX_SERVER_AUTH),
+    }
+}
+
+#[cfg(windows)]
+const PKIX_SERVER_AUTH: &str = "1.3.6.1.5.5.7.3.1";
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "linux"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] = &[
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/pki/tls/cacert.pem",
+    "/etc/ssl/cert.pem",
+    "/opt/etc/ssl/certs/ca-certificates.crt",
+    "/etc/ssl/certs/cacert.pem",
+];
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "freebsd"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] = &["/usr/local/etc/ssl/cert.pem"];
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "dragonfly"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] = &["/usr/local/share/certs/ca-root-nss.crt"];
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "netbsd"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] = &["/etc/openssl/certs/ca-certificates.crt"];
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "openbsd"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] = &["/etc/ssl/cert.pem"];
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "solaris"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] = &["/etc/certs/ca-certificates.crt"];
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "illumos"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] =
+    &["/etc/ssl/cacert.pem", "/etc/certs/ca-certificates.crt"];
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "android"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] =
+    &["/data/data/com.termux/files/usr/etc/tls/cert.pem"];
+
+#[cfg(all(unix, not(target_os = "macos"), target_os = "haiku"))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] = &["/boot/system/data/ssl/CARootCertificates.pem"];
+
+#[cfg(all(
+    unix,
+    not(target_os = "macos"),
+    not(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "solaris",
+        target_os = "illumos",
+        target_os = "android",
+        target_os = "haiku",
+    ))
+))]
+const NATIVE_CERTIFICATE_FILE_NAMES: &[&str] = &["/etc/ssl/certs/ca-certificates.crt"];
 
 fn append_pem_file(bundle: &mut String, path: &Path) -> Result<()> {
     if !bundle.ends_with('\n') {
@@ -498,6 +708,26 @@ mod tests {
 
         assert!(trust_bundle.contains("managed ca"));
         assert!(!trust_bundle.contains("stale managed bundle"));
+    }
+
+    #[test]
+    fn build_managed_ca_trust_bundle_appends_inherited_bundle() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let trust_bundle_path = dir.path().join("ca-bundle.pem");
+        let inherited_bundle_path = dir.path().join("inherited.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        fs::write(&inherited_bundle_path, "inherited ca\n").unwrap();
+        let env = HashMap::from([(
+            "SSL_CERT_FILE".to_string(),
+            inherited_bundle_path.display().to_string(),
+        )]);
+
+        let trust_bundle =
+            build_managed_ca_trust_bundle(&managed_ca_cert_path, &trust_bundle_path, &env).unwrap();
+
+        assert!(trust_bundle.contains("inherited ca"));
+        assert!(trust_bundle.contains("managed ca"));
     }
 
     #[cfg(unix)]
