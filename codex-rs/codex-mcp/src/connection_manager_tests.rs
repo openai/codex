@@ -729,7 +729,7 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
-async fn list_all_tools_hides_app_only_tools_but_inventory_retains_them() {
+async fn list_all_tools_for_model_hides_app_only_tools_but_regular_list_retains_them() {
     let mut app_tool = create_test_tool("rmcp", "app_tool");
     app_tool.tool.meta = Some(Meta(
         serde_json::json!({ "ui": { "visibility": ["app"] } })
@@ -761,7 +761,7 @@ async fn list_all_tools_hides_app_only_tools_but_inventory_retains_them() {
 
     assert_eq!(
         manager
-            .list_all_tools()
+            .list_all_tools_for_model()
             .await
             .into_iter()
             .map(|tool| tool.tool.name.to_string())
@@ -770,12 +770,12 @@ async fn list_all_tools_hides_app_only_tools_but_inventory_retains_them() {
     );
     assert_eq!(
         manager
-            .list_all_tools_for_inventory()
+            .list_all_tools()
             .await
             .into_iter()
             .map(|tool| tool.tool.name.to_string())
             .collect::<Vec<_>>(),
-        vec!["model_tool".to_string(), "app_tool".to_string()]
+        vec!["app_tool".to_string(), "model_tool".to_string()]
     );
 }
 

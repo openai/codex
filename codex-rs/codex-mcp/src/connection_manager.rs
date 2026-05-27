@@ -62,10 +62,41 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
+use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 use tracing::warn;
+
+const MCP_UI_META_KEY: &str = "ui";
+const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
+const MCP_UI_APP_VISIBILITY: &str = "app";
+const MCP_UI_MODEL_VISIBILITY: &str = "model";
+
+/// Returns whether a tool may be included in model-facing tool declarations.
+///
+/// Tools without visibility metadata remain visible. Tools marked visible to
+/// the app are hidden unless they are also explicitly visible to the model.
+fn tool_is_model_visible(tool: &ToolInfo) -> bool {
+    let Some(visibility) = tool
+        .tool
+        .meta
+        .as_deref()
+        .and_then(|meta| meta.get(MCP_UI_META_KEY))
+        .and_then(JsonValue::as_object)
+        .and_then(|ui| ui.get(MCP_UI_VISIBILITY_META_KEY))
+        .and_then(JsonValue::as_array)
+    else {
+        return true;
+    };
+
+    !visibility
+        .iter()
+        .any(|target| target.as_str() == Some(MCP_UI_APP_VISIBILITY))
+        || visibility
+            .iter()
+            .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
+}
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub struct McpConnectionManager {
@@ -377,18 +408,28 @@ impl McpConnectionManager {
         failures
     }
 
-    /// Returns all tools with model-visible names normalized.
+    /// Returns all tools with callable names normalized.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         normalize_tools_for_model_with_prefix(
-            self.list_all_tools_for_inventory().await,
+            self.list_all_tools_unprocessed().await,
             self.prefix_mcp_tool_names,
         )
     }
 
-    /// Returns all listed tools with raw MCP names for app-server inventory consumers.
+    /// Returns the tools exposed to the model with callable names normalized.
     #[instrument(level = "trace", skip_all)]
-    pub async fn list_all_tools_for_inventory(&self) -> Vec<ToolInfo> {
+    pub async fn list_all_tools_for_model(&self) -> Vec<ToolInfo> {
+        normalize_tools_for_model_with_prefix(
+            self.list_all_tools_unprocessed()
+                .await
+                .into_iter()
+                .filter(tool_is_model_visible),
+            self.prefix_mcp_tool_names,
+        )
+    }
+
+    async fn list_all_tools_unprocessed(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for managed_client in self.clients.values() {
             let Some(server_tools) = managed_client.listed_tools().await else {
@@ -406,7 +447,7 @@ impl McpConnectionManager {
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace the cache contents and the
-    /// latest filtered tools are returned directly to the caller. On
+    /// latest tools are returned directly to the caller. On
     /// failure, the existing cache remains unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
         let managed_client = self

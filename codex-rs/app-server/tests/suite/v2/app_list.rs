@@ -317,6 +317,73 @@ connectors = false
 }
 
 #[tokio::test]
+async fn list_apps_keeps_apps_with_app_only_tools_accessible() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let mut app_only_tool = connector_tool("beta", "Beta App")?;
+    app_only_tool
+        .meta
+        .as_mut()
+        .expect("connector tool should include metadata")
+        .0
+        .insert("ui".to_string(), json!({ "visibility": ["app"] }));
+    let tools = vec![app_only_tool];
+    let (server_url, server_handle) =
+        start_apps_server_with_delays(connectors, tools, Duration::ZERO, Duration::ZERO).await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-app-only")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let AppsListResponse { data, next_cursor } = to_response(response)?;
+
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].id, "beta");
+    assert!(data[0].is_accessible);
+    assert!(next_cursor.is_none());
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_apps_reports_is_enabled_from_config() -> Result<()> {
     let connectors = vec![AppInfo {
         id: "beta".to_string(),

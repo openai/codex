@@ -26,10 +26,6 @@ pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
     "codex.mcp.tools.cache_write.duration_ms";
 
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
-const MCP_UI_META_KEY: &str = "ui";
-const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
-const MCP_UI_APP_VISIBILITY: &str = "app";
-const MCP_UI_MODEL_VISIBILITY: &str = "model";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
@@ -142,32 +138,7 @@ pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<Too
         .collect()
 }
 
-/// Returns whether a tool may be included in model-facing tool declarations.
-///
-/// Tools without visibility metadata remain visible.
-/// Tools marked visible to the app are hidden unless they are also explicitly
-/// visible to the model.
-fn tool_is_model_visible(tool: &Tool) -> bool {
-    let Some(visibility) = tool
-        .meta
-        .as_deref()
-        .and_then(|meta| meta.get(MCP_UI_META_KEY))
-        .and_then(JsonValue::as_object)
-        .and_then(|ui| ui.get(MCP_UI_VISIBILITY_META_KEY))
-        .and_then(JsonValue::as_array)
-    else {
-        return true;
-    };
-
-    !visibility
-        .iter()
-        .any(|target| target.as_str() == Some(MCP_UI_APP_VISIBILITY))
-        || visibility
-            .iter()
-            .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
-}
-
-/// Returns the model-visible subset of MCP tools with names normalized.
+/// Returns MCP tools with model-visible names normalized.
 ///
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
 /// `callable_namespace` / `callable_name` are sanitized and, when necessary, hashed so
@@ -185,10 +156,6 @@ where
     let mut seen_raw_names = HashSet::new();
     let mut candidates = Vec::new();
     for tool in tools {
-        if !tool_is_model_visible(&tool.tool) {
-            continue;
-        }
-
         let raw_namespace_identity = format!(
             "{}\0{}\0{}",
             tool.server_name,
