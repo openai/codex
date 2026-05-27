@@ -797,6 +797,92 @@ async fn update_goal_can_block_and_accounts_final_progress() -> anyhow::Result<(
 }
 
 #[tokio::test]
+async fn update_goal_can_complete_and_reports_final_budget() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let tools = harness.tools();
+    let create_tool = tool_by_name(&tools, "create_goal");
+    create_tool
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({
+                "objective": "ship goal extension backend",
+                "token_budget": 40,
+            }),
+        ))
+        .await?;
+    harness.sink.clear();
+
+    harness
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 20, /*cached_input_tokens*/ 5, /*output_tokens*/ 8,
+                /*reasoning_output_tokens*/ 2, /*total_tokens*/ 30,
+            ),
+        )
+        .await;
+    let update_tool = tool_by_name(&tools, "update_goal");
+    let invocation = tool_call(
+        "update_goal",
+        "call-update-goal",
+        json!({ "status": "complete" }),
+    );
+    let output = update_tool.handle(invocation.clone()).await?;
+    let result = output.code_mode_result(&invocation.payload);
+
+    assert_eq!(
+        result,
+        json!({
+            "goal": {
+                "threadId": thread_id,
+                "objective": "ship goal extension backend",
+                "status": "complete",
+                "tokenBudget": 40,
+                "tokensUsed": 23,
+                "timeUsedSeconds": 0,
+                "createdAt": result["goal"]["createdAt"],
+                "updatedAt": result["goal"]["updatedAt"],
+            },
+            "remainingTokens": 17,
+            "completionBudgetReport": "Goal achieved. Report final usage from this tool result's structured goal fields. If `goal.tokenBudget` is present, include token usage from `goal.tokensUsed` and `goal.tokenBudget`. If `goal.timeUsedSeconds` is greater than 0, summarize elapsed time in a concise, human-friendly form appropriate to the response language.",
+        })
+    );
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(23, goal.tokens_used);
+    assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
+
+    assert_eq!(
+        vec![
+            CapturedGoalEvent {
+                event_id: "call-update-goal".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                status: ThreadGoalStatus::Active,
+                tokens_used: 23,
+            },
+            CapturedGoalEvent {
+                event_id: "call-update-goal".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                status: ThreadGoalStatus::Complete,
+                tokens_used: 23,
+            },
+        ],
+        harness.sink.goal_events()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_goal_mutation_start_accounts_active_goal_progress() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
