@@ -703,7 +703,7 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
         Some(&cache_context),
     )
     .expect("expected startup snapshot to load from cache");
-    let startup_server_info = load_startup_cached_codex_apps_server_info(
+    let cached_server_info = load_startup_cached_codex_apps_server_info(
         CODEX_APPS_MCP_SERVER_NAME,
         Some(&cache_context),
     );
@@ -711,7 +711,7 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(startup_tools[0].callable_name, "calendar_search");
-    assert_eq!(startup_server_info, Some(server_info));
+    assert_eq!(cached_server_info, Some(server_info));
 }
 
 #[test]
@@ -738,14 +738,14 @@ fn startup_cached_codex_apps_tools_loads_without_server_info_cache() {
         Some(&cache_context),
     )
     .expect("legacy startup snapshot should remain available");
-    let startup_server_info = load_startup_cached_codex_apps_server_info(
+    let cached_server_info = load_startup_cached_codex_apps_server_info(
         CODEX_APPS_MCP_SERVER_NAME,
         Some(&cache_context),
     );
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].callable_name, "calendar_search");
-    assert_eq!(startup_server_info, None);
+    assert_eq!(cached_server_info, None);
 }
 
 #[test]
@@ -795,7 +795,7 @@ fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
 }
 
 #[tokio::test]
-async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
+async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending() {
     let startup_tools = vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "calendar_create_event",
@@ -814,8 +814,8 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(startup_tools),
-            startup_server_info: None,
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -851,8 +851,8 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(Vec::new()),
-            startup_server_info: Some(server_info.clone()),
+            cached_tool_info_snapshot: Some(Vec::new()),
+            cached_server_info: Some(server_info.clone()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -888,8 +888,8 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
         "rmcp".to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(startup_tools),
-            startup_server_info: None,
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -931,8 +931,8 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
         "rmcp".to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(startup_tools),
-            startup_server_info: None,
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -958,7 +958,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
 }
 
 #[tokio::test]
-async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot() {
+async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_snapshot() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -973,8 +973,8 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: None,
-            startup_server_info: None,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -987,7 +987,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
 }
 
 #[tokio::test]
-async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty() {
+async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -1002,8 +1002,8 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(Vec::new()),
-            startup_server_info: None,
+            cached_tool_info_snapshot: Some(Vec::new()),
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -1017,7 +1017,7 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
 }
 
 #[tokio::test]
-async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
+async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails() {
     let startup_tools = vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "calendar_create_event",
@@ -1042,8 +1042,8 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: failed_client,
-            startup_snapshot: Some(startup_tools),
-            startup_server_info: Some(server_info.clone()),
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: Some(server_info.clone()),
             startup_complete,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
@@ -1097,8 +1097,8 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
         server_name.to_string(),
         AsyncManagedClient {
             client: pending_client,
-            startup_snapshot: Some(startup_tools),
-            startup_server_info: None,
+            cached_tool_info_snapshot: Some(startup_tools),
+            cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),

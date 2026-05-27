@@ -126,8 +126,8 @@ impl ManagedClient {
 #[derive(Clone)]
 pub(crate) struct AsyncManagedClient {
     pub(crate) client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
-    pub(crate) startup_snapshot: Option<Vec<ToolInfo>>,
-    pub(crate) startup_server_info: Option<McpServerInfo>,
+    pub(crate) cached_tool_info_snapshot: Option<Vec<ToolInfo>>,
+    pub(crate) cached_server_info: Option<McpServerInfo>,
     pub(crate) startup_complete: Arc<AtomicBool>,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
@@ -154,12 +154,13 @@ impl AsyncManagedClient {
             .configured_config()
             .map(ToolFilter::from_config)
             .unwrap_or_default();
-        let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
+        let cached_tool_info_snapshot = load_startup_cached_codex_apps_tools_snapshot(
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
         );
-        let startup_snapshot = startup_snapshot.map(|tools| filter_tools(tools, &tool_filter));
-        let startup_server_info = load_startup_cached_codex_apps_server_info(
+        let cached_tool_info_snapshot =
+            cached_tool_info_snapshot.map(|tools| filter_tools(tools, &tool_filter));
+        let cached_server_info = load_startup_cached_codex_apps_server_info(
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
         );
@@ -215,7 +216,7 @@ impl AsyncManagedClient {
             outcome
         };
         let client = fut.boxed().shared();
-        if startup_snapshot.is_some() {
+        if cached_tool_info_snapshot.is_some() {
             let startup_task = client.clone();
             tokio::spawn(async move {
                 let _ = startup_task.await;
@@ -224,8 +225,8 @@ impl AsyncManagedClient {
 
         Self {
             client,
-            startup_snapshot,
-            startup_server_info,
+            cached_tool_info_snapshot,
+            cached_server_info,
             startup_complete,
             tool_plugin_provenance,
             cancel_token,
@@ -247,9 +248,9 @@ impl AsyncManagedClient {
         }
     }
 
-    fn startup_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
+    fn cached_tool_info_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
         if !self.startup_complete.load(Ordering::Acquire) {
-            return self.startup_snapshot.clone();
+            return self.cached_tool_info_snapshot.clone();
         }
         None
     }
@@ -307,12 +308,13 @@ impl AsyncManagedClient {
         };
 
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
-        let tools = if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
+        let tools = if let Some(startup_tools) = self.cached_tool_info_snapshot_while_initializing()
+        {
             Some(startup_tools)
         } else {
             match self.client().await {
                 Ok(client) => Some(client.listed_tools()),
-                Err(_) => self.startup_snapshot.clone(),
+                Err(_) => self.cached_tool_info_snapshot.clone(),
             }
         };
         tools.map(annotate_tools)

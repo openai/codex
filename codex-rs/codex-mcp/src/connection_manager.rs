@@ -401,7 +401,7 @@ impl McpConnectionManager {
         let mut server_infos = HashMap::new();
         for (server_name, client) in &self.clients {
             if !client.startup_complete.load(Ordering::Acquire) {
-                if let Some(server_info) = client.startup_server_info.clone() {
+                if let Some(server_info) = client.cached_server_info.clone() {
                     server_infos.insert(server_name.clone(), server_info);
                 }
                 continue;
@@ -411,7 +411,7 @@ impl McpConnectionManager {
                     server_infos.insert(server_name.clone(), managed_client.server_info);
                 }
                 Err(_) => {
-                    if let Some(server_info) = client.startup_server_info.clone() {
+                    if let Some(server_info) = client.cached_server_info.clone() {
                         server_infos.insert(server_name.clone(), server_info);
                     }
                 }
