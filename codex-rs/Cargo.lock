@@ -1162,7 +1162,6 @@ dependencies = [
  "serde_core",
  "serde_json",
  "serde_path_to_error",
- "serde_urlencoded",
  "sha1 0.10.6",
  "sync_wrapper",
  "tokio",
