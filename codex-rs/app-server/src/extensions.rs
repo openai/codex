@@ -9,6 +9,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
+use codex_extension_api::ExtensionEventFuture;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -59,24 +60,23 @@ struct AppServerExtensionEventSink {
 }
 
 impl ExtensionEventSink for AppServerExtensionEventSink {
-    fn emit(&self, event: Event) {
-        match event.msg {
-            EventMsg::ThreadGoalUpdated(thread_goal_event) => {
-                let outgoing = Arc::clone(&self.outgoing);
-                let notification =
-                    ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
-                        thread_id: thread_goal_event.thread_id.to_string(),
-                        turn_id: thread_goal_event.turn_id,
-                        goal: thread_goal_event.goal.into(),
-                    });
-                let _handle = tokio::spawn(async move {
-                    outgoing.send_server_notification(notification).await;
-                });
+    fn emit<'a>(&'a self, event: Event) -> ExtensionEventFuture<'a> {
+        Box::pin(async move {
+            match event.msg {
+                EventMsg::ThreadGoalUpdated(thread_goal_event) => {
+                    let notification =
+                        ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
+                            thread_id: thread_goal_event.thread_id.to_string(),
+                            turn_id: thread_goal_event.turn_id,
+                            goal: thread_goal_event.goal.into(),
+                        });
+                    self.outgoing.send_server_notification(notification).await;
+                }
+                msg => {
+                    tracing::debug!(event_id = %event.id, ?msg, "dropping unsupported extension event");
+                }
             }
-            msg => {
-                tracing::debug!(event_id = %event.id, ?msg, "dropping unsupported extension event");
-            }
-        }
+        })
     }
 }
 
@@ -138,18 +138,47 @@ mod tests {
             .expect("prefill should fit in one-slot channel");
         let sink = app_server_extension_event_sink(outgoing);
 
-        sink.emit(thread_goal_update_event(
-            thread_id,
-            "wait for capacity",
-            "turn-1",
-        ));
+        let emit = tokio::spawn(async move {
+            sink.emit(thread_goal_update_event(
+                thread_id,
+                "wait for capacity",
+                "turn-1",
+            ))
+            .await;
+        });
 
         let _prefill = recv_goal_update(&mut outgoing_rx).await;
+        emit.await.expect("event emission should complete");
         let notification = recv_goal_update(&mut outgoing_rx).await;
 
         assert_eq!(
             app_server_goal_update(thread_id, "wait for capacity", "turn-1"),
             notification
+        );
+    }
+
+    #[tokio::test]
+    async fn app_server_event_sink_preserves_goal_update_order() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(2);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            AnalyticsEventsClient::disabled(),
+        ));
+        let thread_id = ThreadId::default();
+        let sink = app_server_extension_event_sink(outgoing);
+
+        sink.emit(thread_goal_update_event(thread_id, "first", "turn-1"))
+            .await;
+        sink.emit(thread_goal_update_event(thread_id, "second", "turn-2"))
+            .await;
+
+        assert_eq!(
+            app_server_goal_update(thread_id, "first", "turn-1"),
+            recv_goal_update(&mut outgoing_rx).await
+        );
+        assert_eq!(
+            app_server_goal_update(thread_id, "second", "turn-2"),
+            recv_goal_update(&mut outgoing_rx).await
         );
     }
 

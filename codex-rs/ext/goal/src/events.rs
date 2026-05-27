@@ -16,19 +16,21 @@ impl GoalEventEmitter {
         Self { sink }
     }
 
-    pub(crate) fn thread_goal_updated(
+    pub(crate) async fn thread_goal_updated(
         &self,
         event_id: impl Into<String>,
         turn_id: Option<String>,
         goal: ThreadGoal,
     ) {
-        self.sink.emit(Event {
-            id: event_id.into(),
-            msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
-                thread_id: goal.thread_id,
-                turn_id,
-                goal,
-            }),
-        });
+        self.sink
+            .emit(Event {
+                id: event_id.into(),
+                msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                    thread_id: goal.thread_id,
+                    turn_id,
+                    goal,
+                }),
+            })
+            .await;
     }
 }

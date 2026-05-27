@@ -216,11 +216,14 @@ impl GoalRuntimeHandle {
             .record_terminal_if_status_changed(previous_status, &goal);
         self.inner.accounting_state.clear_active_goal();
         let goal = protocol_goal_from_state(goal);
-        self.inner.event_emitter.thread_goal_updated(
-            format!("{turn_id}:usage-limit"),
-            Some(turn_id.to_string()),
-            goal,
-        );
+        self.inner
+            .event_emitter
+            .thread_goal_updated(
+                format!("{turn_id}:usage-limit"),
+                Some(turn_id.to_string()),
+                goal,
+            )
+            .await;
         Ok(())
     }
 
@@ -380,11 +383,14 @@ impl GoalRuntimeHandle {
                     budget_limited_goal_disposition,
                 );
                 let goal = protocol_goal_from_state(goal);
-                self.inner.event_emitter.thread_goal_updated(
-                    event_id.to_string(),
-                    Some(turn_id.to_string()),
-                    goal.clone(),
-                );
+                self.inner
+                    .event_emitter
+                    .thread_goal_updated(
+                        event_id.to_string(),
+                        Some(turn_id.to_string()),
+                        goal.clone(),
+                    )
+                    .await;
                 Some(AccountedGoalProgress { goal, goal_id })
             }
             codex_state::GoalAccountingOutcome::Unchanged(_) => None,
@@ -430,11 +436,10 @@ impl GoalRuntimeHandle {
                     budget_limited_goal_disposition,
                 );
                 let goal = protocol_goal_from_state(goal);
-                self.inner.event_emitter.thread_goal_updated(
-                    event_id.to_string(),
-                    /*turn_id*/ None,
-                    goal.clone(),
-                );
+                self.inner
+                    .event_emitter
+                    .thread_goal_updated(event_id.to_string(), /*turn_id*/ None, goal.clone())
+                    .await;
                 Some(AccountedGoalProgress { goal, goal_id })
             }
             codex_state::GoalAccountingOutcome::Unchanged(_) => {

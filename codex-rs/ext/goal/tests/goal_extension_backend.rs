@@ -1435,8 +1435,9 @@ impl RecordingEventSink {
 }
 
 impl ExtensionEventSink for RecordingEventSink {
-    fn emit(&self, event: Event) {
+    fn emit<'a>(&'a self, event: Event) -> codex_extension_api::ExtensionEventFuture<'a> {
         self.events().push(event);
+        Box::pin(std::future::ready(()))
     }
 }
 

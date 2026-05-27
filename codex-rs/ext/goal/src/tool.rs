@@ -201,7 +201,8 @@ impl GoalToolExecutor {
             .mark_current_turn_goal_active(goal.goal_id.clone());
         self.metrics.record_created();
         let goal = protocol_goal_from_state(goal);
-        self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone());
+        self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone())
+            .await;
         goal_response(Some(goal), CompletionBudgetReport::Omit)
     }
 
@@ -261,7 +262,8 @@ impl GoalToolExecutor {
             .record_terminal_if_status_changed(previous_status, &goal);
         let goal = protocol_goal_from_state(goal);
         let turn_id = self.accounting_state.clear_current_turn_goal();
-        self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone());
+        self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone())
+            .await;
         goal_response(
             Some(goal),
             if args.status == ThreadGoalStatus::Complete {
@@ -272,14 +274,15 @@ impl GoalToolExecutor {
         )
     }
 
-    fn emit_goal_updated_from_tool_call(
+    async fn emit_goal_updated_from_tool_call(
         &self,
         invocation: &ToolCall,
         turn_id: Option<String>,
         goal: ThreadGoal,
     ) {
         self.event_emitter
-            .thread_goal_updated(invocation.call_id.clone(), turn_id, goal);
+            .thread_goal_updated(invocation.call_id.clone(), turn_id, goal)
+            .await;
     }
 
     async fn account_active_goal_progress(
@@ -327,11 +330,9 @@ impl GoalToolExecutor {
                     budget_limited_goal_disposition,
                 );
                 let goal = protocol_goal_from_state(goal);
-                self.event_emitter.thread_goal_updated(
-                    event_id.to_string(),
-                    Some(turn_id),
-                    goal.clone(),
-                );
+                self.event_emitter
+                    .thread_goal_updated(event_id.to_string(), Some(turn_id), goal.clone())
+                    .await;
                 Some(goal)
             }
             codex_state::GoalAccountingOutcome::Unchanged(_) => None,
