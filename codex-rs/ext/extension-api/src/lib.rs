@@ -27,6 +27,7 @@ pub use contributors::ConfigContributor;
 pub use contributors::ContextContributor;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;
+pub use contributors::ThreadIdleInput;
 pub use contributors::ThreadLifecycleContributor;
 pub use contributors::ThreadResumeInput;
 pub use contributors::ThreadStartInput;
