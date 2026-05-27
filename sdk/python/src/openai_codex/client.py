@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from ._message_router import MessageRouter
 from ._version import __version__ as SDK_VERSION
-from .errors import AppServerError, TransportClosedError
+from .errors import CodexError, TransportClosedError
 from .generated.notification_registry import NOTIFICATION_MODELS
 from .generated.v2_all import (
     AccountLoginCompletedNotification,
@@ -183,7 +183,7 @@ class CodexConfig:
     experimental_api: bool = True
 
 
-class AppServerClient:
+class CodexClient:
     """Synchronous typed JSON-RPC client for `codex app-server` over stdio."""
 
     def __init__(
@@ -200,7 +200,7 @@ class AppServerClient:
         self._stderr_thread: threading.Thread | None = None
         self._reader_thread: threading.Thread | None = None
 
-    def __enter__(self) -> "AppServerClient":
+    def __enter__(self) -> "CodexClient":
         self.start()
         return self
 
@@ -289,7 +289,7 @@ class AppServerClient:
     ) -> ModelT:
         result = self._request_raw(method, params)
         if not isinstance(result, dict):
-            raise AppServerError(f"{method} response must be a JSON object")
+            raise CodexError(f"{method} response must be a JSON object")
         return response_model.model_validate(result)
 
     def _request_raw(self, method: str, params: JsonObject | None = None) -> JsonValue:
@@ -659,28 +659,28 @@ class AppServerClient:
 
     def _write_message(self, payload: JsonObject) -> None:
         if self._proc is None or self._proc.stdin is None:
-            raise TransportClosedError("app-server is not running")
+            raise TransportClosedError("Codex process is not running")
         with self._lock:
             self._proc.stdin.write(json.dumps(payload) + "\n")
             self._proc.stdin.flush()
 
     def _read_message(self) -> dict[str, JsonValue]:
         if self._proc is None or self._proc.stdout is None:
-            raise TransportClosedError("app-server is not running")
+            raise TransportClosedError("Codex process is not running")
 
         line = self._proc.stdout.readline()
         if not line:
             raise TransportClosedError(
-                f"app-server closed stdout. stderr_tail={self._stderr_tail()[:2000]}"
+                f"Codex process closed stdout. stderr_tail={self._stderr_tail()[:2000]}"
             )
 
         try:
             message = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise AppServerError(f"Invalid JSON-RPC line: {line!r}") from exc
+            raise CodexError(f"Invalid JSON-RPC line: {line!r}") from exc
 
         if not isinstance(message, dict):
-            raise AppServerError(f"Invalid JSON-RPC payload: {message!r}")
+            raise CodexError(f"Invalid JSON-RPC payload: {message!r}")
         return message
 
 

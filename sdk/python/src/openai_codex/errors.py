@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 
-class AppServerError(Exception):
+class CodexError(Exception):
     """Base exception for SDK errors."""
 
 
-class JsonRpcError(AppServerError):
+class JsonRpcError(CodexError):
     """Raw JSON-RPC error wrapper from the server."""
 
     def __init__(self, code: int, message: str, data: Any = None):
@@ -17,35 +17,35 @@ class JsonRpcError(AppServerError):
         self.data = data
 
 
-class TransportClosedError(AppServerError):
-    """Raised when the app-server transport closes unexpectedly."""
+class TransportClosedError(CodexError):
+    """Raised when the Codex transport closes unexpectedly."""
 
 
-class AppServerRpcError(JsonRpcError):
+class CodexRpcError(JsonRpcError):
     """Base typed error for JSON-RPC failures."""
 
 
-class ParseError(AppServerRpcError):
+class ParseError(CodexRpcError):
     pass
 
 
-class InvalidRequestError(AppServerRpcError):
+class InvalidRequestError(CodexRpcError):
     pass
 
 
-class MethodNotFoundError(AppServerRpcError):
+class MethodNotFoundError(CodexRpcError):
     pass
 
 
-class InvalidParamsError(AppServerRpcError):
+class InvalidParamsError(CodexRpcError):
     pass
 
 
-class InternalRpcError(AppServerRpcError):
+class InternalRpcError(CodexRpcError):
     pass
 
 
-class ServerBusyError(AppServerRpcError):
+class ServerBusyError(CodexRpcError):
     """Server is overloaded / unavailable and caller should retry."""
 
 
@@ -104,7 +104,7 @@ def map_jsonrpc_error(code: int, message: str, data: Any = None) -> JsonRpcError
             return ServerBusyError(code, message, data)
         if _contains_retry_limit_text(message):
             return RetryLimitExceededError(code, message, data)
-        return AppServerRpcError(code, message, data)
+        return CodexRpcError(code, message, data)
 
     return JsonRpcError(code, message, data)
 
