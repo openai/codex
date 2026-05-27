@@ -75,12 +75,13 @@ fn filter_codex_apps_mcp_tools(
             if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
                 return false;
             }
+            if !tool_is_model_visible(tool) {
+                return false;
+            }
             let Some(connector_id) = tool.connector_id.as_deref() else {
                 return false;
             };
-            allowed.contains(connector_id)
-                && connectors::codex_app_tool_is_enabled(config, tool)
-                && tool_is_model_visible(tool)
+            allowed.contains(connector_id) && connectors::codex_app_tool_is_enabled(config, tool)
         })
         .cloned()
         .collect()
