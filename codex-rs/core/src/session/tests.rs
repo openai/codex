@@ -3118,6 +3118,7 @@ async fn set_rate_limits_retains_previous_credits() {
             unlimited: false,
             balance: Some("10.00".to_string()),
         }),
+        individual_limit: None,
         plan_type: Some(codex_protocol::account::PlanType::Plus),
         rate_limit_reached_type: None,
     };
@@ -3137,6 +3138,7 @@ async fn set_rate_limits_retains_previous_credits() {
             resets_at: Some(1_900),
         }),
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -3150,6 +3152,7 @@ async fn set_rate_limits_retains_previous_credits() {
             primary: update.primary.clone(),
             secondary: update.secondary,
             credits: initial.credits,
+            individual_limit: initial.individual_limit,
             plan_type: initial.plan_type,
             rate_limit_reached_type: None,
         })
@@ -3227,6 +3230,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             unlimited: false,
             balance: Some("15.00".to_string()),
         }),
+        individual_limit: None,
         plan_type: Some(codex_protocol::account::PlanType::Plus),
         rate_limit_reached_type: None,
     };
@@ -3242,6 +3246,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         }),
         secondary: None,
         credits: None,
+        individual_limit: None,
         plan_type: Some(codex_protocol::account::PlanType::Pro),
         rate_limit_reached_type: None,
     };
@@ -3255,6 +3260,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             primary: update.primary,
             secondary: update.secondary,
             credits: initial.credits,
+            individual_limit: initial.individual_limit,
             plan_type: update.plan_type,
             rate_limit_reached_type: None,
         })

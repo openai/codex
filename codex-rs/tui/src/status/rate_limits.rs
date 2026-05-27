@@ -17,6 +17,8 @@ use chrono::Utc;
 use codex_app_server_protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
+use codex_app_server_protocol::SpendControlLimitSnapshot as CoreSpendControlLimitSnapshot;
+use codex_protocol::num_format::format_with_separators;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
@@ -37,6 +39,17 @@ pub(crate) enum StatusRateLimitValue {
     Window {
         /// Percent of the window that has been consumed.
         percent_used: f64,
+        /// Localized reset string, or `None` when unknown.
+        resets_at: Option<String>,
+    },
+    /// Effective monthly credit cap with both remaining percentage and usage totals.
+    MonthlyCreditLimit {
+        /// Percent of the monthly credit cap that remains.
+        percent_remaining: f64,
+        /// Formatted credits consumed in the current period.
+        used: String,
+        /// Formatted effective monthly credit cap.
+        limit: String,
         /// Localized reset string, or `None` when unknown.
         resets_at: Option<String>,
     },
@@ -99,6 +112,8 @@ pub(crate) struct RateLimitSnapshotDisplay {
     pub secondary: Option<RateLimitWindowDisplay>,
     /// Optional credits metadata when available.
     pub credits: Option<CreditsSnapshotDisplay>,
+    /// Optional effective monthly credit limit from workspace spend controls.
+    pub individual_limit: Option<SpendControlLimitSnapshotDisplay>,
 }
 
 /// Display-ready credits state extracted from protocol snapshots.
@@ -110,6 +125,15 @@ pub(crate) struct CreditsSnapshotDisplay {
     pub unlimited: bool,
     /// Raw balance text as provided by the backend.
     pub balance: Option<String>,
+}
+
+/// Display-ready effective monthly limit extracted from spend controls.
+#[derive(Debug, Clone)]
+pub(crate) struct SpendControlLimitSnapshotDisplay {
+    pub percent_remaining: f64,
+    pub used: String,
+    pub limit: String,
+    pub resets_at: Option<String>,
 }
 
 /// Converts a protocol snapshot into UI-friendly display data.
@@ -141,6 +165,10 @@ pub(crate) fn rate_limit_snapshot_display_for_limit(
             .as_ref()
             .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
         credits: snapshot.credits.as_ref().map(CreditsSnapshotDisplay::from),
+        individual_limit: snapshot
+            .individual_limit
+            .as_ref()
+            .and_then(|limit| SpendControlLimitSnapshotDisplay::from_limit(limit, captured_at)),
     }
 }
 
@@ -151,6 +179,22 @@ impl From<&CoreCreditsSnapshot> for CreditsSnapshotDisplay {
             unlimited: value.unlimited,
             balance: value.balance.clone(),
         }
+    }
+}
+
+impl SpendControlLimitSnapshotDisplay {
+    fn from_limit(
+        value: &CoreSpendControlLimitSnapshot,
+        captured_at: DateTime<Local>,
+    ) -> Option<Self> {
+        let resets_at = DateTime::<Utc>::from_timestamp(value.resets_at, 0)
+            .map(|dt| format_reset_timestamp(dt.with_timezone(&Local), captured_at));
+        Some(Self {
+            percent_remaining: f64::from(value.remaining_percent),
+            used: format_credit_amount(&value.used)?,
+            limit: format_credit_amount(&value.limit)?,
+            resets_at,
+        })
     }
 }
 
@@ -265,6 +309,17 @@ pub(crate) fn compose_rate_limit_data_many(
         {
             rows.push(row);
         }
+        if let Some(individual_limit) = snapshot.individual_limit.as_ref() {
+            rows.push(StatusRateLimitRow {
+                label: "Monthly credit limit".to_string(),
+                value: StatusRateLimitValue::MonthlyCreditLimit {
+                    percent_remaining: individual_limit.percent_remaining,
+                    used: individual_limit.used.clone(),
+                    limit: individual_limit.limit.clone(),
+                    resets_at: individual_limit.resets_at.clone(),
+                },
+            });
+        }
     }
 
     if rows.is_empty() {
@@ -341,6 +396,14 @@ fn format_credit_balance(raw: &str) -> Option<String> {
     None
 }
 
+fn format_credit_amount(raw: &str) -> Option<String> {
+    let value = raw.trim().parse::<f64>().ok()?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    Some(format_with_separators(value.round() as i64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::CreditsSnapshotDisplay;
@@ -372,6 +435,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("25".to_string()),
             }),
+            individual_limit: None,
         };
         let other = RateLimitSnapshotDisplay {
             limit_name: "codex-other".to_string(),
@@ -383,6 +447,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("99".to_string()),
             }),
+            individual_limit: None,
         };
 
         let rows = match compose_rate_limit_data_many(&[codex, other], now) {
@@ -420,6 +485,7 @@ mod tests {
                 window_minutes: Some(2 * 60),
             }),
             credits: None,
+            individual_limit: None,
         };
 
         let rows = match compose_rate_limit_data_many(&[other], now) {

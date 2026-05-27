@@ -6,6 +6,7 @@ use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::protocol::SpendControlLimitSnapshot as CoreSpendControlLimitSnapshot;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -260,6 +261,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub individual_limit: Option<SpendControlLimitSnapshot>,
     pub plan_type: Option<PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }
@@ -272,6 +274,7 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
+            individual_limit: value.individual_limit.map(SpendControlLimitSnapshot::from),
             plan_type: value.plan_type,
             rate_limit_reached_type: value
                 .rate_limit_reached_type
@@ -367,6 +370,27 @@ impl From<CoreCreditsSnapshot> for CreditsSnapshot {
             has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpendControlLimitSnapshot {
+    pub limit: String,
+    pub used: String,
+    pub remaining_percent: i32,
+    pub resets_at: i64,
+}
+
+impl From<CoreSpendControlLimitSnapshot> for SpendControlLimitSnapshot {
+    fn from(value: CoreSpendControlLimitSnapshot) -> Self {
+        Self {
+            limit: value.limit,
+            used: value.used,
+            remaining_percent: value.remaining_percent,
+            resets_at: value.resets_at,
         }
     }
 }

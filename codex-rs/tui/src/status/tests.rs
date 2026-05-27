@@ -19,6 +19,7 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CreditsSnapshot;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
+use codex_app_server_protocol::SpendControlLimitSnapshot;
 use codex_config::LoaderOverrides;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
@@ -236,6 +237,7 @@ async fn status_snapshot_includes_reasoning_details() {
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 1_200)),
         }),
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -871,6 +873,7 @@ async fn status_snapshot_includes_monthly_limit() {
         }),
         secondary: None,
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -894,6 +897,70 @@ async fn status_snapshot_includes_monthly_limit() {
         /*reasoning_effort_override*/ None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.model_provider_id = "openai".to_string();
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+
+    let account_display = test_status_account_display();
+    let usage = TokenUsage {
+        input_tokens: 800,
+        cached_input_tokens: 0,
+        output_tokens: 400,
+        reasoning_output_tokens: 0,
+        total_tokens: 1_200,
+    };
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 5, 6, 7, 8, 9)
+        .single()
+        .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        individual_limit: Some(SpendControlLimitSnapshot {
+            limit: "25000".to_string(),
+            used: "8000".to_string(),
+            remaining_percent: 68,
+            resets_at: reset_at_from(&captured_at, /*seconds*/ 86_400),
+        }),
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let composite = new_status_output(
+        &config,
+        account_display.as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        Some(&rate_display),
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 92));
     if cfg!(windows) {
         for line in &mut rendered_lines {
             *line = line.replace('\\', "/");
@@ -938,6 +1005,7 @@ async fn status_snapshot_uses_generic_limit_labels_for_unsupported_windows() {
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 172_800)),
         }),
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -990,6 +1058,7 @@ async fn status_snapshot_shows_unlimited_credits() {
             unlimited: true,
             balance: None,
         }),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1040,6 +1109,7 @@ async fn status_snapshot_shows_positive_credits() {
             unlimited: false,
             balance: Some("12.5".to_string()),
         }),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1090,6 +1160,7 @@ async fn status_snapshot_hides_zero_credits() {
             unlimited: false,
             balance: Some("0".to_string()),
         }),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1138,6 +1209,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
             unlimited: true,
             balance: None,
         }),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1244,6 +1316,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         }),
         secondary: None,
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1414,6 +1487,7 @@ async fn status_snapshot_shows_refreshing_limits_notice() {
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 2_700)),
         }),
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1485,6 +1559,7 @@ async fn status_snapshot_includes_credits_and_limits() {
             unlimited: false,
             balance: Some("37.5".to_string()),
         }),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1539,6 +1614,7 @@ async fn status_snapshot_shows_unavailable_limits_message() {
         primary: None,
         secondary: None,
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1596,6 +1672,7 @@ async fn status_snapshot_treats_refreshing_empty_limits_as_unavailable() {
         primary: None,
         secondary: None,
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1667,6 +1744,7 @@ async fn status_snapshot_shows_stale_limits_message() {
             resets_at: Some(reset_at_from(&captured_at, /*seconds*/ 1_800)),
         }),
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
@@ -1738,6 +1816,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
             unlimited: false,
             balance: Some("80".to_string()),
         }),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
