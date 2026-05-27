@@ -232,7 +232,7 @@ fn load_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
             refresh_expires_in_from_timestamp(&mut tokens);
             Ok(Some(tokens))
         }
-        None => load_oauth_tokens_from_direct_keyring(keyring_store, server_name, url),
+        None => Ok(None),
     }
 }
 
@@ -319,9 +319,6 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
     let key = compute_store_key(server_name, &tokens.url)?;
     if let Err(error) = delete_oauth_tokens_from_file(&key) {
         warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
-    }
-    if let Err(error) = keyring_store.delete(KEYRING_SERVICE, &key) {
-        warn!("failed to remove legacy OAuth tokens from direct keyring storage: {error:?}");
     }
     Ok(())
 }
@@ -426,8 +423,7 @@ fn delete_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     let secrets_removed = backend
         .delete(&SecretScope::Global, &secret_name)
         .context("failed to delete OAuth tokens from encrypted storage")?;
-    let direct_removed = delete_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)?;
-    Ok(secrets_removed || direct_removed)
+    Ok(secrets_removed)
 }
 
 #[derive(Clone)]
@@ -717,6 +713,12 @@ fn compute_store_key(server_name: &str, server_url: &str) -> Result<String> {
     Ok(format!("{server_name}|{truncated}"))
 }
 
+/// Derive a valid secret-store name from the MCP OAuth store key.
+///
+/// `compute_store_key` intentionally includes readable identity components and
+/// a pipe separator, but `SecretName` only allows `A-Z`, `0-9`, and `_`.
+/// Re-hashing keeps the secret key deterministic while satisfying that
+/// restricted alphabet.
 fn compute_secret_name(server_name: &str, server_url: &str) -> Result<SecretName> {
     let key = compute_store_key(server_name, server_url)?;
     let mut hasher = Sha256::new();
@@ -981,17 +983,41 @@ mod tests {
             .get(&SecretScope::Global, &secret_name)?
             .expect("tokens should be saved to encrypted storage");
         assert_eq!(serde_json::from_str::<StoredOAuthTokens>(&stored)?, tokens);
-        assert!(store.saved_value(&key).is_none());
+        assert_eq!(store.saved_value(&key), Some(serialized));
         assert!(!super::fallback_file_path()?.exists());
         Ok(())
     }
 
     #[test]
-    fn load_oauth_tokens_with_secrets_backend_reads_legacy_direct_entry() -> Result<()> {
+    fn load_oauth_tokens_with_secrets_backend_reads_encrypted_storage() -> Result<()> {
         let _env = TempCodexHome::new();
         let store = MockKeyringStore::default();
         let tokens = sample_tokens();
         let expected = tokens.clone();
+
+        super::save_oauth_tokens_with_keyring(
+            &store,
+            AuthKeyringBackendKind::Secrets,
+            &tokens.server_name,
+            &tokens,
+        )?;
+
+        let loaded = super::load_oauth_tokens_from_keyring(
+            &store,
+            AuthKeyringBackendKind::Secrets,
+            &tokens.server_name,
+            &tokens.url,
+        )?
+        .expect("tokens should load from encrypted storage");
+        assert_tokens_match_without_expiry(&loaded, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn load_oauth_tokens_with_secrets_backend_ignores_direct_entry() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
         let serialized = serde_json::to_string(&tokens)?;
         store.save(KEYRING_SERVICE, &key, &serialized)?;
@@ -1001,10 +1027,9 @@ mod tests {
             AuthKeyringBackendKind::Secrets,
             &tokens.server_name,
             &tokens.url,
-        )?
-        .expect("tokens should load from legacy direct keyring storage");
+        )?;
 
-        assert_tokens_match_without_expiry(&loaded, &expected);
+        assert!(loaded.is_none());
         Ok(())
     }
 
@@ -1033,7 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_oauth_tokens_with_secrets_backend_removes_secrets_direct_and_file() -> Result<()> {
+    fn delete_oauth_tokens_with_secrets_backend_removes_secrets_and_file() -> Result<()> {
         let env = TempCodexHome::new();
         let store = MockKeyringStore::default();
         let tokens = sample_tokens();
@@ -1061,7 +1086,7 @@ mod tests {
         let secret_name = super::compute_secret_name(&tokens.server_name, &tokens.url)?;
         assert!(removed);
         assert!(backend.get(&SecretScope::Global, &secret_name)?.is_none());
-        assert!(store.saved_value(&key).is_none());
+        assert_eq!(store.saved_value(&key), Some(serialized));
         assert!(!super::fallback_file_path()?.exists());
         Ok(())
     }
