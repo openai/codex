@@ -21,6 +21,13 @@ fn detects_extension_context_fragment() {
 }
 
 #[test]
+fn detects_legacy_goal_context_fragment() {
+    assert!(is_contextual_user_fragment(&ContentItem::InputText {
+        text: "<goal_context>\nlegacy hidden goal prompt\n</goal_context>".to_string(),
+    }));
+}
+
+#[test]
 fn detects_agents_instructions_fragment() {
     assert!(is_contextual_user_fragment(&ContentItem::InputText {
         text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"

@@ -481,6 +481,7 @@ async fn thread_idle_hook_requests_hidden_goal_continuation() -> anyhow::Result<
     assert!(text.starts_with("<extension_context>"));
     assert!(text.contains("<goal_context>"));
     assert!(text.contains("Continue working toward the active thread goal."));
+    assert!(text.contains("Completion audit:"));
     assert!(text.ends_with("</extension_context>"));
     Ok(())
 }
