@@ -22,7 +22,6 @@ use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
-use codex_tools::default_namespace_description;
 use codex_tools::dynamic_tool_to_responses_api_tool;
 use serde_json::Value;
 use std::time::Instant;
@@ -48,9 +47,7 @@ impl DynamicToolHandler {
                     .as_deref()
                     .map(str::trim)
                     .filter(|description| !description.is_empty());
-                let description = custom_description
-                    .map(str::to_string)
-                    .unwrap_or_else(|| default_namespace_description(namespace));
+                let description = custom_description.unwrap_or_default().to_string();
                 let search_source_info = custom_description.map_or_else(
                     || ToolSearchSourceInfo {
                         name: "Dynamic tools".to_string(),

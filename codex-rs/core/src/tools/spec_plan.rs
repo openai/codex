@@ -494,6 +494,11 @@ fn code_mode_namespace_descriptions(
             entry.description = namespace.description.clone();
         }
     }
+    for namespace in namespace_descriptions.values_mut() {
+        if namespace.description.trim().is_empty() {
+            namespace.description = default_namespace_description(&namespace.name);
+        }
+    }
     namespace_descriptions
 }
 

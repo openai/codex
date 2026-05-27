@@ -2,7 +2,6 @@ use codex_tools::LoadableToolSpec;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
-use codex_tools::default_namespace_description;
 
 #[derive(Clone)]
 pub(crate) struct ToolSearchEntry {
@@ -29,9 +28,6 @@ impl ToolSearchInfo {
                 LoadableToolSpec::Function(tool)
             }
             ToolSpec::Namespace(mut namespace) => {
-                if namespace.description.trim().is_empty() {
-                    namespace.description = default_namespace_description(&namespace.name);
-                }
                 for tool in &mut namespace.tools {
                     let ResponsesApiNamespaceTool::Function(tool) = tool;
                     tool.defer_loading = Some(true);

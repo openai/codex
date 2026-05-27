@@ -94,11 +94,24 @@ pub fn coalesce_loadable_tool_specs(
                         LoadableToolSpec::Function(_) | LoadableToolSpec::Namespace(_) => None,
                     })
                 {
+                    if existing_namespace.description.trim().is_empty()
+                        && !namespace.description.trim().is_empty()
+                    {
+                        existing_namespace.description = namespace.description;
+                    }
                     existing_namespace.tools.append(&mut namespace.tools);
                 } else {
                     coalesced_specs.push(LoadableToolSpec::Namespace(namespace));
                 }
             }
+        }
+    }
+    for spec in &mut coalesced_specs {
+        let LoadableToolSpec::Namespace(namespace) = spec else {
+            continue;
+        };
+        if namespace.description.trim().is_empty() {
+            namespace.description = default_namespace_description(&namespace.name);
         }
     }
     coalesced_specs

@@ -149,21 +149,35 @@ mod tests {
 
     #[test]
     fn mixed_search_results_coalesce_mcp_namespaces() {
-        let dynamic_tools = [DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            namespace_description: None,
-            name: "automation_update".to_string(),
-            description: "Create, update, view, or delete recurring automations.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "mode": { "type": "string" },
-                },
-                "required": ["mode"],
-                "additionalProperties": false,
-            }),
-            defer_loading: true,
-        }];
+        let dynamic_tools = [
+            DynamicToolSpec {
+                namespace: Some("codex_app".to_string()),
+                namespace_description: None,
+                name: "automation_list".to_string(),
+                description: "List recurring automations.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }),
+                defer_loading: true,
+            },
+            DynamicToolSpec {
+                namespace: Some("codex_app".to_string()),
+                namespace_description: Some("Create and update Codex automations.".to_string()),
+                name: "automation_update".to_string(),
+                description: "Create, update, view, or delete recurring automations.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "mode": { "type": "string" },
+                    },
+                    "required": ["mode"],
+                    "additionalProperties": false,
+                }),
+                defer_loading: true,
+            },
+        ];
         let mcp_tools = [
             tool_info("calendar", "create_event", "Create events"),
             tool_info("calendar", "list_events", "List events"),
@@ -187,6 +201,7 @@ mod tests {
         let results = [
             &handler.entries[0],
             &handler.entries[2],
+            &handler.entries[3],
             &handler.entries[1],
         ];
 
@@ -229,23 +244,37 @@ mod tests {
                 }),
                 LoadableToolSpec::Namespace(ResponsesApiNamespace {
                     name: "codex_app".to_string(),
-                    description: "Tools in the codex_app namespace.".to_string(),
-                    tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                        name: "automation_update".to_string(),
-                        description: "Create, update, view, or delete recurring automations."
-                            .to_string(),
-                        strict: false,
-                        defer_loading: Some(true),
-                        parameters: codex_tools::JsonSchema::object(
-                            std::collections::BTreeMap::from([(
-                                "mode".to_string(),
-                                codex_tools::JsonSchema::string(/*description*/ None),
-                            )]),
-                            Some(vec!["mode".to_string()]),
-                            Some(false.into()),
-                        ),
-                        output_schema: None,
-                    })],
+                    description: "Create and update Codex automations.".to_string(),
+                    tools: vec![
+                        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                            name: "automation_list".to_string(),
+                            description: "List recurring automations.".to_string(),
+                            strict: false,
+                            defer_loading: Some(true),
+                            parameters: codex_tools::JsonSchema::object(
+                                Default::default(),
+                                /*required*/ None,
+                                Some(false.into()),
+                            ),
+                            output_schema: None,
+                        }),
+                        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                            name: "automation_update".to_string(),
+                            description: "Create, update, view, or delete recurring automations."
+                                .to_string(),
+                            strict: false,
+                            defer_loading: Some(true),
+                            parameters: codex_tools::JsonSchema::object(
+                                std::collections::BTreeMap::from([(
+                                    "mode".to_string(),
+                                    codex_tools::JsonSchema::string(/*description*/ None),
+                                )]),
+                                Some(vec!["mode".to_string()]),
+                                Some(false.into()),
+                            ),
+                            output_schema: None,
+                        }),
+                    ],
                 }),
             ],
         );

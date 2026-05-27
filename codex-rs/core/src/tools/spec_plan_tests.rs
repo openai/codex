@@ -703,6 +703,10 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
         plain.namespace_function_names("codex_app"),
         &["lookup".to_string()]
     );
+    let ToolSpec::Namespace(namespace) = plain.visible_spec("codex_app") else {
+        panic!("expected namespaced dynamic tool");
+    };
+    assert_eq!(namespace.description, "Tools in the codex_app namespace.");
     plain.assert_visible_lacks(&[
         codex_code_mode::PUBLIC_TOOL_NAME,
         codex_code_mode::WAIT_TOOL_NAME,
@@ -729,6 +733,40 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
     assert_eq!(
         code_mode_only.namespace_function_names("codex_app"),
         Vec::<String>::new().as_slice()
+    );
+    let ToolSpec::Freeform(exec) = code_mode_only.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME)
+    else {
+        panic!("expected code mode executor");
+    };
+    assert!(
+        exec.description
+            .contains("## codex_app\nTools in the codex_app namespace.")
+    );
+}
+
+#[tokio::test]
+async fn dynamic_namespaces_prefer_a_later_supplied_description() {
+    let mut described_tool =
+        dynamic_tool(Some("codex_app"), "update", /*defer_loading*/ false);
+    described_tool.namespace_description = Some("Create and update Codex automations.".to_string());
+    let plan = probe_with(
+        |_| {},
+        ToolPlanInputs {
+            dynamic_tools: vec![
+                dynamic_tool(Some("codex_app"), "list", /*defer_loading*/ false),
+                described_tool,
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    let ToolSpec::Namespace(namespace) = plan.visible_spec("codex_app") else {
+        panic!("expected namespaced dynamic tools");
+    };
+    assert_eq!(
+        namespace.description,
+        "Create and update Codex automations."
     );
 }
 
