@@ -393,7 +393,19 @@ fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<Stri
         .map(|header| header.value.clone())
 }
 
-/// Extracts the `scope` auth-param without inspecting text inside other parameter values.
+/// Extracts the `scope` auth-param from a Bearer `WWW-Authenticate` challenge.
+///
+/// RFC 9110 section 11.2 defines an `auth-param` value as either a `token` or
+/// a `quoted-string`, and RFC 6750 section 3 represents Bearer `scope` as one
+/// of these values. Quoted strings use HTTP syntax rather than JSON: RFC 9110
+/// section 5.6.4 requires recipients to replace each `quoted-pair` with its
+/// escaped octet.
+///
+/// After quoted-string processing, RFC 6750 limits each scope token to `%x21`,
+/// `%x23-5B`, or `%x5D-7E`, with `%x20` separating multiple tokens. Thus a
+/// returned scope cannot contain `"` or `\`, even though those characters can
+/// occur in the HTTP encoding.
+///
 /// RMCP has an equivalent helper, but it is private to that crate.
 fn extract_scope_from_www_authenticate(header: &str) -> Option<String> {
     let scope_from_segment = |segment: &str| {
@@ -407,14 +419,35 @@ fn extract_scope_from_www_authenticate(header: &str) -> Option<String> {
         }
 
         let value = value.trim();
-        if let Some(quoted_value) = value.strip_prefix('"') {
-            return quoted_value.strip_suffix('"').map(str::to_string);
-        }
-        value
-            .split_ascii_whitespace()
-            .next()
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
+        let scope = if let Some(quoted_value) = value.strip_prefix('"') {
+            let quoted_value = quoted_value.strip_suffix('"')?;
+            let mut scope = String::with_capacity(quoted_value.len());
+            let mut characters = quoted_value.chars();
+            while let Some(character) = characters.next() {
+                if character == '\\' {
+                    scope.push(characters.next()?);
+                } else {
+                    scope.push(character);
+                }
+            }
+            scope
+        } else {
+            value
+                .split_ascii_whitespace()
+                .next()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)?
+        };
+
+        scope
+            .split(' ')
+            .all(|token| {
+                !token.is_empty()
+                    && token
+                        .bytes()
+                        .all(|byte| matches!(byte, b'!' | b'#'..=b'[' | b']'..=b'~'))
+            })
+            .then_some(scope)
     };
     let mut segment_start = 0;
     let mut in_quotes = false;

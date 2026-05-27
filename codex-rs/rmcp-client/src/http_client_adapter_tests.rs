@@ -17,6 +17,10 @@ fn extracts_scope_authentication_parameters() {
             r#"Bearer error="insufficient_scope", ScOpE = "files:read""#,
             "files:read",
         ),
+        (
+            r#"Bearer error="insufficient_scope", scope="files:read\ files:write""#,
+            "files:read files:write",
+        ),
     ];
 
     for (header, expected_scope) in cases {
@@ -36,6 +40,9 @@ fn ignores_scope_text_outside_a_scope_parameter() {
         r#"Bearer "scope=admin""#,
         r#"Bearer error="insufficient_scope", scope="#,
         r#"Bearer error_description="unterminated scope=admin"#,
+        r#"Bearer error="insufficient_scope", scope="read\"write""#,
+        r#"Bearer error="insufficient_scope", scope="read\\write""#,
+        r#"Bearer error="insufficient_scope", scope="read  write""#,
     ];
 
     for header in cases {
