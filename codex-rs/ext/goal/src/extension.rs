@@ -7,9 +7,8 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::IdleTurnContributor;
-use codex_extension_api::IdleTurnFuture;
-use codex_extension_api::IdleTurnInput;
+use codex_extension_api::ThreadIdleInput;
+use codex_extension_api::ThreadIdleRequest;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
@@ -126,6 +125,21 @@ where
                 "failed to restore goal runtime after thread resume for {}: {err}",
                 runtime.thread_id()
             );
+        }
+    }
+
+    async fn on_thread_idle(&self, input: ThreadIdleInput<'_>) -> Option<ThreadIdleRequest> {
+        let runtime = goal_runtime_handle(input.thread_store)?;
+        match runtime
+            .idle_continuation_items(input.collaboration_mode.mode)
+            .await
+        {
+            Ok(Some(items)) => Some(ThreadIdleRequest { items }),
+            Ok(None) => None,
+            Err(err) => {
+                tracing::warn!("failed to request idle goal continuation: {err}");
+                None
+            }
         }
     }
 }
@@ -417,28 +431,6 @@ where
     }
 }
 
-impl<C> IdleTurnContributor for GoalExtension<C>
-where
-    C: Send + Sync + 'static,
-{
-    fn next_idle_turn<'a>(&'a self, input: IdleTurnInput<'a>) -> IdleTurnFuture<'a> {
-        Box::pin(async move {
-            let runtime = goal_runtime_handle(input.thread_store)?;
-            match runtime
-                .idle_continuation_items(input.collaboration_mode.mode)
-                .await
-            {
-                Ok(Some(items)) => Some(items),
-                Ok(None) => None,
-                Err(err) => {
-                    tracing::warn!("failed to request idle goal continuation: {err}");
-                    None
-                }
-            }
-        })
-    }
-}
-
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
@@ -460,8 +452,7 @@ pub fn install_with_backend<C>(
     registry.turn_lifecycle_contributor(extension.clone());
     registry.token_usage_contributor(extension.clone());
     registry.tool_lifecycle_contributor(extension.clone());
-    registry.tool_contributor(extension.clone());
-    registry.idle_turn_contributor(extension);
+    registry.tool_contributor(extension);
 }
 
 fn goal_runtime_handle(thread_store: &ExtensionData) -> Option<Arc<GoalRuntimeHandle>> {

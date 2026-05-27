@@ -12,7 +12,7 @@ pub(super) fn schedule_turn(session: &Arc<Session>) {
     if session
         .services
         .extensions
-        .idle_turn_contributors()
+        .thread_lifecycle_contributors()
         .is_empty()
     {
         return;
@@ -77,14 +77,15 @@ async fn has_active_or_pending_work(session: &Session) -> bool {
 
 async fn next_idle_turn_input(session: &Session) -> Option<Vec<TurnInput>> {
     let collaboration_mode = session.collaboration_mode().await;
-    for contributor in session.services.extensions.idle_turn_contributors() {
+    for contributor in session.services.extensions.thread_lifecycle_contributors() {
         let Some(items) = contributor
-            .next_idle_turn(codex_extension_api::IdleTurnInput {
+            .on_thread_idle(codex_extension_api::ThreadIdleInput {
                 collaboration_mode: &collaboration_mode,
                 session_store: &session.services.session_extension_data,
                 thread_store: &session.services.thread_extension_data,
             })
             .await
+            .map(|request| request.items)
         else {
             continue;
         };

@@ -1,12 +1,9 @@
 //! Contributor traits and inputs that let extensions hook into host-owned workflows.
 
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -22,6 +19,8 @@ mod turn_lifecycle;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
+pub use thread_lifecycle::ThreadIdleInput;
+pub use thread_lifecycle::ThreadIdleRequest;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
@@ -57,6 +56,15 @@ pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
 
     /// Called after the host constructs a runtime from persisted history.
     async fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
+
+    /// Called after the host has drained immediately pending thread work.
+    ///
+    /// Implementations may use host capabilities captured by the extension to
+    /// submit follow-up input. The host remains responsible for deciding
+    /// whether that input starts a turn, is queued, or is ignored.
+    async fn on_thread_idle(&self, _input: ThreadIdleInput<'_>) -> Option<ThreadIdleRequest> {
+        None
+    }
 
     /// Called before the host drops the thread runtime and thread-scoped store.
     async fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
@@ -147,26 +155,6 @@ pub struct ToolContributionInput<'a> {
     pub session_source: &'a SessionSource,
     /// Whether the current thread has persistent state available.
     pub persistent_thread: bool,
-}
-
-/// Context supplied when the host is idle and extensions may request work.
-pub struct IdleTurnInput<'a> {
-    /// Effective collaboration mode for the next default turn.
-    pub collaboration_mode: &'a CollaborationMode,
-    /// Store scoped to the host session runtime.
-    pub session_store: &'a ExtensionData,
-    /// Store scoped to this thread runtime.
-    pub thread_store: &'a ExtensionData,
-}
-
-pub type IdleTurnFuture<'a> =
-    Pin<Box<dyn Future<Output = Option<Vec<ResponseInputItem>>> + Send + 'a>>;
-
-/// Extension contribution that can request host-owned work while a thread is idle.
-pub trait IdleTurnContributor: Send + Sync {
-    fn next_idle_turn<'a>(&'a self, _input: IdleTurnInput<'a>) -> IdleTurnFuture<'a> {
-        Box::pin(std::future::ready(None))
-    }
 }
 
 /// Contributor for host-owned tool lifecycle gates.

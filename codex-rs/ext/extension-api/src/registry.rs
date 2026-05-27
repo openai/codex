@@ -7,7 +7,6 @@ use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
 use crate::ExtensionEventSink;
-use crate::IdleTurnContributor;
 use crate::NoopExtensionEventSink;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
@@ -27,7 +26,6 @@ pub struct ExtensionRegistryBuilder<C: Sync> {
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
-    idle_turn_contributors: Vec<Arc<dyn IdleTurnContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
@@ -44,7 +42,6 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
             tool_contributors: Vec::new(),
             tool_lifecycle_contributors: Vec::new(),
             turn_item_contributors: Vec::new(),
-            idle_turn_contributors: Vec::new(),
         }
     }
 }
@@ -116,11 +113,6 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.turn_item_contributors.push(contributor);
     }
 
-    /// Registers one idle-turn contributor.
-    pub fn idle_turn_contributor(&mut self, contributor: Arc<dyn IdleTurnContributor>) {
-        self.idle_turn_contributors.push(contributor);
-    }
-
     /// Finishes construction and returns the immutable registry.
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
@@ -134,7 +126,6 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
             tool_contributors: self.tool_contributors,
             tool_lifecycle_contributors: self.tool_lifecycle_contributors,
             turn_item_contributors: self.turn_item_contributors,
-            idle_turn_contributors: self.idle_turn_contributors,
         }
     }
 }
@@ -150,7 +141,6 @@ pub struct ExtensionRegistry<C: Sync> {
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
-    idle_turn_contributors: Vec<Arc<dyn IdleTurnContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
 
@@ -218,11 +208,6 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered ordered turn-item contributors.
     pub fn turn_item_contributors(&self) -> &[Arc<dyn TurnItemContributor>] {
         &self.turn_item_contributors
-    }
-
-    /// Returns the registered idle-turn contributors.
-    pub fn idle_turn_contributors(&self) -> &[Arc<dyn IdleTurnContributor>] {
-        &self.idle_turn_contributors
     }
 }
 
