@@ -235,7 +235,7 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
 
     if let Some(network) = requirements.network.as_ref() {
         requirement_lines.push(requirement_line(
-            "experimental_network",
+            "permissions.network",
             format_network_constraints(&network.value),
             Some(&network.source),
         ));
@@ -786,7 +786,7 @@ mod tests {
             "enforce_residency: us (source: {requirements_source})"
         )));
         assert!(rendered.contains(&format!(
-            "experimental_network: enabled=true, domains={{example.com=allow}} (source: {requirements_source})"
+            "permissions.network: enabled=true, domains={{example.com=allow}} (source: {requirements_source})"
         )));
         assert!(
             rendered.contains(
@@ -854,7 +854,7 @@ mod tests {
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
         assert!(rendered.contains(&format!(
-            "experimental_network: unix_sockets={{/tmp/blocked.sock=deny, /tmp/codex.sock=allow}} (source: {requirements_source})"
+            "permissions.network: unix_sockets={{/tmp/blocked.sock=deny, /tmp/codex.sock=allow}} (source: {requirements_source})"
         )));
     }
 

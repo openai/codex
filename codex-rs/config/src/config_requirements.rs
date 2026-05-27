@@ -357,6 +357,11 @@ struct RawNetworkRequirementsToml {
     #[serde(default)]
     allow_unix_sockets: Option<Vec<String>>,
     allow_local_binding: Option<bool>,
+    description: Option<serde::de::IgnoredAny>,
+    extends: Option<serde::de::IgnoredAny>,
+    workspace_roots: Option<serde::de::IgnoredAny>,
+    filesystem: Option<serde::de::IgnoredAny>,
+    network: Option<serde::de::IgnoredAny>,
 }
 
 impl<'de> Deserialize<'de> for NetworkRequirementsToml {
@@ -379,17 +384,33 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             unix_sockets,
             allow_unix_sockets,
             allow_local_binding,
+            description,
+            extends,
+            workspace_roots,
+            filesystem,
+            network,
         } = raw;
+
+        if description.is_some()
+            || extends.is_some()
+            || workspace_roots.is_some()
+            || filesystem.is_some()
+            || network.is_some()
+        {
+            return Err(D::Error::custom(
+                "`permissions.network` is reserved for requirements-level network constraints and cannot define a profile",
+            ));
+        }
 
         if domains.is_some() && (allowed_domains.is_some() || denied_domains.is_some()) {
             return Err(D::Error::custom(
-                "`experimental_network.domains` cannot be combined with legacy `allowed_domains` or `denied_domains`",
+                "`domains` cannot be combined with legacy `allowed_domains` or `denied_domains` in managed network requirements",
             ));
         }
 
         if unix_sockets.is_some() && allow_unix_sockets.is_some() {
             return Err(D::Error::custom(
-                "`experimental_network.unix_sockets` cannot be combined with legacy `allow_unix_sockets`",
+                "`unix_sockets` cannot be combined with legacy `allow_unix_sockets` in managed network requirements",
             ));
         }
 
@@ -546,8 +567,9 @@ impl<'de> Deserialize<'de> for FilesystemRequirementsToml {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionsRequirementsToml {
     pub filesystem: Option<FilesystemRequirementsToml>,
-    // For legacy reasons, `filesystem` stays reserved for requirements-level
-    // filesystem constraints and cannot name a profile.
+    pub network: Option<NetworkRequirementsToml>,
+    // `filesystem` and `network` are reserved for requirements-level
+    // constraints and cannot name profiles.
     #[serde(default, flatten)]
     pub profiles: BTreeMap<String, PermissionProfileToml>,
 }
@@ -838,6 +860,7 @@ pub struct ConfigRequirementsToml {
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
+    /// Temporary compatibility alias for `permissions.network`.
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
     pub permissions: Option<PermissionsRequirementsToml>,
@@ -1417,10 +1440,29 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
-        let network = network.map(|sourced_network| {
-            let Sourced { value, source } = sourced_network;
-            Sourced::new(NetworkConstraints::from(value), source)
+        let permissions_network = permissions.as_ref().and_then(|sourced_permissions| {
+            sourced_permissions
+                .value
+                .network
+                .clone()
+                .map(|network| Sourced::new(network, sourced_permissions.source.clone()))
         });
+        let network = match (permissions_network, network) {
+            (Some(stable_network), Some(_legacy_network)) => {
+                return Err(ConstraintError::InvalidValue {
+                    field_name: "permissions.network",
+                    candidate: "configured together with legacy experimental_network".to_string(),
+                    allowed: "specify managed network requirements through exactly one surface"
+                        .to_string(),
+                    requirement_source: stable_network.source,
+                });
+            }
+            (Some(network), None) | (None, Some(network)) => {
+                let Sourced { value, source } = network;
+                Some(Sourced::new(NetworkConstraints::from(value), source))
+            }
+            (None, None) => None,
+        };
         let filesystem = permissions.map(|sourced_permissions| {
             let Sourced { value, source } = sourced_permissions;
             Sourced::new(FilesystemConstraints::from(value), source)
@@ -1670,6 +1712,24 @@ mod tests {
         assert!(
             err.to_string().contains(
                 "`permissions.filesystem` is reserved for requirements-level filesystem constraints and cannot define a profile"
+            ),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn network_requirements_table_cannot_define_a_permission_profile() {
+        let err = from_str::<ConfigRequirementsToml>(
+            r#"
+                [permissions.network]
+                extends = ":workspace"
+            "#,
+        )
+        .expect_err("network requirements cannot define a permission profile");
+
+        assert!(
+            err.to_string().contains(
+                "`permissions.network` is reserved for requirements-level network constraints and cannot define a profile"
             ),
             "unexpected error: {err:#}"
         );
@@ -3098,21 +3158,21 @@ command = "python3 /enterprise/hooks/pre.py"
     }
 
     #[test]
-    fn network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
+    fn permissions_network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
         let toml_str = r#"
-            [experimental_network]
+            [permissions.network]
             enabled = true
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
             managed_allowed_domains_only = true
             allow_local_binding = false
 
-            [experimental_network.domains]
+            [permissions.network.domains]
             "api.example.com" = "allow"
             "*.openai.com" = "allow"
             "blocked.example.com" = "deny"
 
-            [experimental_network.unix_sockets]
+            [permissions.network.unix_sockets]
             "/tmp/example.sock" = "allow"
             "/tmp/blocked.sock" = "deny"
         "#;
@@ -3257,8 +3317,7 @@ command = "python3 /enterprise/hooks/pre.py"
         .expect_err("mixed network domain shapes should fail");
 
         assert!(
-            err.to_string()
-                .contains("`experimental_network.domains` cannot be combined"),
+            err.to_string().contains("`domains` cannot be combined"),
             "unexpected error: {err:#}"
         );
 
@@ -3275,9 +3334,39 @@ command = "python3 /enterprise/hooks/pre.py"
 
         assert!(
             err.to_string()
-                .contains("`experimental_network.unix_sockets` cannot be combined"),
+                .contains("`unix_sockets` cannot be combined"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[test]
+    fn permissions_network_and_experimental_network_cannot_be_combined() -> Result<()> {
+        let mut requirements_with_sources = ConfigRequirementsWithSources::default();
+        requirements_with_sources.merge_unset_fields(
+            RequirementSource::CloudRequirements,
+            from_str(
+                r#"
+                    [permissions.network]
+                    enabled = true
+
+                    [experimental_network]
+                    enabled = true
+                "#,
+            )?,
+        );
+
+        let err = ConfigRequirements::try_from(requirements_with_sources)
+            .expect_err("duplicate managed network surfaces should be rejected");
+
+        assert!(matches!(
+            err,
+            ConstraintError::InvalidValue {
+                field_name: "permissions.network",
+                requirement_source: RequirementSource::CloudRequirements,
+                ..
+            }
+        ));
+        Ok(())
     }
 
     #[test]

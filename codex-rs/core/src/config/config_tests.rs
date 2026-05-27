@@ -1446,6 +1446,40 @@ enabled = true
 }
 
 #[tokio::test]
+async fn permissions_network_requirements_enable_proxy_without_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                permissions: Some(codex_config::PermissionsRequirementsToml {
+                    network: Some(codex_config::NetworkRequirementsToml {
+                        enabled: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::NetworkProxy));
+    assert!(config.managed_network_requirements_enabled());
+    assert!(
+        config
+            .permissions
+            .network
+            .as_ref()
+            .expect("permissions.network should configure the managed proxy")
+            .enabled()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;

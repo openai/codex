@@ -3716,15 +3716,20 @@ impl Config {
         };
     }
 
+    pub(crate) fn managed_network_requirements_configured(&self) -> bool {
+        let requirements = self.config_layer_stack.requirements_toml();
+        requirements.network.is_some()
+            || requirements
+                .permissions
+                .as_ref()
+                .is_some_and(|permissions| permissions.network.is_some())
+    }
+
     pub fn managed_network_requirements_enabled(&self) -> bool {
         !matches!(
             self.permissions.permission_profile(),
             PermissionProfile::Disabled
-        ) && self
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some()
+        ) && self.managed_network_requirements_configured()
     }
 
     pub(crate) fn network_proxy_spec_for_active_permission_profile(

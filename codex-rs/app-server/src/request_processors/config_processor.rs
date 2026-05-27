@@ -314,6 +314,11 @@ impl ConfigRequestProcessor {
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
+    let network = requirements
+        .permissions
+        .as_ref()
+        .and_then(|permissions| permissions.network.clone())
+        .or_else(|| requirements.network.clone());
     ConfigRequirements {
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
@@ -374,7 +379,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
-        network: requirements.network.map(map_network_requirements_to_api),
+        network: network.map(map_network_requirements_to_api),
     }
 }
 
@@ -568,6 +573,8 @@ mod tests {
     use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::NetworkRequirementsToml;
+    use codex_config::PermissionsRequirementsToml;
     use codex_config::WindowsRequirementsToml;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
@@ -654,5 +661,21 @@ mod tests {
                 WindowsSandboxSetupMode::Unelevated,
             ])
         );
+    }
+
+    #[test]
+    fn requirements_api_includes_permissions_network() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            permissions: Some(PermissionsRequirementsToml {
+                network: Some(NetworkRequirementsToml {
+                    enabled: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.network.and_then(|network| network.enabled), Some(true));
     }
 }

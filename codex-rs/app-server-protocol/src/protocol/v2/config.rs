@@ -385,7 +385,6 @@ pub struct ConfigRequirements {
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
     pub enforce_residency: Option<ResidencyRequirement>,
-    #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
 }
 
@@ -479,7 +478,7 @@ pub struct NetworkRequirements {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
-    /// Canonical network permission map for `experimental_network`.
+    /// Canonical network permission map for `permissions.network`.
     pub domains: Option<BTreeMap<String, NetworkDomainPermission>>,
     /// When true, only managed allowlist entries are respected while managed
     /// network enforcement is active.
@@ -488,7 +487,7 @@ pub struct NetworkRequirements {
     pub allowed_domains: Option<Vec<String>>,
     /// Legacy compatibility view derived from `domains`.
     pub denied_domains: Option<Vec<String>>,
-    /// Canonical unix socket permission map for `experimental_network`.
+    /// Canonical unix socket permission map for `permissions.network`.
     pub unix_sockets: Option<BTreeMap<String, NetworkUnixSocketPermission>>,
     /// Legacy compatibility view derived from `unix_sockets`.
     pub allow_unix_sockets: Option<Vec<String>>,
