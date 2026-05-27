@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptSlot;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
@@ -41,6 +42,7 @@ fn tools_are_not_contributed_when_disabled() {
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: false,
+        dedicated_tools: true,
         codex_home: test_path_buf("/tmp/codex-home").abs(),
     });
 
@@ -52,17 +54,65 @@ fn tools_are_not_contributed_when_disabled() {
 }
 
 #[test]
-fn tools_are_contributed_when_enabled() {
+fn tools_are_not_contributed_when_dedicated_tools_disabled() {
     let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
+        dedicated_tools: false,
+        codex_home: test_path_buf("/tmp/codex-home").abs(),
+    });
+
+    assert!(
+        extension
+            .tools(&ExtensionData::new("session"), &thread_store)
+            .is_empty()
+    );
+}
+
+#[test]
+fn tools_are_contributed_when_enabled_with_dedicated_tools() {
+    let extension = MemoriesExtension::default();
+    let thread_store = ExtensionData::new("thread");
+    thread_store.insert(MemoriesExtensionConfig {
+        enabled: true,
+        dedicated_tools: true,
         codex_home: test_path_buf("/tmp/codex-home").abs(),
     });
 
     let tool_names = extension
         .tools(&ExtensionData::new("session"), &thread_store)
         .into_iter()
+        .map(|tool| tool.tool_name())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tool_names,
+        vec![
+            memory_tool_name(crate::ADD_AD_HOC_NOTE_TOOL_NAME),
+            memory_tool_name(crate::LIST_TOOL_NAME),
+            memory_tool_name(crate::READ_TOOL_NAME),
+            memory_tool_name(crate::SEARCH_TOOL_NAME),
+        ]
+    );
+}
+
+#[test]
+fn install_registers_dedicated_tool_contributor() {
+    let mut builder = ExtensionRegistryBuilder::<codex_core::config::Config>::new();
+    crate::install(&mut builder, /*metrics_client*/ None);
+    let registry = builder.build();
+    let thread_store = ExtensionData::new("thread");
+    thread_store.insert(MemoriesExtensionConfig {
+        enabled: true,
+        dedicated_tools: true,
+        codex_home: test_path_buf("/tmp/codex-home").abs(),
+    });
+
+    let tool_names = registry
+        .tool_contributors()
+        .iter()
+        .flat_map(|contributor| contributor.tools(&ExtensionData::new("session"), &thread_store))
         .map(|tool| tool.tool_name())
         .collect::<Vec<_>>();
 
@@ -115,6 +165,7 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
+        dedicated_tools: false,
         codex_home: tempdir.path().abs(),
     });
 
@@ -415,10 +466,13 @@ async fn search_tool_rejects_legacy_single_query() {
 
 fn memory_tool(memory_root: &Path, tool_name: &str) -> Arc<dyn ToolExecutor<ToolCall>> {
     let expected_tool_name = memory_tool_name(tool_name);
-    crate::tools::memory_tools(LocalMemoriesBackend::from_memory_root(memory_root))
-        .into_iter()
-        .find(|tool| tool.tool_name() == expected_tool_name)
-        .unwrap_or_else(|| panic!("{tool_name} tool should be registered"))
+    crate::tools::memory_tools(
+        LocalMemoriesBackend::from_memory_root(memory_root),
+        /*metrics_client*/ None,
+    )
+    .into_iter()
+    .find(|tool| tool.tool_name() == expected_tool_name)
+    .unwrap_or_else(|| panic!("{tool_name} tool should be registered"))
 }
 
 fn memory_tool_name(tool_name: &str) -> ToolName {

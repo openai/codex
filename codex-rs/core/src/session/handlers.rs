@@ -10,6 +10,7 @@ use tracing::debug_span;
 use tracing::info_span;
 
 use crate::session::SteerInputError;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
@@ -194,6 +195,7 @@ pub(super) async fn user_input_or_turn_inner(
         environments,
         final_output_json_schema,
         responsesapi_client_metadata,
+        additional_context,
         thread_settings,
     } = op
     else {
@@ -224,6 +226,7 @@ pub(super) async fn user_input_or_turn_inner(
     let accepted_items = match sess
         .steer_input(
             items.clone(),
+            additional_context.clone(),
             /*expected_turn_id*/ None,
             responsesapi_client_metadata.clone(),
         )
@@ -246,9 +249,20 @@ pub(super) async fn user_input_or_turn_inner(
             )
             .await;
             let accepted_items = items.clone();
+            let additional_context_input = {
+                let mut state = sess.state.lock().await;
+                state.additional_context.merge(additional_context)
+            };
+            let mut task_input = additional_context_input
+                .into_iter()
+                .map(TurnInput::ResponseInputItem)
+                .collect::<Vec<_>>();
+            if !items.is_empty() {
+                task_input.push(TurnInput::UserInput(items));
+            }
             sess.spawn_task(
                 Arc::clone(&current_context),
-                items,
+                task_input,
                 crate::tasks::RegularTask::new(),
             )
             .await;

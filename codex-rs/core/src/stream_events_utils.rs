@@ -233,7 +233,7 @@ async fn record_stage1_output_usage_for_memory_citation(
     }
 
     if let Some(db) = state_db_ctx {
-        let _ = db.record_stage1_output_usage(&thread_ids).await;
+        let _ = db.memories().record_stage1_output_usage(&thread_ids).await;
     }
     true
 }

@@ -43,6 +43,7 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -421,7 +422,14 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.3-codex", "resumed", "user");
+    assert_basic_thread_initialized_event(
+        event,
+        &thread.id,
+        &thread.session_id,
+        "gpt-5.3-codex",
+        "resumed",
+        "user",
+    );
     assert_eq!(event["event_params"]["thread_source"], "user");
     Ok(())
 }
@@ -1929,7 +1937,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 }
 
 #[tokio::test]
-async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -> Result<()> {
+async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
@@ -1972,6 +1980,33 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 
     let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
     assert_eq!(after_modified, rollout.before_modified);
+
+    let unsubscribe_id = mcp
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(unsubscribe_id)),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: "not-a-valid-thread-id".to_string(),
+            path: Some(normalized_existing_path(&rollout.rollout_file_path)?),
+            cwd: Some(codex_home.path().to_string_lossy().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { cwd, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(cwd, AbsolutePathBuf::from_absolute_path(codex_home.path())?);
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -2291,9 +2326,10 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
     )
     .await??;
 
-    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &thread_id);
+    let stale_thread_id = Uuid::new_v4().to_string();
+    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &stale_thread_id);
     std::fs::create_dir_all(stale_path.parent().expect("stale path parent"))?;
-    let thread_uuid = Uuid::parse_str(&thread_id)?;
+    let thread_uuid = Uuid::parse_str(&stale_thread_id)?;
     let mut stale_file = std::fs::File::create(&stale_path)?;
     let stale_meta = json!({
         "timestamp": "2025-01-01T00:00:00Z",

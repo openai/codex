@@ -500,6 +500,9 @@
             "network_proxy": {
               "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
             },
+            "non_prefixed_mcp_tool_names": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -570,6 +573,9 @@
               "type": "boolean"
             },
             "sqlite": {
+              "type": "boolean"
+            },
+            "standalone_web_search": {
               "type": "boolean"
             },
             "steer": {
@@ -1279,6 +1285,10 @@
         "consolidation_model": {
           "description": "Model used for memory consolidation.",
           "type": "string"
+        },
+        "dedicated_tools": {
+          "description": "When `true`, expose dedicated memory tools through the extension tool surface.",
+          "type": "boolean"
         },
         "disable_on_external_context": {
           "description": "When `true`, external context sources mark the thread `memory_mode` as `\"polluted\"`.",
@@ -4423,6 +4433,9 @@
         "network_proxy": {
           "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
         },
+        "non_prefixed_mcp_tool_names": {
+          "type": "boolean"
+        },
         "personality": {
           "type": "boolean"
         },
@@ -4493,6 +4506,9 @@
           "type": "boolean"
         },
         "sqlite": {
+          "type": "boolean"
+        },
+        "standalone_web_search": {
           "type": "boolean"
         },
         "steer": {

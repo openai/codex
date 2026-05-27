@@ -1,6 +1,6 @@
 ---
 source: tui/src/bottom_pane/feedback_view.rs
-assertion_line: 704
+assertion_line: 716
 expression: rendered
 ---
 Upload logs?

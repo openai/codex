@@ -714,6 +714,7 @@ async fn run_review_on_session(
             environments: None,
             final_output_json_schema: Some(params.schema.clone()),
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 #[allow(deprecated)]
                 cwd: Some(params.parent_turn.cwd.to_path_buf()),
@@ -904,6 +905,7 @@ pub(crate) fn build_guardian_review_session_config(
             .map(guardian_policy_prompt_with_config)
             .unwrap_or_else(guardian_policy_prompt),
     );
+    guardian_config.notify = None;
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config

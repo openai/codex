@@ -18,6 +18,14 @@ pub struct ThreadResumeInput<'a> {
     pub thread_store: &'a ExtensionData,
 }
 
+/// Input supplied when the host has no immediately pending thread work.
+pub struct ThreadIdleInput<'a> {
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+}
+
 /// Input supplied when the host stops a thread runtime.
 pub struct ThreadStopInput<'a> {
     /// Store scoped to the host session runtime.

@@ -5768,6 +5768,28 @@
         ],
         "type": "string"
       },
+      "AdditionalContextEntry": {
+        "properties": {
+          "kind": {
+            "$ref": "#/definitions/v2/AdditionalContextKind"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AdditionalContextKind": {
+        "enum": [
+          "untrusted",
+          "application"
+        ],
+        "type": "string"
+      },
       "AdditionalFileSystemPermissions": {
         "properties": {
           "entries": {
@@ -10138,6 +10160,8 @@
       },
       "ImageDetail": {
         "enum": [
+          "auto",
+          "low",
           "high",
           "original"
         ],
@@ -10341,6 +10365,12 @@
             "minimum": 0.0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": [
+              "string",
               "null"
             ]
           }

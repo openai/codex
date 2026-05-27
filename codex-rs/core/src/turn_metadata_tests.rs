@@ -93,6 +93,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
         Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
@@ -128,6 +129,7 @@ fn turn_metadata_state_uses_explicit_subagent_thread_source() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
         Some(ThreadSource::Subagent),
         "turn-a".to_string(),
         cwd,
@@ -144,6 +146,35 @@ fn turn_metadata_state_uses_explicit_subagent_thread_source() {
 }
 
 #[test]
+fn turn_metadata_state_includes_root_fork_lineage() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().abs();
+    let permission_profile = PermissionProfile::read_only();
+    let source_thread_id =
+        ThreadId::from_string("11111111-1111-4111-8111-111111111111").expect("thread id");
+
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        Some(source_thread_id),
+        Some(ThreadSource::User),
+        "turn-a".to_string(),
+        cwd,
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+
+    let header = state.current_header_value().expect("header");
+    let json: Value = serde_json::from_str(&header).expect("json");
+
+    assert_eq!(
+        json["forked_from_thread_id"].as_str(),
+        Some("11111111-1111-4111-8111-111111111111")
+    );
+}
+
+#[test]
 fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
@@ -152,6 +183,7 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
         Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
@@ -179,6 +211,7 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
@@ -224,6 +257,7 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
         /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
@@ -266,7 +300,7 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
 }
 
 #[test]
-fn turn_metadata_state_ignores_client_turn_started_at_unix_ms_before_start() {
+fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
     let permission_profile = PermissionProfile::read_only();
@@ -274,6 +308,7 @@ fn turn_metadata_state_ignores_client_turn_started_at_unix_ms_before_start() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
         Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
@@ -281,15 +316,22 @@ fn turn_metadata_state_ignores_client_turn_started_at_unix_ms_before_start() {
         WindowsSandboxLevel::Disabled,
         /*enforce_managed_network*/ false,
     );
-    state.set_responsesapi_client_metadata(HashMap::from([(
-        "turn_started_at_unix_ms".to_string(),
-        "client-supplied".to_string(),
-    )]));
+    state.set_responsesapi_client_metadata(HashMap::from([
+        (
+            "turn_started_at_unix_ms".to_string(),
+            "client-supplied".to_string(),
+        ),
+        (
+            "forked_from_thread_id".to_string(),
+            "client-supplied".to_string(),
+        ),
+    ]));
 
     let header = state.current_header_value().expect("header");
     let json: Value = serde_json::from_str(&header).expect("json");
 
     assert!(json.get("turn_started_at_unix_ms").is_none());
+    assert!(json.get("forked_from_thread_id").is_none());
 }
 
 #[test]
@@ -297,10 +339,13 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
     let permission_profile = PermissionProfile::read_only();
+    let source_thread_id =
+        ThreadId::from_string("44444444-4444-4444-8444-444444444444").expect("thread id");
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
+        Some(source_thread_id),
         Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
@@ -318,6 +363,10 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         ),
         ("session_id".to_string(), "client-supplied".to_string()),
         ("thread_id".to_string(), "client-supplied".to_string()),
+        (
+            "forked_from_thread_id".to_string(),
+            "client-supplied".to_string(),
+        ),
         ("thread_source".to_string(), "client-supplied".to_string()),
         (
             "turn_started_at_unix_ms".to_string(),
@@ -337,6 +386,10 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["reasoning_effort"].as_str(), Some("client-supplied"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
     assert_eq!(json["thread_id"].as_str(), Some("thread-a"));
+    assert_eq!(
+        json["forked_from_thread_id"].as_str(),
+        Some("44444444-4444-4444-8444-444444444444")
+    );
     assert_eq!(json["thread_source"].as_str(), Some("user"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
     assert_eq!(

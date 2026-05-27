@@ -482,6 +482,7 @@ impl Session {
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
             thread_id.to_string(),
+            session_configuration.forked_from_thread_id,
             session_configuration.thread_source,
             sub_id.clone(),
             cwd.clone(),

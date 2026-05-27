@@ -781,6 +781,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         thread_id: primary_thread_id_for_span.clone(),
                         input: items.into_iter().map(Into::into).collect(),
                         responsesapi_client_metadata: None,
+                        additional_context: None,
                         environments: None,
                         cwd: Some(default_cwd),
                         runtime_workspace_roots: None,

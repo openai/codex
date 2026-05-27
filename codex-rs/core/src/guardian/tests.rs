@@ -2216,6 +2216,25 @@ async fn guardian_review_session_config_clears_parent_developer_instructions() {
 }
 
 #[tokio::test]
+async fn guardian_review_session_config_clears_legacy_notify() {
+    let mut parent_config = test_config().await;
+    parent_config.notify = Some(vec![
+        "/path/to/notify".to_string(),
+        "turn-ended".to_string(),
+    ]);
+
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
+
+    assert_eq!(guardian_config.notify, None);
+}
+
+#[tokio::test]
 async fn guardian_review_session_config_uses_live_network_proxy_state() {
     let mut parent_config = test_config().await;
     let mut parent_network = NetworkProxyConfig::default();

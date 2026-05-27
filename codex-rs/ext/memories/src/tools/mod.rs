@@ -7,6 +7,7 @@ use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
+use codex_otel::MetricsClient;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::default_namespace_description;
@@ -24,21 +25,30 @@ mod list;
 mod read;
 mod search;
 
-pub(crate) fn memory_tools<B>(backend: B) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>
+pub(crate) fn memory_tools<B>(
+    backend: B,
+    metrics_client: Option<MetricsClient>,
+) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>
 where
     B: MemoriesBackend,
 {
     vec![
         Arc::new(ad_hoc_note::AddAdHocNoteTool {
             backend: backend.clone(),
+            metrics_client: metrics_client.clone(),
         }),
         Arc::new(list::ListTool {
             backend: backend.clone(),
+            metrics_client: metrics_client.clone(),
         }),
         Arc::new(read::ReadTool {
             backend: backend.clone(),
+            metrics_client: metrics_client.clone(),
         }),
-        Arc::new(search::SearchTool { backend }),
+        Arc::new(search::SearchTool {
+            backend,
+            metrics_client,
+        }),
     ]
 }
 

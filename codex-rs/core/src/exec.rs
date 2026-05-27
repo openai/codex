@@ -423,7 +423,6 @@ pub(crate) async fn execute_exec_request(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
-    let sandbox_policy = exec_request.compatibility_sandbox_policy();
     let ExecRequest {
         command,
         cwd,
@@ -464,7 +463,6 @@ pub(crate) async fn execute_exec_request(
         stdout_stream,
         after_spawn,
         sandbox,
-        &sandbox_policy,
         &permission_profile,
         &windows_sandbox_policy_cwd,
         windows_sandbox_filesystem_overrides.as_ref(),
@@ -481,7 +479,6 @@ async fn get_raw_output_result(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
     #[cfg_attr(not(windows), allow(unused_variables))] sandbox: SandboxType,
-    #[cfg_attr(not(windows), allow(unused_variables))] sandbox_policy: &SandboxPolicy,
     #[cfg_attr(not(windows), allow(unused_variables))] permission_profile: &PermissionProfile,
     #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_policy_cwd: &AbsolutePathBuf,
     #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_filesystem_overrides: Option<
@@ -492,7 +489,6 @@ async fn get_raw_output_result(
     if sandbox == SandboxType::WindowsRestrictedToken {
         return exec_windows_sandbox(
             params,
-            sandbox_policy,
             permission_profile,
             windows_sandbox_policy_cwd,
             windows_sandbox_filesystem_overrides,
@@ -572,7 +568,6 @@ fn record_windows_sandbox_spawn_failure(
 #[cfg(target_os = "windows")]
 async fn exec_windows_sandbox(
     params: ExecParams,
-    sandbox_policy: &SandboxPolicy,
     permission_profile: &PermissionProfile,
     windows_sandbox_policy_cwd: &AbsolutePathBuf,
     windows_sandbox_filesystem_overrides: Option<&WindowsSandboxFilesystemOverrides>,
@@ -604,11 +599,6 @@ async fn exec_windows_sandbox(
         None
     };
 
-    let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
-        CodexErr::Io(io::Error::other(format!(
-            "failed to serialize Windows sandbox policy: {err}"
-        )))
-    })?;
     let sandbox_cwd = windows_sandbox_policy_cwd.clone();
     let permission_profile = permission_profile.clone();
     let codex_home = find_codex_home().map_err(|err| {
@@ -655,7 +645,7 @@ async fn exec_windows_sandbox(
             )
         } else {
             run_windows_sandbox_capture_with_filesystem_overrides(
-                policy_str.as_str(),
+                &permission_profile,
                 &sandbox_cwd,
                 codex_home.as_ref(),
                 command,

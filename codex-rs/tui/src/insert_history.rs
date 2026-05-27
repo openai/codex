@@ -40,6 +40,17 @@ pub enum HistoryLineWrapPolicy {
     Terminal,
 }
 
+/// Selects the terminal escape strategy used when writing history above the viewport.
+///
+/// Raw lines intentionally remain unbroken so terminal selection copies their source faithfully.
+/// Zellij does not constrain soft-wrapped continuation rows to Codex's scroll region, so its raw
+/// path appends history through the terminal and reserves blank rows for the next viewport draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InsertHistoryMode {
+    Standard,
+    ZellijRaw,
+}
+
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub fn insert_history_lines<B>(
@@ -60,12 +71,28 @@ pub fn insert_history_lines_with_wrap_policy<B>(
 where
     B: Backend + Write,
 {
+    insert_history_lines_with_mode_and_wrap_policy(
+        terminal,
+        lines,
+        InsertHistoryMode::Standard,
+        wrap_policy,
+    )
+}
+
+pub(crate) fn insert_history_lines_with_mode_and_wrap_policy<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+    mode: InsertHistoryMode,
+    wrap_policy: HistoryLineWrapPolicy,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.viewport_area;
     let mut should_update_area = false;
     let last_cursor_pos = terminal.last_known_cursor_pos;
-    let writer = terminal.backend_mut();
 
     // Pre-wrap lines for terminal scrollback. Three paths:
     //
@@ -102,60 +129,92 @@ where
         wrapped.extend(line_wrapped);
     }
     let wrapped_lines = wrapped_rows as u16;
-    let cursor_top = if area.bottom() < screen_size.height {
-        // If the viewport is not at the bottom of the screen, scroll it down to make room.
-        // Don't scroll it past the bottom of the screen.
-        let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
+    match mode {
+        InsertHistoryMode::ZellijRaw => {
+            // The existing viewport is immediately replaced in the same draw pass. Clear it
+            // before terminal scrolling can move composer contents into scrollback.
+            terminal.clear_after_position(area.as_position())?;
+            let writer = terminal.backend_mut();
+            queue!(writer, MoveTo(/*x*/ 0, area.top()))?;
+            for (index, line) in wrapped.iter().enumerate() {
+                if index > 0 {
+                    queue!(writer, Print("\r\n"))?;
+                }
+                write_history_line(writer, line, wrap_width)?;
+            }
 
-        let top_1based = area.top() + 1;
-        queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
-        queue!(writer, MoveTo(/*x*/ 0, area.top()))?;
-        for _ in 0..scroll_amount {
-            queue!(writer, Print("\x1bM"))?;
+            // Writing raw source text through the terminal preserves its soft-wrap metadata.
+            // Advance through empty rows for the viewport so history ends immediately above the
+            // composer even when a replay batch is taller than the visible history region.
+            for _ in 0..area.height {
+                queue!(writer, Print("\r\n"), Clear(ClearType::UntilNewLine))?;
+            }
+            queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+
+            let viewport_top = area
+                .top()
+                .saturating_add(wrapped_lines)
+                .min(screen_size.height.saturating_sub(area.height));
+            if area.y != viewport_top {
+                area.y = viewport_top;
+                should_update_area = true;
+            }
         }
-        queue!(writer, ResetScrollRegion)?;
+        InsertHistoryMode::Standard => {
+            let writer = terminal.backend_mut();
+            let cursor_top = if area.bottom() < screen_size.height {
+                // If the viewport is not at the bottom of the screen, scroll it down to make room.
+                // Don't scroll it past the bottom of the screen.
+                let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
 
-        let cursor_top = area.top().saturating_sub(1);
-        area.y += scroll_amount;
-        should_update_area = true;
-        cursor_top
-    } else {
-        area.top().saturating_sub(1)
-    };
+                let top_1based = area.top() + 1;
+                queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
+                queue!(writer, MoveTo(/*x*/ 0, area.top()))?;
+                for _ in 0..scroll_amount {
+                    queue!(writer, Print("\x1bM"))?;
+                }
+                queue!(writer, ResetScrollRegion)?;
 
-    // Limit the scroll region to the lines from the top of the screen to the
-    // top of the viewport. With this in place, when we add lines inside this
-    // area, only the lines in this area will be scrolled. We place the cursor
-    // at the end of the scroll region, and add lines starting there.
-    //
-    // ┌─Screen───────────────────────┐
-    // │┌╌Scroll region╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐│
-    // │┆                            ┆│
-    // │┆                            ┆│
-    // │┆                            ┆│
-    // │█╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘│
-    // │╭─Viewport───────────────────╮│
-    // ││                            ││
-    // │╰────────────────────────────╯│
-    // └──────────────────────────────┘
-    queue!(writer, SetScrollRegion(1..area.top()))?;
+                let cursor_top = area.top().saturating_sub(1);
+                area.y += scroll_amount;
+                should_update_area = true;
+                cursor_top
+            } else {
+                area.top().saturating_sub(1)
+            };
 
-    // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
-    // terminal's last_known_cursor_position, which hopefully will still be accurate after we
-    // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
-    queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
+            // Limit the scroll region to the lines from the top of the screen to the
+            // top of the viewport. With this in place, when we add lines inside this
+            // area, only the lines in this area will be scrolled. We place the cursor
+            // at the end of the scroll region, and add lines starting there.
+            //
+            // ┌─Screen───────────────────────┐
+            // │┌╌Scroll region╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐│
+            // │┆                            ┆│
+            // │┆                            ┆│
+            // │┆                            ┆│
+            // │█╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘│
+            // │╭─Viewport───────────────────╮│
+            // ││                            ││
+            // │╰────────────────────────────╯│
+            // └──────────────────────────────┘
+            queue!(writer, SetScrollRegion(1..area.top()))?;
 
-    for line in &wrapped {
-        queue!(writer, Print("\r\n"))?;
-        write_history_line(writer, line, wrap_width)?;
+            // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
+            // terminal's last_known_cursor_position, which hopefully will still be accurate after we
+            // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
+            queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
+
+            for line in &wrapped {
+                queue!(writer, Print("\r\n"))?;
+                write_history_line(writer, line, wrap_width)?;
+            }
+
+            queue!(writer, ResetScrollRegion)?;
+            queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+        }
     }
 
-    queue!(writer, ResetScrollRegion)?;
-
-    // Restore the cursor position to where it was before we started.
-    queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
-
-    let _ = writer;
     if should_update_area {
         terminal.set_viewport_area(area);
     }
@@ -793,6 +852,85 @@ mod tests {
             rows.iter()
                 .any(|row| row.trim_end() == "alpha beta gamma del"),
             "expected terminal soft-wrap instead of Codex word pre-wrap, rows: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn vt100_zellij_raw_insert_keeps_soft_wrapped_tail_above_viewport() {
+        let width: u16 = 20;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(
+            /*x*/ 0,
+            /*y*/ height - 2,
+            /*width*/ width,
+            /*height*/ 2,
+        );
+        term.set_viewport_area(viewport);
+
+        let line = Line::from("raw-start-aaaaaaaaaaaaaaaaaaaaaaaa-tail-must-remain");
+        insert_history_lines_with_mode_and_wrap_policy(
+            &mut term,
+            vec![line],
+            InsertHistoryMode::ZellijRaw,
+            HistoryLineWrapPolicy::Terminal,
+        )
+        .expect("insert Zellij raw history");
+
+        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+        insta::assert_snapshot!("zellij_raw_terminal_wrap_above_viewport", rows.join("\n"));
+        let history_rows = rows[..usize::from(term.viewport_area.y)]
+            .iter()
+            .map(|row| row.trim_end())
+            .collect::<String>();
+        let viewport_rows = rows[usize::from(term.viewport_area.y)..].join("\n");
+        assert!(
+            history_rows.contains("tail-must-remain"),
+            "expected wrapped raw tail above the viewport, rows: {rows:?}"
+        );
+        assert!(
+            !viewport_rows.contains("tail-must-remain"),
+            "raw tail must not be written through the viewport, rows: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn vt100_zellij_raw_replay_keeps_overflowing_soft_wrapped_tail_above_viewport() {
+        let width: u16 = 20;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ width, /*height*/ 2,
+        ));
+
+        let line = Line::from(format!("raw-start-{}tail-must-remain", "a".repeat(130)));
+        insert_history_lines_with_mode_and_wrap_policy(
+            &mut term,
+            vec![line],
+            InsertHistoryMode::ZellijRaw,
+            HistoryLineWrapPolicy::Terminal,
+        )
+        .expect("replay Zellij raw history");
+
+        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+        insta::assert_snapshot!(
+            "zellij_raw_terminal_wrap_overflow_above_viewport",
+            rows.join("\n")
+        );
+        let history_rows = rows[..usize::from(term.viewport_area.y)]
+            .iter()
+            .map(|row| row.trim_end())
+            .collect::<String>();
+        let viewport_rows = rows[usize::from(term.viewport_area.y)..].join("\n");
+        assert!(
+            history_rows.contains("tail-must-remain"),
+            "expected overflowing raw tail above the viewport, rows: {rows:?}"
+        );
+        assert!(
+            !viewport_rows.contains("tail-must-remain"),
+            "overflowing raw tail must not be written through the viewport, rows: {rows:?}"
         );
     }
 
