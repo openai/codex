@@ -2280,6 +2280,61 @@ async fn replay_snapshot_with_pending_request_suppresses_replay_notices() {
 }
 
 #[tokio::test]
+async fn repeated_skill_load_warnings_emit_once_until_errors_clear() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let cwd = app.chat_widget.config_ref().cwd.to_path_buf();
+    let error = codex_app_server_protocol::SkillErrorInfo {
+        path: test_path_buf("/tmp/user/skills/planning/SKILL.md"),
+        message: "invalid YAML".to_string(),
+    };
+    let response = codex_app_server_protocol::SkillsListResponse {
+        data: vec![codex_app_server_protocol::SkillsListEntry {
+            cwd: cwd.clone(),
+            skills: Vec::new(),
+            errors: vec![error],
+        }],
+    };
+
+    app.handle_skills_list_response(response.clone());
+    app.handle_skills_list_response(response.clone());
+
+    assert_eq!(
+        drain_insert_history_transcripts(&mut app_event_rx),
+        vec![
+            "⚠ Skipped loading 1 skill(s) due to invalid SKILL.md files.".to_string(),
+            "⚠ /tmp/user/skills/planning/SKILL.md: invalid YAML".to_string(),
+        ],
+    );
+
+    app.handle_skills_list_response(codex_app_server_protocol::SkillsListResponse {
+        data: vec![codex_app_server_protocol::SkillsListEntry {
+            cwd,
+            skills: Vec::new(),
+            errors: Vec::new(),
+        }],
+    });
+    assert_eq!(
+        drain_insert_history_transcripts(&mut app_event_rx),
+        Vec::<String>::new(),
+    );
+
+    app.handle_skills_list_response(response);
+    assert_eq!(drain_insert_history_transcripts(&mut app_event_rx).len(), 2);
+}
+
+fn drain_insert_history_transcripts(
+    app_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Vec<String> {
+    let mut transcripts = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            transcripts.push(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)));
+        }
+    }
+    transcripts
+}
+
+#[tokio::test]
 async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> {
     let mut app = make_test_app().await;
     let main_thread_id =
@@ -3778,6 +3833,7 @@ async fn make_test_app() -> App {
         commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        skill_load_warnings_by_cwd: HashMap::new(),
         backtrack: BacktrackState::default(),
         backtrack_render_pending: false,
         feedback: codex_feedback::CodexFeedback::new(),
@@ -3841,6 +3897,7 @@ async fn make_test_app_with_channels() -> (
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+            skill_load_warnings_by_cwd: HashMap::new(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),

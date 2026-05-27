@@ -1341,8 +1341,27 @@ impl App {
     pub(super) fn handle_skills_list_response(&mut self, response: SkillsListResponse) {
         let cwd = self.chat_widget.config_ref().cwd.clone();
         let errors = errors_for_cwd(&cwd, &response);
-        emit_skill_load_warnings(&self.app_event_tx, &errors);
+        self.emit_skill_load_warnings_if_changed(&cwd, errors);
         self.chat_widget.handle_skills_list_response(response);
+    }
+
+    fn emit_skill_load_warnings_if_changed(&mut self, cwd: &Path, errors: Vec<SkillErrorInfo>) {
+        if errors.is_empty() {
+            self.skill_load_warnings_by_cwd.remove(cwd);
+            return;
+        }
+
+        if self
+            .skill_load_warnings_by_cwd
+            .get(cwd)
+            .is_some_and(|previous_errors| previous_errors == &errors)
+        {
+            return;
+        }
+
+        emit_skill_load_warnings(&self.app_event_tx, &errors);
+        self.skill_load_warnings_by_cwd
+            .insert(cwd.to_path_buf(), errors);
     }
 
     pub(super) async fn handle_thread_rollback_response(
