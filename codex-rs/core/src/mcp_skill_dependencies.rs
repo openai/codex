@@ -212,6 +212,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         turn_context,
         refresh_servers,
         config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
         elicitation_reviewer,
     )
     .await;
