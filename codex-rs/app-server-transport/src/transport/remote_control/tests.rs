@@ -28,6 +28,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::test_support::auth_manager_from_auth;
 use codex_core::test_support::auth_manager_from_auth_with_home;
 use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::save_auth;
@@ -743,6 +744,7 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
     let (transport_event_tx, _transport_event_rx) =
@@ -1544,6 +1546,7 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         codex_home.path(),
         &remote_control_auth_dot_json(/*account_id*/ None),
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .expect("auth without account id should save");
     let state_db = remote_control_state_runtime(&codex_home).await;
@@ -1552,6 +1555,7 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
     )
     .await;
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
@@ -1593,6 +1597,7 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         codex_home.path(),
         &remote_control_auth_dot_json(Some("account_id")),
         AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
     )
     .expect("auth with account id should save");
     auth_manager.reload().await;
