@@ -41,34 +41,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use std::time::Instant;
 use tokio::sync::mpsc;
 
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
 const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
 const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
-
-#[derive(Clone, Copy, Debug)]
-pub struct StartedTimer {
-    started_at: Instant,
-}
-
-impl StartedTimer {
-    #[must_use]
-    pub fn start() -> Self {
-        Self {
-            started_at: Instant::now(),
-        }
-    }
-
-    fn elapsed_ms(self) -> u64 {
-        self.started_at
-            .elapsed()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX)
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct AnalyticsEventsQueue {
@@ -189,12 +166,12 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_app_server_started(&self, timer: StartedTimer, remote_control_enabled: bool) {
+    pub fn track_app_server_started(&self, startup_duration_ms: u64, remote_control_enabled: bool) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::AppServerStarted(AppServerStartedInput {
                 runtime: current_runtime_metadata(),
                 remote_control_enabled,
-                startup_duration_ms: timer.elapsed_ms(),
+                startup_duration_ms,
                 completed_at: now_unix_seconds(),
             }),
         ));
