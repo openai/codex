@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+#[cfg(not(windows))]
 use anyhow::Context;
 use anyhow::Result;
 use codex_protocol::ThreadId;
@@ -55,6 +56,6 @@ impl ShellEnvFile {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 #[path = "shell_env_file_tests.rs"]
 mod tests;
