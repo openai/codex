@@ -37,6 +37,10 @@ use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::Sse;
 use sse_stream::SseStream;
 
+mod www_authenticate;
+
+use self::www_authenticate::insufficient_scope_challenge;
+
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
@@ -146,12 +150,13 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             )));
         }
         if response.status == StatusCode::FORBIDDEN.as_u16()
-            && let Some(header) =
-                response_header(&response.headers, reqwest::header::WWW_AUTHENTICATE)
+            && let Some(challenge) = insufficient_scope_challenge(&response.headers)
         {
-            let required_scope = extract_scope_from_www_authenticate(&header);
             return Err(StreamableHttpError::InsufficientScope(
-                InsufficientScopeError::new(header, required_scope),
+                InsufficientScopeError::new(
+                    challenge.www_authenticate_header,
+                    challenge.required_scope,
+                ),
             ));
         }
         if matches!(
@@ -393,91 +398,6 @@ fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<Stri
         .map(|header| header.value.clone())
 }
 
-/// Extracts the `scope` auth-param from a Bearer `WWW-Authenticate` challenge.
-///
-/// RFC 9110 section 11.2 defines an `auth-param` value as either a `token` or
-/// a `quoted-string`, and RFC 6750 section 3 represents Bearer `scope` as one
-/// of these values. Quoted strings use HTTP syntax rather than JSON: RFC 9110
-/// section 5.6.4 requires recipients to replace each `quoted-pair` with its
-/// escaped octet.
-///
-/// After quoted-string processing, RFC 6750 limits each scope token to `%x21`,
-/// `%x23-5B`, or `%x5D-7E`, with `%x20` separating multiple tokens. Thus a
-/// returned scope cannot contain `"` or `\`, even though those characters can
-/// occur in the HTTP encoding.
-///
-/// RMCP has an equivalent helper, but it is private to that crate.
-fn extract_scope_from_www_authenticate(header: &str) -> Option<String> {
-    let scope_from_segment = |segment: &str| {
-        let (name, value) = segment.split_once('=')?;
-        if !name
-            .split_ascii_whitespace()
-            .last()?
-            .eq_ignore_ascii_case("scope")
-        {
-            return None;
-        }
-
-        let value = value.trim();
-        let scope = if let Some(quoted_value) = value.strip_prefix('"') {
-            let quoted_value = quoted_value.strip_suffix('"')?;
-            let mut scope = String::with_capacity(quoted_value.len());
-            let mut characters = quoted_value.chars();
-            while let Some(character) = characters.next() {
-                if character == '\\' {
-                    scope.push(characters.next()?);
-                } else {
-                    scope.push(character);
-                }
-            }
-            scope
-        } else {
-            value
-                .split_ascii_whitespace()
-                .next()
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)?
-        };
-
-        scope
-            .split(' ')
-            .all(|token| {
-                !token.is_empty()
-                    && token
-                        .bytes()
-                        .all(|byte| matches!(byte, b'!' | b'#'..=b'[' | b']'..=b'~'))
-            })
-            .then_some(scope)
-    };
-    let mut segment_start = 0;
-    let mut in_quotes = false;
-    let mut escaped = false;
-
-    for (position, character) in header.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match character {
-            '\\' if in_quotes => escaped = true,
-            '"' => in_quotes = !in_quotes,
-            ',' | ';' if !in_quotes => {
-                if let Some(scope) = scope_from_segment(&header[segment_start..position]) {
-                    return Some(scope);
-                }
-                segment_start = position + character.len_utf8();
-            }
-            _ => {}
-        }
-    }
-
-    if in_quotes {
-        None
-    } else {
-        scope_from_segment(&header[segment_start..])
-    }
-}
-
 fn status_is_success(status: u16) -> bool {
     StatusCode::from_u16(status).is_ok_and(|status| status.is_success())
 }
@@ -509,7 +429,3 @@ fn sse_stream_from_body(
     }))
     .boxed()
 }
-
-#[cfg(test)]
-#[path = "http_client_adapter_tests.rs"]
-mod tests;

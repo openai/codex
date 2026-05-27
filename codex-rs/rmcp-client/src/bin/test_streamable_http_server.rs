@@ -74,16 +74,17 @@ struct SessionFailureState {
 struct ArmedFailure {
     status: StatusCode,
     remaining: usize,
-    /// Optional raw `WWW-Authenticate` challenge header returned with the failure.
-    www_authenticate_header: Option<HeaderValue>,
+    /// Raw `WWW-Authenticate` challenge header field values returned with the failure.
+    www_authenticate_headers: Vec<HeaderValue>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ArmSessionPostFailureRequest {
     status: u16,
     remaining: usize,
-    /// Optional raw `WWW-Authenticate` challenge header to add to the failure.
-    www_authenticate_header: Option<String>,
+    /// Raw `WWW-Authenticate` challenge header field values to add to the failure.
+    #[serde(default)]
+    www_authenticate_headers: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -407,17 +408,18 @@ async fn arm_session_post_failure(
     Json(request): Json<ArmSessionPostFailureRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let status = StatusCode::from_u16(request.status).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let www_authenticate_header = request
-        .www_authenticate_header
+    let www_authenticate_headers = request
+        .www_authenticate_headers
+        .into_iter()
         .map(|value| HeaderValue::from_str(&value).map_err(|_| StatusCode::BAD_REQUEST))
-        .transpose()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let armed_failure = if request.remaining == 0 {
         None
     } else {
         Some(ArmedFailure {
             status,
             remaining: request.remaining,
-            www_authenticate_header,
+            www_authenticate_headers,
         })
     };
     *state.armed_failure.lock().await = armed_failure;
@@ -443,7 +445,7 @@ async fn fail_session_post_when_armed(
         {
             failure.remaining -= 1;
             let status = failure.status;
-            let www_authenticate_header = failure.www_authenticate_header.clone();
+            let www_authenticate_headers = failure.www_authenticate_headers.clone();
             if failure.remaining == 0 {
                 *armed_failure = None;
             }
@@ -451,10 +453,10 @@ async fn fail_session_post_when_armed(
                 "forced session failure with status {status}"
             )));
             *response.status_mut() = status;
-            if let Some(www_authenticate_header) = www_authenticate_header {
+            for www_authenticate_header in www_authenticate_headers {
                 response
                     .headers_mut()
-                    .insert(WWW_AUTHENTICATE, www_authenticate_header);
+                    .append(WWW_AUTHENTICATE, www_authenticate_header);
             }
             return response;
         }
