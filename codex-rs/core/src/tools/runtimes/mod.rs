@@ -130,13 +130,18 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 /// POSIX-only wrapper for commands produced by `Shell::derive_exec_args` for
 /// Bash/Zsh/sh when shell setup must be sourced before the user script:
 ///
-///   shell -lc "<script>"
+///   shell -c/-lc "<script>"
+///   => shell -c/-lc ". ENV_FILE; <script>"
+///
+///   shell -lc "<script>" with a matching snapshot
 ///   => user_shell -c ". SNAPSHOT; . ENV_FILE; exec shell -c <script>"
 ///
 /// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
 /// be run by Bash/Zsh/sh. The env file is sourced for either `-c` or `-lc`
 /// commands and is independent of cwd. A snapshot remains restricted to
-/// login commands in its matching cwd.
+/// login commands in its matching cwd. Without a snapshot, the original
+/// script stays in the original shell so login-shell-local initialization
+/// remains visible to it.
 ///
 /// `explicit_env_overrides` and `env` are intentionally separate inputs.
 /// `explicit_env_overrides` contains policy-driven shell env overrides that
@@ -182,18 +187,6 @@ pub(crate) fn maybe_wrap_shell_command_with_runtime_env(
     }
 
     let has_snapshot = snapshot.is_some();
-    let shell_path = if has_snapshot {
-        session_shell.shell_path.to_string_lossy().to_string()
-    } else {
-        command[0].clone()
-    };
-    let shell_flag = if has_snapshot { "-c" } else { flag };
-    let original_shell = shell_single_quote(&command[0]);
-    let original_script = shell_single_quote(&command[2]);
-    let trailing_args = command[3..]
-        .iter()
-        .map(|arg| format!(" '{}'", shell_single_quote(arg)))
-        .collect::<String>();
     let mut override_env = explicit_env_overrides.clone();
     for key in [CODEX_THREAD_ID_ENV_VAR, CODEX_ENV_FILE_ENV_VAR] {
         if let Some(value) = env.get(key) {
@@ -214,17 +207,34 @@ pub(crate) fn maybe_wrap_shell_command_with_runtime_env(
         source_commands.push(format!("if . '{path}' >/dev/null 2>&1; then :; fi"));
     }
     let source_commands = join_shell_blocks(source_commands);
-    let rewritten_script = if override_exports.is_empty() {
-        format!(
-            "{source_commands}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
-        )
+    let execution = if has_snapshot {
+        let original_shell = shell_single_quote(&command[0]);
+        let original_script = shell_single_quote(&command[2]);
+        let trailing_args = command[3..]
+            .iter()
+            .map(|arg| format!(" '{}'", shell_single_quote(arg)))
+            .collect::<String>();
+        format!("exec '{original_shell}' -c '{original_script}'{trailing_args}")
     } else {
-        format!(
-            "{override_captures}\n\n{source_commands}\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
-        )
+        command[2].clone()
+    };
+    let rewritten_script = if override_exports.is_empty() {
+        format!("{source_commands}\n\n{execution}")
+    } else {
+        format!("{override_captures}\n\n{source_commands}\n\n{override_exports}\n\n{execution}")
     };
 
-    vec![shell_path, shell_flag.to_string(), rewritten_script]
+    if has_snapshot {
+        vec![
+            session_shell.shell_path.to_string_lossy().to_string(),
+            "-c".to_string(),
+            rewritten_script,
+        ]
+    } else {
+        let mut rewritten_command = command.to_vec();
+        rewritten_command[2] = rewritten_script;
+        rewritten_command
+    }
 }
 
 fn non_empty_shell_env_file_path(env_file: Option<&Path>) -> Option<&Path> {

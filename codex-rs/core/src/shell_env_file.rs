@@ -4,13 +4,9 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 use codex_protocol::ThreadId;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use tempfile::TempPath;
 
 pub(crate) const CODEX_ENV_FILE_ENV_VAR: &str = "CODEX_ENV_FILE";
-
-#[cfg(not(windows))]
-const SHELL_ENV_DIR: &str = "shell_env";
 
 /// Session-owned script that hooks can populate with exported shell state.
 ///
@@ -21,33 +17,27 @@ pub(crate) struct ShellEnvFile {
 }
 
 impl ShellEnvFile {
-    pub(crate) fn for_session(
-        codex_home: &AbsolutePathBuf,
-        thread_id: ThreadId,
-    ) -> Result<Option<Self>> {
+    pub(crate) fn for_session(thread_id: ThreadId) -> Result<Option<Self>> {
         #[cfg(windows)]
         {
-            let _ = (codex_home, thread_id);
+            let _ = thread_id;
             // TODO: Support a Windows shell environment persistence contract,
             // likely with PowerShell- and cmd-compatible formats.
             Ok(None)
         }
         #[cfg(not(windows))]
         {
-            Self::new(codex_home, thread_id).map(Some)
+            Self::new(thread_id).map(Some)
         }
     }
 
     #[cfg(not(windows))]
-    fn new(codex_home: &AbsolutePathBuf, thread_id: ThreadId) -> Result<Self> {
-        let dir = codex_home.join(SHELL_ENV_DIR);
-        std::fs::create_dir_all(dir.as_path())
-            .with_context(|| format!("failed to create shell env dir {}", dir.display()))?;
+    fn new(thread_id: ThreadId) -> Result<Self> {
         let file = tempfile::Builder::new()
-            .prefix(&format!("{thread_id}."))
+            .prefix(&format!("codex-env-{thread_id}."))
             .suffix(".sh")
-            .tempfile_in(dir.as_path())
-            .with_context(|| format!("failed to create shell env file in {}", dir.display()))?;
+            .tempfile()
+            .context("failed to create temporary shell env file")?;
         Ok(Self {
             path: file.into_temp_path(),
         })

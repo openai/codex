@@ -29,6 +29,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
@@ -294,20 +296,33 @@ fn maybe_wrap_shell_command_skips_empty_session_env_file() {
     assert_eq!(rewritten, command);
 }
 
+#[cfg(unix)]
 #[test]
 fn maybe_wrap_shell_command_keeps_login_initialization_before_session_env_file() {
     let dir = tempdir().expect("create temp dir");
     let env_file = dir.path().join("session-env.sh");
     std::fs::write(&env_file, "export FROM_SESSION_START='hook-value'\n").expect("write env file");
+    let shell_path = dir.path().join("login-shell.sh");
+    std::fs::write(
+        &shell_path,
+        "#!/bin/sh\nif [ \"$1\" = \"-lc\" ]; then\n  LOGIN_ONLY='from-login'\nfi\nscript=\"$2\"\nshift 2\neval \"$script\"\n",
+    )
+    .expect("write login shell");
+    let mut permissions = std::fs::metadata(&shell_path)
+        .expect("read login shell permissions")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&shell_path, permissions).expect("make login shell executable");
+    let shell_path = shell_path.to_string_lossy().to_string();
     let session_shell = Shell {
         shell_type: ShellType::Bash,
-        shell_path: PathBuf::from("/bin/bash"),
+        shell_path: PathBuf::from(&shell_path),
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
     let command = vec![
-        "/bin/bash".to_string(),
+        shell_path,
         "-lc".to_string(),
-        "printf '%s' \"$FROM_SESSION_START\"".to_string(),
+        "printf '%s|%s' \"$LOGIN_ONLY\" \"$FROM_SESSION_START\"".to_string(),
     ];
 
     let rewritten = maybe_wrap_shell_command_with_runtime_env(
@@ -318,10 +333,17 @@ fn maybe_wrap_shell_command_keeps_login_initialization_before_session_env_file()
         &HashMap::new(),
         &HashMap::new(),
     );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .output()
+        .expect("run rewritten command");
 
-    assert_eq!(rewritten[0], "/bin/bash");
+    assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(rewritten[1], "-lc");
-    assert!(rewritten[2].contains("session-env.sh"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "from-login|hook-value"
+    );
 }
 
 #[test]
