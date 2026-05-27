@@ -29,6 +29,7 @@ fn main() {
 
 // Process startup is slow enough that 30 samples keep runs practical, and
 // sample size 1 lets each measured server be reaped before the next starts.
+// The benchmark warms one CODEX_HOME before timing to measure normal restarts.
 // This e2e runner receives its separately built Codex binary from just or Bazel.
 #[divan::bench(sample_count = 30, sample_size = 1, skip_ext_time)]
 #[allow(clippy::expect_used)]
@@ -36,13 +37,16 @@ fn initialize_response(bencher: Bencher) {
     let codex_bin = std::env::var_os("CODEX_BIN")
         .map(PathBuf::from)
         .expect("CODEX_BIN must point to the codex binary; run via `just bench-e2e` or Bazel");
+    let codex_home = tempfile::tempdir().expect("benchmark CODEX_HOME should be created");
+    drop(
+        start_until_initialize_response(&codex_bin, codex_home.path())
+            .expect("benchmark CODEX_HOME should be initialized"),
+    );
 
-    bencher
-        .with_inputs(|| tempfile::tempdir().expect("benchmark CODEX_HOME should be created"))
-        .bench_local_values(move |codex_home| {
-            start_until_initialize_response(&codex_bin, codex_home.path())
-                .expect("codex app-server should return an initialize response")
-        });
+    bencher.bench_local(|| {
+        start_until_initialize_response(&codex_bin, codex_home.path())
+            .expect("codex app-server should return an initialize response")
+    });
 }
 
 /// A running app-server that has returned a valid `initialize` response.
