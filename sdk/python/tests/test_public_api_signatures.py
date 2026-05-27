@@ -11,11 +11,11 @@ import openai_codex
 import openai_codex.types as public_types
 from openai_codex import (
     ApprovalMode,
-    AppServerConfig,
     AsyncCodex,
     AsyncThread,
     AsyncTurnHandle,
     Codex,
+    CodexConfig,
     Sandbox,
     Thread,
     TurnHandle,
@@ -26,7 +26,7 @@ from openai_codex.types import InitializeResponse
 
 EXPECTED_ROOT_EXPORTS = [
     "__version__",
-    "AppServerConfig",
+    "CodexConfig",
     "Codex",
     "AsyncCodex",
     "ApprovalMode",
@@ -49,10 +49,10 @@ EXPECTED_ROOT_EXPORTS = [
     "SkillInput",
     "MentionInput",
     "retry_on_overload",
-    "AppServerError",
+    "CodexError",
     "TransportClosedError",
     "JsonRpcError",
-    "AppServerRpcError",
+    "CodexRpcError",
     "ParseError",
     "InvalidRequestError",
     "MethodNotFoundError",
@@ -129,9 +129,9 @@ def _assert_no_any_annotations(fn: object) -> None:
         raise AssertionError(f"{fn} has public return annotation typed as Any")
 
 
-def test_root_exports_app_server_config() -> None:
+def test_root_exports_codex_config() -> None:
     """The root package should expose the process configuration object."""
-    assert AppServerConfig.__name__ == "AppServerConfig"
+    assert CodexConfig.__name__ == "CodexConfig"
 
 
 def test_root_exports_turn_result() -> None:
@@ -208,7 +208,7 @@ def test_package_and_default_client_versions_follow_project_version() -> None:
     pyproject = tomllib.loads(pyproject_path.read_text())
 
     assert openai_codex.__version__ == pyproject["project"]["version"]
-    assert AppServerConfig().client_version == openai_codex.__version__
+    assert CodexConfig().client_version == openai_codex.__version__
 
 
 def test_package_includes_py_typed_marker() -> None:
@@ -224,16 +224,16 @@ def test_package_root_exports_only_public_api() -> None:
         EXPECTED_ROOT_EXPORTS, True
     )
     assert {
-        "AppServerClient": hasattr(openai_codex, "AppServerClient"),
-        "AsyncAppServerClient": hasattr(openai_codex, "AsyncAppServerClient"),
+        "CodexClient": hasattr(openai_codex, "CodexClient"),
+        "AsyncCodexClient": hasattr(openai_codex, "AsyncCodexClient"),
         "InitializeResponse": hasattr(openai_codex, "InitializeResponse"),
         "ThreadStartParams": hasattr(openai_codex, "ThreadStartParams"),
         "TurnStartParams": hasattr(openai_codex, "TurnStartParams"),
         "TurnCompletedNotification": hasattr(openai_codex, "TurnCompletedNotification"),
         "TurnStatus": hasattr(openai_codex, "TurnStatus"),
     } == {
-        "AppServerClient": False,
-        "AsyncAppServerClient": False,
+        "CodexClient": False,
+        "AsyncCodexClient": False,
         "InitializeResponse": False,
         "ThreadStartParams": False,
         "TurnStartParams": False,
@@ -252,7 +252,7 @@ def test_package_star_import_matches_public_api() -> None:
 
 
 def test_types_module_exports_curated_public_types() -> None:
-    """The public type module should be the supported place for app-server models."""
+    """The public type module should expose Codex protocol models."""
     assert public_types.__all__ == EXPECTED_TYPES_EXPORTS
     assert {name: hasattr(public_types, name) for name in EXPECTED_TYPES_EXPORTS} == dict.fromkeys(
         EXPECTED_TYPES_EXPORTS, True

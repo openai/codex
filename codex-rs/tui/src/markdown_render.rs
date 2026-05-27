@@ -2713,6 +2713,26 @@ mod tests {
     }
 
     #[test]
+    fn key_value_table_keeps_web_annotations() {
+        let destination = "https://example.com/a/very/long/path";
+        let markdown = format!(
+            "| c1 | c2 | c3 | c4 | c5 | c6 |\n| --- | --- | --- | --- | --- | --- |\n| {destination} | 2 | 3 | 4 | 5 | 6 |\n"
+        );
+        let lines = render_markdown_lines_with_width_and_cwd(
+            &markdown,
+            /*width*/ Some(20),
+            /*cwd*/ None,
+        );
+        let destinations = lines
+            .iter()
+            .flat_map(|line| line.hyperlinks.iter().map(|link| link.destination.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(!destinations.is_empty());
+        assert!(destinations.iter().all(|link| *link == destination));
+    }
+
+    #[test]
     fn does_not_annotate_code_or_non_web_markdown_links() {
         let markdown = "`https://example.com/inline`\n\n```text\nhttps://example.com/block\n```\n\n[mail](mailto:test@example.com)\n\n[https://example.com/label](mailto:test@example.com)\n\n| Target |\n| --- |\n| [https://example.com/table-label](mailto:test@example.com) |";
         let lines = render_markdown_lines_with_width_and_cwd(
