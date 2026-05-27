@@ -32,6 +32,17 @@ Agent Identity JWT in `CODEX_ACCESS_TOKEN` can opt into that auth path with
 `--use-agent-identity-auth`; Codex then registers an Agent task and sends the
 derived AgentAssertion headers on the registry request.
 
+Registration proxies that accept API keys can instead use `CODEX_API_KEY`;
+Codex sends it as a bearer token on the registration request. For example, a
+registration proxy rooted at `/api` can be reached with:
+
+```sh
+CODEX_API_KEY="$OPENAI_API_KEY" \
+codex exec-server \
+  --remote https://registration-proxy.example/api \
+  --environment-id "$ENVIRONMENT_ID"
+```
+
 Wire framing:
 
 - local websocket: one JSON-RPC message per websocket frame
