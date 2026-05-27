@@ -37,23 +37,6 @@ pub(crate) struct AccountedGoalProgress {
     pub(crate) goal_id: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreviousGoalSnapshot {
-    pub goal_id: String,
-    pub status: codex_state::ThreadGoalStatus,
-    pub objective: String,
-}
-
-impl From<&codex_state::ThreadGoal> for PreviousGoalSnapshot {
-    fn from(goal: &codex_state::ThreadGoal) -> Self {
-        Self {
-            goal_id: goal.goal_id.clone(),
-            status: goal.status,
-            objective: goal.objective.clone(),
-        }
-    }
-}
-
 impl std::fmt::Debug for GoalRuntimeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GoalRuntimeHandle").finish_non_exhaustive()
@@ -127,7 +110,7 @@ impl GoalRuntimeHandle {
     pub async fn apply_external_goal_set(
         &self,
         goal: codex_state::ThreadGoal,
-        previous_goal: Option<PreviousGoalSnapshot>,
+        previous_goal: Option<codex_state::ThreadGoal>,
     ) -> Result<(), String> {
         if !self.is_enabled() {
             return Ok(());

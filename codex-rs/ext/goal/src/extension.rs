@@ -10,7 +10,6 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::IdleTurnContributor;
 use codex_extension_api::IdleTurnFuture;
 use codex_extension_api::IdleTurnInput;
-use codex_extension_api::IdleTurnRequest;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
@@ -429,7 +428,7 @@ where
                 .idle_continuation_items(input.collaboration_mode.mode)
                 .await
             {
-                Ok(Some(items)) => Some(IdleTurnRequest { items }),
+                Ok(Some(items)) => Some(items),
                 Ok(None) => None,
                 Err(err) => {
                     tracing::warn!("failed to request idle goal continuation: {err}");

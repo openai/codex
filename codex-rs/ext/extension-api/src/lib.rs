@@ -28,7 +28,6 @@ pub use contributors::ContextContributor;
 pub use contributors::IdleTurnContributor;
 pub use contributors::IdleTurnFuture;
 pub use contributors::IdleTurnInput;
-pub use contributors::IdleTurnRequest;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;
 pub use contributors::ThreadLifecycleContributor;

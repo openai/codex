@@ -141,17 +141,10 @@ pub struct ToolContributionInput<'a> {
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.
     pub thread_store: &'a ExtensionData,
-    /// Store scoped to this turn runtime, if the host is collecting for a turn.
-    pub turn_store: Option<&'a ExtensionData>,
     /// Source for the current turn's session.
     pub session_source: &'a SessionSource,
     /// Whether the current thread has persistent state available.
     pub persistent_thread: bool,
-}
-
-/// Extension request to start a new idle turn.
-pub struct IdleTurnRequest {
-    pub items: Vec<ResponseInputItem>,
 }
 
 /// Context supplied when the host is idle and extensions may request work.
@@ -164,7 +157,8 @@ pub struct IdleTurnInput<'a> {
     pub thread_store: &'a ExtensionData,
 }
 
-pub type IdleTurnFuture<'a> = Pin<Box<dyn Future<Output = Option<IdleTurnRequest>> + Send + 'a>>;
+pub type IdleTurnFuture<'a> =
+    Pin<Box<dyn Future<Output = Option<Vec<ResponseInputItem>>> + Send + 'a>>;
 
 /// Extension contribution that can request host-owned work while a thread is idle.
 pub trait IdleTurnContributor: Send + Sync {

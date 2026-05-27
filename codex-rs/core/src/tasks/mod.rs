@@ -512,7 +512,7 @@ impl Session {
                     })
                     .await
                 {
-                    requested_items = Some(request.items);
+                    requested_items = Some(request);
                     break;
                 }
             }

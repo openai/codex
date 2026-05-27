@@ -334,7 +334,6 @@ use codex_feedback::FeedbackUploadOptions;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_goal_extension::GoalRuntimeHandle;
-use codex_goal_extension::PreviousGoalSnapshot;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;

@@ -21,7 +21,6 @@ use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_goal_extension::GoalRuntimeHandle;
-use codex_goal_extension::PreviousGoalSnapshot;
 use codex_goal_extension::install_with_backend;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -661,10 +660,7 @@ async fn external_goal_set_active_resets_baseline_without_live_thread() -> anyho
         .ok_or_else(|| anyhow::anyhow!("goal update should succeed"))?;
     harness
         .runtime_handle()
-        .apply_external_goal_set(
-            updated_goal,
-            Some(PreviousGoalSnapshot::from(&previous_goal)),
-        )
+        .apply_external_goal_set(updated_goal, Some(previous_goal))
         .await
         .map_err(anyhow::Error::msg)?;
 
@@ -924,7 +920,7 @@ impl GoalExtensionHarness {
                 })
                 .await
             {
-                return Some(request.items);
+                return Some(request);
             }
         }
         None
