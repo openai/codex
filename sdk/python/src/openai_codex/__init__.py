@@ -24,8 +24,8 @@ from .api import (
 )
 from .client import CodexConfig
 from .errors import (
-    AppServerError,
-    AppServerRpcError,
+    CodexError,
+    CodexRpcError,
     InternalRpcError,
     InvalidParamsError,
     InvalidRequestError,
@@ -64,10 +64,10 @@ __all__ = [
     "SkillInput",
     "MentionInput",
     "retry_on_overload",
-    "AppServerError",
+    "CodexError",
     "TransportClosedError",
     "JsonRpcError",
-    "AppServerRpcError",
+    "CodexRpcError",
     "ParseError",
     "InvalidRequestError",
     "MethodNotFoundError",

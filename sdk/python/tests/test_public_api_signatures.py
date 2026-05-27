@@ -49,10 +49,10 @@ EXPECTED_ROOT_EXPORTS = [
     "SkillInput",
     "MentionInput",
     "retry_on_overload",
-    "AppServerError",
+    "CodexError",
     "TransportClosedError",
     "JsonRpcError",
-    "AppServerRpcError",
+    "CodexRpcError",
     "ParseError",
     "InvalidRequestError",
     "MethodNotFoundError",
@@ -224,16 +224,16 @@ def test_package_root_exports_only_public_api() -> None:
         EXPECTED_ROOT_EXPORTS, True
     )
     assert {
-        "AppServerClient": hasattr(openai_codex, "AppServerClient"),
-        "AsyncAppServerClient": hasattr(openai_codex, "AsyncAppServerClient"),
+        "CodexClient": hasattr(openai_codex, "CodexClient"),
+        "AsyncCodexClient": hasattr(openai_codex, "AsyncCodexClient"),
         "InitializeResponse": hasattr(openai_codex, "InitializeResponse"),
         "ThreadStartParams": hasattr(openai_codex, "ThreadStartParams"),
         "TurnStartParams": hasattr(openai_codex, "TurnStartParams"),
         "TurnCompletedNotification": hasattr(openai_codex, "TurnCompletedNotification"),
         "TurnStatus": hasattr(openai_codex, "TurnStatus"),
     } == {
-        "AppServerClient": False,
-        "AsyncAppServerClient": False,
+        "CodexClient": False,
+        "AsyncCodexClient": False,
         "InitializeResponse": False,
         "ThreadStartParams": False,
         "TurnStartParams": False,
@@ -252,7 +252,7 @@ def test_package_star_import_matches_public_api() -> None:
 
 
 def test_types_module_exports_curated_public_types() -> None:
-    """The public type module should be the supported place for app-server models."""
+    """The public type module should expose Codex protocol models."""
     assert public_types.__all__ == EXPECTED_TYPES_EXPORTS
     assert {name: hasattr(public_types, name) for name in EXPECTED_TYPES_EXPORTS} == dict.fromkeys(
         EXPECTED_TYPES_EXPORTS, True
