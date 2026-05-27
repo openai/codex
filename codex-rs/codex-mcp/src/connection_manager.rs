@@ -33,7 +33,7 @@ use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
-use crate::tools::normalize_tools_for_model_with_prefix;
+use crate::tools::normalize_tools_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
 use anyhow::Context;
 use anyhow::Result;
@@ -410,7 +410,7 @@ impl McpConnectionManager {
     /// Returns all tools with callable names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
-        normalize_tools_for_model_with_prefix(
+        normalize_tools_with_prefix(
             self.list_all_tools_unprocessed().await,
             self.prefix_mcp_tool_names,
         )
@@ -419,7 +419,7 @@ impl McpConnectionManager {
     /// Returns the tools exposed to the model with callable names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools_for_model(&self) -> Vec<ToolInfo> {
-        normalize_tools_for_model_with_prefix(
+        normalize_tools_with_prefix(
             self.list_all_tools_unprocessed()
                 .await
                 .into_iter()
@@ -515,7 +515,7 @@ impl McpConnectionManager {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
                 self.with_server_metadata(tool)
             });
-        Ok(normalize_tools_for_model_with_prefix(
+        Ok(normalize_tools_with_prefix(
             tools,
             self.prefix_mcp_tool_names,
         ))

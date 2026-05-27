@@ -14,7 +14,7 @@ use crate::server::McpServerOrigin;
 use crate::tools::ToolFilter;
 use crate::tools::ToolInfo;
 use crate::tools::filter_tools;
-use crate::tools::normalize_tools_for_model_with_prefix;
+use crate::tools::normalize_tools_with_prefix;
 use crate::tools::tool_with_model_visible_input_schema;
 use codex_config::Constrained;
 use codex_config::McpServerConfig;
@@ -303,8 +303,7 @@ fn test_normalize_tools_short_non_duplicated_names() {
         create_test_tool("server1", "tool2"),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
+    let model_tools = normalize_tools_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(
         model_tool_names(&model_tools),
@@ -322,8 +321,7 @@ fn test_normalize_tools_duplicated_names_skipped() {
         create_test_tool("server1", "duplicate_tool"),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
+    let model_tools = normalize_tools_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     // Only the first tool should remain, the second is skipped
     assert_eq!(
@@ -347,8 +345,7 @@ fn test_normalize_tools_long_names_same_server() {
         ),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
+    let model_tools = normalize_tools_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 2);
 
@@ -370,8 +367,7 @@ fn test_normalize_tools_long_names_same_server() {
 fn test_normalize_tools_sanitizes_invalid_characters() {
     let tools = vec![create_test_tool("server.one", "tool.two-three")];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
+    let model_tools = normalize_tools_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 1);
     let tool = model_tools.into_iter().next().expect("one tool");
@@ -401,8 +397,7 @@ fn test_normalize_tools_sanitizes_invalid_characters() {
 fn test_normalize_tools_keeps_hyphenated_mcp_tools_callable() {
     let tools = vec![create_test_tool("music-studio", "get-strudel-guide")];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
+    let model_tools = normalize_tools_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 1);
     let tool = model_tools.into_iter().next().expect("one tool");
@@ -422,8 +417,7 @@ fn test_normalize_tools_disambiguates_sanitized_namespace_collisions() {
         create_test_tool("basic_server", "query"),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
+    let model_tools = normalize_tools_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 2);
     let mut namespaces = model_tools
@@ -453,8 +447,7 @@ fn test_normalize_tools_disambiguates_sanitized_tool_name_collisions() {
         create_test_tool("server", "tool_name"),
     ];
 
-    let model_tools =
-        normalize_tools_for_model_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
+    let model_tools = normalize_tools_with_prefix(tools, /*prefix_mcp_tool_names*/ true);
 
     assert_eq!(model_tools.len(), 2);
     let raw_tool_names = model_tools

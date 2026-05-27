@@ -138,18 +138,15 @@ pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<Too
         .collect()
 }
 
-/// Returns MCP tools with model-visible names normalized.
+/// Returns MCP tools with callable names normalized.
 ///
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
 /// `callable_namespace` / `callable_name` are sanitized and, when necessary, hashed so
-/// every model-visible name is unique and <= 64 bytes.
+/// every callable name is unique and <= 64 bytes.
 ///
 /// When `prefix_mcp_tool_names` is true, the historical `mcp__` namespace
 /// prefix is added without restoring the old trailing `__` namespace suffix.
-pub(crate) fn normalize_tools_for_model_with_prefix<I>(
-    tools: I,
-    prefix_mcp_tool_names: bool,
-) -> Vec<ToolInfo>
+pub(crate) fn normalize_tools_with_prefix<I>(tools: I, prefix_mcp_tool_names: bool) -> Vec<ToolInfo>
 where
     I: IntoIterator<Item = ToolInfo>,
 {
