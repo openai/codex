@@ -274,10 +274,12 @@ fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest 
             thread_id: thread_id.to_string(),
             input: vec![
                 UserInput::Text {
+                    client_id: None,
                     text: "hello".to_string(),
                     text_elements: vec![],
                 },
                 UserInput::Image {
+                    client_id: None,
                     url: "https://example.com/a.png".to_string(),
                     detail: None,
                 },
@@ -393,10 +395,12 @@ fn sample_turn_steer_request(
             expected_turn_id: expected_turn_id.to_string(),
             input: vec![
                 UserInput::Text {
+                    client_id: None,
                     text: "more".to_string(),
                     text_elements: vec![],
                 },
                 UserInput::LocalImage {
+                    client_id: None,
                     path: "/tmp/a.png".into(),
                     detail: None,
                 },

@@ -1845,6 +1845,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "initial prompt".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -1865,6 +1866,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
             .submit(Op::UserInput {
                 environments: None,
                 items: vec![UserInput::Text {
+                    client_id: None,
                     text: text.to_string(),
                     text_elements: Vec::new(),
                 }],

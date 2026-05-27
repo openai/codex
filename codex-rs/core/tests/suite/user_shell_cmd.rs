@@ -176,6 +176,7 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
         .codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "run model shell command".to_string(),
                 text_elements: Vec::new(),
             }],

@@ -39,6 +39,7 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "inspect the active tab".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -75,6 +76,7 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
     assert_eq!(
         user_item.content,
         vec![UserInput::Text {
+            client_id: None,
             text: "inspect the active tab".to_string(),
             text_elements: Vec::new(),
         }]
@@ -130,6 +132,7 @@ async fn external_context_like_user_text_remains_a_user_message_item() -> Result
         .build(&server)
         .await?;
     let user_input = UserInput::Text {
+        client_id: None,
         text: "<external_api>".to_string(),
         text_elements: Vec::new(),
     };
@@ -184,6 +187,7 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "inspect context".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -265,6 +269,7 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -283,6 +288,7 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -345,6 +351,7 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -378,6 +385,7 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -411,6 +419,7 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "third turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -508,6 +517,7 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "summarize context".to_string(),
                 text_elements: Vec::new(),
             }],

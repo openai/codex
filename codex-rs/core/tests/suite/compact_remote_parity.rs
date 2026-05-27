@@ -319,6 +319,7 @@ async fn run_manual_session(
     submit_user_input(
         &codex,
         vec![UserInput::Text {
+            client_id: None,
             text: format!("{}_AFTER_COMPACT_USER", scenario.name),
             text_elements: Vec::new(),
         }],
@@ -369,6 +370,7 @@ async fn run_pre_turn_auto_session(mode: Mode) -> Result<Capture> {
     submit_user_input(
         &codex,
         vec![UserInput::Text {
+            client_id: None,
             text: "pre_turn_auto_before".to_string(),
             text_elements: Vec::new(),
         }],
@@ -377,6 +379,7 @@ async fn run_pre_turn_auto_session(mode: Mode) -> Result<Capture> {
     submit_user_input(
         &codex,
         vec![UserInput::Text {
+            client_id: None,
             text: "pre_turn_auto_after".to_string(),
             text_elements: Vec::new(),
         }],
@@ -427,6 +430,7 @@ async fn run_mid_turn_auto_session(mode: Mode) -> Result<Capture> {
     submit_user_input(
         &codex,
         vec![UserInput::Text {
+            client_id: None,
             text: "mid_turn_auto_user".to_string(),
             text_elements: Vec::new(),
         }],
@@ -466,6 +470,7 @@ async fn run_manual_hook_session(mode: Mode) -> Result<Value> {
     submit_user_input(
         &codex,
         vec![UserInput::Text {
+            client_id: None,
             text: "manual_hooks_before".to_string(),
             text_elements: Vec::new(),
         }],
@@ -622,11 +627,13 @@ fn user_input_for_step(scenario_name: &str, idx: usize, step: Step) -> Vec<UserI
     let mut items = Vec::new();
     if matches!(step, Step::ImageAssistant) {
         items.push(UserInput::Image {
+            client_id: None,
             image_url: IMAGE_URL.to_string(),
             detail: None,
         });
     }
     items.push(UserInput::Text {
+        client_id: None,
         text: format!("{}_USER_TURN_{}_{}", scenario_name, idx, step.label()),
         text_elements: Vec::new(),
     });

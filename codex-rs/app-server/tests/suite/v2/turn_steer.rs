@@ -68,6 +68,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
         .send_turn_steer_request(TurnSteerParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "steer".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -153,6 +154,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -178,6 +180,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
         .send_turn_steer_request(TurnSteerParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: oversized_input.clone(),
                 text_elements: Vec::new(),
             }],
@@ -263,6 +266,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -287,6 +291,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
         .send_turn_steer_request(TurnSteerParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "steer".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -367,6 +372,7 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
             }],

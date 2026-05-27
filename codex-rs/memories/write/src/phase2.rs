@@ -349,6 +349,7 @@ mod agent {
     pub(super) fn get_prompt(root: &Path) -> Vec<UserInput> {
         let prompt = build_consolidation_prompt(root);
         vec![UserInput::Text {
+            client_id: None,
             text: prompt,
             text_elements: vec![],
         }]

@@ -94,6 +94,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
+                client_id: None,
                 text: "materialize".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -518,6 +519,7 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
+                client_id: None,
                 text: "materialize".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -595,6 +597,7 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![UserInput::Text {
+                client_id: None,
                 text: "secondary turn".to_string(),
                 text_elements: Vec::new(),
             }],

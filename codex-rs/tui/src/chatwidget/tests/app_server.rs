@@ -284,6 +284,7 @@ async fn live_app_server_user_message_item_completed_does_not_duplicate_rendered
             item: AppServerThreadItem::UserMessage {
                 id: "user-1".to_string(),
                 content: vec![AppServerUserInput::Text {
+                    client_id: None,
                     text: "Hi, are you there?".to_string(),
                     text_elements: Vec::new(),
                 }],

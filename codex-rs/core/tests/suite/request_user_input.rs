@@ -138,6 +138,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please confirm".into(),
                 text_elements: Vec::new(),
             }],
@@ -282,6 +283,7 @@ async fn request_user_input_interrupt_emits_deferred_token_count() -> anyhow::Re
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please confirm".into(),
                 text_elements: Vec::new(),
             }],
@@ -387,6 +389,7 @@ where
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please confirm".into(),
                 text_elements: Vec::new(),
             }],

@@ -52,6 +52,7 @@ fn disabled_plan_turn(
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
     Ok(Op::UserInput {
         items: vec![UserInput::Text {
+            client_id: None,
             text: text.into(),
             text_elements: Vec::new(),
         }],
@@ -110,6 +111,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
         Some("<file>".into()),
     )];
     let expected_input = UserInput::Text {
+        client_id: None,
         text: "please inspect sample.txt".into(),
         text_elements: text_elements.clone(),
     };
@@ -175,6 +177,7 @@ async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please summarize results".into(),
                 text_elements: Vec::new(),
             }],
@@ -237,6 +240,7 @@ async fn reasoning_item_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "explain your reasoning".into(),
                 text_elements: Vec::new(),
             }],
@@ -300,6 +304,7 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "find the weather".into(),
                 text_elements: Vec::new(),
             }],
@@ -381,6 +386,7 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "generate a tiny blue square".into(),
                 text_elements: Vec::new(),
             }],
@@ -469,6 +475,7 @@ async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyho
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "generate an image".into(),
                 text_elements: Vec::new(),
             }],
@@ -526,6 +533,7 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please stream text".into(),
                 text_elements: Vec::new(),
             }],
@@ -1111,6 +1119,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "reason through it".into(),
                 text_elements: Vec::new(),
             }],
@@ -1167,6 +1176,7 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "show raw reasoning".into(),
                 text_elements: Vec::new(),
             }],

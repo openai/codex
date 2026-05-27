@@ -990,6 +990,7 @@ impl TurnRequestProcessor {
             vec![ThreadItem::UserMessage {
                 id: turn_id.clone(),
                 content: vec![V2UserInput::Text {
+                    client_id: None,
                     text: display_text.to_string(),
                     // Review prompt display text is synthesized; no UI element ranges to preserve.
                     text_elements: Vec::new(),

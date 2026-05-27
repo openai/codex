@@ -60,6 +60,7 @@ async fn turn_start_accepts_output_schema_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -142,6 +143,7 @@ async fn turn_start_output_schema_is_per_turn_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -184,6 +186,7 @@ async fn turn_start_output_schema_is_per_turn_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Hello again".to_string(),
                 text_elements: Vec::new(),
             }],

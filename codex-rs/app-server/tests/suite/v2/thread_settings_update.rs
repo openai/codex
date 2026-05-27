@@ -260,6 +260,7 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -306,6 +307,7 @@ async fn start_text_turn(mcp: &mut McpProcess, thread_id: String) -> Result<()> 
         .send_turn_start_request(TurnStartParams {
             thread_id,
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],

@@ -1035,6 +1035,7 @@ async fn user_message_during_user_shell_command_is_queued_not_steered() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "hi".to_string(),
                 text_elements: Vec::new(),
             }]

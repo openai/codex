@@ -33,11 +33,13 @@ pub(crate) fn apply_ide_context_to_user_input(
         let item = std::mem::replace(
             &mut items[text_index],
             UserInput::Text {
+                client_id: None,
                 text: String::new(),
                 text_elements: Vec::new(),
             },
         );
         let UserInput::Text {
+            client_id: None,
             text,
             text_elements,
         } = item
@@ -49,6 +51,7 @@ pub(crate) fn apply_ide_context_to_user_input(
         items.insert(
             0,
             UserInput::Text {
+                client_id: None,
                 text: prefix,
                 text_elements: Vec::new(),
             },
@@ -76,6 +79,7 @@ pub(crate) fn extract_prompt_request_with_offset(message: &str) -> (&str, usize)
 fn prefixed_text_input(prefix: String, text: String, text_elements: Vec<TextElement>) -> UserInput {
     let prefix_len = prefix.len();
     UserInput::Text {
+        client_id: None,
         text: format!("{prefix}{text}"),
         text_elements: text_elements
             .into_iter()
@@ -268,10 +272,12 @@ mod tests {
         let text = "Ask $figma".to_string();
         let mut items = vec![
             UserInput::LocalImage {
+                client_id: None,
                 path: PathBuf::from("/tmp/screenshot.png"),
                 detail: None,
             },
             UserInput::Text {
+                client_id: None,
                 text,
                 text_elements: vec![TextElement::new(
                     ByteRange { start: 4, end: 10 },
@@ -288,10 +294,12 @@ mod tests {
             items,
             vec![
                 UserInput::LocalImage {
+                    client_id: None,
                     path: PathBuf::from("/tmp/screenshot.png"),
                     detail: None,
                 },
                 UserInput::Text {
+                    client_id: None,
                     text: format!("{expected_prefix}Ask $figma"),
                     text_elements: vec![TextElement::new(
                         ByteRange {

@@ -199,6 +199,7 @@ impl AppServerClient {
             params: TurnStartParams {
                 thread_id: thread_id.to_string(),
                 input: vec![UserInput::Text {
+                    client_id: None,
                     text,
                     // Debug client sends plain text with no UI markup spans.
                     text_elements: Vec::new(),

@@ -45,14 +45,17 @@ fn parses_user_message_with_text_and_two_images() {
         TurnItem::UserMessage(user) => {
             let expected_content = vec![
                 UserInput::Text {
+                    client_id: None,
                     text: "Hello world".to_string(),
                     text_elements: Vec::new(),
                 },
                 UserInput::Image {
+                    client_id: None,
                     image_url: img1,
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 UserInput::Image {
+                    client_id: None,
                     image_url: img2,
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
@@ -94,10 +97,12 @@ fn skips_local_image_label_text() {
         TurnItem::UserMessage(user) => {
             let expected_content = vec![
                 UserInput::Image {
+                    client_id: None,
                     image_url,
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 UserInput::Text {
+                    client_id: None,
                     text: user_text,
                     text_elements: Vec::new(),
                 },
@@ -175,10 +180,12 @@ fn skips_unnamed_image_label_text() {
         TurnItem::UserMessage(user) => {
             let expected_content = vec![
                 UserInput::Image {
+                    client_id: None,
                     image_url,
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 UserInput::Text {
+                    client_id: None,
                     text: user_text,
                     text_elements: Vec::new(),
                 },

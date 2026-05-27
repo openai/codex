@@ -104,6 +104,7 @@ async fn shell_command_tool_executes_command_and_streams_output() -> anyhow::Res
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please run the shell command".into(),
                 text_elements: Vec::new(),
             }],
@@ -186,6 +187,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please update the plan".into(),
                 text_elements: Vec::new(),
             }],
@@ -278,6 +280,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please update the plan".into(),
                 text_elements: Vec::new(),
             }],
@@ -380,6 +383,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please apply a patch".into(),
                 text_elements: Vec::new(),
             }],
@@ -519,6 +523,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "please apply a patch".into(),
                 text_elements: Vec::new(),
             }],

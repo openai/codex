@@ -997,6 +997,7 @@ async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "Please continue.".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -1039,6 +1040,7 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "Please revise.".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -1149,6 +1151,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "queued while compacting".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -1191,6 +1194,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "queued while compacting".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -1256,10 +1260,12 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         items,
         vec![
             UserInput::Text {
+                client_id: None,
                 text: "$sample".to_string(),
                 text_elements: Vec::new(),
             },
             UserInput::Mention {
+                client_id: None,
                 name: "Sample Plugin".to_string(),
                 path: "plugin://sample@test".to_string(),
             },
@@ -1429,6 +1435,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     assert_eq!(
         items[0],
         UserInput::Text {
+            client_id: None,
             text: "build the plan".to_string(),
             text_elements: Vec::new(),
         }

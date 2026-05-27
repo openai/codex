@@ -58,6 +58,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: first_text.to_string(),
                 text_elements: Vec::new(),
             }],
@@ -79,6 +80,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Second".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -138,6 +140,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
             assert_eq!(
                 content,
                 &vec![V2UserInput::Text {
+                    client_id: None,
                     text: first_text.to_string(),
                     text_elements: Vec::new(),
                 }]
@@ -168,6 +171,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
             assert_eq!(
                 content,
                 &vec![V2UserInput::Text {
+                    client_id: None,
                     text: first_text.to_string(),
                     text_elements: Vec::new(),
                 }]

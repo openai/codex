@@ -198,6 +198,7 @@ async fn run_agent_job_loop(
             for item in pending_items {
                 let prompt = build_worker_prompt(&job, &item)?;
                 let items = vec![UserInput::Text {
+                    client_id: None,
                     text: prompt,
                     text_elements: Vec::new(),
                 }];

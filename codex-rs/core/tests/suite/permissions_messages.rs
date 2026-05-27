@@ -53,6 +53,7 @@ async fn permissions_message_sent_once_on_start() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -94,6 +95,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -118,6 +120,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -165,6 +168,7 @@ async fn permissions_message_not_added_when_no_change() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -180,6 +184,7 @@ async fn permissions_message_not_added_when_no_change() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -227,6 +232,7 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -251,6 +257,7 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -311,6 +318,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -336,6 +344,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -353,6 +362,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
@@ -414,6 +424,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -439,6 +450,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -462,6 +474,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
@@ -499,6 +512,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "after fork".into(),
                 text_elements: Vec::new(),
             }],
@@ -561,6 +575,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],

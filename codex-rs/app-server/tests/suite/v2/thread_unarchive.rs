@@ -82,6 +82,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
+                client_id: None,
                 text: "materialize".to_string(),
                 text_elements: Vec::new(),
             }],

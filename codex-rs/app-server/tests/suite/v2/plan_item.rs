@@ -153,6 +153,7 @@ async fn start_plan_mode_turn(mcp: &mut McpProcess) -> Result<codex_app_server_p
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Plan this".to_string(),
                 text_elements: Vec::new(),
             }],

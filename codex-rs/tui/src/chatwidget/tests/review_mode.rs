@@ -183,6 +183,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
             item: AppServerThreadItem::UserMessage {
                 id: "review-prompt".to_string(),
                 content: vec![AppServerUserInput::Text {
+                    client_id: None,
                     text: "Review the code changes against the base branch 'main'.".to_string(),
                     text_elements: Vec::new(),
                 }],
@@ -213,6 +214,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "review follow-up one".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -223,6 +225,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "review follow-up two".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -263,6 +266,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "review follow-up one\nreview follow-up two".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -276,6 +280,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "queued later".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -596,10 +601,12 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
         "user-1",
         vec![
             UserInput::Image {
+                client_id: None,
                 url: "data:image/png;base64,placeholder".to_string(),
                 detail: None,
             },
             UserInput::Text {
+                client_id: None,
                 text,
                 text_elements: Vec::new(),
             },
@@ -679,6 +686,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
     assert_eq!(
         first_items,
         vec![UserInput::Text {
+            client_id: None,
             text: "first follow-up".to_string(),
             text_elements: Vec::new(),
         }]
@@ -690,6 +698,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
     assert_eq!(
         second_items,
         vec![UserInput::Text {
+            client_id: None,
             text: "second follow-up".to_string(),
             text_elements: Vec::new(),
         }]
@@ -743,6 +752,7 @@ async fn manual_interrupt_restores_pending_steers_to_composer() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "queued while streaming".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -779,6 +789,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "first pending steer".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -794,6 +805,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "second pending steer".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -817,6 +829,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "first pending steer\nsecond pending steer".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -893,6 +906,7 @@ async fn manual_interrupt_restores_pending_steer_mention_bindings_to_composer() 
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please use $figma".to_string(),
                 text_elements: vec![
                     TextElement::new((11..17).into(), Some("$figma".to_string())).into()
@@ -932,6 +946,7 @@ async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "pending steer".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -1425,6 +1440,7 @@ async fn enter_submits_steer_while_review_is_running() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "Steer submitted while /review was running.".to_string(),
                 text_elements: Vec::new(),
             }]

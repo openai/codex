@@ -59,6 +59,7 @@ mv "${tmp_path}" "${payload_path}""#,
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello world".into(),
                 text_elements: Vec::new(),
             }],

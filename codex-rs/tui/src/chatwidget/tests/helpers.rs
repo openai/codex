@@ -739,6 +739,7 @@ pub(super) fn replay_user_message_text(
         chat,
         item_id,
         vec![AppServerUserInput::Text {
+            client_id: None,
             text: text.into(),
             text_elements: Vec::new(),
         }],
@@ -928,6 +929,7 @@ pub(super) fn complete_user_message(chat: &mut ChatWidget, item_id: &str, text: 
         chat,
         item_id,
         vec![UserInput::Text {
+            client_id: None,
             text: text.to_string(),
             text_elements: Vec::new(),
         }],

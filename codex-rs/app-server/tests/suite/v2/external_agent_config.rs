@@ -392,6 +392,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
+                client_id: None,
                 text: "follow up".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -965,6 +966,7 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
+                client_id: None,
                 text: "follow up".to_string(),
                 text_elements: Vec::new(),
             }],

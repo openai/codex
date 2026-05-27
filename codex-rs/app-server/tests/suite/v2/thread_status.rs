@@ -49,6 +49,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "collect status updates".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -172,6 +173,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run once".to_string(),
                 text_elements: Vec::new(),
             }],

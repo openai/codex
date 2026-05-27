@@ -111,6 +111,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],

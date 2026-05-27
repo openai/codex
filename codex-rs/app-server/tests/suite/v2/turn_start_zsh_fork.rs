@@ -118,6 +118,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run echo hi".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -236,6 +237,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -368,6 +370,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -526,6 +529,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "remove both files".to_string(),
                 text_elements: Vec::new(),
             }],

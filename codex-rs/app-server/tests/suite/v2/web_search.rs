@@ -89,6 +89,7 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Search the web".to_string(),
                 text_elements: Vec::new(),
             }],

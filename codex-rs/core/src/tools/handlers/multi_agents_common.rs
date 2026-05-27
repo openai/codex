@@ -179,6 +179,7 @@ pub(crate) fn parse_collab_input(
                 ));
             }
             Ok(vec![UserInput::Text {
+                client_id: None,
                 text: message,
                 text_elements: Vec::new(),
             }]

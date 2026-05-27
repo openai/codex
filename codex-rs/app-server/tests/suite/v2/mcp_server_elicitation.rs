@@ -136,6 +136,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Warm up connectors.".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -168,6 +169,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Use [$calendar](app://calendar) to run the calendar tool.".to_string(),
                 text_elements: Vec::new(),
             }],

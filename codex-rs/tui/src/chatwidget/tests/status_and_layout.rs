@@ -1448,6 +1448,7 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     assert_eq!(
         items,
         vec![UserInput::Text {
+            client_id: None,
             text: "Please summarize the rest more briefly.".to_string(),
             text_elements: Vec::new(),
         }]

@@ -171,6 +171,7 @@ async fn startup_thread_started_submits_queued_startup_input() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "queued before startup completes".to_string(),
                 text_elements: Vec::new(),
             }]

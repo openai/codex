@@ -144,6 +144,7 @@ async fn submit_turn(
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],

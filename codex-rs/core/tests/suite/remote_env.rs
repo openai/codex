@@ -69,6 +69,7 @@ async fn submit_turn_with_approval_and_environments(
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],

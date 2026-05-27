@@ -79,6 +79,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -160,6 +161,7 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "say done".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -254,6 +256,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],

@@ -267,6 +267,7 @@ async fn queued_empty_bang_shell_reports_help_when_dequeued_and_drains_next_inpu
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "hello after help".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -306,6 +307,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "hello after shell".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -339,6 +341,7 @@ async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "hello after menu".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -378,6 +381,7 @@ async fn queued_slash_menu_selection_drains_next_input() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "hello after selection".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -429,6 +433,7 @@ async fn queued_bare_rename_drains_next_input_after_name_update() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "hello after rename".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -464,6 +469,7 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "first after rename".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -512,6 +518,7 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "second after rename".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -2227,6 +2234,7 @@ async fn queued_fast_slash_applies_before_next_queued_message() {
         } if service_tier == ServiceTier::Fast.request_value() => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "hello after fast".to_string(),
                 text_elements: Vec::new(),
             }]

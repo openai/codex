@@ -663,6 +663,7 @@ command = "python3 {hook_script_path}"
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -724,6 +725,7 @@ command = "python3 {hook_script_path}"
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -793,6 +795,7 @@ command = "python3 {hook_script_path}"
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "third turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -933,6 +936,7 @@ command = "python3 {hook_script_path}"
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -984,6 +988,7 @@ command = "python3 {hook_script_path}"
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
             }],

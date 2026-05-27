@@ -9,6 +9,7 @@ use crate::plugins::PluginCapabilitySummary;
 
 fn text_input(text: &str) -> UserInput {
     UserInput::Text {
+        client_id: None,
         text: text.to_string(),
         text_elements: Vec::new(),
     }
@@ -39,6 +40,7 @@ fn collect_explicit_app_ids_dedupes_structured_and_linked_mentions() {
     let input = vec![
         text_input("use [$calendar](app://calendar)"),
         UserInput::Mention {
+            client_id: None,
             name: "calendar".to_string(),
             path: "app://calendar".to_string(),
         },
@@ -56,14 +58,17 @@ fn collect_explicit_app_ids_ignores_non_app_paths() {
             "use [$docs](mcp://docs) and [$skill](skill://team/skill) and [$file](/tmp/file.txt)",
         ),
         UserInput::Mention {
+            client_id: None,
             name: "docs".to_string(),
             path: "mcp://docs".to_string(),
         },
         UserInput::Mention {
+            client_id: None,
             name: "skill".to_string(),
             path: "skill://team/skill".to_string(),
         },
         UserInput::Mention {
+            client_id: None,
             name: "file".to_string(),
             path: "/tmp/file.txt".to_string(),
         },
@@ -83,6 +88,7 @@ fn collect_explicit_plugin_mentions_from_structured_paths() {
 
     let mentioned = collect_explicit_plugin_mentions(
         &[UserInput::Mention {
+            client_id: None,
             name: "sample".to_string(),
             path: "plugin://sample@test".to_string(),
         }],
@@ -118,6 +124,7 @@ fn collect_explicit_plugin_mentions_dedupes_structured_and_linked_mentions() {
         &[
             text_input("use [@sample](plugin://sample@test)"),
             UserInput::Mention {
+                client_id: None,
                 name: "sample".to_string(),
                 path: "plugin://sample@test".to_string(),
             },

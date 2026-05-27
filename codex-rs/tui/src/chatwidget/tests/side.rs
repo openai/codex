@@ -237,6 +237,7 @@ async fn submit_user_message_as_plain_user_turn_does_not_run_shell_commands() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "!echo hello".to_string(),
                 text_elements: Vec::new(),
             }]

@@ -654,6 +654,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                     environments: None,
                     thread_id,
                     input: vec![UserInput::Text {
+                        client_id: None,
                         text: "hello".to_string(),
                         text_elements: Vec::new(),
                     }],

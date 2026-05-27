@@ -2985,6 +2985,7 @@ text(
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "use exec to inspect and call hidden tools".into(),
                 text_elements: Vec::new(),
             }],

@@ -468,6 +468,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "call the rmcp echo tool".to_string(),
                 text_elements: Vec::new(),
             }],

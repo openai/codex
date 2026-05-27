@@ -222,6 +222,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         .submit(Op::UserInput {
             environments: None,
             items: vec![codex_protocol::user_input::UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -302,6 +303,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![codex_protocol::user_input::UserInput::Mention {
+                client_id: None,
                 name: "sample".into(),
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
             }],
@@ -385,6 +387,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![codex_protocol::user_input::UserInput::Mention {
+                client_id: None,
                 name: "sample".into(),
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
             }],

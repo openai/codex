@@ -117,10 +117,12 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         "user-1",
         vec![
             AppServerUserInput::Text {
+                client_id: None,
                 text: message.clone(),
                 text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
             },
             AppServerUserInput::LocalImage {
+                client_id: None,
                 path: local_images[0].clone(),
                 detail: None,
             },
@@ -189,10 +191,12 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         "user-1",
         vec![
             AppServerUserInput::Text {
+                client_id: None,
                 text: message.clone(),
                 text_elements: Vec::new(),
             },
             AppServerUserInput::Image {
+                client_id: None,
                 url: remote_image_urls[0].clone(),
                 detail: None,
             },
@@ -451,6 +455,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         &mut chat,
         "user-1",
         vec![AppServerUserInput::Image {
+            client_id: None,
             url: remote_image_urls[0].clone(),
             detail: None,
         }],
@@ -509,6 +514,7 @@ async fn replayed_user_message_with_only_local_images_renders_history_cell() {
         &mut chat,
         "user-1",
         vec![AppServerUserInput::LocalImage {
+            client_id: None,
             path: local_images[0].clone(),
             detail: None,
         }],

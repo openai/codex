@@ -48,6 +48,7 @@ async fn submit_user_turn(
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
@@ -136,6 +137,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "run shell command".into(),
                 text_elements: Vec::new(),
             }],

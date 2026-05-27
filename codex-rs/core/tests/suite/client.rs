@@ -387,6 +387,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -754,6 +755,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -966,6 +968,7 @@ async fn includes_base_instructions_override_in_request() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1024,6 +1027,7 @@ async fn chatgpt_auth_sends_correct_request() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1149,6 +1153,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1189,6 +1194,7 @@ async fn includes_user_instructions_message_in_request() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1278,6 +1284,7 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1342,6 +1349,7 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1402,6 +1410,7 @@ async fn omits_apps_guidance_when_configured_off() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1445,6 +1454,7 @@ async fn omits_environment_context_when_configured_off() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1503,6 +1513,7 @@ async fn skills_append_to_developer_message() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1587,6 +1598,7 @@ async fn skills_use_aliases_in_developer_message_under_budget_pressure() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1649,6 +1661,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1692,6 +1705,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1736,6 +1750,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1787,6 +1802,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1845,6 +1861,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1910,6 +1927,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1972,6 +1990,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -2032,6 +2051,7 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -2072,6 +2092,7 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -2121,6 +2142,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -2169,6 +2191,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -2222,6 +2245,7 @@ async fn includes_developer_instructions_message_in_request() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -2519,6 +2543,7 @@ async fn token_count_includes_rate_limits_snapshot() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -2659,6 +2684,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -2737,6 +2763,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "seed turn".into(),
                 text_elements: Vec::new(),
             }],
@@ -2753,6 +2780,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "trigger context window".into(),
                 text_elements: Vec::new(),
             }],
@@ -2839,6 +2867,7 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "trigger incomplete".into(),
                 text_elements: Vec::new(),
             }],
@@ -2951,6 +2980,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -3041,6 +3071,7 @@ async fn env_var_overrides_loaded_auth() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -3099,6 +3130,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "U1".into(),
                 text_elements: Vec::new(),
             }],
@@ -3116,6 +3148,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "U2".into(),
                 text_elements: Vec::new(),
             }],
@@ -3133,6 +3166,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "U3".into(),
                 text_elements: Vec::new(),
             }],

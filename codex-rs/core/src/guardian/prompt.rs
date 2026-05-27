@@ -153,6 +153,7 @@ pub(crate) async fn build_guardian_prompt_items(
     let mut items = Vec::new();
     let mut push_text = |text: String| {
         items.push(UserInput::Text {
+            client_id: None,
             text,
             text_elements: Vec::new(),
         });

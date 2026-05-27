@@ -194,6 +194,7 @@ async fn submit_unified_exec_turn(
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
@@ -286,6 +287,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "apply patch via unified exec".into(),
                 text_elements: Vec::new(),
             }],
@@ -2142,6 +2144,7 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "keep unified exec process after turn end".into(),
                 text_elements: Vec::new(),
             }],
@@ -2246,6 +2249,7 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "interrupt long-running unified exec".into(),
                 text_elements: Vec::new(),
             }],
@@ -2719,6 +2723,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "summarize large output".into(),
                 text_elements: Vec::new(),
             }],
@@ -2842,6 +2847,7 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "read the fixture files".into(),
                 text_elements: Vec::new(),
             }],
@@ -2981,6 +2987,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "start python under seatbelt".into(),
                 text_elements: Vec::new(),
             }],

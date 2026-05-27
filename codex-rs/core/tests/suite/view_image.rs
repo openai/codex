@@ -206,6 +206,7 @@ async fn assert_user_turn_local_image_resizes_to(
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::LocalImage {
+                client_id: None,
                 path: abs_path.clone(),
                 detail: None,
             }],
@@ -317,6 +318,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
             }],
@@ -710,6 +712,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please add the original screenshot".into(),
                 text_elements: Vec::new(),
             }],
@@ -799,6 +802,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please attach the image at low detail".into(),
                 text_elements: Vec::new(),
             }],
@@ -879,6 +883,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please attach the image with a null detail".into(),
                 text_elements: Vec::new(),
             }],
@@ -969,6 +974,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
             }],
@@ -1063,6 +1069,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
             }],
@@ -1145,6 +1152,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please attach the folder".into(),
                 text_elements: Vec::new(),
             }],
@@ -1216,6 +1224,7 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please use the view_image tool to read the json file".into(),
                 text_elements: Vec::new(),
             }],
@@ -1293,6 +1302,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please attach the missing image".into(),
                 text_elements: Vec::new(),
             }],
@@ -1423,6 +1433,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::Text {
+                client_id: None,
                 text: "please attach the image".into(),
                 text_elements: Vec::new(),
             }],
@@ -1494,6 +1505,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         .submit(disabled_user_turn(
             &test,
             vec![UserInput::LocalImage {
+                client_id: None,
                 path: abs_path.clone(),
                 detail: None,
             }],

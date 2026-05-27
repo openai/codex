@@ -62,6 +62,7 @@ fn read_only_text_turn_with_personality(
         turn_permission_fields(PermissionProfile::read_only(), test.cwd_path());
     Op::UserInput {
         items: vec![UserInput::Text {
+            client_id: None,
             text: text.into(),
             text_elements: Vec::new(),
         }],

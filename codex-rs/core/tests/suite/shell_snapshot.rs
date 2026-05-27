@@ -161,6 +161,7 @@ async fn run_snapshot_command_with_options(
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "run unified exec with shell snapshot".into(),
                 text_elements: Vec::new(),
             }],
@@ -262,6 +263,7 @@ async fn run_shell_command_snapshot_with_options(
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "run shell_command with shell snapshot".into(),
                 text_elements: Vec::new(),
             }],
@@ -343,6 +345,7 @@ async fn run_tool_turn_on_harness(
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
@@ -587,6 +590,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "apply patch via shell_command with snapshot".into(),
                 text_elements: Vec::new(),
             }],

@@ -340,6 +340,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
             vec![ThreadItem::UserMessage {
                 id: "user-1".to_string(),
                 content: vec![AppServerUserInput::Text {
+                    client_id: None,
                     text: "earlier prompt".to_string(),
                     text_elements: Vec::new(),
                 }],
@@ -376,6 +377,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     assert_eq!(
         submitted_items,
         Some(vec![UserInput::Text {
+            client_id: None,
             text: initial_prompt,
             text_elements: Vec::new(),
         }])
@@ -611,6 +613,7 @@ async fn replayed_turn_complete_submits_restored_queued_follow_up() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "queued follow-up".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -854,6 +857,7 @@ async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up()
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "queued follow-up".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -911,6 +915,7 @@ async fn replay_thread_snapshot_restores_pending_pastes_for_submit() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: large,
                 text_elements: Vec::new(),
             }]
@@ -981,6 +986,7 @@ async fn replay_thread_snapshot_restores_collaboration_mode_for_draft_submit() {
             assert_eq!(
                 items,
                 vec![UserInput::Text {
+                    client_id: None,
                     text: "draft prompt".to_string(),
                     text_elements: Vec::new(),
                 }]
@@ -3265,6 +3271,7 @@ async fn side_thread_snapshot_hides_forked_parent_transcript() {
         vec![ThreadItem::UserMessage {
             id: "parent-user".to_string(),
             content: vec![AppServerUserInput::Text {
+                client_id: None,
                 text: "parent prompt should stay hidden".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -4691,6 +4698,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                     items: vec![ThreadItem::UserMessage {
                         id: "user-1".to_string(),
                         content: vec![AppServerUserInput::Text {
+                            client_id: None,
                             text: "first prompt".to_string(),
                             text_elements: Vec::new(),
                         }],
@@ -4708,6 +4716,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                         ThreadItem::UserMessage {
                             id: "user-2".to_string(),
                             content: vec![AppServerUserInput::Text {
+                                client_id: None,
                                 text: "third prompt".to_string(),
                                 text_elements: Vec::new(),
                             }],
@@ -4855,6 +4864,7 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
         vec![ThreadItem::UserMessage {
             id: "user-1".to_string(),
             content: vec![AppServerUserInput::Text {
+                client_id: None,
                 text: "restored prompt".to_string(),
                 text_elements: Vec::new(),
             }],

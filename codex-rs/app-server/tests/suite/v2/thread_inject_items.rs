@@ -93,6 +93,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -171,6 +172,7 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "First turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -216,6 +218,7 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "Second turn".to_string(),
                 text_elements: Vec::new(),
             }],

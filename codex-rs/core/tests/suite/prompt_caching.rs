@@ -148,6 +148,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -163,6 +164,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -247,6 +249,7 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -262,6 +265,7 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -328,6 +332,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -343,6 +348,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -427,6 +433,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -466,6 +473,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -548,6 +556,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "first message".into(),
                 text_elements: Vec::new(),
             }],
@@ -703,6 +712,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -728,6 +738,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -843,6 +854,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -872,6 +884,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
@@ -984,6 +997,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
@@ -1015,6 +1029,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],

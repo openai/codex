@@ -2161,6 +2161,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: user_text.to_string(),
                 text_elements: Vec::new(),
             }],
@@ -2297,6 +2298,7 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: user_text.clone(),
                 text_elements: Vec::new(),
             }],
@@ -3494,6 +3496,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "first prompt".to_string(),
                 text_elements: Vec::new(),
             }],

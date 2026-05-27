@@ -765,6 +765,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
         .thread
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: INTERNAL_SUBAGENT_PROMPT.to_string(),
                 text_elements: Vec::new(),
             }],

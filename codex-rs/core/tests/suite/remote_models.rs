@@ -154,6 +154,7 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "check context window".into(),
                 text_elements: Vec::new(),
             }],
@@ -222,6 +223,7 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "check context window".into(),
                 text_elements: Vec::new(),
             }],
@@ -289,6 +291,7 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "check context window".into(),
                 text_elements: Vec::new(),
             }],
@@ -369,6 +372,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "check model slug".into(),
                 text_elements: Vec::new(),
             }],
@@ -420,6 +424,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "check namespaced model metadata".into(),
                 text_elements: Vec::new(),
             }],
@@ -574,6 +579,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "run call".into(),
                 text_elements: Vec::new(),
             }],
@@ -798,6 +804,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello remote".into(),
                 text_elements: Vec::new(),
             }],

@@ -77,10 +77,12 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![
                 UserInput::Text {
+                    client_id: None,
                     text: "please use $demo".to_string(),
                     text_elements: Vec::new(),
                 },
                 UserInput::Skill {
+                    client_id: None,
                     name: "demo".to_string(),
                     path: skill_path.clone(),
                 },

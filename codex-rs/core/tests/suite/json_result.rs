@@ -77,6 +77,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
+                client_id: None,
                 text: "hello world".into(),
                 text_elements: Vec::new(),
             }],

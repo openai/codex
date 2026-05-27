@@ -218,6 +218,7 @@ async fn queued_goal_slash_command_rejects_oversized_objective_and_drains_next_i
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
+                client_id: None,
                 text: "continue".to_string(),
                 text_elements: Vec::new(),
             }]

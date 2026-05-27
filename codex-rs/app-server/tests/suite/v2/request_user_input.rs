@@ -52,6 +52,7 @@ async fn request_user_input_round_trip() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
+                client_id: None,
                 text: "ask something".to_string(),
                 text_elements: Vec::new(),
             }],
