@@ -24,6 +24,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
@@ -97,6 +98,13 @@ pub struct TurnTokenUsageFact {
     pub turn_id: String,
     pub thread_id: String,
     pub token_usage: TokenUsage,
+}
+
+#[derive(Clone)]
+pub struct GoalStatusAtTurnEndFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub goal_status_at_turn_end: Option<ThreadGoalStatus>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -329,6 +337,7 @@ pub(crate) enum CustomAnalyticsFact {
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    GoalStatusAtTurnEnd(Box<GoalStatusAtTurnEndFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

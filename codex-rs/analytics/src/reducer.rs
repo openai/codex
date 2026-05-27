@@ -64,6 +64,7 @@ use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::GoalStatusAtTurnEndFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
@@ -118,6 +119,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
@@ -324,6 +326,8 @@ struct TurnState {
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
+    // Outer None means the completion fact has not arrived; inner None means no goal.
+    goal_status_at_turn_end: Option<Option<ThreadGoalStatus>>,
     completed: Option<CompletedTurnState>,
     latest_diff: Option<String>,
     steer_count: usize,
@@ -463,6 +467,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnTokenUsage(input) => {
                     self.ingest_turn_token_usage(*input, out).await;
+                }
+                CustomAnalyticsFact::GoalStatusAtTurnEnd(input) => {
+                    self.ingest_goal_status_at_turn_end(*input, out).await;
                 }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
@@ -611,6 +618,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            goal_status_at_turn_end: None,
             completed: None,
             latest_diff: None,
             steer_count: 0,
@@ -635,6 +643,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            goal_status_at_turn_end: None,
             completed: None,
             latest_diff: None,
             steer_count: 0,
@@ -642,6 +651,30 @@ impl AnalyticsReducer {
         });
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
+        self.maybe_emit_turn_event(&turn_id, out).await;
+    }
+
+    async fn ingest_goal_status_at_turn_end(
+        &mut self,
+        input: GoalStatusAtTurnEndFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let turn_id = input.turn_id.clone();
+        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+            connection_id: None,
+            thread_id: None,
+            num_input_images: None,
+            resolved_config: None,
+            started_at: None,
+            token_usage: None,
+            goal_status_at_turn_end: None,
+            completed: None,
+            latest_diff: None,
+            steer_count: 0,
+            tool_counts: TurnToolCounts::default(),
+        });
+        turn_state.thread_id = Some(input.thread_id);
+        turn_state.goal_status_at_turn_end = Some(input.goal_status_at_turn_end);
         self.maybe_emit_turn_event(&turn_id, out).await;
     }
 
@@ -800,6 +833,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at: None,
                     token_usage: None,
+                    goal_status_at_turn_end: None,
                     completed: None,
                     latest_diff: None,
                     steer_count: 0,
@@ -1159,6 +1193,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at: None,
                     token_usage: None,
+                    goal_status_at_turn_end: None,
                     completed: None,
                     latest_diff: None,
                     steer_count: 0,
@@ -1180,6 +1215,7 @@ impl AnalyticsReducer {
                             resolved_config: None,
                             started_at: None,
                             token_usage: None,
+                            goal_status_at_turn_end: None,
                             completed: None,
                             latest_diff: None,
                             steer_count: 0,
@@ -1199,6 +1235,7 @@ impl AnalyticsReducer {
                             resolved_config: None,
                             started_at: None,
                             token_usage: None,
+                            goal_status_at_turn_end: None,
                             completed: None,
                             latest_diff: None,
                             steer_count: 0,
@@ -1478,6 +1515,7 @@ impl AnalyticsReducer {
         if turn_state.thread_id.is_none()
             || turn_state.num_input_images.is_none()
             || turn_state.resolved_config.is_none()
+            || turn_state.goal_status_at_turn_end.is_none()
             || turn_state.completed.is_none()
         {
             return;
@@ -2482,6 +2520,10 @@ fn codex_turn_event_params(
         approvals_reviewer: approvals_reviewer.to_string(),
         sandbox_network_access,
         collaboration_mode: Some(collaboration_mode_mode(collaboration_mode)),
+        goal_status_at_turn_end: turn_state
+            .goal_status_at_turn_end
+            .flatten()
+            .map(goal_status_mode),
         personality: personality_mode(personality),
         num_input_images,
         is_first_turn,
@@ -2545,6 +2587,17 @@ fn collaboration_mode_mode(mode: ModeKind) -> &'static str {
     match mode {
         ModeKind::Plan => "plan",
         ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => "default",
+    }
+}
+
+fn goal_status_mode(status: ThreadGoalStatus) -> &'static str {
+    match status {
+        ThreadGoalStatus::Active => "active",
+        ThreadGoalStatus::Paused => "paused",
+        ThreadGoalStatus::Blocked => "blocked",
+        ThreadGoalStatus::UsageLimited => "usage_limited",
+        ThreadGoalStatus::BudgetLimited => "budget_limited",
+        ThreadGoalStatus::Complete => "complete",
     }
 }
 

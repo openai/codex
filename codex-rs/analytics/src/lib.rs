@@ -31,6 +31,7 @@ pub use facts::CompactionReason;
 pub use facts::CompactionStatus;
 pub use facts::CompactionStrategy;
 pub use facts::CompactionTrigger;
+pub use facts::GoalStatusAtTurnEndFact;
 pub use facts::HookRunFact;
 pub use facts::InputError;
 pub use facts::InvocationType;

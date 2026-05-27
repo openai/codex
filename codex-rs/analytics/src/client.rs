@@ -10,6 +10,7 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::GoalStatusAtTurnEndFact;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginState;
@@ -254,6 +255,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnTokenUsage(
             Box::new(fact),
         )));
+    }
+
+    pub fn track_goal_status_at_turn_end(&self, fact: GoalStatusAtTurnEndFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::GoalStatusAtTurnEnd(Box::new(fact)),
+        ));
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {

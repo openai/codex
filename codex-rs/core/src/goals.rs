@@ -431,6 +431,37 @@ impl Session {
             .map(|goal| goal.map(protocol_goal_from_state))
     }
 
+    pub(crate) async fn goal_status_at_turn_end(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<ThreadGoalStatus> {
+        if !self.enabled(Feature::Goals)
+            || should_ignore_goal_for_mode(turn_context.collaboration_mode.mode)
+        {
+            return None;
+        }
+        let state_db = match self.state_db_for_thread_goals().await {
+            Ok(Some(state_db)) => state_db,
+            Ok(None) => return None,
+            Err(err) => {
+                tracing::warn!("failed to open state db at turn end: {err}");
+                return None;
+            }
+        };
+        match state_db
+            .thread_goals()
+            .get_thread_goal(self.conversation_id)
+            .await
+        {
+            Ok(Some(goal)) => Some(protocol_goal_status_from_state(goal.status)),
+            Ok(None) => None,
+            Err(err) => {
+                tracing::warn!("failed to read thread goal at turn end: {err}");
+                None
+            }
+        }
+    }
+
     pub(crate) async fn set_thread_goal(
         &self,
         turn_context: &TurnContext,

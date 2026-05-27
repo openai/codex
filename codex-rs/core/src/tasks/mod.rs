@@ -33,6 +33,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_analytics::GoalStatusAtTurnEndFact;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -515,14 +516,19 @@ impl Session {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
         }
-        if (aborted_turn || reason == TurnAbortReason::Interrupted)
-            && let Err(err) = self
+        if aborted_turn || reason == TurnAbortReason::Interrupted {
+            if let Err(err) = self
                 .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
                     turn_context: turn_context.as_deref(),
                 })
                 .await
-        {
-            warn!("failed to apply goal runtime abort event: {err}");
+            {
+                warn!("failed to apply goal runtime abort event: {err}");
+            }
+            if let Some(turn_context) = turn_context.as_deref() {
+                self.track_goal_status_at_turn_end_analytics(turn_context)
+                    .await;
+            }
         }
         if let Some(active_turn) = active_turn_to_clear {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
@@ -571,6 +577,10 @@ impl Session {
             .await
         {
             warn!("failed to apply goal runtime abort event: {err}");
+        }
+        if let Some(turn_context) = turn_context.as_deref() {
+            self.track_goal_status_at_turn_end_analytics(turn_context)
+                .await;
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
@@ -774,6 +784,8 @@ impl Session {
         {
             warn!("failed to apply goal runtime turn-finished event: {err}");
         }
+        self.track_goal_status_at_turn_end_analytics(turn_context.as_ref())
+            .await;
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
@@ -809,6 +821,17 @@ impl Session {
         {
             warn!("failed to apply goal runtime maybe-continue event: {err}");
         }
+    }
+
+    async fn track_goal_status_at_turn_end_analytics(&self, turn_context: &TurnContext) {
+        let goal_status_at_turn_end = self.goal_status_at_turn_end(turn_context).await;
+        self.services
+            .analytics_events_client
+            .track_goal_status_at_turn_end(GoalStatusAtTurnEndFact {
+                turn_id: turn_context.sub_id.clone(),
+                thread_id: self.conversation_id.to_string(),
+                goal_status_at_turn_end,
+            });
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {

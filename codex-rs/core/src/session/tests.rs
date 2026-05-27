@@ -8743,6 +8743,10 @@ async fn create_thread_goal_fills_empty_thread_preview() -> anyhow::Result<()> {
         Some("Keep improving the benchmark"),
         page.items[0].preview.as_deref()
     );
+    assert_eq!(
+        Some(ThreadGoalStatus::Active),
+        sess.goal_status_at_turn_end(tc.as_ref()).await
+    );
 
     Ok(())
 }
@@ -8823,6 +8827,10 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
         .expect("goal should remain persisted after accounting");
     assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
     assert_eq!(25, goal.tokens_used);
+    assert_eq!(
+        Some(ThreadGoalStatus::BudgetLimited),
+        sess.goal_status_at_turn_end(tc.as_ref()).await
+    );
 
     set_total_token_usage(
         &sess,
