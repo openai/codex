@@ -1,6 +1,6 @@
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -16,6 +16,7 @@ use crate::sandbox_bin_dir;
 
 const DEV_BUILD_VERSION_SENTINEL: &str = "0.0.0";
 const RESOURCES_DIRNAME: &str = "codex-resources";
+const CODEX_CLI_PATH_ENV_VAR: &str = "CODEX_CLI_PATH";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
@@ -49,9 +50,7 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 }
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(candidate) = source_path_for_exe(&exe, kind.file_name())
-    {
+    if let Some(candidate) = resolve_helper_source_path(kind.file_name()) {
         return candidate;
     }
     PathBuf::from(kind.file_name())
@@ -89,10 +88,7 @@ pub(crate) fn resolve_helper_for_launch(
     }
 }
 
-pub fn resolve_current_exe_for_launch(
-    codex_home: &Path,
-    fallback_executable: &str,
-) -> PathBuf {
+pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
     let source = match std::env::current_exe() {
         Ok(path) => path,
         Err(_) => return PathBuf::from(fallback_executable),
@@ -179,13 +175,38 @@ fn store_helper_path(cache_key: String, path: PathBuf) {
 }
 
 fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
+    let exe = resolve_launch_anchor_exe()
+        .context("resolve launch anchor executable for helper lookup")?;
     source_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
         anyhow!(
             "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
             exe.display()
         )
     })
+}
+
+pub(crate) fn resolve_helper_source_path(file_name: &str) -> Option<PathBuf> {
+    let exe = resolve_launch_anchor_exe()?;
+    source_path_for_exe(&exe, file_name)
+}
+
+fn resolve_launch_anchor_exe() -> Option<PathBuf> {
+    resolve_launch_anchor_exe_from(
+        std::env::var_os(CODEX_CLI_PATH_ENV_VAR).map(PathBuf::from),
+        std::env::current_exe().ok(),
+    )
+}
+
+fn resolve_launch_anchor_exe_from(
+    codex_cli_path: Option<PathBuf>,
+    current_exe: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(path) = codex_cli_path
+        && path.exists()
+    {
+        return Some(path);
+    }
+    current_exe
 }
 
 fn source_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
@@ -242,11 +263,7 @@ fn dev_build_suffix(source: &Path) -> Result<String> {
     let duration = modified
         .duration_since(UNIX_EPOCH)
         .with_context(|| format!("convert helper source mtime {}", source.display()))?;
-    Ok(format!(
-        "{}-{:x}",
-        metadata.len(),
-        duration.as_secs(),
-    ))
+    Ok(format!("{}-{:x}", metadata.len(), duration.as_secs(),))
 }
 
 fn copy_from_source_if_needed(source: &Path, destination: &Path) -> Result<CopyOutcome> {
@@ -254,9 +271,12 @@ fn copy_from_source_if_needed(source: &Path, destination: &Path) -> Result<CopyO
         return Ok(CopyOutcome::Reused);
     }
 
-    let destination_dir = destination
-        .parent()
-        .ok_or_else(|| anyhow!("helper destination has no parent: {}", destination.display()))?;
+    let destination_dir = destination.parent().ok_or_else(|| {
+        anyhow!(
+            "helper destination has no parent: {}",
+            destination.display()
+        )
+    })?;
     fs::create_dir_all(destination_dir).with_context(|| {
         format!(
             "create helper destination directory {}",
@@ -327,8 +347,9 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => {
-            return Err(err)
-                .with_context(|| format!("read helper destination metadata {}", destination.display()));
+            return Err(err).with_context(|| {
+                format!("read helper destination metadata {}", destination.display())
+            });
         }
     };
 
@@ -348,16 +369,17 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::copy_from_source_if_needed;
     use super::CopyOutcome;
-    use super::dev_build_suffix;
+    use super::DEV_BUILD_VERSION_SENTINEL;
+    use super::HelperExecutable;
+    use super::RESOURCES_DIRNAME;
+    use super::copy_from_source_if_needed;
     use super::destination_is_fresh;
+    use super::dev_build_suffix;
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
-    use super::HelperExecutable;
-    use super::DEV_BUILD_VERSION_SENTINEL;
-    use super::RESOURCES_DIRNAME;
+    use super::resolve_launch_anchor_exe_from;
     use super::source_path_for_exe;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -376,7 +398,10 @@ mod tests {
         let outcome = copy_from_source_if_needed(&source, &destination).expect("copy helper");
 
         assert_eq!(CopyOutcome::ReCopied, outcome);
-        assert_eq!(b"runner-v1".as_slice(), fs::read(&destination).expect("read destination"));
+        assert_eq!(
+            b"runner-v1".as_slice(),
+            fs::read(&destination).expect("read destination")
+        );
     }
 
     #[test]
@@ -403,11 +428,13 @@ mod tests {
         fs::write(&source, b"runner-v1").expect("write source");
         copy_from_source_if_needed(&source, &destination).expect("initial copy");
 
-        let outcome =
-            copy_from_source_if_needed(&source, &destination).expect("revalidate helper");
+        let outcome = copy_from_source_if_needed(&source, &destination).expect("revalidate helper");
 
         assert_eq!(CopyOutcome::Reused, outcome);
-        assert_eq!(b"runner-v1".as_slice(), fs::read(&destination).expect("read destination"));
+        assert_eq!(
+            b"runner-v1".as_slice(),
+            fs::read(&destination).expect("read destination")
+        );
     }
 
     #[test]
@@ -429,8 +456,10 @@ mod tests {
         let runner_source = source_dir.join("codex-command-runner.exe");
         fs::write(&runner_source, b"runner").expect("runner");
         let runner_suffix = helper_version_suffix(&runner_source).expect("runner suffix");
-        let runner_destination = helper_bin_dir(&codex_home)
-            .join(materialized_file_name(HelperExecutable::CommandRunner, &runner_suffix));
+        let runner_destination = helper_bin_dir(&codex_home).join(materialized_file_name(
+            HelperExecutable::CommandRunner,
+            &runner_suffix,
+        ));
 
         let runner_outcome =
             copy_from_source_if_needed(&runner_source, &runner_destination).expect("runner copy");
@@ -453,8 +482,8 @@ mod tests {
         fs::write(&exe, b"codex").expect("write exe");
         fs::write(&helper, b"runner").expect("write helper");
 
-        let resolved =
-            source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe").expect("helper path");
+        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+            .expect("helper path");
 
         assert_eq!(resolved, helper);
     }
@@ -472,10 +501,26 @@ mod tests {
         fs::write(&sibling_helper, b"sibling runner").expect("write sibling helper");
         fs::write(&resource_helper, b"resource runner").expect("write resource helper");
 
-        let resolved =
-            source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe").expect("helper path");
+        let resolved = source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+            .expect("helper path");
 
         assert_eq!(resolved, sibling_helper);
+    }
+
+    #[test]
+    fn launch_anchor_prefers_existing_codex_cli_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let release_dir = tmp.path().join("release");
+        let exe = release_dir.join("codex.exe");
+        let current = tmp.path().join("current").join("node_repl.exe");
+        fs::create_dir_all(&release_dir).expect("create release dir");
+        fs::create_dir_all(current.parent().expect("current parent")).expect("create current dir");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&current, b"node_repl").expect("write current exe");
+
+        let resolved = resolve_launch_anchor_exe_from(Some(exe.clone()), Some(current));
+
+        assert_eq!(resolved, Some(exe));
     }
 
     #[test]
