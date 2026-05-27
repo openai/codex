@@ -51,6 +51,7 @@ use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::GoalStatusAtTurnEndFact;
+use crate::facts::GoalStatusAtTurnStartFact;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::InputError;
@@ -342,6 +343,18 @@ fn sample_goal_status_at_turn_end_fact(
         thread_id: thread_id.to_string(),
         turn_id: turn_id.to_string(),
         goal_status_at_turn_end,
+    }
+}
+
+fn sample_goal_status_at_turn_start_fact(
+    thread_id: &str,
+    turn_id: &str,
+    goal_status_at_turn_start: Option<ThreadGoalStatus>,
+) -> GoalStatusAtTurnStartFact {
+    GoalStatusAtTurnStartFact {
+        thread_id: thread_id.to_string(),
+        turn_id: turn_id.to_string(),
+        goal_status_at_turn_start,
     }
 }
 
@@ -647,6 +660,14 @@ async fn ingest_turn_prerequisites(
             .await;
     }
 
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::GoalStatusAtTurnStart(Box::new(
+                sample_goal_status_at_turn_start_fact("thread-2", "turn-2", None),
+            ))),
+            out,
+        )
+        .await;
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::GoalStatusAtTurnEnd(Box::new(
@@ -3256,6 +3277,7 @@ fn turn_event_serializes_expected_shape() {
             approvals_reviewer: "auto_review".to_string(),
             sandbox_network_access: true,
             collaboration_mode: Some("plan"),
+            goal_status_at_turn_start: None,
             goal_status_at_turn_end: None,
             personality: Some("pragmatic".to_string()),
             num_input_images: 2,
@@ -3319,6 +3341,7 @@ fn turn_event_serializes_expected_shape() {
                 "approvals_reviewer": "auto_review",
                 "sandbox_network_access": true,
                 "collaboration_mode": "plan",
+                "goal_status_at_turn_start": null,
                 "goal_status_at_turn_end": null,
                 "personality": "pragmatic",
                 "num_input_images": 2,
@@ -3598,6 +3621,18 @@ async fn turn_lifecycle_emits_turn_event() {
     .await;
     reducer
         .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::GoalStatusAtTurnStart(Box::new(
+                sample_goal_status_at_turn_start_fact(
+                    "thread-2",
+                    "turn-2",
+                    Some(ThreadGoalStatus::Active),
+                ),
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::GoalStatusAtTurnEnd(Box::new(
                 sample_goal_status_at_turn_end_fact(
                     "thread-2",
@@ -3675,6 +3710,10 @@ async fn turn_lifecycle_emits_turn_event() {
         json!(13)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(321));
+    assert_eq!(
+        payload["event_params"]["goal_status_at_turn_start"],
+        json!("active")
+    );
     assert_eq!(
         payload["event_params"]["goal_status_at_turn_end"],
         json!("budget_limited")

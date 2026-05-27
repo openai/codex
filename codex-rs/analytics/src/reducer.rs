@@ -65,6 +65,7 @@ use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::GoalStatusAtTurnEndFact;
+use crate::facts::GoalStatusAtTurnStartFact;
 use crate::facts::HookRunInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
@@ -326,7 +327,8 @@ struct TurnState {
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
-    // Outer None means the completion fact has not arrived; inner None means no goal.
+    // `None` means a boundary fact has not arrived; `Some(None)` means no applicable goal.
+    goal_status_at_turn_start: Option<Option<ThreadGoalStatus>>,
     goal_status_at_turn_end: Option<Option<ThreadGoalStatus>>,
     completed: Option<CompletedTurnState>,
     latest_diff: Option<String>,
@@ -467,6 +469,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnTokenUsage(input) => {
                     self.ingest_turn_token_usage(*input, out).await;
+                }
+                CustomAnalyticsFact::GoalStatusAtTurnStart(input) => {
+                    self.ingest_goal_status_at_turn_start(*input, out).await;
                 }
                 CustomAnalyticsFact::GoalStatusAtTurnEnd(input) => {
                     self.ingest_goal_status_at_turn_end(*input, out).await;
@@ -618,6 +623,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            goal_status_at_turn_start: None,
             goal_status_at_turn_end: None,
             completed: None,
             latest_diff: None,
@@ -643,6 +649,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            goal_status_at_turn_start: None,
             goal_status_at_turn_end: None,
             completed: None,
             latest_diff: None,
@@ -651,6 +658,31 @@ impl AnalyticsReducer {
         });
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
+        self.maybe_emit_turn_event(&turn_id, out).await;
+    }
+
+    async fn ingest_goal_status_at_turn_start(
+        &mut self,
+        input: GoalStatusAtTurnStartFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let turn_id = input.turn_id.clone();
+        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+            connection_id: None,
+            thread_id: None,
+            num_input_images: None,
+            resolved_config: None,
+            started_at: None,
+            token_usage: None,
+            goal_status_at_turn_start: None,
+            goal_status_at_turn_end: None,
+            completed: None,
+            latest_diff: None,
+            steer_count: 0,
+            tool_counts: TurnToolCounts::default(),
+        });
+        turn_state.thread_id = Some(input.thread_id);
+        turn_state.goal_status_at_turn_start = Some(input.goal_status_at_turn_start);
         self.maybe_emit_turn_event(&turn_id, out).await;
     }
 
@@ -667,6 +699,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            goal_status_at_turn_start: None,
             goal_status_at_turn_end: None,
             completed: None,
             latest_diff: None,
@@ -833,6 +866,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at: None,
                     token_usage: None,
+                    goal_status_at_turn_start: None,
                     goal_status_at_turn_end: None,
                     completed: None,
                     latest_diff: None,
@@ -1193,6 +1227,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at: None,
                     token_usage: None,
+                    goal_status_at_turn_start: None,
                     goal_status_at_turn_end: None,
                     completed: None,
                     latest_diff: None,
@@ -1215,6 +1250,7 @@ impl AnalyticsReducer {
                             resolved_config: None,
                             started_at: None,
                             token_usage: None,
+                            goal_status_at_turn_start: None,
                             goal_status_at_turn_end: None,
                             completed: None,
                             latest_diff: None,
@@ -1235,6 +1271,7 @@ impl AnalyticsReducer {
                             resolved_config: None,
                             started_at: None,
                             token_usage: None,
+                            goal_status_at_turn_start: None,
                             goal_status_at_turn_end: None,
                             completed: None,
                             latest_diff: None,
@@ -1515,6 +1552,7 @@ impl AnalyticsReducer {
         if turn_state.thread_id.is_none()
             || turn_state.num_input_images.is_none()
             || turn_state.resolved_config.is_none()
+            || turn_state.goal_status_at_turn_start.is_none()
             || turn_state.goal_status_at_turn_end.is_none()
             || turn_state.completed.is_none()
         {
@@ -2520,6 +2558,10 @@ fn codex_turn_event_params(
         approvals_reviewer: approvals_reviewer.to_string(),
         sandbox_network_access,
         collaboration_mode: Some(collaboration_mode_mode(collaboration_mode)),
+        goal_status_at_turn_start: turn_state
+            .goal_status_at_turn_start
+            .flatten()
+            .map(goal_status_mode),
         goal_status_at_turn_end: turn_state
             .goal_status_at_turn_end
             .flatten()

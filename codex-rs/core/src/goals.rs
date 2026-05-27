@@ -15,6 +15,7 @@ use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
+use codex_analytics::GoalStatusAtTurnStartFact;
 use codex_features::Feature;
 use codex_otel::GOAL_BLOCKED_METRIC;
 use codex_otel::GOAL_BUDGET_LIMITED_METRIC;
@@ -347,8 +348,16 @@ impl Session {
                 turn_context,
                 token_usage,
             } => Box::pin(async move {
-                self.mark_thread_goal_turn_started(turn_context, token_usage)
+                let goal_status_at_turn_start = self
+                    .mark_thread_goal_turn_started(turn_context, token_usage)
                     .await;
+                self.services
+                    .analytics_events_client
+                    .track_goal_status_at_turn_start(GoalStatusAtTurnStartFact {
+                        turn_id: turn_context.sub_id.clone(),
+                        thread_id: self.conversation_id.to_string(),
+                        goal_status_at_turn_start,
+                    });
                 Ok(())
             }),
             GoalRuntimeEvent::ToolCompleted {
@@ -874,25 +883,25 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         token_usage: TokenUsage,
-    ) {
+    ) -> Option<ThreadGoalStatus> {
         self.goal_runtime.accounting.lock().await.turn = Some(GoalTurnAccountingSnapshot::new(
             turn_context.sub_id.clone(),
             token_usage,
         ));
 
         if !self.enabled(Feature::Goals) {
-            return;
+            return None;
         }
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
             self.clear_active_goal_accounting(turn_context).await;
-            return;
+            return None;
         }
         let state_db = match self.state_db_for_thread_goals().await {
             Ok(Some(state_db)) => state_db,
-            Ok(None) => return,
+            Ok(None) => return None,
             Err(err) => {
                 tracing::warn!("failed to open state db at turn start: {err}");
-                return;
+                return None;
             }
         };
         match state_db
@@ -907,6 +916,7 @@ impl Session {
                         | codex_state::ThreadGoalStatus::BudgetLimited
                 ) =>
             {
+                let status = protocol_goal_status_from_state(goal.status);
                 let mut accounting = self.goal_runtime.accounting.lock().await;
                 if let Some(turn) = accounting.turn.as_mut()
                     && turn.turn_id == turn_context.sub_id
@@ -914,17 +924,20 @@ impl Session {
                     turn.mark_active_goal(goal.goal_id.clone());
                 }
                 accounting.wall_clock.mark_active_goal(goal.goal_id);
+                Some(status)
             }
-            Ok(Some(_)) | Ok(None) => {
+            Ok(goal) => {
                 self.goal_runtime
                     .accounting
                     .lock()
                     .await
                     .wall_clock
                     .clear_active_goal();
+                goal.map(|goal| protocol_goal_status_from_state(goal.status))
             }
             Err(err) => {
                 tracing::warn!("failed to read thread goal at turn start: {err}");
+                None
             }
         }
     }

@@ -101,6 +101,13 @@ pub struct TurnTokenUsageFact {
 }
 
 #[derive(Clone)]
+pub struct GoalStatusAtTurnStartFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub goal_status_at_turn_start: Option<ThreadGoalStatus>,
+}
+
+#[derive(Clone)]
 pub struct GoalStatusAtTurnEndFact {
     pub turn_id: String,
     pub thread_id: String,
@@ -337,6 +344,7 @@ pub(crate) enum CustomAnalyticsFact {
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    GoalStatusAtTurnStart(Box<GoalStatusAtTurnStartFact>),
     GoalStatusAtTurnEnd(Box<GoalStatusAtTurnEndFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
