@@ -1,5 +1,6 @@
 use super::ContextualUserFragment;
 
+/// Hidden user-context fragment for extension-owned steering prompts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionContext {
     body: String,

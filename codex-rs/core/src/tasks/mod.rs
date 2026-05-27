@@ -1,4 +1,5 @@
 mod compact;
+mod idle_extension;
 mod lifecycle;
 mod regular;
 mod review;
@@ -32,7 +33,6 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
-use crate::state::TurnState;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -54,6 +54,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
+pub(crate) use idle_extension::maybe_start_turn as maybe_start_idle_extension_turn;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
 pub(crate) use user_shell::UserShellCommandMode;
@@ -486,107 +487,6 @@ impl Session {
             .await;
     }
 
-    pub(crate) async fn maybe_start_idle_extension_turn(self: &Arc<Self>) {
-        self.maybe_start_turn_for_pending_work().await;
-        if self.active_turn.lock().await.is_some() {
-            return;
-        }
-        if self
-            .input_queue
-            .has_queued_response_items_for_next_turn()
-            .await
-            || self.input_queue.has_trigger_turn_mailbox_items().await
-        {
-            return;
-        }
-
-        let items = {
-            let collaboration_mode = self.collaboration_mode().await;
-            let mut requested_items = None;
-            for contributor in self.services.extensions.idle_turn_contributors() {
-                if let Some(request) = contributor
-                    .next_idle_turn(codex_extension_api::IdleTurnInput {
-                        collaboration_mode: &collaboration_mode,
-                        session_store: &self.services.session_extension_data,
-                        thread_store: &self.services.thread_extension_data,
-                    })
-                    .await
-                {
-                    requested_items = Some(request);
-                    break;
-                }
-            }
-            requested_items
-        };
-        let Some(items) = items.filter(|items| !items.is_empty()) else {
-            return;
-        };
-
-        let turn_state = {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
-                return;
-            }
-            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
-        };
-        if self
-            .input_queue
-            .has_queued_response_items_for_next_turn()
-            .await
-            || self.input_queue.has_trigger_turn_mailbox_items().await
-        {
-            self.clear_reserved_idle_extension_turn(&turn_state).await;
-            self.maybe_start_turn_for_pending_work().await;
-            return;
-        }
-
-        self.input_queue
-            .extend_pending_input_for_turn_state(
-                turn_state.as_ref(),
-                items
-                    .into_iter()
-                    .map(TurnInput::ResponseInputItem)
-                    .collect(),
-            )
-            .await;
-
-        let turn_context = self
-            .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        let still_reserved = {
-            let active_turn = self.active_turn.lock().await;
-            active_turn.as_ref().is_some_and(|active_turn| {
-                active_turn.task.is_none() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
-            })
-        };
-        if !still_reserved {
-            self.input_queue
-                .take_pending_input_for_turn_state(turn_state.as_ref())
-                .await;
-            self.clear_reserved_idle_extension_turn(&turn_state).await;
-            return;
-        }
-        drop(turn_state);
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
-    }
-
-    async fn clear_reserved_idle_extension_turn(
-        &self,
-        turn_state: &Arc<tokio::sync::Mutex<TurnState>>,
-    ) {
-        let mut active_turn_guard = self.active_turn.lock().await;
-        if let Some(active_turn) = active_turn_guard.as_ref()
-            && active_turn.task.is_none()
-            && Arc::ptr_eq(&active_turn.turn_state, turn_state)
-        {
-            *active_turn_guard = None;
-        }
-    }
-
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
@@ -869,14 +769,7 @@ impl Session {
         if !cleared_active_turn {
             return;
         }
-        self.schedule_idle_extension_turn();
-    }
-
-    fn schedule_idle_extension_turn(self: &Arc<Self>) {
-        let session = Arc::clone(self);
-        let _handle = tokio::spawn(async move {
-            session.maybe_start_idle_extension_turn().await;
-        });
+        idle_extension::schedule_turn(self);
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {

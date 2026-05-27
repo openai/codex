@@ -164,7 +164,7 @@ impl CodexThread {
     }
 
     pub async fn continue_idle_extension_work(&self) {
-        self.codex.session.maybe_start_idle_extension_turn().await;
+        crate::tasks::maybe_start_idle_extension_turn(Arc::clone(&self.codex.session)).await;
     }
 
     pub fn thread_extension_data(&self) -> &codex_extension_api::ExtensionData {

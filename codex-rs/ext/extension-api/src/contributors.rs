@@ -1,3 +1,5 @@
+//! Contributor traits and inputs that let extensions hook into host-owned workflows.
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
