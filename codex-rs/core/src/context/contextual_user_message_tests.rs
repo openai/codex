@@ -1,5 +1,6 @@
 use super::*;
 use crate::context::ContextualUserFragment;
+use crate::context::ExtensionContext;
 use crate::context::GoalContext;
 use crate::context::SubagentNotification;
 use codex_protocol::items::HookPromptFragment;
@@ -32,6 +33,15 @@ fn detects_subagent_notification_fragment_case_insensitively() {
 #[test]
 fn detects_goal_context_fragment() {
     let text = GoalContext::new("Continue working toward the active thread goal.").render();
+
+    assert!(is_contextual_user_fragment(&ContentItem::InputText {
+        text
+    }));
+}
+
+#[test]
+fn detects_extension_context_fragment() {
+    let text = ExtensionContext::new("<goal_context>\nContinue working.\n</goal_context>").render();
 
     assert!(is_contextual_user_fragment(&ContentItem::InputText {
         text

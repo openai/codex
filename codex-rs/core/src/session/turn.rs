@@ -145,7 +145,15 @@ pub(crate) async fn run_turn(
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
     if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
-        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+        let error_info = err.to_codex_protocol_error();
+        if error_info == CodexErrorInfo::UsageLimitExceeded {
+            sess.emit_turn_error_lifecycle(
+                turn_context.as_ref(),
+                CodexErrorInfo::UsageLimitExceeded,
+            )
+            .await;
+        }
+        if error_info == CodexErrorInfo::UsageLimitExceeded
             && let Err(err) = sess
                 .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                     turn_context: turn_context.as_ref(),
@@ -292,7 +300,15 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                        let error_info = err.to_codex_protocol_error();
+                        if error_info == CodexErrorInfo::UsageLimitExceeded {
+                            sess.emit_turn_error_lifecycle(
+                                turn_context.as_ref(),
+                                CodexErrorInfo::UsageLimitExceeded,
+                            )
+                            .await;
+                        }
+                        if error_info == CodexErrorInfo::UsageLimitExceeded
                             && let Err(err) = sess
                                 .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                                     turn_context: turn_context.as_ref(),
@@ -381,7 +397,15 @@ pub(crate) async fn run_turn(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                if e.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                let error_info = e.to_codex_protocol_error();
+                if error_info == CodexErrorInfo::UsageLimitExceeded {
+                    sess.emit_turn_error_lifecycle(
+                        turn_context.as_ref(),
+                        CodexErrorInfo::UsageLimitExceeded,
+                    )
+                    .await;
+                }
+                if error_info == CodexErrorInfo::UsageLimitExceeded
                     && let Err(err) = sess
                         .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                             turn_context: turn_context.as_ref(),
@@ -1102,7 +1126,7 @@ pub(crate) async fn built_tools(
             mcp_tools,
             deferred_mcp_tools,
             discoverable_tools,
-            extension_tool_executors: extension_tool_executors(sess),
+            extension_tool_executors: extension_tool_executors(sess, turn_context),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     )))

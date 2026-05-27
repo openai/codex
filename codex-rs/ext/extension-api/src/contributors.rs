@@ -1,8 +1,12 @@
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
@@ -25,6 +29,7 @@ pub use tool_lifecycle::ToolFinishInput;
 pub use tool_lifecycle::ToolLifecycleFuture;
 pub use tool_lifecycle::ToolStartInput;
 pub use turn_lifecycle::TurnAbortInput;
+pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
 
@@ -71,6 +76,10 @@ pub trait TurnLifecycleContributor: Send + Sync {
 
     /// Called after the host aborts a running turn.
     async fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
+
+    /// Called when a running turn encounters a host-classified error before it
+    /// can complete normally.
+    async fn on_turn_error(&self, _input: TurnErrorInput<'_>) {}
 }
 
 /// Contributor for host-owned configuration changes.
@@ -115,6 +124,47 @@ pub trait ToolContributor: Send + Sync {
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>;
+
+    /// Returns the native tools visible for the current turn, when the host has
+    /// turn context available.
+    fn tools_for_turn(
+        &self,
+        input: ToolContributionInput<'_>,
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        self.tools(input.session_store, input.thread_store)
+    }
+}
+
+/// Context supplied while collecting extension-owned tools for a turn.
+pub struct ToolContributionInput<'a> {
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+    /// Source for the current turn's session.
+    pub session_source: &'a SessionSource,
+    /// Whether the current thread has persistent state available.
+    pub persistent_thread: bool,
+}
+
+/// Context supplied when the host is idle and extensions may request work.
+pub struct IdleTurnInput<'a> {
+    /// Effective collaboration mode for the next default turn.
+    pub collaboration_mode: &'a CollaborationMode,
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+}
+
+pub type IdleTurnFuture<'a> =
+    Pin<Box<dyn Future<Output = Option<Vec<ResponseInputItem>>> + Send + 'a>>;
+
+/// Extension contribution that can request host-owned work while a thread is idle.
+pub trait IdleTurnContributor: Send + Sync {
+    fn next_idle_turn<'a>(&'a self, _input: IdleTurnInput<'a>) -> IdleTurnFuture<'a> {
+        Box::pin(std::future::ready(None))
+    }
 }
 
 /// Contributor for host-owned tool lifecycle gates.

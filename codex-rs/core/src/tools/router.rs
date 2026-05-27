@@ -219,6 +219,7 @@ impl ToolRouter {
 
 pub(crate) fn extension_tool_executors(
     session: &Session,
+    turn_context: &TurnContext,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
     session
         .services
@@ -226,10 +227,12 @@ pub(crate) fn extension_tool_executors(
         .tool_contributors()
         .iter()
         .flat_map(|contributor| {
-            contributor.tools(
-                &session.services.session_extension_data,
-                &session.services.thread_extension_data,
-            )
+            contributor.tools_for_turn(codex_extension_api::ToolContributionInput {
+                session_store: &session.services.session_extension_data,
+                thread_store: &session.services.thread_extension_data,
+                session_source: &turn_context.session_source,
+                persistent_thread: !turn_context.config.ephemeral && session.state_db().is_some(),
+            })
         })
         .collect()
 }
