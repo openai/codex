@@ -388,7 +388,13 @@ pub fn build_exec_request(
         .map(|request| {
             let windows_sandbox_policy_cwd = AbsolutePathBuf::try_from(sandbox_cwd.to_path_buf())
                 .unwrap_or_else(|_| request.cwd.clone());
-            ExecRequest::from_sandbox_exec_request(request, options, windows_sandbox_policy_cwd)
+            let windows_sandbox_workspace_roots = vec![windows_sandbox_policy_cwd.clone()];
+            ExecRequest::from_sandbox_exec_request(
+                request,
+                options,
+                windows_sandbox_policy_cwd,
+                windows_sandbox_workspace_roots,
+            )
         })
         .map_err(CodexErr::from)?;
     let use_windows_elevated_backend = windows_sandbox_uses_elevated_backend(
@@ -434,6 +440,7 @@ pub(crate) async fn execute_exec_request(
         capture_policy,
         sandbox,
         windows_sandbox_policy_cwd,
+        windows_sandbox_workspace_roots,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
         permission_profile,
@@ -466,6 +473,7 @@ pub(crate) async fn execute_exec_request(
         sandbox,
         &permission_profile,
         &windows_sandbox_policy_cwd,
+        &windows_sandbox_workspace_roots,
         windows_sandbox_filesystem_overrides.as_ref(),
     )
     .await;
@@ -482,6 +490,8 @@ async fn get_raw_output_result(
     #[cfg_attr(not(windows), allow(unused_variables))] sandbox: SandboxType,
     #[cfg_attr(not(windows), allow(unused_variables))] permission_profile: &PermissionProfile,
     #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_policy_cwd: &AbsolutePathBuf,
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    windows_sandbox_workspace_roots: &[AbsolutePathBuf],
     #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_filesystem_overrides: Option<
         &WindowsSandboxFilesystemOverrides,
     >,
@@ -492,6 +502,7 @@ async fn get_raw_output_result(
             params,
             permission_profile,
             windows_sandbox_policy_cwd,
+            windows_sandbox_workspace_roots,
             windows_sandbox_filesystem_overrides,
         )
         .await;
@@ -571,6 +582,7 @@ async fn exec_windows_sandbox(
     params: ExecParams,
     permission_profile: &PermissionProfile,
     windows_sandbox_policy_cwd: &AbsolutePathBuf,
+    windows_sandbox_workspace_roots: &[AbsolutePathBuf],
     windows_sandbox_filesystem_overrides: Option<&WindowsSandboxFilesystemOverrides>,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
@@ -600,7 +612,11 @@ async fn exec_windows_sandbox(
         None
     };
 
-    let sandbox_cwd = windows_sandbox_policy_cwd.clone();
+    let workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
+        vec![windows_sandbox_policy_cwd.clone()]
+    } else {
+        windows_sandbox_workspace_roots.to_vec()
+    };
     let permission_profile = permission_profile.clone();
     let codex_home = find_codex_home().map_err(|err| {
         CodexErr::Io(io::Error::other(format!(
@@ -628,7 +644,7 @@ async fn exec_windows_sandbox(
             run_windows_sandbox_capture_for_permission_profile_elevated(
                 codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
                     permission_profile: &permission_profile,
-                    permission_profile_cwd: &sandbox_cwd,
+                    workspace_roots: workspace_roots.as_slice(),
                     codex_home: codex_home.as_ref(),
                     command,
                     cwd: &cwd,
@@ -647,7 +663,7 @@ async fn exec_windows_sandbox(
         } else {
             run_windows_sandbox_capture_with_filesystem_overrides(
                 &permission_profile,
-                &sandbox_cwd,
+                workspace_roots.as_slice(),
                 codex_home.as_ref(),
                 command,
                 &cwd,
