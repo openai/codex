@@ -62,14 +62,16 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
     fn emit(&self, event: Event) {
         match event.msg {
             EventMsg::ThreadGoalUpdated(thread_goal_event) => {
-                self.outgoing
-                    .try_send_server_notification(ServerNotification::ThreadGoalUpdated(
-                        ThreadGoalUpdatedNotification {
-                            thread_id: thread_goal_event.thread_id.to_string(),
-                            turn_id: thread_goal_event.turn_id,
-                            goal: thread_goal_event.goal.into(),
-                        },
-                    ));
+                let outgoing = Arc::clone(&self.outgoing);
+                let notification =
+                    ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
+                        thread_id: thread_goal_event.thread_id.to_string(),
+                        turn_id: thread_goal_event.turn_id,
+                        goal: thread_goal_event.goal.into(),
+                    });
+                let _handle = tokio::spawn(async move {
+                    outgoing.send_server_notification(notification).await;
+                });
             }
             msg => {
                 tracing::debug!(event_id = %event.id, ?msg, "dropping unsupported extension event");
@@ -125,14 +127,61 @@ mod tests {
         let sink = app_server_extension_event_sink(outgoing);
         let thread_id = ThreadId::default();
 
-        sink.emit(Event {
+        sink.emit(thread_goal_update_event(
+            thread_id,
+            "wire extension events",
+            "turn-1",
+        ));
+        let notification = recv_goal_update(&mut outgoing_rx).await;
+
+        assert_eq!(
+            app_server_goal_update(thread_id, "wire extension events", "turn-1"),
+            notification
+        );
+    }
+
+    #[tokio::test]
+    async fn app_server_event_sink_waits_for_outgoing_capacity() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(1);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx.clone(),
+            AnalyticsEventsClient::disabled(),
+        ));
+        let thread_id = ThreadId::default();
+        outgoing_tx
+            .try_send(OutgoingEnvelope::Broadcast {
+                message: OutgoingMessage::AppServerNotification(
+                    ServerNotification::ThreadGoalUpdated(app_server_goal_update(
+                        thread_id,
+                        "prefill channel",
+                        "prefill",
+                    )),
+                ),
+            })
+            .expect("prefill should fit in one-slot channel");
+        let sink = app_server_extension_event_sink(outgoing);
+
+        sink.emit(thread_goal_update_event(
+            thread_id,
+            "wait for capacity",
+            "turn-1",
+        ));
+
+        let _prefill = recv_goal_update(&mut outgoing_rx).await;
+        let notification = recv_goal_update(&mut outgoing_rx).await;
+
+        assert_eq!(Some("turn-1".to_string()), notification.turn_id);
+    }
+
+    fn thread_goal_update_event(thread_id: ThreadId, objective: &str, turn_id: &str) -> Event {
+        Event {
             id: "call-1".to_string(),
             msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
                 thread_id,
-                turn_id: Some("turn-1".to_string()),
+                turn_id: Some(turn_id.to_string()),
                 goal: ThreadGoal {
                     thread_id,
-                    objective: "wire extension events".to_string(),
+                    objective: objective.to_string(),
                     status: ThreadGoalStatus::Active,
                     token_budget: Some(123),
                     tokens_used: 45,
@@ -141,8 +190,33 @@ mod tests {
                     updated_at: 8,
                 },
             }),
-        });
+        }
+    }
 
+    fn app_server_goal_update(
+        thread_id: ThreadId,
+        objective: &str,
+        turn_id: &str,
+    ) -> ThreadGoalUpdatedNotification {
+        ThreadGoalUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            goal: AppServerThreadGoal {
+                thread_id: thread_id.to_string(),
+                objective: objective.to_string(),
+                status: AppServerThreadGoalStatus::Active,
+                token_budget: Some(123),
+                tokens_used: 45,
+                time_used_seconds: 6,
+                created_at: 7,
+                updated_at: 8,
+            },
+        }
+    }
+
+    async fn recv_goal_update(
+        outgoing_rx: &mut mpsc::Receiver<OutgoingEnvelope>,
+    ) -> ThreadGoalUpdatedNotification {
         let envelope = timeout(Duration::from_secs(1), outgoing_rx.recv())
             .await
             .expect("timed out waiting for forwarded extension event")
@@ -156,23 +230,6 @@ mod tests {
         else {
             panic!("expected thread goal updated notification");
         };
-
-        assert_eq!(
-            ThreadGoalUpdatedNotification {
-                thread_id: thread_id.to_string(),
-                turn_id: Some("turn-1".to_string()),
-                goal: AppServerThreadGoal {
-                    thread_id: thread_id.to_string(),
-                    objective: "wire extension events".to_string(),
-                    status: AppServerThreadGoalStatus::Active,
-                    token_budget: Some(123),
-                    tokens_used: 45,
-                    time_used_seconds: 6,
-                    created_at: 7,
-                    updated_at: 8,
-                },
-            },
-            notification
-        );
+        notification
     }
 }
