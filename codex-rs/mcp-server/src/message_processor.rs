@@ -6,7 +6,8 @@ use codex_core::StateDbHandle;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
-use codex_extension_api::empty_extension_registry;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
@@ -63,18 +64,31 @@ impl MessageProcessor {
             /*enable_codex_api_key_env*/ false,
         )
         .await;
-        let thread_manager = Arc::new(ThreadManager::new(
-            config.as_ref(),
-            auth_manager,
-            SessionSource::Mcp,
-            environment_manager,
-            empty_extension_registry(),
-            /*analytics_events_client*/ None,
-            codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),
-            state_db.clone(),
-            installation_id,
-            /*attestation_provider*/ None,
-        ));
+        let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        let thread_manager = Arc::new_cyclic(|thread_manager| {
+            let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+            if let Some(state_db) = state_db.clone() {
+                codex_goal_extension::install_with_backend(
+                    &mut extensions,
+                    state_db,
+                    codex_otel::global(),
+                    thread_manager.clone(),
+                    |config: &Config| config.features.enabled(Feature::Goals),
+                );
+            }
+            ThreadManager::new(
+                config.as_ref(),
+                auth_manager.clone(),
+                SessionSource::Mcp,
+                Arc::clone(&environment_manager),
+                Arc::new(extensions.build()),
+                /*analytics_events_client*/ None,
+                Arc::clone(&thread_store),
+                state_db.clone(),
+                installation_id.clone(),
+                /*attestation_provider*/ None,
+            )
+        });
         Self {
             outgoing,
             initialized: false,

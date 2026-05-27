@@ -414,6 +414,18 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
 
     let requests = server.received_requests().await.unwrap();
     let request = requests[0].body_json::<serde_json::Value>()?;
+    let tool_names = request["tools"]
+        .as_array()
+        .expect("responses request should include tools")
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(
+        tool_names.contains(&"create_goal")
+            && tool_names.contains(&"get_goal")
+            && tool_names.contains(&"update_goal"),
+        "expected MCP-hosted Codex session to advertise goal tools, got {tool_names:?}"
+    );
     let instructions = request["instructions"]
         .as_str()
         .expect("responses request should include instructions");
