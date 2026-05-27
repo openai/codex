@@ -16,6 +16,7 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource;
+use codex_extension_api::ToolContributionInput;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolPayload;
@@ -25,14 +26,19 @@ use codex_extension_api::TurnStopInput;
 use codex_goal_extension::GoalRuntimeHandle;
 use codex_goal_extension::install_with_backend;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TruncationPolicy;
@@ -120,6 +126,35 @@ async fn installed_goal_tools_reject_duplicate_goal_creation() -> anyhow::Result
                 .to_string()
         )
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_tools_hidden_for_review_turns() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
+
+    let tools = harness.tools_for_turn(
+        SessionSource::SubAgent(SubAgentSource::Review),
+        /*persistent_thread*/ true,
+    );
+
+    assert!(tools.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_tools_hidden_without_persistent_thread() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
+
+    let tools = harness.tools_for_turn(SessionSource::Cli, /*persistent_thread*/ false);
+
+    assert!(tools.is_empty());
     Ok(())
 }
 
@@ -950,6 +985,40 @@ async fn thread_resume_rehydrates_active_goal_idle_accounting() -> anyhow::Resul
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_resume_in_plan_mode_does_not_rehydrate_idle_accounting() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    runtime
+        .thread_goals()
+        .replace_thread_goal(
+            thread_id,
+            "ship goal extension backend",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+        )
+        .await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+
+    harness.resume_thread_with_mode(ModeKind::Plan).await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    harness
+        .runtime_handle()
+        .prepare_external_goal_mutation()
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(ThreadGoalStatus::Active, protocol_status(goal.status));
+    assert_eq!(0, goal.time_used_seconds);
+    Ok(())
+}
+
 async fn installed_tools(
     runtime: Arc<codex_state::StateRuntime>,
     thread_id: ThreadId,
@@ -978,7 +1047,15 @@ async fn installed_tools(
     registry
         .tool_contributors()
         .iter()
-        .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
+        .flat_map(|contributor| {
+            let session_source = SessionSource::Cli;
+            contributor.tools_for_turn(ToolContributionInput {
+                session_store: &session_store,
+                thread_store: &thread_store,
+                session_source: &session_source,
+                persistent_thread: true,
+            })
+        })
         .collect()
 }
 
@@ -1024,10 +1101,25 @@ impl GoalExtensionHarness {
     }
 
     fn tools(&self) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        self.tools_for_turn(SessionSource::Cli, /*persistent_thread*/ true)
+    }
+
+    fn tools_for_turn(
+        &self,
+        session_source: SessionSource,
+        persistent_thread: bool,
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
         self.registry
             .tool_contributors()
             .iter()
-            .flat_map(|contributor| contributor.tools(&self.session_store, &self.thread_store))
+            .flat_map(|contributor| {
+                contributor.tools_for_turn(ToolContributionInput {
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                    session_source: &session_source,
+                    persistent_thread,
+                })
+            })
             .collect()
     }
 
@@ -1087,9 +1179,15 @@ impl GoalExtensionHarness {
     }
 
     async fn resume_thread(&self) {
+        self.resume_thread_with_mode(ModeKind::Default).await;
+    }
+
+    async fn resume_thread_with_mode(&self, mode: ModeKind) {
+        let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_lifecycle_contributors() {
             contributor
                 .on_thread_resume(ThreadResumeInput {
+                    thread_settings: &thread_settings,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                 })
@@ -1132,12 +1230,11 @@ impl GoalExtensionHarness {
     }
 
     async fn next_idle_turn(&self, mode: ModeKind) -> Option<ThreadIdleRequest> {
-        let mut collaboration_mode = default_collaboration_mode();
-        collaboration_mode.mode = mode;
+        let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_idle_turn_contributors() {
             if let Some(request) = contributor
                 .request_thread_idle_turn(ThreadIdleInput {
-                    collaboration_mode: &collaboration_mode,
+                    thread_settings: &thread_settings,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                 })
@@ -1150,12 +1247,11 @@ impl GoalExtensionHarness {
     }
 
     async fn should_start_idle_turn(&self, mode: ModeKind, request: &ThreadIdleRequest) -> bool {
-        let mut collaboration_mode = default_collaboration_mode();
-        collaboration_mode.mode = mode;
+        let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_idle_turn_contributors() {
             if contributor
                 .should_start_thread_idle_turn(ThreadIdleTurnStartInput {
-                    collaboration_mode: &collaboration_mode,
+                    thread_settings: &thread_settings,
                     request,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
@@ -1274,6 +1370,29 @@ fn default_collaboration_mode() -> CollaborationMode {
             reasoning_effort: None,
             developer_instructions: None,
         },
+    }
+}
+
+fn thread_settings(mode: ModeKind) -> ThreadSettingsSnapshot {
+    let mut collaboration_mode = default_collaboration_mode();
+    collaboration_mode.mode = mode;
+    let cwd = match std::env::current_dir().and_then(TryInto::try_into) {
+        Ok(cwd) => cwd,
+        Err(err) => panic!("test cwd should be absolute: {err}"),
+    };
+    ThreadSettingsSnapshot {
+        model: collaboration_mode.model().to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::workspace_write(),
+        active_permission_profile: None,
+        cwd,
+        reasoning_effort: None,
+        reasoning_summary: None,
+        personality: None,
+        collaboration_mode,
     }
 }
 

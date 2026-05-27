@@ -8,6 +8,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
@@ -225,8 +226,15 @@ impl GoalRuntimeHandle {
         Ok(())
     }
 
-    pub async fn restore_after_resume(&self) -> Result<(), String> {
+    pub async fn restore_after_resume(
+        &self,
+        thread_settings: &ThreadSettingsSnapshot,
+    ) -> Result<(), String> {
         if !self.is_enabled() {
+            return Ok(());
+        }
+        if matches!(thread_settings.collaboration_mode.mode, ModeKind::Plan) {
+            self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
 

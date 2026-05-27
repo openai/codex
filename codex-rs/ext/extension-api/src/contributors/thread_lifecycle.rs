@@ -1,5 +1,5 @@
 use crate::ExtensionData;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 
 /// Input supplied when the host starts a runtime for a thread.
 pub struct ThreadStartInput<'a, C> {
@@ -13,6 +13,8 @@ pub struct ThreadStartInput<'a, C> {
 
 /// Input supplied when the host resumes an existing thread.
 pub struct ThreadResumeInput<'a> {
+    /// Current host-owned thread settings at resume time.
+    pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.
@@ -21,8 +23,8 @@ pub struct ThreadResumeInput<'a> {
 
 /// Input supplied when the host has no immediately pending thread work.
 pub struct ThreadIdleInput<'a> {
-    /// Effective collaboration mode for the next default turn.
-    pub collaboration_mode: &'a CollaborationMode,
+    /// Current host-owned thread settings for the idle thread.
+    pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.
@@ -53,8 +55,8 @@ impl ThreadIdleRequest {
 
 /// Input supplied before the host starts an extension-requested idle turn.
 pub struct ThreadIdleTurnStartInput<'a> {
-    /// Effective collaboration mode for the default turn being started.
-    pub collaboration_mode: &'a CollaborationMode,
+    /// Host-owned thread settings for the default turn being started.
+    pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Request returned by this contributor for the candidate idle turn.
     pub request: &'a ThreadIdleRequest,
     /// Store scoped to the host session runtime.

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use codex_extension_api::ThreadIdleRequest;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 
 use crate::context::ContextualUserFragment;
 use crate::context::ExtensionContext;
@@ -102,11 +103,11 @@ pub(crate) async fn maybe_start_turn(session: Arc<Session>) {
 }
 
 async fn notify_thread_idle(session: &Session) {
-    let collaboration_mode = session.collaboration_mode().await;
+    let thread_settings = thread_settings_snapshot(session).await;
     for contributor in session.services.extensions.thread_lifecycle_contributors() {
         contributor
             .on_thread_idle(codex_extension_api::ThreadIdleInput {
-                collaboration_mode: &collaboration_mode,
+                thread_settings: &thread_settings,
                 session_store: &session.services.session_extension_data,
                 thread_store: &session.services.thread_extension_data,
             })
@@ -132,7 +133,7 @@ struct IdleTurnCandidate {
 }
 
 async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate> {
-    let collaboration_mode = session.collaboration_mode().await;
+    let thread_settings = thread_settings_snapshot(session).await;
     for (contributor_index, contributor) in session
         .services
         .extensions
@@ -142,7 +143,7 @@ async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate
     {
         let Some(request) = contributor
             .request_thread_idle_turn(codex_extension_api::ThreadIdleInput {
-                collaboration_mode: &collaboration_mode,
+                thread_settings: &thread_settings,
                 session_store: &session.services.session_extension_data,
                 thread_store: &session.services.thread_extension_data,
             })
@@ -170,15 +171,19 @@ async fn should_start_idle_turn(session: &Session, candidate: &IdleTurnCandidate
     else {
         return false;
     };
-    let collaboration_mode = session.collaboration_mode().await;
+    let thread_settings = thread_settings_snapshot(session).await;
     contributor
         .should_start_thread_idle_turn(codex_extension_api::ThreadIdleTurnStartInput {
-            collaboration_mode: &collaboration_mode,
+            thread_settings: &thread_settings,
             request: &candidate.request,
             session_store: &session.services.session_extension_data,
             thread_store: &session.services.thread_extension_data,
         })
         .await
+}
+
+async fn thread_settings_snapshot(session: &Session) -> ThreadSettingsSnapshot {
+    ThreadSettingsSnapshot::from(session.thread_config_snapshot().await)
 }
 
 async fn reserve_idle_turn(session: &Session) -> bool {

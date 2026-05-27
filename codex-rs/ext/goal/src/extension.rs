@@ -123,7 +123,7 @@ where
             return;
         };
 
-        if let Err(err) = runtime.restore_after_resume().await {
+        if let Err(err) = runtime.restore_after_resume(input.thread_settings).await {
             tracing::warn!(
                 "failed to restore goal runtime after thread resume for {}: {err}",
                 runtime.thread_id()
@@ -143,7 +143,7 @@ where
         Box::pin(async move {
             let runtime = goal_runtime_handle(input.thread_store)?;
             match runtime
-                .idle_continuation_request(input.collaboration_mode.mode)
+                .idle_continuation_request(input.thread_settings.collaboration_mode.mode)
                 .await
             {
                 Ok(request) => request,
@@ -165,7 +165,7 @@ where
             };
             match runtime
                 .idle_continuation_is_current(
-                    input.collaboration_mode.mode,
+                    input.thread_settings.collaboration_mode.mode,
                     input.request.validation_key.as_deref(),
                 )
                 .await

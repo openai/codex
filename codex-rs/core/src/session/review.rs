@@ -22,6 +22,7 @@ pub(super) async fn spawn_review_thread(
     let mut review_features = sess.features.clone();
     let _ = review_features.disable(Feature::WebSearchRequest);
     let _ = review_features.disable(Feature::WebSearchCached);
+    let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
     let available_models = sess
         .services
@@ -66,7 +67,7 @@ pub(super) async fn spawn_review_thread(
     let reasoning_summary = per_turn_config
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
-    let session_source = parent_turn_context.session_source.clone();
+    let session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let forked_from_thread_id = {
         let state = sess.state.lock().await;
         state.session_configuration.forked_from_thread_id

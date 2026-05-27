@@ -28,6 +28,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -79,6 +80,25 @@ impl ThreadConfigSnapshot {
             self.permission_profile.network_sandbox_policy(),
             self.cwd.as_path(),
         )
+    }
+}
+
+impl From<ThreadConfigSnapshot> for ThreadSettingsSnapshot {
+    fn from(value: ThreadConfigSnapshot) -> Self {
+        Self {
+            model: value.model,
+            model_provider_id: value.model_provider_id,
+            service_tier: value.service_tier,
+            approval_policy: value.approval_policy,
+            approvals_reviewer: value.approvals_reviewer,
+            permission_profile: value.permission_profile,
+            active_permission_profile: value.active_permission_profile,
+            cwd: value.cwd,
+            reasoning_effort: value.reasoning_effort,
+            reasoning_summary: value.reasoning_summary,
+            personality: value.personality,
+            collaboration_mode: value.collaboration_mode,
+        }
     }
 }
 
@@ -147,6 +167,7 @@ impl CodexThread {
     }
 
     pub async fn emit_thread_resume_lifecycle(&self) {
+        let thread_settings = ThreadSettingsSnapshot::from(self.config_snapshot().await);
         for contributor in self
             .codex
             .session
@@ -156,6 +177,7 @@ impl CodexThread {
         {
             contributor
                 .on_thread_resume(codex_extension_api::ThreadResumeInput {
+                    thread_settings: &thread_settings,
                     session_store: &self.codex.session.services.session_extension_data,
                     thread_store: &self.codex.session.services.thread_extension_data,
                 })
