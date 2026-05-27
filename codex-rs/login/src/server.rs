@@ -38,6 +38,9 @@ use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::emit_auth_http_status;
+use codex_client::emit_auth_network_environment_snapshot;
+use codex_client::emit_auth_transport_failure;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_template::Template;
 use rand::RngCore;
@@ -725,6 +728,7 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
+    emit_auth_network_environment_snapshot(/* operation */ "oauth_token_exchange");
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     info!(
@@ -748,6 +752,7 @@ pub(crate) async fn exchange_code_for_tokens(
     let resp = match resp {
         Ok(resp) => resp,
         Err(error) => {
+            emit_auth_transport_failure(/* operation */ "oauth_token_exchange", &error);
             let error = redact_sensitive_error_url(error);
             error!(
                 is_timeout = error.is_timeout(),
@@ -762,6 +767,7 @@ pub(crate) async fn exchange_code_for_tokens(
 
     let status = resp.status();
     if !status.is_success() {
+        emit_auth_http_status(/* operation */ "oauth_token_exchange", status);
         let body = resp.text().await.map_err(io::Error::other)?;
         let detail = parse_token_endpoint_error(&body);
         warn!(
@@ -1128,6 +1134,7 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
+    emit_auth_network_environment_snapshot(/* operation */ "api_key_exchange");
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     let resp = client
@@ -1142,9 +1149,16 @@ pub(crate) async fn obtain_api_key(
             urlencoding::encode("urn:ietf:params:oauth:token-type:id_token")
         ))
         .send()
-        .await
-        .map_err(io::Error::other)?;
+        .await;
+    let resp = match resp {
+        Ok(resp) => resp,
+        Err(error) => {
+            emit_auth_transport_failure(/* operation */ "api_key_exchange", &error);
+            return Err(io::Error::other(error));
+        }
+    };
     if !resp.status().is_success() {
+        emit_auth_http_status(/* operation */ "api_key_exchange", resp.status());
         return Err(io::Error::other(format!(
             "api key exchange failed with status {}",
             resp.status()
