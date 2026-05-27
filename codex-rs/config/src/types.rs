@@ -101,6 +101,7 @@ impl fmt::Display for NetworkProxyMode {
 /// `http://proxy.example:8080`). It is deliberately not a PAC/WPAD URL, and
 /// callers must redact credentials before logging it.
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct NetworkConfigToml {
     /// Proxy selection mode. Defaults to `auto` when omitted.
     #[serde(default)]
