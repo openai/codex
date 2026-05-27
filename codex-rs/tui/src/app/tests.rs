@@ -2283,6 +2283,7 @@ async fn replay_snapshot_with_pending_request_suppresses_replay_notices() {
 async fn repeated_skill_load_warnings_emit_once_until_errors_clear() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let cwd = app.chat_widget.config_ref().cwd.to_path_buf();
+    let expected_path = test_path_display("/tmp/user/skills/planning/SKILL.md");
     let error = codex_app_server_protocol::SkillErrorInfo {
         path: test_path_buf("/tmp/user/skills/planning/SKILL.md"),
         message: "invalid YAML".to_string(),
@@ -2302,7 +2303,7 @@ async fn repeated_skill_load_warnings_emit_once_until_errors_clear() {
         drain_insert_history_transcripts(&mut app_event_rx),
         vec![
             "⚠ Skipped loading 1 skill(s) due to invalid SKILL.md files.".to_string(),
-            "⚠ /tmp/user/skills/planning/SKILL.md: invalid YAML".to_string(),
+            format!("⚠ {expected_path}: invalid YAML"),
         ],
     );
 
