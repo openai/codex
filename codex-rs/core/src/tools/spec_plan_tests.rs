@@ -302,21 +302,15 @@ fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
         callable_name: name.to_string(),
         callable_namespace: namespace.to_string(),
         namespace_description: Some(format!("Tools from {server}.")),
-        tool: rmcp::model::Tool {
-            name: name.to_string().into(),
-            title: None,
-            description: Some(format!("{name} test tool").into()),
-            input_schema: Arc::new(rmcp::model::object(json!({
+        tool: rmcp::model::Tool::new(
+            name.to_string(),
+            format!("{name} test tool"),
+            Arc::new(rmcp::model::object(json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false,
             }))),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        ),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),

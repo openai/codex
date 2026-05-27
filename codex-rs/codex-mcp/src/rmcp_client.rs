@@ -470,26 +470,13 @@ async fn start_server_task(
         codex_apps_tools_cache_context,
         client_elicitation_capability,
     } = params;
-    let params = InitializeRequestParams {
-        meta: None,
-        capabilities: ClientCapabilities {
-            experimental: None,
-            extensions: None,
-            roots: None,
-            sampling: None,
-            elicitation: Some(client_elicitation_capability),
-            tasks: None,
-        },
-        client_info: Implementation {
-            name: "codex-mcp-client".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            title: Some("Codex".into()),
-            description: None,
-            icons: None,
-            website_url: None,
-        },
-        protocol_version: ProtocolVersion::V_2025_06_18,
-    };
+    let mut capabilities = ClientCapabilities::default();
+    capabilities.elicitation = Some(client_elicitation_capability);
+    let params = InitializeRequestParams::new(
+        capabilities,
+        Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),
+    )
+    .with_protocol_version(ProtocolVersion::V_2025_06_18);
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
 
@@ -647,32 +634,27 @@ mod tests {
     use rmcp::model::Meta;
 
     fn tool_with_connector_meta() -> RmcpTool {
-        RmcpTool {
-            name: "capture_file_upload".to_string().into(),
-            title: None,
-            description: Some("test tool".to_string().into()),
-            input_schema: Arc::new(JsonObject::default()),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: Some(Meta(
-                serde_json::json!({
-                    "connector_id": "connector_gmail",
-                    "connector_name": "Gmail",
-                    "connector_display_name": "Gmail",
-                    "connector_description": "Mail connector",
-                    "connectorDescription": "Mail connector",
-                    "connectorFutureField": "future connector metadata",
-                    "CONNECTOR_UPPERCASE": "uppercase connector metadata",
-                    "openai/fileParams": ["file"],
-                    "custom": "kept"
-                })
-                .as_object()
-                .expect("object")
-                .clone(),
-            )),
-        }
+        RmcpTool::new(
+            "capture_file_upload",
+            "test tool",
+            Arc::new(JsonObject::default()),
+        )
+        .with_meta(Meta(
+            serde_json::json!({
+                "connector_id": "connector_gmail",
+                "connector_name": "Gmail",
+                "connector_display_name": "Gmail",
+                "connector_description": "Mail connector",
+                "connectorDescription": "Mail connector",
+                "connectorFutureField": "future connector metadata",
+                "CONNECTOR_UPPERCASE": "uppercase connector metadata",
+                "openai/fileParams": ["file"],
+                "custom": "kept"
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+        ))
     }
 
     #[test]
