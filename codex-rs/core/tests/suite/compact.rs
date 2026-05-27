@@ -559,10 +559,8 @@ async fn summarize_context_three_requests_and_instructions() {
             RolloutItem::TurnContext(_) => {
                 regular_turn_context_count += 1;
             }
-            RolloutItem::Compacted(ci) => {
-                if ci.message == expected_summary_message {
-                    saw_compacted_summary = true;
-                }
+            RolloutItem::Compacted(ci) if ci.message == expected_summary_message => {
+                saw_compacted_summary = true;
             }
             _ => {}
         }

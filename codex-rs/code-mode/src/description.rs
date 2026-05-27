@@ -649,7 +649,7 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String
         .unwrap_or_default();
 
     let mut sorted_properties = properties.iter().collect::<Vec<_>>();
-    sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+    sorted_properties.sort_unstable_by_key(|(name_a, _)| *name_a);
     if sorted_properties
         .iter()
         .any(|(_, value)| has_property_description(value))
