@@ -16,8 +16,8 @@ uv sync
 source .venv/bin/activate
 ```
 
-Published SDK builds pin an exact `openai-codex-cli-bin` runtime dependency
-with the same version as the SDK. Pass `AppServerConfig(codex_bin=...)` only
+Published SDK builds pin an exact compatible `openai-codex-cli-bin` runtime
+dependency. Pass `AppServerConfig(codex_bin=...)` only
 when you intentionally want to run against a specific local app-server binary.
 
 ## Quickstart
@@ -111,7 +111,7 @@ python examples/01_quickstart_constructor/async.py
 
 Published SDK builds are pinned to an exact `openai-codex-cli-bin` package
 version, and that runtime package carries the platform-specific binary for the
-target wheel. The SDK package version and runtime package version must match.
+target wheel. SDK beta releases are versioned independently of runtime releases.
 
 ## Compatibility and versioning
 
@@ -119,7 +119,7 @@ target wheel. The SDK package version and runtime package version must match.
 - Runtime package: `openai-codex-cli-bin`
 - Python: `>=3.10`
 - Target protocol: Codex `app-server` JSON-RPC v2
-- Versioning rule: the SDK package version is the underlying Codex runtime version
+- Versioning rule: SDK releases pin one exact compatible Codex runtime version
 
 ## Notes
 

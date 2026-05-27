@@ -249,11 +249,11 @@ def test_source_sdk_package_pins_published_runtime() -> None:
         "runtime_pin": script.pinned_runtime_version(),
         "dependencies": pyproject["project"]["dependencies"],
     } == {
-        "sdk_version": "0.131.0a4",
-        "runtime_pin": "0.131.0a4",
+        "sdk_version": "0.1.0b1",
+        "runtime_pin": "0.132.0",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.131.0a4",
+            "openai-codex-cli-bin==0.132.0",
         ],
     }
 
@@ -491,23 +491,32 @@ def test_runtime_package_layout_is_included_by_wheel_config(
     ]
 
 
-def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
+def test_stage_sdk_release_preserves_reviewed_runtime_pin(tmp_path: Path) -> None:
     script = _load_update_script_module()
     staged = script.stage_python_sdk_package(
         tmp_path / "sdk-stage",
-        "rust-v0.116.0-alpha.1",
+        "0.1.0b1",
     )
 
-    pyproject = (staged / "pyproject.toml").read_text()
-    assert 'name = "openai-codex"' in pyproject
-    assert 'version = "0.116.0a1"' in pyproject
-    assert '"openai-codex-cli-bin==0.116.0a1"' in pyproject
+    pyproject = tomllib.loads((staged / "pyproject.toml").read_text())
+    assert {
+        "name": pyproject["project"]["name"],
+        "version": pyproject["project"]["version"],
+        "dependencies": pyproject["project"]["dependencies"],
+    } == {
+        "name": "openai-codex",
+        "version": "0.1.0b1",
+        "dependencies": [
+            "pydantic>=2.12",
+            "openai-codex-cli-bin==0.132.0",
+        ],
+    }
     assert (
-        '__version__ = "0.116.0a1"'
+        '__version__ = "0.1.0b1"'
         not in (staged / "src" / "openai_codex" / "__init__.py").read_text()
     )
     assert (
-        'client_version: str = "0.116.0a1"'
+        'client_version: str = "0.1.0b1"'
         not in (staged / "src" / "openai_codex" / "client.py").read_text()
     )
     assert not any((staged / "src" / "openai_codex").glob("bin/**"))
@@ -520,34 +529,41 @@ def test_stage_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None
     old_file.parent.mkdir(parents=True)
     old_file.write_text("stale")
 
-    staged = script.stage_python_sdk_package(staging_dir, "0.116.0a1")
+    staged = script.stage_python_sdk_package(staging_dir, "0.1.0b1")
 
     assert staged == staging_dir
     assert not old_file.exists()
 
 
-def test_staged_sdk_and_runtime_versions_match(tmp_path: Path) -> None:
+def test_sdk_beta_release_can_pin_stable_runtime(tmp_path: Path) -> None:
     script = _load_update_script_module()
     package_archive = _write_fake_codex_package_archive(tmp_path, script)
 
     sdk_stage = script.stage_python_sdk_package(
         tmp_path / "sdk-stage",
-        "rust-v0.116.0-alpha.1",
+        "0.1.0b1",
     )
     runtime_stage = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
-        "rust-v0.116.0-alpha.1",
+        "0.132.0",
         package_archive,
     )
 
     sdk_pyproject = tomllib.loads((sdk_stage / "pyproject.toml").read_text())
     runtime_pyproject = tomllib.loads((runtime_stage / "pyproject.toml").read_text())
 
-    assert sdk_pyproject["project"]["version"] == runtime_pyproject["project"]["version"]
-    assert sdk_pyproject["project"]["dependencies"] == [
-        "pydantic>=2.12",
-        "openai-codex-cli-bin==0.116.0a1",
-    ]
+    assert {
+        "sdk_version": sdk_pyproject["project"]["version"],
+        "runtime_version": runtime_pyproject["project"]["version"],
+        "sdk_dependencies": sdk_pyproject["project"]["dependencies"],
+    } == {
+        "sdk_version": "0.1.0b1",
+        "runtime_version": "0.132.0",
+        "sdk_dependencies": [
+            "pydantic>=2.12",
+            "openai-codex-cli-bin==0.132.0",
+        ],
+    }
 
 
 def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
@@ -557,16 +573,16 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
         [
             "stage-sdk",
             str(tmp_path / "sdk-stage"),
-            "--codex-version",
-            "rust-v0.116.0-alpha.1",
+            "--sdk-version",
+            "0.1.0b1",
         ]
     )
 
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
-    def fake_stage_sdk_package(_staging_dir: Path, codex_version: str) -> Path:
-        calls.append(f"stage_sdk:{codex_version}")
+    def fake_stage_sdk_package(_staging_dir: Path, sdk_version: str) -> Path:
+        calls.append(f"stage_sdk:{sdk_version}")
         return tmp_path / "sdk-stage"
 
     def fake_stage_runtime_package(
@@ -589,26 +605,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
     script.run_command(args, ops)
 
-    assert calls == ["generate_types", "stage_sdk:0.116.0a1"]
-
-
-def test_stage_sdk_rejects_mismatched_legacy_versions(tmp_path: Path) -> None:
-    script = _load_update_script_module()
-    args = script.parse_args(
-        [
-            "stage-sdk",
-            str(tmp_path / "sdk-stage"),
-            "--codex-version",
-            "0.116.0a1",
-            "--runtime-version",
-            "0.116.0a1",
-            "--sdk-version",
-            "0.115.0",
-        ]
-    )
-
-    with pytest.raises(RuntimeError, match="versions must match"):
-        script.run_command(args, script.default_cli_ops())
+    assert calls == ["generate_types", "stage_sdk:0.1.0b1"]
 
 
 def test_stage_runtime_stages_package_without_type_generation(tmp_path: Path) -> None:
