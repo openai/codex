@@ -1486,7 +1486,8 @@ async fn run_exec_server_command(
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
         let config = load_exec_server_config(root_config_overrides, strict_config).await?;
         let auth_provider =
-            load_exec_server_remote_auth_provider(&config, cmd.use_agent_identity_auth).await?;
+            load_exec_server_remote_auth_provider(&config, &base_url, cmd.use_agent_identity_auth)
+                .await?;
         let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new(
             base_url,
             environment_id,
@@ -1516,6 +1517,7 @@ async fn run_exec_server_command(
 
 async fn load_exec_server_remote_auth_provider(
     config: &codex_core::config::Config,
+    base_url: &str,
     use_agent_identity_auth: bool,
 ) -> anyhow::Result<codex_api::SharedAuthProvider> {
     if use_agent_identity_auth {
@@ -1540,11 +1542,34 @@ async fn load_exec_server_remote_auth_provider(
         );
     }
 
+    if auth.is_api_key_auth() {
+        validate_api_key_remote_host(base_url)?;
+    }
+
     Ok(codex_model_provider::auth_provider_from_auth(&auth))
 }
 
 fn is_supported_exec_server_remote_auth(auth: &CodexAuth) -> bool {
     auth.is_chatgpt_auth() || auth.is_api_key_auth()
+}
+
+fn validate_api_key_remote_host(base_url: &str) -> anyhow::Result<()> {
+    let uri = base_url
+        .parse::<http::Uri>()
+        .map_err(|err| anyhow::anyhow!("invalid remote exec-server registration URL: {err}"))?;
+    let host = uri.host().ok_or_else(|| {
+        anyhow::anyhow!("remote exec-server registration URL must include a host")
+    })?;
+
+    let openai_host = regex_lite::Regex::new(r"(?i)^(?:[^.]+\.)*openai\.com$")
+        .map_err(|err| anyhow::anyhow!("failed to initialize remote host allowlist: {err}"))?;
+    if !openai_host.is_match(host) {
+        anyhow::bail!(
+            "remote exec-server API-key authentication is restricted to openai.com hosts and subdomains"
+        );
+    }
+
+    Ok(())
 }
 
 async fn load_exec_server_config(
@@ -2177,6 +2202,27 @@ mod tests {
         let auth = CodexAuth::from_api_key("sk-test");
 
         assert!(is_supported_exec_server_remote_auth(&auth));
+    }
+
+    #[test]
+    fn exec_server_remote_api_key_auth_accepts_openai_subdomain() {
+        assert!(validate_api_key_remote_host("https://service.openai.com/api").is_ok());
+    }
+
+    #[test]
+    fn exec_server_remote_api_key_auth_rejects_non_openai_host() {
+        let error = validate_api_key_remote_host("https://service.openai.com.evil.example/api")
+            .expect_err("reject non-OpenAI host");
+
+        assert_eq!(
+            error.to_string(),
+            "remote exec-server API-key authentication is restricted to openai.com hosts and subdomains"
+        );
+    }
+
+    #[test]
+    fn exec_server_remote_api_key_auth_accepts_apex_domain() {
+        assert!(validate_api_key_remote_host("https://openai.com/api").is_ok());
     }
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
