@@ -309,14 +309,6 @@ async fn apply_metadata_update(
                         message: format!("failed to update memory mode for {thread_id}: {err}"),
                     })?;
             }
-            if let Some(dynamic_tools) = patch.dynamic_tools {
-                state_db
-                    .persist_dynamic_tools(thread_id, Some(dynamic_tools.as_slice()))
-                    .await
-                    .map_err(|err| ThreadStoreError::Internal {
-                        message: format!("failed to update dynamic tools for {thread_id}: {err}"),
-                    })?;
-            }
             Ok(())
         }
         .await
@@ -393,7 +385,6 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.sandbox_policy.is_some()
         || patch.token_usage.is_some()
         || patch.first_user_message.is_some()
-        || patch.dynamic_tools.is_some()
 }
 
 fn enum_to_string<T: serde::Serialize>(value: &T) -> String {
