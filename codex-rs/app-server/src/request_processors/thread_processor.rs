@@ -2727,8 +2727,11 @@ impl ThreadRequestProcessor {
                     .await;
                 }
                 self.thread_goal_processor
-                    .emit_resume_goal_snapshot_and_continue(thread_id, codex_thread.as_ref())
+                    .emit_resume_goal_snapshot(thread_id)
                     .await;
+                // App-server owns resume response and snapshot ordering, so wait
+                // until those are sent before letting extensions start idle work.
+                codex_thread.continue_idle_extension_work().await;
             }
             Err(err) => {
                 let error = internal_error(format!("error resuming thread: {err}"));

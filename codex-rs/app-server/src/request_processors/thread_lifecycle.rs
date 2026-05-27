@@ -596,9 +596,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
-    if pending.emit_thread_goal_update {
-        conversation.emit_thread_resume_lifecycle().await;
-    }
+    conversation.emit_thread_resume_lifecycle().await;
 
     let ThreadConfigSnapshot {
         model,
@@ -669,9 +667,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         .await;
     // App-server owns resume response and snapshot ordering, so wait until
     // replay completes before letting extensions start idle work.
-    if pending.emit_thread_goal_update {
-        conversation.continue_idle_extension_work().await;
-    }
+    conversation.continue_idle_extension_work().await;
 }
 
 pub(super) async fn send_thread_goal_snapshot_notification(
