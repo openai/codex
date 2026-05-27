@@ -47,6 +47,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
+use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
@@ -85,6 +86,7 @@ const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
 #[derive(Clone)]
 pub(crate) struct ManagedClient {
     pub(crate) client: Arc<RmcpClient>,
+    pub(crate) server_info: McpServerInfo,
     pub(crate) tools: Vec<ToolInfo>,
     pub(crate) tool_filter: ToolFilter,
     pub(crate) tool_timeout: Option<Duration>,
@@ -535,6 +537,7 @@ async fn start_server_task(
 
     let managed = ManagedClient {
         client: Arc::clone(&client),
+        server_info: mcp_server_info_from_implementation(initialize_result.server_info),
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
@@ -544,6 +547,22 @@ async fn start_server_task(
     };
 
     Ok(managed)
+}
+
+fn mcp_server_info_from_implementation(server_info: Implementation) -> McpServerInfo {
+    McpServerInfo {
+        name: server_info.name,
+        title: server_info.title,
+        version: server_info.version,
+        description: server_info.description,
+        icons: server_info.icons.map(|icons| {
+            icons
+                .into_iter()
+                .filter_map(|icon| serde_json::to_value(icon).ok())
+                .collect()
+        }),
+        website_url: server_info.website_url,
+    }
 }
 
 struct StartServerTaskParams {

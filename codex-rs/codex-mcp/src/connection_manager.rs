@@ -44,6 +44,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
@@ -392,6 +393,17 @@ impl McpConnectionManager {
             );
         }
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+    }
+
+    pub async fn list_server_infos(&self) -> HashMap<String, McpServerInfo> {
+        let mut server_infos = HashMap::new();
+        for (server_name, client) in &self.clients {
+            let Ok(managed_client) = client.client().await else {
+                continue;
+            };
+            server_infos.insert(server_name.clone(), managed_client.server_info);
+        }
+        server_infos
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
