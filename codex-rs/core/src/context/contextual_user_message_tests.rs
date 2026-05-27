@@ -1,6 +1,5 @@
 use super::*;
 use crate::context::ContextualUserFragment;
-use crate::context::ExtensionContextTag;
 use crate::context::SubagentNotification;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::build_hook_prompt_message;
@@ -18,15 +17,6 @@ fn detects_environment_context_fragment() {
 fn detects_extension_context_fragment() {
     assert!(is_contextual_user_fragment(&ContentItem::InputText {
         text: "<extension_context>\n<example>data</example>\n</extension_context>".to_string(),
-    }));
-}
-
-#[test]
-fn detects_goal_extension_context_fragment() {
-    let text = ExtensionContext::with_tag(ExtensionContextTag::GOAL, "hidden goal prompt").render();
-
-    assert!(is_contextual_user_fragment(&ContentItem::InputText {
-        text
     }));
 }
 

@@ -228,8 +228,6 @@ fn idle_extension_input(prompt: String) -> TurnInput {
 
 #[cfg(test)]
 mod tests {
-    use crate::context::ExtensionContextTag;
-
     use super::*;
 
     #[test]
@@ -240,7 +238,7 @@ mod tests {
         );
         let original_len = prompt.len();
 
-        let prompt = ExtensionContext::with_tag(ExtensionContextTag::GOAL, prompt).render();
+        let prompt = ExtensionContext::new(prompt).render();
         let TurnInput::ResponseInputItem(ResponseInputItem::Message { content, .. }) =
             idle_extension_input(prompt)
         else {
@@ -250,7 +248,7 @@ mod tests {
             panic!("expected one text content item");
         };
 
-        assert!(text.starts_with("<goal_context>"));
+        assert!(text.starts_with("<extension_context>"));
         assert!(text.contains("start"));
         assert!(text.contains("end"));
         assert!(text.len() < original_len);

@@ -507,14 +507,14 @@ async fn thread_idle_hook_requests_hidden_goal_continuation() -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("active goal should request idle continuation"))?;
 
     assert!(request.validation_key.is_some());
-    assert!(request.prompt.starts_with("<goal_context>"));
+    assert!(request.prompt.starts_with("<extension_context>"));
     assert!(
         request
             .prompt
             .contains("Continue working toward the active thread goal.")
     );
     assert!(request.prompt.contains("Completion audit:"));
-    assert!(request.prompt.ends_with("</goal_context>"));
+    assert!(request.prompt.ends_with("</extension_context>"));
     assert!(
         harness
             .should_start_idle_turn(ModeKind::Default, &request)
