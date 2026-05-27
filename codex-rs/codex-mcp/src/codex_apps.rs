@@ -46,19 +46,24 @@ pub(crate) struct CodexAppsToolsCacheContext {
 
 impl CodexAppsToolsCacheContext {
     pub(crate) fn cache_path(&self) -> PathBuf {
+        self.cache_path_in(CODEX_APPS_TOOLS_CACHE_DIR)
+    }
+
+    pub(crate) fn server_info_cache_path(&self) -> PathBuf {
+        self.cache_path_in(CODEX_APPS_SERVER_INFO_CACHE_DIR)
+    }
+
+    fn cache_path_in(&self, cache_dir: &str) -> PathBuf {
         let user_key_json = serde_json::to_string(&self.user_key).unwrap_or_default();
         let user_key_hash = sha1_hex(&user_key_json);
         self.codex_home
-            .join(CODEX_APPS_TOOLS_CACHE_DIR)
+            .join(cache_dir)
             .join(format!("{user_key_hash}.json"))
     }
 }
 
 pub(crate) enum CachedCodexAppsToolsLoad {
-    Hit {
-        tools: Vec<ToolInfo>,
-        server_info: Option<McpServerInfo>,
-    },
+    Hit(Vec<ToolInfo>),
     Missing,
     Invalid,
 }
@@ -149,7 +154,8 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
 
     if let Some(cache_context) = cache_context {
         let cache_write_start = Instant::now();
-        write_cached_codex_apps_tools(cache_context, server_info, tools);
+        write_cached_codex_apps_tools(cache_context, tools);
+        write_cached_codex_apps_server_info(cache_context, server_info);
         emit_duration(
             MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
             cache_write_start.elapsed(),
@@ -161,7 +167,7 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
 pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
     server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
-) -> Option<(Vec<ToolInfo>, Option<McpServerInfo>)> {
+) -> Option<Vec<ToolInfo>> {
     if server_name != CODEX_APPS_MCP_SERVER_NAME {
         return None;
     }
@@ -169,9 +175,20 @@ pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
     let cache_context = cache_context?;
 
     match load_cached_codex_apps_tools(cache_context) {
-        CachedCodexAppsToolsLoad::Hit { tools, server_info } => Some((tools, server_info)),
+        CachedCodexAppsToolsLoad::Hit(tools) => Some(tools),
         CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => None,
     }
+}
+
+pub(crate) fn load_startup_cached_codex_apps_server_info(
+    server_name: &str,
+    cache_context: Option<&CodexAppsToolsCacheContext>,
+) -> Option<McpServerInfo> {
+    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
+    load_cached_codex_apps_server_info(cache_context?)
 }
 
 #[cfg(test)]
@@ -179,7 +196,7 @@ pub(crate) fn read_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> Option<Vec<ToolInfo>> {
     match load_cached_codex_apps_tools(cache_context) {
-        CachedCodexAppsToolsLoad::Hit { tools, .. } => Some(tools),
+        CachedCodexAppsToolsLoad::Hit(tools) => Some(tools),
         CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => None,
     }
 }
@@ -202,15 +219,11 @@ pub(crate) fn load_cached_codex_apps_tools(
     if cache.schema_version != CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION {
         return CachedCodexAppsToolsLoad::Invalid;
     }
-    CachedCodexAppsToolsLoad::Hit {
-        tools: filter_disallowed_codex_apps_tools(cache.tools),
-        server_info: cache.server_info,
-    }
+    CachedCodexAppsToolsLoad::Hit(filter_disallowed_codex_apps_tools(cache.tools))
 }
 
 pub(crate) fn write_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
-    server_info: &McpServerInfo,
     tools: &[ToolInfo],
 ) {
     let cache_path = cache_context.cache_path();
@@ -222,8 +235,35 @@ pub(crate) fn write_cached_codex_apps_tools(
     let tools = filter_disallowed_codex_apps_tools(tools.to_vec());
     let Ok(bytes) = serde_json::to_vec_pretty(&CodexAppsToolsDiskCache {
         schema_version: CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION,
-        server_info: Some(server_info.clone()),
         tools,
+    }) else {
+        return;
+    };
+    let _ = std::fs::write(cache_path, bytes);
+}
+
+pub(crate) fn load_cached_codex_apps_server_info(
+    cache_context: &CodexAppsToolsCacheContext,
+) -> Option<McpServerInfo> {
+    let bytes = std::fs::read(cache_context.server_info_cache_path()).ok()?;
+    let cache: CodexAppsServerInfoDiskCache = serde_json::from_slice(&bytes).ok()?;
+    (cache.schema_version == CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION)
+        .then_some(cache.server_info)
+}
+
+fn write_cached_codex_apps_server_info(
+    cache_context: &CodexAppsToolsCacheContext,
+    server_info: &McpServerInfo,
+) {
+    let cache_path = cache_context.server_info_cache_path();
+    if let Some(parent) = cache_path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec_pretty(&CodexAppsServerInfoDiskCache {
+        schema_version: CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION,
+        server_info: server_info.clone(),
     }) else {
         return;
     };
@@ -244,12 +284,18 @@ pub(crate) fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<To
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexAppsToolsDiskCache {
     schema_version: u8,
-    #[serde(default)]
-    server_info: Option<McpServerInfo>,
     tools: Vec<ToolInfo>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodexAppsServerInfoDiskCache {
+    schema_version: u8,
+    server_info: McpServerInfo,
+}
+
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
+const CODEX_APPS_SERVER_INFO_CACHE_DIR: &str = "cache/codex_apps_server_info";
+const CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION: u8 = 1;
 
 fn sha1_hex(s: &str) -> String {
     let mut hasher = Sha1::new();

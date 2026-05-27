@@ -20,6 +20,7 @@ use crate::codex_apps::CachedCodexAppsToolsLoad;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::filter_disallowed_codex_apps_tools;
 use crate::codex_apps::load_cached_codex_apps_tools;
+use crate::codex_apps::load_startup_cached_codex_apps_server_info;
 use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
@@ -99,7 +100,7 @@ impl ManagedClient {
     fn listed_tools(&self) -> Vec<ToolInfo> {
         let total_start = Instant::now();
         if let Some(cache_context) = self.codex_apps_tools_cache_context.as_ref()
-            && let CachedCodexAppsToolsLoad::Hit { tools, .. } =
+            && let CachedCodexAppsToolsLoad::Hit(tools) =
                 load_cached_codex_apps_tools(cache_context)
         {
             emit_duration(
@@ -157,10 +158,11 @@ impl AsyncManagedClient {
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
         );
-        let (startup_snapshot, startup_server_info) = startup_snapshot
-            .map_or((None, None), |(tools, server_info)| {
-                (Some(filter_tools(tools, &tool_filter)), server_info)
-            });
+        let startup_snapshot = startup_snapshot.map(|tools| filter_tools(tools, &tool_filter));
+        let startup_server_info = load_startup_cached_codex_apps_server_info(
+            &server_name,
+            codex_apps_tools_cache_context.as_ref(),
+        );
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);

@@ -1,9 +1,11 @@
 use super::*;
 use crate::codex_apps::CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION;
 use crate::codex_apps::CodexAppsToolsCacheContext;
+use crate::codex_apps::load_startup_cached_codex_apps_server_info;
 use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::read_cached_codex_apps_tools;
 use crate::codex_apps::write_cached_codex_apps_tools;
+use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::elicitation_is_rejected_by_policy;
@@ -561,14 +563,13 @@ fn codex_apps_tools_cache_is_overwritten_by_last_write() {
     );
     let tools_gateway_1 = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "one")];
     let tools_gateway_2 = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "two")];
-    let server_info = create_test_server_info("Codex Apps");
 
-    write_cached_codex_apps_tools(&cache_context, &server_info, &tools_gateway_1);
+    write_cached_codex_apps_tools(&cache_context, &tools_gateway_1);
     let cached_gateway_1 =
         read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for first write");
     assert_eq!(cached_gateway_1[0].callable_name, "one");
 
-    write_cached_codex_apps_tools(&cache_context, &server_info, &tools_gateway_2);
+    write_cached_codex_apps_tools(&cache_context, &tools_gateway_2);
     let cached_gateway_2 =
         read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for second write");
     assert_eq!(cached_gateway_2[0].callable_name, "two");
@@ -589,10 +590,9 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
     );
     let tools_user_1 = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "one")];
     let tools_user_2 = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "two")];
-    let server_info = create_test_server_info("Codex Apps");
 
-    write_cached_codex_apps_tools(&cache_context_user_1, &server_info, &tools_user_1);
-    write_cached_codex_apps_tools(&cache_context_user_2, &server_info, &tools_user_2);
+    write_cached_codex_apps_tools(&cache_context_user_1, &tools_user_1);
+    write_cached_codex_apps_tools(&cache_context_user_2, &tools_user_2);
 
     let read_user_1 =
         read_cached_codex_apps_tools(&cache_context_user_1).expect("cache entry for user one");
@@ -630,9 +630,8 @@ fn codex_apps_tools_cache_filters_disallowed_connectors() {
             Some("Calendar"),
         ),
     ];
-    let server_info = create_test_server_info("Codex Apps");
 
-    write_cached_codex_apps_tools(&cache_context, &server_info, &tools);
+    write_cached_codex_apps_tools(&cache_context, &tools);
     let cached = read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for user");
 
     assert_eq!(cached.len(), 1);
@@ -692,14 +691,22 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
         "calendar_search",
     )];
     let server_info = create_test_server_info("Codex Apps");
-    write_cached_codex_apps_tools(&cache_context, &server_info, &cached_tools);
+    write_cached_codex_apps_tools_if_needed(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+        &server_info,
+        &cached_tools,
+    );
 
-    let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
+    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+    )
+    .expect("expected startup snapshot to load from cache");
+    let startup_server_info = load_startup_cached_codex_apps_server_info(
         CODEX_APPS_MCP_SERVER_NAME,
         Some(&cache_context),
     );
-    let (startup_tools, startup_server_info) =
-        startup_snapshot.expect("expected startup snapshot to load from cache");
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].server_name, CODEX_APPS_MCP_SERVER_NAME);
@@ -708,7 +715,7 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
 }
 
 #[test]
-fn startup_cached_codex_apps_tools_loads_cache_without_server_info() {
+fn startup_cached_codex_apps_tools_loads_without_server_info_cache() {
     let codex_home = tempdir().expect("tempdir");
     let cache_context = create_codex_apps_tools_cache_context(
         codex_home.path().to_path_buf(),
@@ -726,15 +733,65 @@ fn startup_cached_codex_apps_tools_loads_cache_without_server_info() {
     .expect("serialize");
     std::fs::write(cache_path, bytes).expect("write");
 
-    let (startup_tools, startup_server_info) = load_startup_cached_codex_apps_tools_snapshot(
+    let startup_tools = load_startup_cached_codex_apps_tools_snapshot(
         CODEX_APPS_MCP_SERVER_NAME,
         Some(&cache_context),
     )
     .expect("legacy startup snapshot should remain available");
+    let startup_server_info = load_startup_cached_codex_apps_server_info(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+    );
 
     assert_eq!(startup_tools.len(), 1);
     assert_eq!(startup_tools[0].callable_name, "calendar_search");
     assert_eq!(startup_server_info, None);
+}
+
+#[test]
+fn codex_apps_server_info_cache_survives_legacy_tools_cache_write() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let server_info = create_test_server_info("Codex Apps");
+    write_cached_codex_apps_tools_if_needed(
+        CODEX_APPS_MCP_SERVER_NAME,
+        Some(&cache_context),
+        &server_info,
+        &[create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_search",
+        )],
+    );
+
+    let cache_path = cache_context.cache_path();
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent).expect("create parent");
+    }
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION - 1,
+        "tools": [create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "calendar_search")],
+    }))
+    .expect("serialize");
+    std::fs::write(cache_path, bytes).expect("write legacy tools cache");
+
+    assert_eq!(
+        load_startup_cached_codex_apps_server_info(
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some(&cache_context),
+        ),
+        Some(server_info)
+    );
+    assert!(
+        load_startup_cached_codex_apps_tools_snapshot(
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some(&cache_context),
+        )
+        .is_none()
+    );
 }
 
 #[tokio::test]
