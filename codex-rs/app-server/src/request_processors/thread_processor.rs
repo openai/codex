@@ -2644,11 +2644,7 @@ impl ThreadRequestProcessor {
                     config_snapshot.active_permission_profile,
                 );
                 let token_usage_thread = include_turns.then(|| thread.clone());
-                if redact_resume_payloads {
-                    redact_thread_resume_payloads(&mut thread);
-                }
-
-                let initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
+                let mut initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
                     match build_thread_resume_initial_turns_page(
                         &response_history.get_rollout_items(),
                         thread.status.clone(),
@@ -2665,6 +2661,12 @@ impl ThreadRequestProcessor {
                 } else {
                     None
                 };
+                if redact_resume_payloads {
+                    redact_thread_resume_payloads(&mut thread.turns);
+                    if let Some(initial_turns_page) = initial_turns_page.as_mut() {
+                        redact_thread_resume_payloads(&mut initial_turns_page.data);
+                    }
+                }
 
                 let response = ThreadResumeResponse {
                     thread,
