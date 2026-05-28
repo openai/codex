@@ -700,9 +700,6 @@ pub async fn run_main_with_transport_options(
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
-    let analytics_events_client =
-        analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
-    let analytics_transport = analytics_rpc_transport(&transport);
 
     let remote_control_requested = runtime_options.remote_control_enabled;
     let remote_control_enabled = remote_control_requested && state_db.is_some();
@@ -792,7 +789,14 @@ pub async fn run_main_with_transport_options(
 
     let processor_handle = tokio::spawn({
         let auth_manager = Arc::clone(&auth_manager);
-        let analytics_events_client = analytics_events_client.clone();
+        let analytics_events_client =
+            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+        let duration_ms = app_server_started_at
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        analytics_events_client.track_app_server_started(duration_ms, remote_control_enabled);
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
@@ -813,7 +817,7 @@ pub async fn run_main_with_transport_options(
             session_source,
             auth_manager,
             installation_id,
-            rpc_transport: analytics_transport,
+            rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
@@ -1069,12 +1073,6 @@ pub async fn run_main_with_transport_options(
             info!("processor task exited (channel closed)");
         }
     });
-    let duration_ms = app_server_started_at
-        .elapsed()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
-    analytics_events_client.track_app_server_started(duration_ms, remote_control_enabled);
 
     drop(transport_event_tx);
 
