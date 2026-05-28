@@ -386,6 +386,39 @@ impl McpConnectionManager {
         }
     }
 
+    /// Returns an owned future that waits only for the requested MCP servers.
+    ///
+    /// Constructing this future clones the selected clients, allowing callers to
+    /// release any lock guarding the manager before awaiting startup.
+    pub fn wait_for_servers_ready(
+        &self,
+        server_names: &[String],
+    ) -> impl std::future::Future<Output = Vec<McpStartupFailure>> + Send + 'static {
+        let clients = server_names
+            .iter()
+            .map(|server_name| (server_name.clone(), self.clients.get(server_name).cloned()))
+            .collect::<Vec<_>>();
+        async move {
+            let mut failures = Vec::new();
+            for (server_name, client) in clients {
+                let Some(client) = client else {
+                    failures.push(McpStartupFailure {
+                        server: server_name.clone(),
+                        error: format!("MCP server `{server_name}` was not initialized"),
+                    });
+                    continue;
+                };
+                if let Err(error) = client.client().await {
+                    failures.push(McpStartupFailure {
+                        server: server_name,
+                        error: startup_outcome_error_message(error),
+                    });
+                }
+            }
+            failures
+        }
+    }
+
     pub async fn required_startup_failures(
         &self,
         required_servers: &[String],
@@ -475,6 +508,37 @@ impl McpConnectionManager {
             }
         }
         server_infos
+    }
+
+    /// Returns model-visible tools already available from startup cache or a ready client.
+    ///
+    /// Pending MCP servers without a cached snapshot are intentionally omitted so
+    /// ordinary model work does not wait on optional background initialization.
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
+    pub async fn list_ready_or_cached_tools(&self) -> Vec<ToolInfo> {
+        let mut tools = Vec::new();
+        for (server_name, managed_client) in &self.clients {
+            let has_cached_tool_info_snapshot =
+                managed_client.cached_tool_info_snapshot.is_some();
+            let startup_complete = managed_client
+                .startup_complete
+                .load(std::sync::atomic::Ordering::Acquire);
+            trace!(
+                server_name = %server_name,
+                has_cached_tool_info_snapshot,
+                startup_complete,
+                "checking ready MCP server tools while building nonblocking tool list"
+            );
+            let Some(server_tools) = managed_client.listed_tools_if_ready_or_cached().await else {
+                continue;
+            };
+            tools.extend(
+                server_tools
+                    .into_iter()
+                    .map(|tool| self.with_server_metadata(tool)),
+            );
+        }
+        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.

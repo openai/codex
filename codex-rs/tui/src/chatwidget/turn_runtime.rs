@@ -8,8 +8,8 @@ use super::*;
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
-    /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
+    /// The bottom pane only has one running flag, but MCP startup enters this
+    /// visible lifecycle only when its diagnostic presentation is enabled.
     pub(super) fn update_task_running_state(&mut self) {
         self.bottom_pane.set_task_running(
             self.turn_lifecycle.agent_turn_running || self.mcp_startup_status.is_some(),

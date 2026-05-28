@@ -2,6 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartupState) {
+    chat.config.tui_show_mcp_startup_status = true;
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             name: name.to_string(),
@@ -13,6 +14,7 @@ fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartup
 }
 
 fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
+    chat.config.tui_show_mcp_startup_status = true;
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             name: name.to_string(),
@@ -20,6 +22,47 @@ fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
             error: Some(error.to_string()),
         }),
         /*replay_kind*/ None,
+    );
+}
+
+#[tokio::test]
+async fn mcp_startup_status_is_hidden_by_default_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Failed,
+            error: Some("MCP client for `alpha` failed to start: handshake failed".to_string()),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    let height = chat.desired_height(/*width*/ 80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+        /*width*/ 80, height,
+    ))
+    .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw chat widget");
+    assert_chatwidget_snapshot!(
+        "mcp_startup_status_is_hidden_by_default",
+        normalized_backend_snapshot(terminal.backend())
     );
 }
 

@@ -1,8 +1,8 @@
 //! MCP startup state and status handling for the chat widget.
 //!
 //! The app server reports MCP server startup as per-server status updates. This
-//! module keeps the TUI's buffered startup round state coherent and translates
-//! those updates into status headers, warnings, and queued-input release points.
+//! module keeps optional diagnostic presentation state coherent when background
+//! startup status display is explicitly enabled.
 
 use std::collections::BTreeSet;
 
@@ -176,6 +176,9 @@ impl ChatWidget {
     }
 
     pub(super) fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
+        if !self.config.tui_show_mcp_startup_status {
+            return;
+        }
         if !cancelled.is_empty() {
             self.on_warning(format!(
                 "MCP startup interrupted. The following servers were not initialized: {}",
@@ -205,6 +208,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
+        if !self.config.tui_show_mcp_startup_status {
+            return;
+        }
         if self.mcp_startup_ignore_updates_until_next_start {
             if self.mcp_startup_pending_next_round.is_empty() {
                 self.mcp_startup_pending_next_round_saw_starting = false;
@@ -257,6 +263,9 @@ impl ChatWidget {
         &mut self,
         notification: McpServerStatusUpdatedNotification,
     ) {
+        if !self.config.tui_show_mcp_startup_status {
+            return;
+        }
         let status = match notification.status {
             McpServerStartupState::Starting => McpStartupStatus::Starting,
             McpServerStartupState::Ready => McpStartupStatus::Ready,
@@ -272,5 +281,25 @@ impl ChatWidget {
             status,
             /*complete_when_settled*/ true,
         );
+    }
+
+    pub(crate) fn sync_mcp_startup_status_config(&mut self, show_status: bool) {
+        let was_visible = self.config.tui_show_mcp_startup_status;
+        self.config.tui_show_mcp_startup_status = show_status;
+        if was_visible && !show_status {
+            let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
+            self.mcp_startup_status = None;
+            self.mcp_startup_expected_servers = None;
+            self.mcp_startup_ignore_updates_until_next_start = false;
+            self.mcp_startup_allow_terminal_only_next_round = false;
+            self.mcp_startup_pending_next_round.clear();
+            self.mcp_startup_pending_next_round_saw_starting = false;
+            self.update_task_running_state();
+            if mcp_startup_owned_status {
+                self.restore_reasoning_status_header();
+            }
+            self.maybe_send_next_queued_input();
+            self.request_redraw();
+        }
     }
 }
