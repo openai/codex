@@ -1209,7 +1209,10 @@ mod tests {
         );
         assert_eq!(
             None,
-            prompt_cache_key_override_for_review_session(&session_source, None)
+            prompt_cache_key_override_for_review_session(
+                &session_source,
+                /*parent_thread_id*/ None
+            )
         );
     }
 
