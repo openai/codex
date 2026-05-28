@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use codex_protocol::protocol::SessionSource;
+
 use crate::ExtensionData;
 use crate::ResponseInjectionItem;
 use crate::ResponseItemInjector;
@@ -28,6 +30,10 @@ impl IdleTurnPolicy {
 pub struct ThreadStartInput<'a, C> {
     /// Host configuration visible at thread start.
     pub config: &'a C,
+    /// Source for this thread's session.
+    pub session_source: &'a SessionSource,
+    /// Whether persistent state is available for this thread.
+    pub persistent_thread_state_available: bool,
     /// Host-provided helper for injecting model-visible input into this
     /// thread's active turn.
     pub response_item_injector: Arc<dyn ResponseItemInjector>,

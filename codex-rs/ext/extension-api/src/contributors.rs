@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
@@ -177,29 +176,6 @@ pub trait ToolContributor: Send + Sync {
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>;
-
-    /// Returns the native tools visible for the current turn, when the host has
-    /// turn context available.
-    fn tools_for_turn(
-        &self,
-        input: ToolContributionInput<'_>,
-    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
-        self.tools(input.session_store, input.thread_store)
-    }
-}
-
-/// Context supplied while collecting extension-owned tools for a turn.
-pub struct ToolContributionInput<'a> {
-    /// Store scoped to the host session runtime.
-    pub session_store: &'a ExtensionData,
-    /// Store scoped to this thread runtime.
-    pub thread_store: &'a ExtensionData,
-    /// Store scoped to the current turn runtime.
-    pub turn_store: &'a ExtensionData,
-    /// Source for the current turn's session.
-    pub session_source: &'a SessionSource,
-    /// Whether persistent state is available for the current thread.
-    pub persistent_thread_state_available: bool,
 }
 
 /// Contributor for host-owned tool lifecycle gates.

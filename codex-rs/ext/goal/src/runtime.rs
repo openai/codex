@@ -28,6 +28,7 @@ struct GoalRuntimeInner {
     response_item_injector: Arc<dyn ResponseItemInjector>,
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
+    tools_visible: bool,
 }
 
 pub(crate) struct AccountedGoalProgress {
@@ -49,7 +50,7 @@ impl GoalRuntimeHandle {
         metrics: GoalMetrics,
         response_item_injector: Arc<dyn ResponseItemInjector>,
         accounting_state: Arc<GoalAccountingState>,
-        enabled: bool,
+        tools_visible: bool,
     ) -> Self {
         Self {
             inner: Arc::new(GoalRuntimeInner {
@@ -59,7 +60,8 @@ impl GoalRuntimeHandle {
                 metrics,
                 response_item_injector,
                 accounting_state,
-                enabled: AtomicBool::new(enabled),
+                enabled: AtomicBool::new(false),
+                tools_visible,
             }),
         }
     }
@@ -70,6 +72,10 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn is_enabled(&self) -> bool {
         self.inner.enabled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn tools_visible(&self) -> bool {
+        self.inner.tools_visible
     }
 
     pub(crate) fn thread_id(&self) -> ThreadId {

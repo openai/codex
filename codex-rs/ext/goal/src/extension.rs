@@ -13,7 +13,6 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCallOutcome;
-use codex_extension_api::ToolContributionInput;
 use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
@@ -84,6 +83,11 @@ where
         let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
             return;
         };
+        let tools_visible = input.persistent_thread_state_available
+            && !matches!(
+                input.session_source,
+                SessionSource::SubAgent(SubAgentSource::Review)
+            );
         let runtime = input.thread_store.get_or_init::<GoalRuntimeHandle>(|| {
             GoalRuntimeHandle::new(
                 thread_id,
@@ -92,7 +96,7 @@ where
                 self.metrics.clone(),
                 Arc::clone(&input.response_item_injector),
                 accounting_state,
-                enabled,
+                /*tools_visible*/ tools_visible,
             )
         });
         runtime.set_enabled(enabled);
@@ -366,21 +370,6 @@ where
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
         self.goal_tools_for_thread(thread_store)
     }
-
-    fn tools_for_turn(
-        &self,
-        input: ToolContributionInput<'_>,
-    ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
-        if !input.persistent_thread_state_available
-            || matches!(
-                input.session_source,
-                SessionSource::SubAgent(SubAgentSource::Review)
-            )
-        {
-            return Vec::new();
-        }
-        self.goal_tools_for_thread(input.thread_store)
-    }
 }
 
 impl<C> GoalExtension<C>
@@ -394,7 +383,7 @@ where
         let Some(runtime) = goal_runtime_handle(thread_store) else {
             return Vec::new();
         };
-        if !runtime.is_enabled() {
+        if !runtime.is_enabled() || !runtime.tools_visible() {
             return Vec::new();
         }
 

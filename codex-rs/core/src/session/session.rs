@@ -1092,6 +1092,9 @@ impl Session {
                 contributor
                     .on_thread_start(codex_extension_api::ThreadStartInput {
                         config: config.as_ref(),
+                        session_source: &session_configuration.session_source,
+                        persistent_thread_state_available: !config.ephemeral
+                            && state_db_ctx.is_some(),
                         response_item_injector: Arc::clone(&response_item_injector),
                         session_store: &sess.services.session_extension_data,
                         thread_store: &sess.services.thread_extension_data,

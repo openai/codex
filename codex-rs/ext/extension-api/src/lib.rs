@@ -45,7 +45,6 @@ pub use contributors::ThreadStopInput;
 pub use contributors::TokenUsageContributor;
 pub use contributors::ToolCallOutcome;
 pub use contributors::ToolCallSource;
-pub use contributors::ToolContributionInput;
 pub use contributors::ToolContributor;
 pub use contributors::ToolFinishInput;
 pub use contributors::ToolLifecycleContributor;

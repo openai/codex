@@ -15,7 +15,6 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource;
-use codex_extension_api::ToolContributionInput;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolPayload;
@@ -140,12 +139,15 @@ async fn goal_tools_hidden_for_review_turns() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
-    let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
-
-    let tools = harness.tools_for_turn(
+    let harness = GoalExtensionHarness::new_with_thread_start(
+        runtime,
+        thread_id,
         SessionSource::SubAgent(SubAgentSource::Review),
         /*persistent_thread_state_available*/ true,
-    );
+    )
+    .await?;
+
+    let tools = harness.tools();
 
     assert!(tools.is_empty());
     Ok(())
@@ -156,12 +158,15 @@ async fn goal_tools_hidden_without_persistent_thread_state() -> anyhow::Result<(
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
-    let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
-
-    let tools = harness.tools_for_turn(
+    let harness = GoalExtensionHarness::new_with_thread_start(
+        runtime,
+        thread_id,
         SessionSource::Cli,
         /*persistent_thread_state_available*/ false,
-    );
+    )
+    .await?;
+
+    let tools = harness.tools();
 
     assert!(tools.is_empty());
     Ok(())
@@ -1147,6 +1152,8 @@ async fn installed_tools(
         contributor
             .on_thread_start(ThreadStartInput {
                 config: &(),
+                session_source: &SessionSource::Cli,
+                persistent_thread_state_available: true,
                 response_item_injector: Arc::new(NoopResponseItemInjector),
                 session_store: &session_store,
                 thread_store: &thread_store,
@@ -1157,17 +1164,7 @@ async fn installed_tools(
     registry
         .tool_contributors()
         .iter()
-        .flat_map(|contributor| {
-            let session_source = SessionSource::Cli;
-            let turn_store = ExtensionData::new("turn-1");
-            contributor.tools_for_turn(ToolContributionInput {
-                session_store: &session_store,
-                thread_store: &thread_store,
-                turn_store: &turn_store,
-                session_source: &session_source,
-                persistent_thread_state_available: true,
-            })
-        })
+        .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
         .collect()
 }
 
@@ -1182,6 +1179,21 @@ impl GoalExtensionHarness {
     async fn new(
         runtime: Arc<codex_state::StateRuntime>,
         thread_id: ThreadId,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_thread_start(
+            runtime,
+            thread_id,
+            SessionSource::Cli,
+            /*persistent_thread_state_available*/ true,
+        )
+        .await
+    }
+
+    async fn new_with_thread_start(
+        runtime: Arc<codex_state::StateRuntime>,
+        thread_id: ThreadId,
+        session_source: SessionSource,
+        persistent_thread_state_available: bool,
     ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
         let mut builder = ExtensionRegistryBuilder::<()>::new();
@@ -1199,6 +1211,8 @@ impl GoalExtensionHarness {
             contributor
                 .on_thread_start(ThreadStartInput {
                     config: &(),
+                    session_source: &session_source,
+                    persistent_thread_state_available,
                     response_item_injector: Arc::new(NoopResponseItemInjector),
                     session_store: &session_store,
                     thread_store: &thread_store,
@@ -1214,30 +1228,10 @@ impl GoalExtensionHarness {
     }
 
     fn tools(&self) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
-        self.tools_for_turn(
-            SessionSource::Cli,
-            /*persistent_thread_state_available*/ true,
-        )
-    }
-
-    fn tools_for_turn(
-        &self,
-        session_source: SessionSource,
-        persistent_thread_state_available: bool,
-    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
-        let turn_store = ExtensionData::new("turn-1");
         self.registry
             .tool_contributors()
             .iter()
-            .flat_map(|contributor| {
-                contributor.tools_for_turn(ToolContributionInput {
-                    session_store: &self.session_store,
-                    thread_store: &self.thread_store,
-                    turn_store: &turn_store,
-                    session_source: &session_source,
-                    persistent_thread_state_available,
-                })
-            })
+            .flat_map(|contributor| contributor.tools(&self.session_store, &self.thread_store))
             .collect()
     }
 

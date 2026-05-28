@@ -347,7 +347,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             deferred_mcp_tools: None,
             mcp_tools: None,
             discoverable_tools: None,
-            extension_tool_executors: extension_tool_executors(&session, &turn),
+            extension_tool_executors: extension_tool_executors(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
     );
