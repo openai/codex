@@ -49,7 +49,7 @@ pub(crate) fn default_builtin_permission_profile_name(
     active_project: &ProjectConfig,
     windows_sandbox_level: WindowsSandboxLevel,
 ) -> &'static str {
-    if active_project.is_trusted()
+    if (active_project.is_trusted() || active_project.is_untrusted())
         && !(cfg!(target_os = "windows") && windows_sandbox_level == WindowsSandboxLevel::Disabled)
     {
         BUILT_IN_WORKSPACE_PROFILE
