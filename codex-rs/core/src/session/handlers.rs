@@ -27,6 +27,7 @@ use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -255,7 +256,8 @@ pub(super) async fn user_input_or_turn_inner(
             };
             let mut task_input = additional_context_input
                 .into_iter()
-                .map(TurnInput::ResponseInputItem)
+                .map(ResponseItem::from)
+                .map(TurnInput::ResponseItem)
                 .collect::<Vec<_>>();
             if !items.is_empty() {
                 task_input.push(TurnInput::UserInput(items));
@@ -899,17 +901,14 @@ Do not assume this also authorizes similar operations with different payloads.
 Approved action:
 {approved_action_json}"#,
     );
-    let items = vec![ResponseInputItem::Message {
+    let items = vec![ResponseItem::from(ResponseInputItem::Message {
         role: "developer".to_string(),
         content: vec![ContentItem::InputText { text }],
         phase: None,
-    }];
+    })];
 
-    if let Err(items) = sess.inject_response_items(items).await {
-        sess.input_queue
-            .queue_response_items_for_next_turn(items)
-            .await;
-    }
+    sess.inject_no_new_turn(items, /*current_turn_context*/ None)
+        .await;
 }
 
 pub(super) fn submission_dispatch_span(sub: &Submission) -> tracing::Span {

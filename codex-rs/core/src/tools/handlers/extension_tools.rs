@@ -208,7 +208,7 @@ mod tests {
             phase: None,
         };
         session
-            .record_into_history(std::slice::from_ref(&history_item), &turn)
+            .record_conversation_items(&turn, std::slice::from_ref(&history_item))
             .await;
         let invocation = ToolInvocation {
             session: session.into(),

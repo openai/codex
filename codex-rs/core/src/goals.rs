@@ -26,7 +26,7 @@ use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_otel::GOAL_USAGE_LIMITED_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
@@ -177,7 +177,7 @@ pub(crate) struct GoalRuntimeState {
 
 struct GoalContinuationCandidate {
     goal_id: String,
-    items: Vec<ResponseInputItem>,
+    items: Vec<ResponseItem>,
 }
 
 impl GoalRuntimeState {
@@ -686,7 +686,7 @@ impl Session {
                     .await;
                 if let Some(goal) = goal_for_steering {
                     let item = goal_context_input_item(objective_updated_prompt(&goal));
-                    if self.inject_response_items(vec![item]).await.is_err() {
+                    if self.inject_if_running(vec![item]).await.is_err() {
                         tracing::debug!(
                             "skipping objective-updated goal steering because no turn is active"
                         );
@@ -1074,7 +1074,7 @@ impl Session {
         .await;
         if should_steer_budget_limit {
             let item = budget_limit_steering_item(&goal);
-            if self.inject_response_items(vec![item]).await.is_err() {
+            if self.inject_if_running(vec![item]).await.is_err() {
                 tracing::debug!("skipping budget-limit goal steering because no turn is active");
             }
             *self.goal_runtime.budget_limit_reported_goal_id.lock().await = Some(goal_id);
@@ -1332,7 +1332,7 @@ impl Session {
                 candidate
                     .items
                     .into_iter()
-                    .map(TurnInput::ResponseInputItem)
+                    .map(TurnInput::ResponseItem)
                     .collect(),
             )
             .await;
@@ -1604,12 +1604,12 @@ fn escape_xml_text(input: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
+fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseItem {
     goal_context_input_item(budget_limit_prompt(goal))
 }
 
-fn goal_context_input_item(prompt: String) -> ResponseInputItem {
-    GoalContext::new(prompt).into_response_input_item()
+fn goal_context_input_item(prompt: String) -> ResponseItem {
+    ResponseItem::from(GoalContext::new(prompt).into_response_input_item())
 }
 
 pub(crate) fn protocol_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
@@ -1678,7 +1678,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::TokenUsage;
@@ -1807,7 +1807,8 @@ mod tests {
 
         assert_eq!(
             item,
-            ResponseInputItem::Message {
+            ResponseItem::Message {
+                id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "<goal_context>\nContinue working.\n</goal_context>".to_string(),

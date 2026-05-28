@@ -44,7 +44,6 @@ use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -361,7 +360,7 @@ impl Session {
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
         let mut pending_items = queued_response_items
             .into_iter()
-            .map(TurnInput::ResponseInputItem)
+            .map(TurnInput::ResponseItem)
             .collect::<Vec<_>>();
         pending_items.extend(mailbox_items);
         self.input_queue
@@ -859,10 +858,11 @@ impl Session {
                 InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),
             )
         {
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
-                .await;
-            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
-                .await;
+            self.record_conversation_items(
+                task.turn_context.as_ref(),
+                std::slice::from_ref(&marker),
+            )
+            .await;
             // Ensure the marker is durably visible before emitting TurnAborted: some clients
             // synchronously re-read the rollout on receipt of the abort event.
             if let Err(err) = self.flush_rollout().await {
