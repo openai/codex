@@ -38,12 +38,12 @@ pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
-    repo_env_path_ref: Option<EnvironmentPathRef>,
+    env_path_ref: Option<EnvironmentPathRef>,
     skill_root_path_ref: Option<EnvironmentPathRef>,
     effective_skill_roots: Vec<PluginSkillRoot>,
 ) -> SkillsLoadInput {
     SkillsLoadInput::new(
-        repo_env_path_ref,
+        env_path_ref,
         skill_root_path_ref,
         effective_skill_roots,
         config.config_layer_stack.clone(),

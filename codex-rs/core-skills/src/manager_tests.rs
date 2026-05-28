@@ -376,7 +376,7 @@ async fn skills_for_cwd_without_fs_skips_repo_roots() {
     .expect("valid config layer stack");
     let skill_root_path_ref = skill_root_path_ref(cwd.path().abs());
     let skills_input = SkillsLoadInput::new(
-        /*repo_env_path_ref*/ None,
+        /*env_path_ref*/ None,
         Some(skill_root_path_ref),
         Vec::new(),
         config_layer_stack.clone(),

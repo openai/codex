@@ -26,7 +26,7 @@ use codex_exec_server::EnvironmentPathRef;
 
 #[derive(Debug, Clone)]
 pub struct SkillsLoadInput {
-    pub repo_env_path_ref: Option<EnvironmentPathRef>,
+    pub env_path_ref: Option<EnvironmentPathRef>,
     pub skill_root_path_ref: Option<EnvironmentPathRef>,
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
@@ -35,14 +35,14 @@ pub struct SkillsLoadInput {
 
 impl SkillsLoadInput {
     pub fn new(
-        repo_env_path_ref: Option<EnvironmentPathRef>,
+        env_path_ref: Option<EnvironmentPathRef>,
         skill_root_path_ref: Option<EnvironmentPathRef>,
         effective_skill_roots: Vec<PluginSkillRoot>,
         config_layer_stack: ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Self {
         Self {
-            repo_env_path_ref,
+            env_path_ref,
             skill_root_path_ref,
             effective_skill_roots,
             config_layer_stack,
@@ -109,7 +109,7 @@ impl SkillsManager {
 
     pub async fn skill_roots_for_config(&self, input: &SkillsLoadInput) -> Vec<SkillRoot> {
         let mut roots = skill_roots(
-            input.repo_env_path_ref.as_ref(),
+            input.env_path_ref.as_ref(),
             input.skill_root_path_ref.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
@@ -126,7 +126,7 @@ impl SkillsManager {
         input: &SkillsLoadInput,
         force_reload: bool,
     ) -> SkillLoadOutcome {
-        let cwd_cache_key = input.repo_env_path_ref.clone();
+        let cwd_cache_key = input.env_path_ref.clone();
         if !force_reload
             && let Some(cwd_cache_key) = cwd_cache_key.as_ref()
             && let Some(outcome) = self.cached_outcome_for_cwd(cwd_cache_key)
@@ -135,7 +135,7 @@ impl SkillsManager {
         }
 
         let mut roots = skill_roots(
-            input.repo_env_path_ref.as_ref(),
+            input.env_path_ref.as_ref(),
             input.skill_root_path_ref.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
