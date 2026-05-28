@@ -679,7 +679,7 @@ impl Session {
             .await;
         let primary_cwd = primary_turn_environment.map(|turn_environment| {
             environment_path_ref(
-                Some(turn_environment.environment_id.clone()),
+                turn_environment.environment_id.clone(),
                 turn_environment.environment.get_filesystem(),
                 turn_environment.cwd.clone(),
             )

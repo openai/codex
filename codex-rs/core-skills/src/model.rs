@@ -245,11 +245,7 @@ mod tests {
     #[test]
     fn environment_path_ref_joins_only_relative_paths() {
         let root_path = std::env::temp_dir().join("skills");
-        let path_ref = EnvironmentPathRef::new(
-            /*environment_id*/ None,
-            Arc::clone(&LOCAL_FS),
-            root_path.abs(),
-        );
+        let path_ref = EnvironmentPathRef::local(root_path.abs());
 
         assert_eq!(
             path_ref

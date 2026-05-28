@@ -505,11 +505,8 @@ impl CatalogRequestProcessor {
         let fs = environment_manager
             .default_environment()
             .map(|environment| environment.get_filesystem());
-        let local_path_ref = Some(codex_core::skills::EnvironmentPathRef::new(
-            Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
-            Arc::clone(&codex_exec_server::LOCAL_FS),
-            config.cwd.clone(),
-        ));
+        let local_path_ref =
+            Some(codex_core::skills::EnvironmentPathRef::local(config.cwd.clone()));
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
@@ -550,13 +547,15 @@ impl CatalogRequestProcessor {
                         Vec::new()
                     };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        fs.clone().map(|file_system| {
-                            codex_core::skills::EnvironmentPathRef::new(
-                                default_environment_id,
-                                file_system,
-                                cwd_abs.clone(),
-                            )
-                        }),
+                        default_environment_id.clone().zip(fs.clone()).map(
+                            |(environment_id, file_system)| {
+                                codex_core::skills::EnvironmentPathRef::new(
+                                    environment_id,
+                                    file_system,
+                                    cwd_abs.clone(),
+                                )
+                            },
+                        ),
                         local_path_ref,
                         effective_skill_roots,
                         config_layer_stack,

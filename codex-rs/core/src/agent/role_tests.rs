@@ -422,7 +422,7 @@ enabled = false
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let path_ref = crate::environment_path_ref(
-        Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
+        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         Arc::clone(&codex_exec_server::LOCAL_FS),
         config.cwd.clone(),
     );

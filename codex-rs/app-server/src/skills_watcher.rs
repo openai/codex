@@ -82,7 +82,7 @@ impl SkillsWatcher {
         }
 
         let skill_root_path_ref = EnvironmentPathRef::new(
-            Some(environment_selection.environment_id.clone()),
+            environment_selection.environment_id.clone(),
             environment.get_filesystem(),
             config.cwd.clone(),
         );

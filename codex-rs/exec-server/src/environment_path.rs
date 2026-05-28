@@ -10,18 +10,20 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::ExecutorFileSystem;
 use crate::FileMetadata;
 use crate::ReadDirectoryEntry;
+use crate::LOCAL_ENVIRONMENT_ID;
+use crate::LOCAL_FS;
 
-/// Binds an absolute path to the executor filesystem and optional environment that owns it.
+/// Binds an absolute path to the executor filesystem and environment that owns it.
 #[derive(Clone)]
 pub struct EnvironmentPathRef {
-    environment_id: Option<String>,
+    environment_id: String,
     file_system: Arc<dyn ExecutorFileSystem>,
     path: AbsolutePathBuf,
 }
 
 impl EnvironmentPathRef {
     pub fn new(
-        environment_id: Option<String>,
+        environment_id: String,
         file_system: Arc<dyn ExecutorFileSystem>,
         path: AbsolutePathBuf,
     ) -> Self {
@@ -32,12 +34,20 @@ impl EnvironmentPathRef {
         }
     }
 
+    pub fn local(path: AbsolutePathBuf) -> Self {
+        Self::new(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            Arc::clone(&LOCAL_FS),
+            path,
+        )
+    }
+
     pub fn path(&self) -> &AbsolutePathBuf {
         &self.path
     }
 
-    pub fn environment_id(&self) -> Option<&str> {
-        self.environment_id.as_deref()
+    pub fn environment_id(&self) -> &str {
+        &self.environment_id
     }
 
     pub fn file_system(&self) -> Arc<dyn ExecutorFileSystem> {

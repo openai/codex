@@ -4121,12 +4121,12 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
             &crate::skills_load_input_from_config(
                 &parent_config,
                 Some(crate::environment_path_ref(
-                    Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
+                    codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                     Arc::clone(&skill_fs),
                     parent_config.cwd.clone(),
                 )),
                 Some(crate::environment_path_ref(
-                    Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
+                    codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                     Arc::clone(&skill_fs),
                     parent_config.cwd.clone(),
                 )),
@@ -4696,7 +4696,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let path_ref = crate::environment_path_ref(
-        Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
+        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         environment.get_filesystem(),
         per_turn_config.cwd.clone(),
     );
@@ -6539,7 +6539,7 @@ where
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let path_ref = crate::environment_path_ref(
-        Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
+        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         environment.get_filesystem(),
         per_turn_config.cwd.clone(),
     );

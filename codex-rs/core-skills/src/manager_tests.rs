@@ -90,7 +90,7 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
 
 fn skill_root_path_ref(path: AbsolutePathBuf) -> EnvironmentPathRef {
     EnvironmentPathRef::new(
-        Some(LOCAL_ENVIRONMENT_ID.to_string()),
+        LOCAL_ENVIRONMENT_ID.to_string(),
         Arc::clone(&LOCAL_FS),
         path,
     )

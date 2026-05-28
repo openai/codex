@@ -458,7 +458,7 @@ async fn warm_plugins_and_skills_for_session_init(
         .and_then(crate::environment_selection::ResolvedTurnEnvironments::primary)
         .map(|environment| {
             environment_path_ref(
-                Some(environment.environment_id.clone()),
+                environment.environment_id.clone(),
                 environment.environment.get_filesystem(),
                 environment.cwd.clone(),
             )
