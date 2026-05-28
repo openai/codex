@@ -4,9 +4,12 @@ use crate::session::turn_context::TurnContext;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
+pub use codex_exec_server::EnvironmentPathRef;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
+use std::sync::Arc;
 
 pub use codex_core_skills::SkillError;
 pub use codex_core_skills::SkillLoadOutcome;
@@ -35,14 +38,25 @@ pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
+    primary_cwd: Option<EnvironmentPathRef>,
+    skill_root_path_ref: Option<EnvironmentPathRef>,
     effective_skill_roots: Vec<PluginSkillRoot>,
 ) -> SkillsLoadInput {
     SkillsLoadInput::new(
-        config.cwd.clone(),
+        primary_cwd,
+        skill_root_path_ref,
         effective_skill_roots,
         config.config_layer_stack.clone(),
         config.bundled_skills_enabled(),
     )
+}
+
+pub(crate) fn environment_path_ref(
+    environment_id: Option<String>,
+    file_system: Arc<dyn ExecutorFileSystem>,
+    path: AbsolutePathBuf,
+) -> EnvironmentPathRef {
+    EnvironmentPathRef::new(environment_id, file_system, path)
 }
 
 pub(crate) async fn maybe_emit_implicit_skill_invocation(

@@ -14,12 +14,13 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
 use codex_core_skills::SkillMetadata;
+use codex_core_skills::SkillRootPathRef;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
-use codex_exec_server::LOCAL_FS;
+use codex_exec_server::EnvironmentPathRef;
 use codex_plugin::AppConnectorId;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
@@ -40,7 +41,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::warn;
 
@@ -112,6 +112,7 @@ pub async fn load_plugins_from_layer_stack(
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
+    skill_path_ref: Option<&EnvironmentPathRef>,
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     let mut configured_plugins = configured_plugins_from_stack(config_layer_stack);
@@ -128,6 +129,7 @@ pub async fn load_plugins_from_layer_stack(
             store,
             restriction_product,
             &skill_config_rules,
+            skill_path_ref,
         )
         .await;
         for name in loaded_plugin.mcp_servers.keys() {
@@ -497,6 +499,7 @@ async fn load_plugin(
     store: &PluginStore,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
+    skill_path_ref: Option<&EnvironmentPathRef>,
 ) -> LoadedPlugin<McpServerConfig> {
     let plugin_id = PluginId::parse(&config_name);
     let active_plugin_root = plugin_id
@@ -565,7 +568,7 @@ async fn load_plugin(
     loaded_plugin.manifest_description = manifest.description.clone();
     loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
     let resolved_skills = load_plugin_skills(
-        &plugin_root,
+        skill_path_ref.map(|path_ref| path_ref.with_path(plugin_root.clone())),
         &loaded_plugin_id,
         manifest_paths,
         restriction_product,
@@ -642,18 +645,24 @@ impl ResolvedPluginSkills {
 }
 
 pub async fn load_plugin_skills(
-    plugin_root: &AbsolutePathBuf,
+    plugin_root: Option<EnvironmentPathRef>,
     plugin_id: &PluginId,
     manifest_paths: &PluginManifestPaths,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
 ) -> ResolvedPluginSkills {
-    let roots = plugin_skill_roots(plugin_root, manifest_paths)
+    let Some(plugin_root) = plugin_root else {
+        return ResolvedPluginSkills {
+            skills: Vec::new(),
+            disabled_skill_paths: HashSet::new(),
+            had_errors: false,
+        };
+    };
+    let roots = plugin_skill_roots(plugin_root.path(), manifest_paths)
         .into_iter()
         .map(|path| SkillRoot {
-            path,
+            path: SkillRootPathRef::new(plugin_root.with_path(path)),
             scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
             plugin_id: Some(plugin_id.as_key()),
             plugin_root: Some(plugin_root.clone()),
         })

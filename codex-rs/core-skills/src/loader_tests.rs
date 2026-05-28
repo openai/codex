@@ -4,6 +4,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -144,6 +145,23 @@ fn normalized(path: &Path) -> AbsolutePathBuf {
         .abs()
 }
 
+fn skill_root_path_ref(path: AbsolutePathBuf) -> EnvironmentPathRef {
+    EnvironmentPathRef::new(
+        Some(LOCAL_ENVIRONMENT_ID.to_string()),
+        Arc::clone(&LOCAL_FS),
+        path,
+    )
+}
+
+fn local_skill_root(path: AbsolutePathBuf, scope: SkillScope) -> SkillRoot {
+    SkillRoot {
+        path: SkillRootPathRef::new(skill_root_path_ref(path)),
+        scope,
+        plugin_id: None,
+        plugin_root: None,
+    }
+}
+
 #[tokio::test]
 async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to_admin()
 -> anyhow::Result<()> {
@@ -187,7 +205,7 @@ async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_sys
     )
     .await
     .into_iter()
-    .map(|root| (root.scope, root.path.to_path_buf()))
+    .map(|root| (root.scope, root.path.path().to_path_buf()))
     .collect::<Vec<_>>();
 
     assert_eq!(
@@ -256,7 +274,7 @@ async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyh
     )
     .await
     .into_iter()
-    .map(|root| (root.scope, root.path.to_path_buf()))
+    .map(|root| (root.scope, root.path.path().to_path_buf()))
     .collect::<Vec<_>>();
 
     assert_eq!(
@@ -846,11 +864,10 @@ interface:
 
     let plugin_root_abs = plugin_root.abs();
     let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
+        path: SkillRootPathRef::new(skill_root_path_ref(plugin_root.join("skills").abs())),
         scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_root: Some(plugin_root_abs.clone()),
+        plugin_root: Some(skill_root_path_ref(plugin_root_abs.clone())),
     }])
     .await;
 
@@ -903,11 +920,10 @@ interface:
     );
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
+        path: SkillRootPathRef::new(skill_root_path_ref(plugin_root.join("skills").abs())),
         scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_root: Some(plugin_root.abs()),
+        plugin_root: Some(skill_root_path_ref(plugin_root.abs())),
     }])
     .await;
 
@@ -1048,14 +1064,9 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
     fs::create_dir_all(admin_root.path()).unwrap();
     symlink_dir(shared.path(), &admin_root.path().join("shared"));
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: admin_root.path().abs(),
-        scope: SkillScope::Admin,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-        plugin_root: None,
-    }])
-    .await;
+    let outcome =
+        load_skills_from_roots([local_skill_root(admin_root.path().abs(), SkillScope::Admin)])
+            .await;
 
     assert!(
         outcome.errors.is_empty(),
@@ -1130,14 +1141,8 @@ async fn system_scope_ignores_symlinked_subdir() {
     fs::create_dir_all(&system_root).unwrap();
     symlink_dir(shared.path(), &system_root.join("shared"));
 
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: system_root.abs(),
-        scope: SkillScope::System,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-        plugin_root: None,
-    }])
-    .await;
+    let outcome =
+        load_skills_from_roots([local_skill_root(system_root.abs(), SkillScope::System)]).await;
     assert!(
         outcome.errors.is_empty(),
         "unexpected errors: {:?}",
@@ -1164,14 +1169,8 @@ async fn respects_max_scan_depth_for_user_scope() {
     );
 
     let skills_root = codex_home.path().join("skills");
-    let outcome = load_skills_from_roots([SkillRoot {
-        path: skills_root.abs(),
-        scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
-        plugin_id: None,
-        plugin_root: None,
-    }])
-    .await;
+    let outcome =
+        load_skills_from_roots([local_skill_root(skills_root.abs(), SkillScope::User)]).await;
 
     assert!(
         outcome.errors.is_empty(),
@@ -1272,11 +1271,10 @@ async fn namespaces_plugin_skills_using_plugin_name() {
     .unwrap();
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
+        path: SkillRootPathRef::new(skill_root_path_ref(plugin_root.join("skills").abs())),
         scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
-        plugin_root: Some(plugin_root.abs()),
+        plugin_root: Some(skill_root_path_ref(plugin_root.abs())),
     }])
     .await;
 
@@ -1595,16 +1593,14 @@ async fn deduplicates_by_path_preferring_first_root() {
 
     let outcome = load_skills_from_roots([
         SkillRoot {
-            path: root.path().abs(),
+            path: SkillRootPathRef::new(skill_root_path_ref(root.path().abs())),
             scope: SkillScope::Repo,
-            file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
             plugin_root: None,
         },
         SkillRoot {
-            path: root.path().abs(),
+            path: SkillRootPathRef::new(skill_root_path_ref(root.path().abs())),
             scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
             plugin_root: None,
         },
@@ -1895,10 +1891,11 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cfg = make_config(&codex_home).await;
 
+    let path_ref = skill_root_path_ref(cfg.cwd.clone());
     let scopes: Vec<SkillScope> = super::skill_roots(
-        Some(Arc::clone(&LOCAL_FS)),
+        Some(&path_ref),
+        Some(&path_ref),
         &cfg.config_layer_stack,
-        &cfg.cwd,
         Vec::new(),
     )
     .await
@@ -1911,4 +1908,24 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     }
     expected.push(SkillScope::Admin);
     assert_eq!(scopes, expected);
+}
+
+#[tokio::test]
+async fn skill_roots_skip_local_roots_without_skill_root_path_ref() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cfg = make_config(&codex_home).await;
+
+    let primary_cwd = skill_root_path_ref(cfg.cwd.clone());
+    let scopes: Vec<SkillScope> = super::skill_roots(
+        Some(&primary_cwd),
+        /*skill_root_path_ref*/ None,
+        &cfg.config_layer_stack,
+        Vec::new(),
+    )
+    .await
+    .into_iter()
+    .map(|root| root.scope)
+    .collect();
+
+    assert!(scopes.is_empty());
 }

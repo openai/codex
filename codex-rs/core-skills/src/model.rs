@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
+use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -43,6 +44,27 @@ impl SkillMetadata {
             }
             None => true,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SkillRootPathRef(EnvironmentPathRef);
+
+impl SkillRootPathRef {
+    pub fn new(path_ref: EnvironmentPathRef) -> Self {
+        Self(path_ref)
+    }
+
+    pub fn path_ref(&self) -> &EnvironmentPathRef {
+        &self.0
+    }
+
+    pub fn path(&self) -> &AbsolutePathBuf {
+        self.0.path()
+    }
+
+    pub(crate) fn file_system(&self) -> Arc<dyn ExecutorFileSystem> {
+        self.0.file_system()
     }
 }
 
@@ -209,4 +231,36 @@ pub fn filter_skill_load_outcome_for_product(
             .collect(),
     );
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    use codex_exec_server::LOCAL_FS;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn environment_path_ref_joins_only_relative_paths() {
+        let root_path = std::env::temp_dir().join("skills");
+        let path_ref = EnvironmentPathRef::new(
+            /*environment_id*/ None,
+            Arc::clone(&LOCAL_FS),
+            root_path.abs(),
+        );
+
+        assert_eq!(
+            path_ref
+                .join_relative(Path::new("demo/SKILL.md"))
+                .map(|path_ref| path_ref.path().clone()),
+            Some(root_path.join("demo/SKILL.md").abs())
+        );
+        assert!(
+            path_ref
+                .join_relative(std::env::temp_dir().join("SKILL.md").as_path())
+                .is_none()
+        );
+    }
 }

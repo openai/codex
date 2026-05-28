@@ -57,6 +57,7 @@ use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
+use codex_exec_server::EnvironmentPathRef;
 use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -91,6 +92,7 @@ pub struct PluginsConfigInput {
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
     pub chatgpt_base_url: String,
+    pub skill_path_ref: Option<EnvironmentPathRef>,
 }
 
 impl PluginsConfigInput {
@@ -105,7 +107,13 @@ impl PluginsConfigInput {
             plugins_enabled,
             remote_plugin_enabled,
             chatgpt_base_url,
+            skill_path_ref: None,
         }
+    }
+
+    pub fn with_skill_path_ref(mut self, skill_path_ref: Option<EnvironmentPathRef>) -> Self {
+        self.skill_path_ref = skill_path_ref;
+        self
     }
 }
 
@@ -411,8 +419,14 @@ pub struct PluginsManager {
 
 #[derive(Clone)]
 struct CachedPluginLoadOutcome {
-    config_version: String,
+    key: PluginLoadCacheKey,
     outcome: PluginLoadOutcome,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PluginLoadCacheKey {
+    config_version: String,
+    skill_path_ref: Option<EnvironmentPathRef>,
 }
 
 impl PluginsManager {
@@ -482,8 +496,11 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
-        let config_version = version_for_toml(&config.config_layer_stack.effective_config());
-        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&config_version) {
+        let cache_key = PluginLoadCacheKey {
+            config_version: version_for_toml(&config.config_layer_stack.effective_config()),
+            skill_path_ref: config.skill_path_ref.clone(),
+        };
+        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
             return outcome;
         }
 
@@ -492,6 +509,7 @@ impl PluginsManager {
             self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
+            config.skill_path_ref.as_ref(),
         )
         .await;
         log_plugin_load_errors(&outcome);
@@ -500,7 +518,7 @@ impl PluginsManager {
             Err(err) => err.into_inner(),
         };
         *cache = Some(CachedPluginLoadOutcome {
-            config_version,
+            key: cache_key,
             outcome: outcome.clone(),
         });
         outcome
@@ -537,6 +555,7 @@ impl PluginsManager {
             self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
+            config.skill_path_ref.as_ref(),
         )
         .await
     }
@@ -552,16 +571,16 @@ impl PluginsManager {
             .effective_plugin_skill_roots()
     }
 
-    fn cached_enabled_outcome(&self, config_version: &str) -> Option<PluginLoadOutcome> {
+    fn cached_enabled_outcome(&self, cache_key: &PluginLoadCacheKey) -> Option<PluginLoadOutcome> {
         match self.cached_enabled_outcome.read() {
             Ok(cache) => cache
                 .as_ref()
-                .filter(|cached| cached.config_version == config_version)
+                .filter(|cached| &cached.key == cache_key)
                 .map(|cached| cached.outcome.clone()),
             Err(err) => err
                 .into_inner()
                 .as_ref()
-                .filter(|cached| cached.config_version == config_version)
+                .filter(|cached| &cached.key == cache_key)
                 .map(|cached| cached.outcome.clone()),
         }
     }
@@ -1420,7 +1439,10 @@ impl PluginsManager {
             marketplace_category,
         );
         let resolved_skills = load_plugin_skills(
-            &source_path,
+            config
+                .skill_path_ref
+                .as_ref()
+                .map(|path_ref| path_ref.with_path(source_path.clone())),
             &plugin_id,
             &manifest.paths,
             self.restriction_product,

@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
-use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -23,10 +22,12 @@ use crate::loader::skill_roots;
 use crate::system::install_system_skills;
 use crate::system::uninstall_system_skills;
 use codex_config::SkillsConfig;
+use codex_exec_server::EnvironmentPathRef;
 
 #[derive(Debug, Clone)]
 pub struct SkillsLoadInput {
-    pub cwd: AbsolutePathBuf,
+    pub primary_cwd: Option<EnvironmentPathRef>,
+    pub skill_root_path_ref: Option<EnvironmentPathRef>,
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
@@ -34,13 +35,15 @@ pub struct SkillsLoadInput {
 
 impl SkillsLoadInput {
     pub fn new(
-        cwd: AbsolutePathBuf,
+        primary_cwd: Option<EnvironmentPathRef>,
+        skill_root_path_ref: Option<EnvironmentPathRef>,
         effective_skill_roots: Vec<PluginSkillRoot>,
         config_layer_stack: ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Self {
         Self {
-            cwd,
+            primary_cwd,
+            skill_root_path_ref,
             effective_skill_roots,
             config_layer_stack,
             bundled_skills_enabled,
@@ -51,7 +54,7 @@ impl SkillsLoadInput {
 pub struct SkillsManager {
     codex_home: AbsolutePathBuf,
     restriction_product: Option<Product>,
-    cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, SkillLoadOutcome>>,
+    cache_by_cwd: RwLock<HashMap<EnvironmentPathRef, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
 
@@ -87,12 +90,8 @@ impl SkillsManager {
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
     /// to share a directory.
-    pub async fn skills_for_config(
-        &self,
-        input: &SkillsLoadInput,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
-    ) -> SkillLoadOutcome {
-        let roots = self.skill_roots_for_config(input, fs).await;
+    pub async fn skills_for_config(&self, input: &SkillsLoadInput) -> SkillLoadOutcome {
+        let roots = self.skill_roots_for_config(input).await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
@@ -108,15 +107,11 @@ impl SkillsManager {
         outcome
     }
 
-    pub async fn skill_roots_for_config(
-        &self,
-        input: &SkillsLoadInput,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
-    ) -> Vec<SkillRoot> {
+    pub async fn skill_roots_for_config(&self, input: &SkillsLoadInput) -> Vec<SkillRoot> {
         let mut roots = skill_roots(
-            fs,
+            input.primary_cwd.as_ref(),
+            input.skill_root_path_ref.as_ref(),
             &input.config_layer_stack,
-            &input.cwd,
             input.effective_skill_roots.clone(),
         )
         .await;
@@ -130,20 +125,19 @@ impl SkillsManager {
         &self,
         input: &SkillsLoadInput,
         force_reload: bool,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
-        let use_cwd_cache = fs.is_some();
-        if use_cwd_cache
-            && !force_reload
-            && let Some(outcome) = self.cached_outcome_for_cwd(&input.cwd)
+        let cwd_cache_key = input.primary_cwd.clone();
+        if !force_reload
+            && let Some(cwd_cache_key) = cwd_cache_key.as_ref()
+            && let Some(outcome) = self.cached_outcome_for_cwd(cwd_cache_key)
         {
             return outcome;
         }
 
         let mut roots = skill_roots(
-            fs.clone(),
+            input.primary_cwd.as_ref(),
+            input.skill_root_path_ref.as_ref(),
             &input.config_layer_stack,
-            &input.cwd,
             input.effective_skill_roots.clone(),
         )
         .await;
@@ -152,12 +146,12 @@ impl SkillsManager {
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
-        if use_cwd_cache {
+        if let Some(cwd_cache_key) = cwd_cache_key {
             let mut cache = self
                 .cache_by_cwd
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.insert(input.cwd.clone(), outcome.clone());
+            cache.insert(cwd_cache_key, outcome.clone());
         }
         outcome
     }
@@ -198,7 +192,7 @@ impl SkillsManager {
         info!("skills cache cleared ({cleared} entries)");
     }
 
-    fn cached_outcome_for_cwd(&self, cwd: &AbsolutePathBuf) -> Option<SkillLoadOutcome> {
+    fn cached_outcome_for_cwd(&self, cwd: &EnvironmentPathRef) -> Option<SkillLoadOutcome> {
         match self.cache_by_cwd.read() {
             Ok(cache) => cache.get(cwd).cloned(),
             Err(err) => err.into_inner().get(cwd).cloned(),
@@ -218,7 +212,7 @@ impl SkillsManager {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(AbsolutePathBuf, u8, Option<String>)>,
+    roots: Vec<(EnvironmentPathRef, u8, Option<String>)>,
     skill_config_rules: SkillConfigRules,
 }
 
@@ -258,7 +252,11 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (root.path.clone(), scope_rank, root.plugin_id.clone())
+                (
+                    root.path.path_ref().clone(),
+                    scope_rank,
+                    root.plugin_id.clone(),
+                )
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),

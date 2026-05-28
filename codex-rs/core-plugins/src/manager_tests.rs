@@ -3669,6 +3669,7 @@ async fn load_plugins_ignores_project_config_files() {
         std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
         Some(Product::Codex),
+        /*skill_path_ref*/ None,
     )
     .await;
 

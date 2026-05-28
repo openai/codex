@@ -421,13 +421,18 @@ enabled = false
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
-    let outcome = skills_manager
-        .skills_for_config(
-            &skills_input,
-            Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
-        )
-        .await;
+    let path_ref = crate::environment_path_ref(
+        Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
+        Arc::clone(&codex_exec_server::LOCAL_FS),
+        config.cwd.clone(),
+    );
+    let skills_input = skills_load_input_from_config(
+        &config,
+        Some(path_ref.clone()),
+        Some(path_ref),
+        effective_skill_roots,
+    );
+    let outcome = skills_manager.skills_for_config(&skills_input).await;
     let skill = outcome
         .skills
         .iter()
