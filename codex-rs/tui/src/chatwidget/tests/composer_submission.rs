@@ -60,7 +60,6 @@ async fn submission_preserves_text_elements_and_local_images() {
     assert_eq!(
         items[0],
         UserInput::LocalImage {
-            client_id: None,
             path: local_images[0].clone(),
             detail: None,
         }
@@ -68,7 +67,6 @@ async fn submission_preserves_text_elements_and_local_images() {
     assert_eq!(
         items[1],
         UserInput::Text {
-            client_id: None,
             text: text.clone(),
             text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
         }
@@ -273,7 +271,6 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     assert_eq!(
         items[0],
         UserInput::Image {
-            client_id: None,
             url: remote_url.clone(),
             detail: None,
         }
@@ -281,7 +278,6 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     assert_eq!(
         items[1],
         UserInput::LocalImage {
-            client_id: None,
             path: local_images[0].clone(),
             detail: None,
         }
@@ -289,7 +285,6 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     assert_eq!(
         items[2],
         UserInput::Text {
-            client_id: None,
             text: text.clone(),
             text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
         }
@@ -363,7 +358,6 @@ async fn enter_with_only_remote_images_submits_user_turn() {
     assert_eq!(
         items,
         vec![UserInput::Image {
-            client_id: None,
             url: remote_url.clone(),
             detail: None,
         }]
@@ -1254,7 +1248,6 @@ async fn submit_user_message_ignores_inaccessible_app_mentions_from_bindings() {
     assert_eq!(
         items,
         vec![UserInput::Text {
-            client_id: None,
             text: "$arabica-uae".to_string(),
             text_elements: Vec::new(),
         }]
@@ -1266,32 +1259,26 @@ fn user_message_display_from_inputs_matches_flattened_user_message_shape() {
     let local_image = PathBuf::from("/tmp/local.png");
     let rendered = ChatWidget::user_message_display_from_inputs(&[
         UserInput::Text {
-            client_id: None,
             text: "hello ".to_string(),
             text_elements: vec![TextElement::new((0..5).into(), /*placeholder*/ None).into()],
         },
         UserInput::Image {
-            client_id: None,
             url: "https://example.com/remote.png".to_string(),
             detail: None,
         },
         UserInput::LocalImage {
-            client_id: None,
             path: local_image.clone(),
             detail: None,
         },
         UserInput::Skill {
-            client_id: None,
             name: "demo".to_string(),
             path: PathBuf::from("/tmp/skill/SKILL.md"),
         },
         UserInput::Mention {
-            client_id: None,
             name: "repo".to_string(),
             path: "app://repo".to_string(),
         },
         UserInput::Text {
-            client_id: None,
             text: "world".to_string(),
             text_elements: vec![TextElement::new((0..5).into(), Some("planet".to_string())).into()],
         },
@@ -1316,7 +1303,6 @@ fn user_message_display_from_inputs_hides_prompt_context() {
     let raw_message = "# Context from my IDE setup:\n\n## Active file: src/lib.rs\n\n## My request for Codex:\nAsk $figma";
     let mention_start = raw_message.find("$figma").expect("mention in raw message");
     let rendered = ChatWidget::user_message_display_from_inputs(&[UserInput::Text {
-        client_id: None,
         text: raw_message.to_string(),
         text_elements: vec![
             TextElement::new(
@@ -1350,12 +1336,10 @@ async fn committed_user_message_with_hidden_prompt_context_renders_local_images(
         "user-1",
         vec![
             UserInput::Text {
-                client_id: None,
                 text: raw_message.to_string(),
                 text_elements: Vec::new(),
             },
             UserInput::LocalImage {
-                client_id: None,
                 path: local_image.clone(),
                 detail: None,
             },

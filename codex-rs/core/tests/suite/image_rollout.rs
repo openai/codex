@@ -116,12 +116,10 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         .submit(Op::UserInput {
             items: vec![
                 UserInput::LocalImage {
-                    client_id: None,
                     path: abs_path.clone(),
                     detail: None,
                 },
                 UserInput::Text {
-                    client_id: None,
                     text: "pasted image".to_string(),
                     text_elements: Vec::new(),
                 },
@@ -215,12 +213,10 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         .submit(Op::UserInput {
             items: vec![
                 UserInput::Image {
-                    client_id: None,
                     image_url: image_url.clone(),
                     detail: None,
                 },
                 UserInput::Text {
-                    client_id: None,
                     text: "dropped image".to_string(),
                     text_elements: Vec::new(),
                 },

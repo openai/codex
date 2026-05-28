@@ -57,7 +57,6 @@ async fn test_config() -> (TempDir, Config) {
 
 fn text_input(text: &str) -> Op {
     vec![UserInput::Text {
-        client_id: None,
         text: text.to_string(),
         text_elements: Vec::new(),
     }]
@@ -248,7 +247,6 @@ async fn send_input_errors_when_manager_dropped() {
         .send_input(
             ThreadId::new(),
             vec![UserInput::Text {
-                client_id: None,
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -361,7 +359,6 @@ async fn send_input_errors_when_thread_missing() {
         .send_input(
             thread_id,
             vec![UserInput::Text {
-                client_id: None,
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -429,7 +426,6 @@ async fn send_input_submits_user_message() {
         .send_input(
             thread_id,
             vec![UserInput::Text {
-                client_id: None,
                 text: "hello from tests".to_string(),
                 text_elements: Vec::new(),
             }]
@@ -443,7 +439,6 @@ async fn send_input_submits_user_message() {
         Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "hello from tests".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -545,7 +540,6 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
         Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "spawned".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -719,7 +713,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "child task".to_string(),
                 text_elements: Vec::new(),
             }],

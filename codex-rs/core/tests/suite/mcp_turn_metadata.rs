@@ -70,7 +70,6 @@ async fn submit_user_turn(
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],

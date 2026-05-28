@@ -42,7 +42,6 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "compress me".into(),
                 text_elements: Vec::new(),
             }],
@@ -94,7 +93,6 @@ async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> 
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "do not compress".into(),
                 text_elements: Vec::new(),
             }],

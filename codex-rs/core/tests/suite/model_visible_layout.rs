@@ -119,7 +119,6 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "first turn".into(),
                 text_elements: Vec::new(),
             }],
@@ -156,7 +155,6 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "second turn with context updates".into(),
                 text_elements: Vec::new(),
             }],
@@ -247,7 +245,6 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "first turn in agents_one".into(),
                 text_elements: Vec::new(),
             }],
@@ -282,7 +279,6 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "second turn in agents_two".into(),
                 text_elements: Vec::new(),
             }],
@@ -368,7 +364,6 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
             }],
@@ -410,7 +405,6 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         .codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "resume and change personality".into(),
                 text_elements: Vec::new(),
             }],
@@ -486,7 +480,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
             }],
@@ -529,7 +522,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "first resumed turn after model override".into(),
                 text_elements: Vec::new(),
             }],

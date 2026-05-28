@@ -662,8 +662,8 @@ command = "python3 {hook_script_path}"
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -724,8 +724,8 @@ command = "python3 {hook_script_path}"
     let second_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -794,8 +794,8 @@ command = "python3 {hook_script_path}"
     let third_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "third turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -935,8 +935,8 @@ command = "python3 {hook_script_path}"
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -987,8 +987,8 @@ command = "python3 {hook_script_path}"
     let second_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
             }],

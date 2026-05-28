@@ -94,7 +94,6 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "hi".into(),
                 text_elements: Vec::new(),
             }],

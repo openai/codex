@@ -39,7 +39,6 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
@@ -367,7 +366,6 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "stream delayed completion".into(),
                 text_elements: Vec::new(),
             }],

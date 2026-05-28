@@ -134,17 +134,14 @@ fn otel_export_routing_policy_routes_user_prompt_log_and_trace_events() {
         let _root_guard = root_span.enter();
         manager.user_prompt(&[
             UserInput::Text {
-                client_id: None,
                 text: "super secret prompt".to_string(),
                 text_elements: Vec::new(),
             },
             UserInput::Image {
-                client_id: None,
                 image_url: "https://example.com/image.png".to_string(),
                 detail: None,
             },
             UserInput::LocalImage {
-                client_id: None,
                 path: PathBuf::from("/tmp/secret.png"),
                 detail: None,
             },

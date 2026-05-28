@@ -106,7 +106,6 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "please run a tool".into(),
                 text_elements: Vec::new(),
             }],

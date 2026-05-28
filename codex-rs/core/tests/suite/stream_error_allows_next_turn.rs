@@ -96,7 +96,6 @@ async fn continue_after_stream_error() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "first message".into(),
                 text_elements: Vec::new(),
             }],
@@ -120,7 +119,6 @@ async fn continue_after_stream_error() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],

@@ -185,7 +185,6 @@ async fn thread_read_can_include_turns() -> Result<()> {
             assert_eq!(
                 content,
                 &vec![UserInput::Text {
-                    client_id: None,
                     text: preview.to_string(),
                     text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
                 }]
@@ -1199,8 +1198,8 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
-                client_id: None,
                 text: "fail this turn".to_string(),
                 text_elements: Vec::new(),
             }],

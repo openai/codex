@@ -52,7 +52,6 @@ async fn fork_thread_twice_drops_to_first_message() {
             .submit(Op::UserInput {
                 environments: None,
                 items: vec![UserInput::Text {
-                    client_id: None,
                     text: text.to_string(),
                     text_elements: Vec::new(),
                 }],
@@ -178,7 +177,6 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "fork me from stored history".to_string(),
                 text_elements: Vec::new(),
             }],

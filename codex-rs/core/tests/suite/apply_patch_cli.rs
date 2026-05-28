@@ -85,7 +85,6 @@ async fn submit_without_wait_with_turn_permissions(
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],

@@ -278,7 +278,11 @@ impl ThreadHistoryBuilder {
             .unwrap_or_else(|| self.new_turn(/*id*/ None));
         let id = self.next_item_id();
         let content = self.build_user_inputs(payload);
-        turn.items.push(ThreadItem::UserMessage { id, content });
+        turn.items.push(ThreadItem::UserMessage {
+            id,
+            client_id: None,
+            content,
+        });
         self.current_turn = Some(turn);
     }
 
@@ -352,8 +356,10 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            codex_protocol::items::TurnItem::UserMessage(_)
-            | codex_protocol::items::TurnItem::HookPrompt(_)
+            codex_protocol::items::TurnItem::UserMessage(user_message) => {
+                self.merge_user_message_client_id(&payload.turn_id, user_message);
+            }
+            codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
@@ -376,8 +382,10 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            codex_protocol::items::TurnItem::UserMessage(_)
-            | codex_protocol::items::TurnItem::HookPrompt(_)
+            codex_protocol::items::TurnItem::UserMessage(user_message) => {
+                self.merge_user_message_client_id(&payload.turn_id, user_message);
+            }
+            codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
@@ -1059,6 +1067,42 @@ impl ThreadHistoryBuilder {
         upsert_turn_item(&mut turn.items, item);
     }
 
+    fn merge_user_message_client_id(
+        &mut self,
+        turn_id: &str,
+        user_message: &codex_protocol::items::UserMessageItem,
+    ) {
+        let Some(client_id) = user_message.client_id.as_deref() else {
+            return;
+        };
+        let content = user_message
+            .content
+            .iter()
+            .cloned()
+            .map(UserInput::from)
+            .collect::<Vec<_>>();
+
+        if let Some(turn) = self.current_turn.as_mut()
+            && turn.id == turn_id
+            && set_user_message_client_id(&mut turn.items, &content, client_id)
+        {
+            return;
+        }
+
+        if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id)
+            && set_user_message_client_id(&mut turn.items, &content, client_id)
+        {
+            return;
+        }
+
+        self.upsert_item_in_turn_id(
+            turn_id,
+            ThreadItem::from(codex_protocol::items::TurnItem::UserMessage(
+                user_message.clone(),
+            )),
+        );
+    }
+
     fn next_item_id(&mut self) -> String {
         let id = format!("item-{}", self.next_item_index);
         self.next_item_index += 1;
@@ -1069,7 +1113,6 @@ impl ThreadHistoryBuilder {
         let mut content = Vec::new();
         if !payload.message.trim().is_empty() {
             content.push(UserInput::Text {
-                client_id: None,
                 text: payload.message.clone(),
                 text_elements: payload
                     .text_elements
@@ -1082,7 +1125,6 @@ impl ThreadHistoryBuilder {
         if let Some(images) = &payload.images {
             for (idx, image) in images.iter().enumerate() {
                 content.push(UserInput::Image {
-                    client_id: None,
                     url: image.clone(),
                     detail: payload.image_details.get(idx).copied().flatten(),
                 });
@@ -1090,7 +1132,6 @@ impl ThreadHistoryBuilder {
         }
         for (idx, path) in payload.local_images.iter().enumerate() {
             content.push(UserInput::LocalImage {
-                client_id: None,
                 path: path.clone(),
                 detail: payload.local_image_details.get(idx).copied().flatten(),
             });
@@ -1136,6 +1177,27 @@ fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) {
         return;
     }
     items.push(item);
+}
+
+fn set_user_message_client_id(
+    items: &mut [ThreadItem],
+    content: &[UserInput],
+    client_id: &str,
+) -> bool {
+    for item in items.iter_mut().rev() {
+        if let ThreadItem::UserMessage {
+            client_id: existing_client_id,
+            content: existing_content,
+            ..
+        } = item
+            && existing_client_id.is_none()
+            && existing_content == content
+        {
+            *existing_client_id = Some(client_id.to_string());
+            return true;
+        }
+    }
+    false
 }
 
 struct PendingTurn {
@@ -1295,14 +1357,13 @@ mod tests {
             first.items[0],
             ThreadItem::UserMessage {
                 id: "item-1".into(),
+                client_id: None,
                 content: vec![
                     UserInput::Text {
-                        client_id: None,
                         text: "First turn".into(),
                         text_elements: Vec::new(),
                     },
                     UserInput::Image {
-                        client_id: None,
                         url: "https://example.com/one.png".into(),
                         detail: None,
                     }
@@ -1335,8 +1396,8 @@ mod tests {
             second.items[0],
             ThreadItem::UserMessage {
                 id: "item-4".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
-                    client_id: None,
                     text: "Second turn".into(),
                     text_elements: Vec::new(),
                 }],
@@ -1374,19 +1435,17 @@ mod tests {
             turns[0].items[0],
             ThreadItem::UserMessage {
                 id: "item-1".into(),
+                client_id: None,
                 content: vec![
                     UserInput::Text {
-                        client_id: None,
                         text: "inspect these".into(),
                         text_elements: Vec::new(),
                     },
                     UserInput::Image {
-                        client_id: None,
                         url: "https://example.com/image.png".into(),
                         detail: Some(ImageDetail::Original),
                     },
                     UserInput::LocalImage {
-                        client_id: None,
                         path: local_path,
                         detail: Some(ImageDetail::Original),
                     },
@@ -1419,6 +1478,7 @@ mod tests {
                 turn_id: turn_id.to_string(),
                 item: CoreTurnItem::UserMessage(CoreUserMessageItem {
                     id: "user-item-id".to_string(),
+                    client_id: None,
                     content: Vec::new(),
                 }),
                 started_at_ms: 0,
@@ -1443,12 +1503,72 @@ mod tests {
             turns[0].items[0],
             ThreadItem::UserMessage {
                 id: "item-1".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
-                    client_id: None,
                     text: "hello".into(),
                     text_elements: Vec::new(),
                 }],
             }
+        );
+    }
+
+    #[test]
+    fn merges_user_message_client_id_from_lifecycle_events() {
+        let turn_id = "turn-1";
+        let thread_id = ThreadId::new();
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "hello".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+                ..Default::default()
+            }),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: CoreTurnItem::UserMessage(CoreUserMessageItem {
+                    id: "user-item-id".to_string(),
+                    client_id: Some("client-message-1".to_string()),
+                    content: vec![codex_protocol::user_input::UserInput::Text {
+                        text: "hello".into(),
+                        text_elements: Vec::new(),
+                    }],
+                }),
+                started_at_ms: 0,
+            }),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items,
+            vec![ThreadItem::UserMessage {
+                id: "item-1".into(),
+                client_id: Some("client-message-1".to_string()),
+                content: vec![UserInput::Text {
+                    text: "hello".into(),
+                    text_elements: Vec::new(),
+                }],
+            }]
         );
     }
 
@@ -1525,8 +1645,8 @@ mod tests {
                 items: vec![
                     ThreadItem::UserMessage {
                         id: "item-1".into(),
+                        client_id: None,
                         content: vec![UserInput::Text {
-                            client_id: None,
                             text: "generate an image".into(),
                             text_elements: Vec::new(),
                         }],
@@ -1645,8 +1765,8 @@ mod tests {
             first_turn.items[0],
             ThreadItem::UserMessage {
                 id: "item-1".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
-                    client_id: None,
                     text: "Please do the thing".into(),
                     text_elements: Vec::new(),
                 }],
@@ -1669,8 +1789,8 @@ mod tests {
             second_turn.items[0],
             ThreadItem::UserMessage {
                 id: "item-3".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
-                    client_id: None,
                     text: "Let's try again".into(),
                     text_elements: Vec::new(),
                 }],
@@ -1745,8 +1865,8 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
-                        client_id: None,
                         text: "First".into(),
                         text_elements: Vec::new(),
                     }],
@@ -1764,8 +1884,8 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-3".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
-                        client_id: None,
                         text: "Third".into(),
                         text_elements: Vec::new(),
                     }],
@@ -1863,16 +1983,16 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
-                        client_id: None,
                         text: "Start".into(),
                         text_elements: Vec::new(),
                     }],
                 },
                 ThreadItem::UserMessage {
                     id: "item-2".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
-                        client_id: None,
                         text: "Steer".into(),
                         text_elements: Vec::new(),
                     }],
@@ -2545,8 +2665,8 @@ mod tests {
             turns[1].items[0],
             ThreadItem::UserMessage {
                 id: "item-2".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
-                    client_id: None,
                     text: "second".into(),
                     text_elements: Vec::new(),
                 }],
@@ -2602,8 +2722,8 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
-                        client_id: None,
                         text: "apply patch".into(),
                         text_elements: Vec::new(),
                     }],
@@ -2671,8 +2791,8 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
-                        client_id: None,
                         text: "apply patch".into(),
                         text_elements: Vec::new(),
                     }],
@@ -3125,8 +3245,8 @@ mod tests {
                 items_view: TurnItemsView::Full,
                 items: vec![ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
-                        client_id: None,
                         text: "hello".into(),
                         text_elements: Vec::new(),
                     }],

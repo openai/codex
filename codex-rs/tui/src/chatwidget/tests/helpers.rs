@@ -722,6 +722,7 @@ pub(super) fn replay_user_message_inputs(
     chat.replay_thread_item(
         AppServerThreadItem::UserMessage {
             id: item_id.to_string(),
+            client_id: None,
             content,
         },
         "turn-1".to_string(),
@@ -739,7 +740,6 @@ pub(super) fn replay_user_message_text(
         chat,
         item_id,
         vec![AppServerUserInput::Text {
-            client_id: None,
             text: text.into(),
             text_elements: Vec::new(),
         }],
@@ -929,7 +929,6 @@ pub(super) fn complete_user_message(chat: &mut ChatWidget, item_id: &str, text: 
         chat,
         item_id,
         vec![UserInput::Text {
-            client_id: None,
             text: text.to_string(),
             text_elements: Vec::new(),
         }],
@@ -948,6 +947,7 @@ pub(super) fn complete_user_message_for_inputs(
             completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: item_id.to_string(),
+                client_id: None,
                 content,
             },
         }),

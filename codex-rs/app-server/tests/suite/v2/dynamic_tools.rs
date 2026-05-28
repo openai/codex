@@ -89,8 +89,8 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -169,8 +169,8 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -349,8 +349,8 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Run the tool".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -524,8 +524,8 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Run the tool".to_string(),
                 text_elements: Vec::new(),
             }],

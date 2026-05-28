@@ -1314,7 +1314,6 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
@@ -1405,7 +1404,6 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],

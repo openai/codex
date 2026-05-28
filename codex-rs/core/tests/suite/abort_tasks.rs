@@ -48,7 +48,6 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "start sleep".into(),
                 text_elements: Vec::new(),
             }],
@@ -107,7 +106,6 @@ async fn interrupt_tool_records_history_entries() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "start history recording".into(),
                 text_elements: Vec::new(),
             }],
@@ -130,7 +128,6 @@ async fn interrupt_tool_records_history_entries() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],
@@ -215,7 +212,6 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "start interrupt marker".into(),
                 text_elements: Vec::new(),
             }],
@@ -238,7 +234,6 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],

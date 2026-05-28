@@ -151,8 +151,8 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "run deterministic tool".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -261,8 +261,8 @@ async fn thread_unsubscribe_preserves_cached_status_before_idle_unload() -> Resu
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "fail this turn".to_string(),
                 text_elements: Vec::new(),
             }],

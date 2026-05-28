@@ -65,6 +65,8 @@ pub struct AdditionalContextEntry {
 #[ts(export_to = "v2/")]
 pub struct TurnStartParams {
     pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
     /// Optional turn-scoped Responses API client metadata.
     #[experimental("turn/start.responsesapiClientMetadata")]
@@ -157,6 +159,8 @@ pub struct TurnStartResponse {
 #[ts(export_to = "v2/")]
 pub struct TurnSteerParams {
     pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
     /// Optional turn-scoped Responses API client metadata.
     #[experimental("turn/steer.responsesapiClientMetadata")]
@@ -266,43 +270,28 @@ impl From<TextElement> for CoreTextElement {
 #[ts(export_to = "v2/")]
 pub enum UserInput {
     Text {
-        #[serde(rename = "clientId", default)]
-        #[ts(rename = "clientId", optional)]
-        client_id: Option<String>,
         text: String,
         /// UI-defined spans within `text` used to render or persist special elements.
         #[serde(default)]
         text_elements: Vec<TextElement>,
     },
     Image {
-        #[serde(rename = "clientId", default)]
-        #[ts(rename = "clientId", optional)]
-        client_id: Option<String>,
         #[serde(default)]
         #[ts(optional)]
         detail: Option<ImageDetail>,
         url: String,
     },
     LocalImage {
-        #[serde(rename = "clientId", default)]
-        #[ts(rename = "clientId", optional)]
-        client_id: Option<String>,
         #[serde(default)]
         #[ts(optional)]
         detail: Option<ImageDetail>,
         path: PathBuf,
     },
     Skill {
-        #[serde(rename = "clientId", default)]
-        #[ts(rename = "clientId", optional)]
-        client_id: Option<String>,
         name: String,
         path: PathBuf,
     },
     Mention {
-        #[serde(rename = "clientId", default)]
-        #[ts(rename = "clientId", optional)]
-        client_id: Option<String>,
         name: String,
         path: String,
     },
@@ -312,50 +301,19 @@ impl UserInput {
     pub fn into_core(self) -> CoreUserInput {
         match self {
             UserInput::Text {
-                client_id,
                 text,
                 text_elements,
             } => CoreUserInput::Text {
-                client_id,
                 text,
                 text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
-            UserInput::Image {
-                client_id,
-                url,
-                detail,
-            } => CoreUserInput::Image {
-                client_id,
+            UserInput::Image { url, detail } => CoreUserInput::Image {
                 image_url: url,
                 detail,
             },
-            UserInput::LocalImage {
-                client_id,
-                path,
-                detail,
-            } => CoreUserInput::LocalImage {
-                client_id,
-                path,
-                detail,
-            },
-            UserInput::Skill {
-                client_id,
-                name,
-                path,
-            } => CoreUserInput::Skill {
-                client_id,
-                name,
-                path,
-            },
-            UserInput::Mention {
-                client_id,
-                name,
-                path,
-            } => CoreUserInput::Mention {
-                client_id,
-                name,
-                path,
-            },
+            UserInput::LocalImage { path, detail } => CoreUserInput::LocalImage { path, detail },
+            UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
+            UserInput::Mention { name, path } => CoreUserInput::Mention { name, path },
         }
     }
 }
@@ -364,50 +322,19 @@ impl From<CoreUserInput> for UserInput {
     fn from(value: CoreUserInput) -> Self {
         match value {
             CoreUserInput::Text {
-                client_id,
                 text,
                 text_elements,
             } => UserInput::Text {
-                client_id,
                 text,
                 text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
-            CoreUserInput::Image {
-                client_id,
-                image_url,
-                detail,
-            } => UserInput::Image {
-                client_id,
+            CoreUserInput::Image { image_url, detail } => UserInput::Image {
                 url: image_url,
                 detail,
             },
-            CoreUserInput::LocalImage {
-                client_id,
-                path,
-                detail,
-            } => UserInput::LocalImage {
-                client_id,
-                path,
-                detail,
-            },
-            CoreUserInput::Skill {
-                client_id,
-                name,
-                path,
-            } => UserInput::Skill {
-                client_id,
-                name,
-                path,
-            },
-            CoreUserInput::Mention {
-                client_id,
-                name,
-                path,
-            } => UserInput::Mention {
-                client_id,
-                name,
-                path,
-            },
+            CoreUserInput::LocalImage { path, detail } => UserInput::LocalImage { path, detail },
+            CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
+            CoreUserInput::Mention { name, path } => UserInput::Mention { name, path },
             _ => unreachable!("unsupported user input variant"),
         }
     }

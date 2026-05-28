@@ -1756,6 +1756,7 @@ fn client_request_turn_start_granular_approval_policy_is_marked_experimental() {
             request_id: crate::RequestId::Integer(4),
             params: TurnStartParams {
                 thread_id: "thr_123".to_string(),
+                client_user_message_id: None,
                 input: Vec::new(),
                 approval_policy: Some(AskForApproval::Granular {
                     sandbox_approval: false,
@@ -2314,29 +2315,25 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
 fn core_turn_item_into_thread_item_converts_supported_variants() {
     let user_item = TurnItem::UserMessage(UserMessageItem {
         id: "user-1".to_string(),
+        client_id: Some("client-message-1".to_string()),
         content: vec![
             CoreUserInput::Text {
-                client_id: Some("client-text-1".to_string()),
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             },
             CoreUserInput::Image {
-                client_id: Some("client-image-1".to_string()),
                 image_url: "https://example.com/image.png".to_string(),
                 detail: Some(ImageDetail::Original),
             },
             CoreUserInput::LocalImage {
-                client_id: Some("client-local-image-1".to_string()),
                 path: PathBuf::from("local/image.png"),
                 detail: Some(ImageDetail::Original),
             },
             CoreUserInput::Skill {
-                client_id: Some("client-skill-1".to_string()),
                 name: "skill-creator".to_string(),
                 path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
             },
             CoreUserInput::Mention {
-                client_id: Some("client-mention-1".to_string()),
                 name: "Demo App".to_string(),
                 path: "app://demo-app".to_string(),
             },
@@ -2347,29 +2344,25 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItem::from(user_item),
         ThreadItem::UserMessage {
             id: "user-1".to_string(),
+            client_id: Some("client-message-1".to_string()),
             content: vec![
                 UserInput::Text {
-                    client_id: Some("client-text-1".to_string()),
                     text: "hello".to_string(),
                     text_elements: Vec::new(),
                 },
                 UserInput::Image {
-                    client_id: Some("client-image-1".to_string()),
                     url: "https://example.com/image.png".to_string(),
                     detail: Some(ImageDetail::Original),
                 },
                 UserInput::LocalImage {
-                    client_id: Some("client-local-image-1".to_string()),
                     path: PathBuf::from("local/image.png"),
                     detail: Some(ImageDetail::Original),
                 },
                 UserInput::Skill {
-                    client_id: Some("client-skill-1".to_string()),
                     name: "skill-creator".to_string(),
                     path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
                 },
                 UserInput::Mention {
-                    client_id: Some("client-mention-1".to_string()),
                     name: "Demo App".to_string(),
                     path: "app://demo-app".to_string(),
                 },
@@ -2583,51 +2576,58 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
 }
 
 #[test]
-fn user_input_client_id_uses_camel_case_wire_field() {
-    let input = UserInput::Text {
-        client_id: Some("client-text-1".to_string()),
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
+fn user_message_client_id_uses_camel_case_wire_field() {
+    let item = ThreadItem::UserMessage {
+        id: "user-1".to_string(),
+        client_id: Some("client-message-1".to_string()),
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
     };
 
-    let value = serde_json::to_value(&input).expect("serialize user input");
+    let value = serde_json::to_value(&item).expect("serialize user message");
     assert_eq!(
         value,
         json!({
-            "type": "text",
-            "clientId": "client-text-1",
-            "text": "hello",
-            "text_elements": [],
+            "type": "userMessage",
+            "id": "user-1",
+            "clientId": "client-message-1",
+            "content": [{
+                "type": "text",
+                "text": "hello",
+                "text_elements": [],
+            }],
         })
     );
 
-    let decoded = serde_json::from_value::<UserInput>(value).expect("deserialize user input");
-    assert_eq!(decoded, input);
+    let decoded = serde_json::from_value::<ThreadItem>(value).expect("deserialize user message");
+    assert_eq!(decoded, item);
 
-    let input_without_client_id = UserInput::Text {
+    let item_without_client_id = ThreadItem::UserMessage {
+        id: "user-1".to_string(),
         client_id: None,
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
+        content: Vec::new(),
     };
 
     assert_eq!(
-        serde_json::to_value(&input_without_client_id).expect("serialize user input"),
+        serde_json::to_value(&item_without_client_id).expect("serialize user message"),
         json!({
-            "type": "text",
+            "type": "userMessage",
+            "id": "user-1",
             "clientId": null,
-            "text": "hello",
-            "text_elements": [],
+            "content": [],
         })
     );
 
     assert_eq!(
-        serde_json::from_value::<UserInput>(json!({
-            "type": "text",
-            "text": "hello",
-            "text_elements": [],
+        serde_json::from_value::<ThreadItem>(json!({
+            "type": "userMessage",
+            "id": "user-1",
+            "content": [],
         }))
-        .expect("deserialize user input without client id"),
-        input_without_client_id
+        .expect("deserialize user message without client id"),
+        item_without_client_id
     );
 }
 
@@ -2635,13 +2635,11 @@ fn user_input_client_id_uses_camel_case_wire_field() {
 fn user_input_into_core_preserves_image_detail() {
     assert_eq!(
         UserInput::Image {
-            client_id: Some("client-image-1".to_string()),
             url: "https://example.com/image.png".to_string(),
             detail: Some(ImageDetail::Original),
         }
         .into_core(),
         CoreUserInput::Image {
-            client_id: Some("client-image-1".to_string()),
             image_url: "https://example.com/image.png".to_string(),
             detail: Some(ImageDetail::Original),
         }
@@ -2649,13 +2647,11 @@ fn user_input_into_core_preserves_image_detail() {
 
     assert_eq!(
         UserInput::LocalImage {
-            client_id: Some("client-local-image-1".to_string()),
             path: PathBuf::from("local/image.png"),
             detail: Some(ImageDetail::Original),
         }
         .into_core(),
         CoreUserInput::LocalImage {
-            client_id: Some("client-local-image-1".to_string()),
             path: PathBuf::from("local/image.png"),
             detail: Some(ImageDetail::Original),
         }
@@ -3645,6 +3641,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
 
     let without_override = TurnStartParams {
         thread_id: "thread_123".to_string(),
+        client_user_message_id: None,
         input: vec![],
         responsesapi_client_metadata: None,
         additional_context: None,

@@ -5781,8 +5781,8 @@ session_picker_view = "dense"
                 items: vec![
                     ThreadItem::UserMessage {
                         id: String::from("user-1"),
+                        client_id: None,
                         content: vec![codex_app_server_protocol::UserInput::Text {
-                            client_id: None,
                             text: String::from("hello from user"),
                             text_elements: Vec::new(),
                         }],

@@ -163,7 +163,6 @@ impl ChatWidget {
 
         for image_url in &remote_image_urls {
             items.push(UserInput::Image {
-                client_id: None,
                 url: image_url.clone(),
                 detail: None,
             });
@@ -171,7 +170,6 @@ impl ChatWidget {
 
         for image in &local_images {
             items.push(UserInput::LocalImage {
-                client_id: None,
                 path: image.path.clone(),
                 detail: None,
             });
@@ -179,7 +177,6 @@ impl ChatWidget {
 
         if !text.is_empty() {
             items.push(UserInput::Text {
-                client_id: None,
                 text: text.clone(),
                 text_elements: app_server_text_elements(&text_elements),
             });
@@ -212,7 +209,6 @@ impl ChatWidget {
                     && selected_skill_paths.insert(skill.path_to_skills_md.clone())
                 {
                     items.push(UserInput::Skill {
-                        client_id: None,
                         name: skill.name.clone(),
                         path: skill.path_to_skills_md.to_path_buf(),
                     });
@@ -227,7 +223,6 @@ impl ChatWidget {
                     continue;
                 }
                 items.push(UserInput::Skill {
-                    client_id: None,
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.to_path_buf(),
                 });
@@ -251,7 +246,6 @@ impl ChatWidget {
                     .find(|plugin| plugin.config_name == plugin_config_name)
                 {
                     items.push(UserInput::Mention {
-                        client_id: None,
                         name: plugin.display_name.clone(),
                         path: binding.path.clone(),
                     });
@@ -278,7 +272,6 @@ impl ChatWidget {
                 {
                     selected_app_ids.insert(app_id.to_string());
                     items.push(UserInput::Mention {
-                        client_id: None,
                         name: app.name.clone(),
                         path: binding.path.clone(),
                     });
@@ -293,7 +286,6 @@ impl ChatWidget {
                 }
                 let app_id = app.id.as_str();
                 items.push(UserInput::Mention {
-                    client_id: None,
                     name: app.name.clone(),
                     path: format!("app://{app_id}"),
                 });

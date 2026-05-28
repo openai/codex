@@ -706,7 +706,6 @@ async fn review_history_surfaces_in_parent_session() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: followup.clone(),
                 text_elements: Vec::new(),
             }],

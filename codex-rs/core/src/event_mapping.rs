@@ -85,7 +85,6 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                     continue;
                 }
                 content.push(UserInput::Text {
-                    client_id: None,
                     text: text.clone(),
                     // Model input content does not carry UI element ranges.
                     text_elements: Vec::new(),
@@ -93,7 +92,6 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
             }
             ContentItem::InputImage { image_url, detail } => {
                 content.push(UserInput::Image {
-                    client_id: None,
                     image_url: image_url.clone(),
                     detail: *detail,
                 });

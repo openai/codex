@@ -129,6 +129,9 @@ pub struct Submission {
     pub id: String,
     /// Payload
     pub op: Op,
+    /// Client-provided id for the user message represented by `Op::UserInput`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_user_message_id: Option<String>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<W3cTraceContext>,
@@ -5068,7 +5071,6 @@ mod tests {
     #[test]
     fn user_input_text_serializes_empty_text_elements() -> Result<()> {
         let input = UserInput::Text {
-            client_id: None,
             text: "hello".to_string(),
             text_elements: Vec::new(),
         };
@@ -5136,17 +5138,14 @@ mod tests {
         let local_path = PathBuf::from("/tmp/local.png");
         let item = UserMessageItem::new(&[
             crate::user_input::UserInput::Image {
-                client_id: None,
                 image_url: "https://example.com/first.png".to_string(),
                 detail: Some(ImageDetail::Original),
             },
             crate::user_input::UserInput::Image {
-                client_id: None,
                 image_url: "https://example.com/second.png".to_string(),
                 detail: None,
             },
             crate::user_input::UserInput::LocalImage {
-                client_id: None,
                 path: local_path.clone(),
                 detail: Some(ImageDetail::Original),
             },

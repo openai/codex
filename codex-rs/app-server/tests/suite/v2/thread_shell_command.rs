@@ -275,8 +275,8 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],

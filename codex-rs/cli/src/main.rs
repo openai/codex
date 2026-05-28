@@ -1742,15 +1742,10 @@ async fn run_debug_prompt_input_command(
         .images
         .into_iter()
         .chain(cmd.images)
-        .map(|path| UserInput::LocalImage {
-            client_id: None,
-            path,
-            detail: None,
-        })
+        .map(|path| UserInput::LocalImage { path, detail: None })
         .collect::<Vec<_>>();
     if let Some(prompt) = cmd.prompt.or(interactive.prompt) {
         input.push(UserInput::Text {
-            client_id: None,
             text: prompt.replace("\r\n", "\n").replace('\r', "\n"),
             text_elements: Vec::new(),
         });

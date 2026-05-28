@@ -447,7 +447,6 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "Find the calendar create tool".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -862,7 +861,6 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "Use the automation tool".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -1172,7 +1170,6 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "Find the rmcp echo tool and call it.".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -1494,7 +1491,6 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "Search for the dynamic tool".to_string(),
                 text_elements: Vec::new(),
             }],

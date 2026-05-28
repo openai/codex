@@ -125,7 +125,6 @@ fn user_turn_with_permission_profile(
         turn_permission_fields(permission_profile, cwd.as_path());
     Op::UserInput {
         items: vec![UserInput::Text {
-            client_id: None,
             text: text.into(),
             text_elements: Vec::new(),
         }],

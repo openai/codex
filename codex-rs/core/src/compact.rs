@@ -76,7 +76,6 @@ pub(crate) async fn run_inline_auto_compact_task(
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
-        client_id: None,
         text: prompt,
         // Compaction prompt is synthesized; no UI element ranges to preserve.
         text_elements: Vec::new(),

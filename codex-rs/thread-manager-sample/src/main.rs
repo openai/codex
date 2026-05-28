@@ -291,7 +291,6 @@ async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyh
     thread
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: prompt,
                 text_elements: Vec::new(),
             }],

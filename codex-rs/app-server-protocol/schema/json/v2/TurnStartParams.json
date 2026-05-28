@@ -354,13 +354,6 @@
       "oneOf": [
         {
           "properties": {
-            "clientId": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "text": {
               "type": "string"
             },
@@ -389,13 +382,6 @@
         },
         {
           "properties": {
-            "clientId": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "detail": {
               "anyOf": [
                 {
@@ -427,13 +413,6 @@
         },
         {
           "properties": {
-            "clientId": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "detail": {
               "anyOf": [
                 {
@@ -465,13 +444,6 @@
         },
         {
           "properties": {
-            "clientId": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "name": {
               "type": "string"
             },
@@ -496,13 +468,6 @@
         },
         {
           "properties": {
-            "clientId": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "name": {
               "type": "string"
             },
@@ -550,6 +515,12 @@
         }
       ],
       "description": "Override where approval requests are routed for review on this turn and subsequent turns."
+    },
+    "clientUserMessageId": {
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "cwd": {
       "description": "Override the working directory for this turn and subsequent turns.",

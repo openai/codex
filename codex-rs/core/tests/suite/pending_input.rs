@@ -98,7 +98,6 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
@@ -117,7 +116,6 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
@@ -149,12 +147,12 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
     codex
         .steer_input(
             vec![UserInput::Text {
-                client_id: None,
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
             /*additional_context*/ Default::default(),
             /*expected_turn_id*/ None,
+            /*client_user_message_id*/ None,
             /*responsesapi_client_metadata*/ None,
         )
         .await
@@ -292,7 +290,6 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "first prompt".into(),
                 text_elements: Vec::new(),
             }],
@@ -313,7 +310,6 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "second prompt".into(),
                 text_elements: Vec::new(),
             }],

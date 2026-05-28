@@ -11,7 +11,10 @@ use tokio::sync::watch;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TurnInput {
-    UserInput(Vec<UserInput>),
+    UserInput {
+        content: Vec<UserInput>,
+        client_id: Option<String>,
+    },
     ResponseItem(ResponseItem),
 }
 

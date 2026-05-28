@@ -73,8 +73,8 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -154,8 +154,8 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Continue".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -335,8 +335,8 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Run sleep".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -366,8 +366,8 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Focus on the failure".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -462,8 +462,8 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],

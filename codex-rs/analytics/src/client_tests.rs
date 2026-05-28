@@ -89,6 +89,7 @@ fn sample_turn_start_request() -> ClientRequest {
         request_id: RequestId::Integer(1),
         params: TurnStartParams {
             thread_id: "thread-1".to_string(),
+            client_user_message_id: None,
             input: Vec::new(),
             ..Default::default()
         },

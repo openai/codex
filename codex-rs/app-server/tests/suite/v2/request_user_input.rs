@@ -51,8 +51,8 @@ async fn request_user_input_round_trip() -> Result<()> {
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "ask something".to_string(),
                 text_elements: Vec::new(),
             }],

@@ -39,7 +39,6 @@ fn disabled_text_turn(test: &TestCodex, text: &str) -> Op {
         turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
     Op::UserInput {
         items: vec![UserInput::Text {
-            client_id: None,
             text: text.to_string(),
             text_elements: Vec::new(),
         }],

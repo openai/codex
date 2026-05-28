@@ -48,7 +48,6 @@ async fn submit_turn_with_policies(
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
-                client_id: None,
                 text: prompt.to_string(),
                 text_elements: Vec::new(),
             }],

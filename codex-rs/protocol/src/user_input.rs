@@ -14,8 +14,6 @@ pub const MAX_USER_INPUT_TEXT_CHARS: usize = 1 << 20;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UserInput {
     Text {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        client_id: Option<String>,
         text: String,
         /// UI-defined spans within `text` that should be treated as special elements.
         /// These are byte ranges into the UTF-8 `text` buffer and are used to render
@@ -26,8 +24,6 @@ pub enum UserInput {
     },
     /// Pre‑encoded data: URI image.
     Image {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        client_id: Option<String>,
         image_url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -37,8 +33,6 @@ pub enum UserInput {
     /// Local image path provided by the user.  This will be converted to an
     /// `Image` variant (base64 data URL) during request serialization.
     LocalImage {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        client_id: Option<String>,
         path: std::path::PathBuf,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -47,8 +41,6 @@ pub enum UserInput {
 
     /// Skill selected by the user (name + path to SKILL.md).
     Skill {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        client_id: Option<String>,
         name: String,
         path: std::path::PathBuf,
     },
@@ -56,12 +48,7 @@ pub enum UserInput {
     ///
     /// `path` identifies the exact mention target, for example
     /// `app://<connector-id>` or `plugin://<plugin-name>@<marketplace-name>`.
-    Mention {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        client_id: Option<String>,
-        name: String,
-        path: String,
-    },
+    Mention { name: String, path: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS, JsonSchema)]

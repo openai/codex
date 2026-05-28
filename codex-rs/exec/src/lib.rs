@@ -631,14 +631,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .chain(args.images.iter().cloned())
-                .map(|path| UserInput::LocalImage {
-                    client_id: None,
-                    path,
-                    detail: None,
-                })
+                .map(|path| UserInput::LocalImage { path, detail: None })
                 .collect();
             items.push(UserInput::Text {
-                client_id: None,
                 text: prompt_text.clone(),
                 // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
@@ -656,14 +651,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let prompt_text = resolve_root_prompt(root_prompt);
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
-                .map(|path| UserInput::LocalImage {
-                    client_id: None,
-                    path,
-                    detail: None,
-                })
+                .map(|path| UserInput::LocalImage { path, detail: None })
                 .collect();
             items.push(UserInput::Text {
-                client_id: None,
                 text: prompt_text.clone(),
                 // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
@@ -789,6 +779,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     request_id: request_ids.next(),
                     params: TurnStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
+                        client_user_message_id: None,
                         input: items.into_iter().map(Into::into).collect(),
                         responsesapi_client_metadata: None,
                         additional_context: None,

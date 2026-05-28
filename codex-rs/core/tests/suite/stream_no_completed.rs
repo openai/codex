@@ -78,7 +78,6 @@ async fn retries_on_early_close() {
         .submit(Op::UserInput {
             environments: None,
             items: vec![UserInput::Text {
-                client_id: None,
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],

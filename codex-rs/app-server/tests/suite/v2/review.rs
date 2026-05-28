@@ -91,8 +91,8 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         turn.items,
         vec![ThreadItem::UserMessage {
             id: turn_id.clone(),
+            client_id: None,
             content: vec![V2UserInput::Text {
-                client_id: None,
                 text: "commit 1234567: Tidy UI colors".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -200,8 +200,8 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
         turn.items,
         vec![ThreadItem::UserMessage {
             id: turn_id.clone(),
+            client_id: None,
             content: vec![V2UserInput::Text {
-                client_id: None,
                 text: "commit 1234567: Check review approvals".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -330,8 +330,8 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
         turn.items,
         vec![ThreadItem::UserMessage {
             id: turn.id.clone(),
+            client_id: None,
             content: vec![V2UserInput::Text {
-                client_id: None,
                 text: "detached review".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -468,8 +468,8 @@ async fn materialize_thread_rollout(mcp: &mut McpProcess, thread_id: &str) -> Re
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.to_string(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
-                client_id: None,
                 text: "materialize rollout".to_string(),
                 text_elements: Vec::new(),
             }],
