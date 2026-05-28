@@ -7,6 +7,7 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -24,6 +25,9 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use tempfile::TempDir;
 use tokio::time::timeout;
+
+use super::analytics::mount_analytics_capture;
+use super::analytics::wait_for_analytics_event;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
@@ -55,7 +59,12 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
             "call_sleep",
         )?])
         .await;
-    create_config_toml(&codex_home, &server.uri(), "never", "workspace-write")?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        &codex_home,
+        &server.uri(),
+        &server.uri(),
+    )?;
+    mount_analytics_capture(&server, &codex_home).await?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -124,6 +133,22 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     )?;
     assert_eq!(completed.thread_id, thread_id);
     assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    assert_eq!(
+        (
+            event["event_params"]["status"].as_str(),
+            event["event_params"]["request_start_delay_ms"]
+                .as_u64()
+                .is_some(),
+            event["event_params"]["sampling_duration_ms"]
+                .as_u64()
+                .is_some(),
+            event["event_params"]["blocking_tool_critical_path_duration_ms"]
+                .as_u64()
+                .is_some_and(|duration_ms| duration_ms > 0),
+        ),
+        (Some("interrupted"), true, true, true)
+    );
 
     Ok(())
 }

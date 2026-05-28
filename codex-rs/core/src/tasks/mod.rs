@@ -6,8 +6,9 @@ mod user_shell;
 
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 
+use codex_analytics::TurnTimingBreakdownFact;
+use codex_analytics::TurnTokenUsageFact;
 use codex_extension_api::ExtensionData;
 use futures::future::BoxFuture;
 use tokio::select;
@@ -33,7 +34,6 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
-use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
@@ -319,11 +319,7 @@ impl Session {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
-        let started_at = Instant::now();
-        let turn_started_at_unix_ms = turn_context
-            .turn_timing_state
-            .mark_turn_started(started_at)
-            .await;
+        let turn_started_at_unix_ms = turn_context.turn_timing_state.mark_turn_started().await;
         turn_context
             .turn_metadata_state
             .set_turn_started_at_unix_ms(turn_started_at_unix_ms);
@@ -763,6 +759,7 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
+        self.track_turn_timing(turn_context.as_ref()).await;
         self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
             .await;
         if let Err(err) = self
@@ -823,6 +820,20 @@ impl Session {
             .await;
     }
 
+    async fn track_turn_timing(&self, turn_context: &TurnContext) {
+        let timing = turn_context.turn_timing_state.timing_breakdown().await;
+        self.services
+            .analytics_events_client
+            .track_turn_timing(TurnTimingBreakdownFact {
+                turn_id: turn_context.sub_id.clone(),
+                thread_id: self.conversation_id.to_string(),
+                request_start_delay_ms: timing.request_start_delay_ms,
+                sampling_duration_ms: timing.sampling_duration_ms,
+                blocking_tool_critical_path_duration_ms: timing
+                    .blocking_tool_critical_path_duration_ms,
+            });
+    }
+
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
@@ -875,6 +886,7 @@ impl Session {
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
+        self.track_turn_timing(task.turn_context.as_ref()).await;
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,

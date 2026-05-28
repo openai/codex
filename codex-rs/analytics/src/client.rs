@@ -21,6 +21,7 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadStartTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnTimingBreakdownFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
@@ -184,6 +185,12 @@ impl AnalyticsEventsClient {
     pub fn track_thread_start_timing(&self, fact: ThreadStartTimingFact) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::ThreadStartTiming(fact),
+        ));
+    }
+
+    pub fn track_turn_timing(&self, fact: TurnTimingBreakdownFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::TurnTimingBreakdown(Box::new(fact)),
         ));
     }
 

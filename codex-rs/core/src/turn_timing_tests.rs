@@ -4,9 +4,10 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
-use std::time::Instant;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tokio::time::sleep;
 
 use super::TurnTimingState;
 use super::response_item_records_turn_ttft;
@@ -22,7 +23,7 @@ async fn turn_timing_state_records_ttft_only_once_per_turn() {
         None
     );
 
-    state.mark_turn_started(Instant::now()).await;
+    state.mark_turn_started().await;
     assert_eq!(
         state
             .record_ttft_for_response_event(&ResponseEvent::Created)
@@ -46,7 +47,7 @@ async fn turn_timing_state_records_ttft_only_once_per_turn() {
 #[tokio::test]
 async fn turn_timing_state_records_ttfm_independently_of_ttft() {
     let state = TurnTimingState::default();
-    state.mark_turn_started(Instant::now()).await;
+    state.mark_turn_started().await;
 
     assert!(
         state
@@ -86,7 +87,7 @@ async fn turn_timing_state_records_turn_started_epoch_millis() {
         .expect("system time should be after unix epoch")
         .as_millis();
 
-    let started_at_unix_ms = state.mark_turn_started(Instant::now()).await;
+    let started_at_unix_ms = state.mark_turn_started().await;
 
     let after = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -96,6 +97,52 @@ async fn turn_timing_state_records_turn_started_epoch_millis() {
     assert_eq!(
         state.started_at_unix_secs().await,
         Some(started_at_unix_ms / 1000)
+    );
+}
+
+#[tokio::test]
+async fn turn_timing_state_tracks_request_start_and_duration_breakdown() {
+    let state = TurnTimingState::default();
+    state.mark_turn_started().await;
+    state.mark_model_request_started().await;
+    state.mark_sampling_started().await;
+    sleep(Duration::from_millis(10)).await;
+    state.mark_sampling_completed().await;
+    state.mark_sampling_started().await;
+    sleep(Duration::from_millis(5)).await;
+    state.mark_sampling_completed().await;
+    state.mark_blocking_tool_critical_path_started().await;
+    sleep(Duration::from_millis(5)).await;
+    state.mark_blocking_tool_critical_path_completed().await;
+
+    let breakdown = state.timing_breakdown().await;
+
+    assert_eq!(
+        (
+            breakdown.sampling_duration_ms >= 15,
+            breakdown.blocking_tool_critical_path_duration_ms >= 5,
+            breakdown.request_start_delay_ms.is_some(),
+        ),
+        (true, true, true)
+    );
+}
+
+#[tokio::test]
+async fn turn_timing_state_snapshots_active_intervals() {
+    let state = TurnTimingState::default();
+    state.mark_turn_started().await;
+    state.mark_sampling_started().await;
+    state.mark_blocking_tool_critical_path_started().await;
+    sleep(Duration::from_millis(5)).await;
+
+    let breakdown = state.timing_breakdown().await;
+
+    assert_eq!(
+        (
+            breakdown.sampling_duration_ms >= 5,
+            breakdown.blocking_tool_critical_path_duration_ms >= 5,
+        ),
+        (true, true)
     );
 }
 

@@ -80,6 +80,7 @@ use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
+use crate::facts::TurnTimingBreakdownFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::now_unix_seconds;
 use crate::option_i64_to_u64;
@@ -331,6 +332,14 @@ struct CompletedTurnState {
     duration_ms: Option<u64>,
 }
 
+#[derive(Clone, Default)]
+struct TurnTimingState {
+    request_start_delay_ms: Option<u64>,
+    sampling_duration_ms: Option<u64>,
+    blocking_tool_critical_path_duration_ms: Option<u64>,
+    approval_wait_duration_ms: u64,
+}
+
 struct TurnState {
     connection_id: Option<u64>,
     thread_id: Option<String>,
@@ -342,6 +351,7 @@ struct TurnState {
     latest_diff: Option<String>,
     steer_count: usize,
     tool_counts: TurnToolCounts,
+    timing: TurnTimingState,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -480,6 +490,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnResolvedConfig(input) => {
                     self.ingest_turn_resolved_config(*input, out).await;
+                }
+                CustomAnalyticsFact::TurnTimingBreakdown(input) => {
+                    self.ingest_turn_timing_breakdown(*input, out).await;
                 }
                 CustomAnalyticsFact::TurnTokenUsage(input) => {
                     self.ingest_turn_token_usage(*input, out).await;
@@ -665,6 +678,7 @@ impl AnalyticsReducer {
             latest_diff: None,
             steer_count: 0,
             tool_counts: TurnToolCounts::default(),
+            timing: TurnTimingState::default(),
         });
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
@@ -689,9 +703,37 @@ impl AnalyticsReducer {
             latest_diff: None,
             steer_count: 0,
             tool_counts: TurnToolCounts::default(),
+            timing: TurnTimingState::default(),
         });
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
+        self.maybe_emit_turn_event(&turn_id, out).await;
+    }
+
+    async fn ingest_turn_timing_breakdown(
+        &mut self,
+        input: TurnTimingBreakdownFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let turn_id = input.turn_id.clone();
+        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+            connection_id: None,
+            thread_id: None,
+            num_input_images: None,
+            resolved_config: None,
+            started_at: None,
+            token_usage: None,
+            completed: None,
+            latest_diff: None,
+            steer_count: 0,
+            tool_counts: TurnToolCounts::default(),
+            timing: TurnTimingState::default(),
+        });
+        turn_state.thread_id = Some(input.thread_id);
+        turn_state.timing.request_start_delay_ms = input.request_start_delay_ms;
+        turn_state.timing.sampling_duration_ms = Some(input.sampling_duration_ms);
+        turn_state.timing.blocking_tool_critical_path_duration_ms =
+            Some(input.blocking_tool_critical_path_duration_ms);
         self.maybe_emit_turn_event(&turn_id, out).await;
     }
 
@@ -854,6 +896,7 @@ impl AnalyticsReducer {
                     latest_diff: None,
                     steer_count: 0,
                     tool_counts: TurnToolCounts::default(),
+                    timing: TurnTimingState::default(),
                 });
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
@@ -1213,6 +1256,7 @@ impl AnalyticsReducer {
                     latest_diff: None,
                     steer_count: 0,
                     tool_counts: TurnToolCounts::default(),
+                    timing: TurnTimingState::default(),
                 });
                 turn_state.started_at = notification
                     .turn
@@ -1234,6 +1278,7 @@ impl AnalyticsReducer {
                             latest_diff: None,
                             steer_count: 0,
                             tool_counts: TurnToolCounts::default(),
+                            timing: TurnTimingState::default(),
                         });
                 turn_state.thread_id = Some(notification.thread_id);
                 turn_state.latest_diff = Some(notification.diff);
@@ -1253,6 +1298,7 @@ impl AnalyticsReducer {
                             latest_diff: None,
                             steer_count: 0,
                             tool_counts: TurnToolCounts::default(),
+                            timing: TurnTimingState::default(),
                         });
                 turn_state.completed = Some(CompletedTurnState {
                     status: analytics_turn_status(notification.turn.status),
@@ -1471,6 +1517,7 @@ impl AnalyticsReducer {
         completed_at_ms: u64,
         out: &mut Vec<TrackEventRequest>,
     ) {
+        let duration_ms = observed_duration_ms(pending_review.started_at_ms, completed_at_ms);
         if let Some(item_key) = item_review_summary_key(&pending_review) {
             self.record_item_review_summary(
                 item_key,
@@ -1479,6 +1526,28 @@ impl AnalyticsReducer {
                 resolution,
                 &pending_review,
             );
+        }
+        if let Some(duration_ms) = duration_ms {
+            let turn_state =
+                self.turns
+                    .entry(pending_review.turn_id.clone())
+                    .or_insert(TurnState {
+                        connection_id: None,
+                        thread_id: None,
+                        num_input_images: None,
+                        resolved_config: None,
+                        started_at: None,
+                        token_usage: None,
+                        completed: None,
+                        latest_diff: None,
+                        steer_count: 0,
+                        tool_counts: TurnToolCounts::default(),
+                        timing: TurnTimingState::default(),
+                    });
+            turn_state.timing.approval_wait_duration_ms = turn_state
+                .timing
+                .approval_wait_duration_ms
+                .saturating_add(duration_ms);
         }
         let Some((connection_state, thread_metadata)) =
             self.thread_context_or_warn(AnalyticsDropSite::review(&pending_review))
@@ -1505,7 +1574,7 @@ impl AnalyticsReducer {
                 resolution,
                 started_at_ms: pending_review.started_at_ms,
                 completed_at_ms,
-                duration_ms: observed_duration_ms(pending_review.started_at_ms, completed_at_ms),
+                duration_ms,
             },
         }));
     }
@@ -2513,6 +2582,26 @@ fn codex_turn_event_params(
         is_first_turn,
     } = resolved_config;
     let token_usage = turn_state.token_usage.clone();
+    let timing = &turn_state.timing;
+    let has_turn_timing = timing.request_start_delay_ms.is_some()
+        || timing.sampling_duration_ms.is_some()
+        || timing.blocking_tool_critical_path_duration_ms.is_some();
+    let approval_wait_duration_ms = has_turn_timing.then_some(timing.approval_wait_duration_ms);
+    let finalize_duration_ms = completed.duration_ms.and_then(|duration_ms| {
+        has_turn_timing.then_some(
+            duration_ms.saturating_sub(
+                timing
+                    .request_start_delay_ms
+                    .unwrap_or_default()
+                    .saturating_add(timing.sampling_duration_ms.unwrap_or_default())
+                    .saturating_add(
+                        timing
+                            .blocking_tool_critical_path_duration_ms
+                            .unwrap_or_default(),
+                    ),
+            ),
+        )
+    });
     CodexTurnEventParams {
         thread_id,
         session_id: thread_metadata.session_id.clone(),
@@ -2570,6 +2659,11 @@ fn codex_turn_event_params(
             .as_ref()
             .map(|token_usage| token_usage.total_tokens),
         duration_ms: completed.duration_ms,
+        request_start_delay_ms: timing.request_start_delay_ms,
+        sampling_duration_ms: timing.sampling_duration_ms,
+        blocking_tool_critical_path_duration_ms: timing.blocking_tool_critical_path_duration_ms,
+        approval_wait_duration_ms,
+        finalize_duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),
     }
