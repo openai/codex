@@ -84,6 +84,51 @@ fn builds_permissions_from_profile() {
 }
 
 #[test]
+fn builds_permissions_from_profile_with_denied_reads() {
+    let cwd = PathBuf::from("/tmp");
+    let denied_root =
+        AbsolutePathBuf::from_absolute_path(cwd.join("blocked")).expect("absolute path");
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: denied_root.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: "/tmp/blocked/**".to_string(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let instructions = PermissionsInstructions::from_permission_profile(
+        &permission_profile,
+        AskForApproval::OnRequest,
+        ApprovalsReviewer::AutoReview,
+        &Policy::empty(),
+        &cwd,
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
+    );
+    let text = instructions.body();
+    assert!(text.contains("## Denied filesystem reads"));
+    assert!(text.contains("Do not request escalation or additional permissions"));
+    assert!(text.contains(denied_root.to_string_lossy().as_ref()));
+    assert!(text.contains("glob `/tmp/blocked/**`"));
+}
+
+#[test]
 fn includes_request_rule_instructions_for_on_request() {
     let mut exec_policy = Policy::empty();
     exec_policy
