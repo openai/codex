@@ -36,6 +36,8 @@ pub struct ListMcpServerStatusParams {
     /// Defaults to `Full` when omitted.
     #[ts(optional = nullable)]
     pub detail: Option<McpServerStatusDetail>,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -688,6 +690,7 @@ impl From<McpServerElicitationRequestResponse> for rmcp::model::CreateElicitatio
         Self {
             action: value.action.into(),
             content: value.content,
+            meta: None,
         }
     }
 }

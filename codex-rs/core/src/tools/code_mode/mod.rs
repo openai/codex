@@ -66,17 +66,6 @@ impl CodeModeService {
         }
     }
 
-    pub(crate) async fn stored_values(&self) -> std::collections::HashMap<String, JsonValue> {
-        self.inner.stored_values().await
-    }
-
-    pub(crate) async fn replace_stored_values(
-        &self,
-        values: std::collections::HashMap<String, JsonValue>,
-    ) {
-        self.inner.replace_stored_values(values).await;
-    }
-
     pub(crate) fn allocate_cell_id(&self) -> String {
         self.inner.allocate_cell_id()
     }
@@ -182,17 +171,11 @@ pub(super) async fn handle_runtime_response(
         }
         RuntimeResponse::Result {
             content_items,
-            stored_values,
             error_text,
             ..
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            exec.session
-                .services
-                .code_mode_service
-                .replace_stored_values(stored_values)
-                .await;
             let success = error_text.is_none();
             if let Some(error_text) = error_text {
                 content_items.push(FunctionCallOutputContentItem::InputText {

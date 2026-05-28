@@ -7,6 +7,8 @@
 mod accounting;
 mod events;
 mod extension;
+mod metrics;
+mod runtime;
 mod spec;
 mod steering;
 mod tool;
@@ -14,6 +16,8 @@ mod tool;
 pub use extension::GoalExtension;
 pub use extension::GoalExtensionConfig;
 pub use extension::install_with_backend;
+pub use runtime::GoalRuntimeHandle;
+pub use runtime::PreviousGoalSnapshot;
 pub use spec::CREATE_GOAL_TOOL_NAME;
 pub use spec::GET_GOAL_TOOL_NAME;
 pub use spec::UPDATE_GOAL_TOOL_NAME;

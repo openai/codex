@@ -7,6 +7,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::status::StatusAccountDisplay;
+use crate::status::remote_connection::RemoteConnectionStatus;
 use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 use crate::token_usage::TokenUsage;
@@ -604,6 +605,7 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
     let (composite, _handle) = new_status_output_with_rate_limits_handle(
         &config,
         Some(runtime_base_url),
+        /*remote_connection*/ None,
         test_status_account_display().as_ref(),
         /*token_info*/ None,
         &usage,
@@ -644,6 +646,7 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
     let (composite, _handle) = new_status_output_with_rate_limits_handle(
         &config,
         /*runtime_model_provider_base_url*/ None,
+        /*remote_connection*/ None,
         test_status_account_display().as_ref(),
         /*token_info*/ None,
         &usage,
@@ -665,6 +668,25 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
         rendered.contains("https://chatgpt.com/codex/settings/usage"),
         "expected /status to show ChatGPT usage link for OpenAI-auth proxy, got: {rendered}"
     );
+
+    let wide_destinations: Vec<String> = composite
+        .display_hyperlink_lines(/*width*/ 120)
+        .into_iter()
+        .flat_map(|line| line.hyperlinks.into_iter())
+        .map(|link| link.destination)
+        .collect();
+    assert_eq!(
+        wide_destinations,
+        vec!["https://chatgpt.com/codex/settings/usage"]
+    );
+
+    let narrow_destinations: Vec<String> = composite
+        .display_hyperlink_lines(/*width*/ 24)
+        .into_iter()
+        .flat_map(|line| line.hyperlinks.into_iter())
+        .map(|link| link.destination)
+        .collect();
+    assert_eq!(narrow_destinations, Vec::<String>::new());
 }
 
 #[tokio::test]
@@ -1321,12 +1343,17 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         .with_ymd_and_hms(2024, 2, 3, 4, 5, 6)
         .single()
         .expect("timestamp");
+    let remote_connection = RemoteConnectionStatus {
+        address: "unix:///tmp/codex-home/app-server-control/app-server-control.sock".to_string(),
+        version: "v0.133.0".to_string(),
+    };
 
     let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let (composite, _) = new_status_output_with_rate_limits_handle(
         &config,
         /*runtime_model_provider_base_url*/ None,
+        Some(&remote_connection),
         account_display.as_ref(),
         Some(&token_info),
         &usage,

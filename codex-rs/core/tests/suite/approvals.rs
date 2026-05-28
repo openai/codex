@@ -653,6 +653,7 @@ async fn submit_turn(
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.cwd.path().to_path_buf()),
                 approval_policy: Some(approval_policy),
@@ -2073,6 +2074,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
 
     let target = TargetPath::OutsideWorkspace("apply_patch_allow_session.txt");
     let (path, patch_path) = target.resolve_for_patch(&test);
+    let _path_cleanup = tempfile::TempPath::try_from_path(path.clone())?;
     let _ = fs::remove_file(&path);
 
     let patch_add = build_add_file_patch(&patch_path, "before");
@@ -2597,6 +2599,7 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.cwd.path().to_path_buf()),
                 approval_policy: Some(approval_policy),

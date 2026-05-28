@@ -10,9 +10,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
-use codex_cli::LandlockCommand;
-use codex_cli::SeatbeltCommand;
-use codex_cli::WindowsCommand;
 use codex_cli::read_access_token_from_stdin;
 use codex_cli::read_api_key_from_stdin;
 use codex_cli::run_login_status;
@@ -30,7 +27,7 @@ use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
 use codex_rollout_trace::replay_bundle;
 use codex_state::StateRuntime;
-use codex_state::state_db_path;
+use codex_state::memories_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
@@ -160,7 +157,7 @@ enum Subcommand {
     Doctor(DoctorCommand),
 
     /// Run commands within a Codex-provided sandbox.
-    Sandbox(SandboxArgs),
+    Sandbox(HostSandboxArgs),
 
     /// Debugging tools.
     Debug(DebugCommand),
@@ -343,24 +340,29 @@ struct ForkCommand {
     config_overrides: TuiCli,
 }
 
+#[cfg(target_os = "macos")]
+type HostSandboxArgs = codex_cli::SeatbeltCommand;
+#[cfg(target_os = "linux")]
+type HostSandboxArgs = codex_cli::LandlockCommand;
+#[cfg(target_os = "windows")]
+type HostSandboxArgs = codex_cli::WindowsCommand;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+type HostSandboxArgs = UnsupportedSandboxArgs;
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 #[derive(Debug, Parser)]
-struct SandboxArgs {
-    #[command(subcommand)]
-    cmd: SandboxCommand,
-}
+struct UnsupportedSandboxArgs {
+    /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
+    #[arg(long = "profile", short = 'p')]
+    pub config_profile: Option<ProfileV2Name>,
 
-#[derive(Debug, clap::Subcommand)]
-enum SandboxCommand {
-    /// Run a command under Seatbelt (macOS only).
-    #[clap(visible_alias = "seatbelt")]
-    Macos(SeatbeltCommand),
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
 
-    /// Run a command under the Linux sandbox (bubblewrap by default).
-    #[clap(visible_alias = "landlock")]
-    Linux(LandlockCommand),
-
-    /// Run a command under Windows restricted token (Windows only).
-    Windows(WindowsCommand),
+    /// Full command args to run under the host sandbox.
+    #[arg(trailing_var_arg = true)]
+    pub command: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -918,7 +920,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
-            mcp_cli.run().await?;
+            let loader_overrides =
+                loader_overrides_for_profile(interactive.config_profile_v2.as_ref())?;
+            mcp_cli.run(loader_overrides).await?;
         }
         Some(Subcommand::Plugin(plugin_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1236,56 +1240,48 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             codex_cloud_tasks::run_main(cloud_cli, arg0_paths.codex_linux_sandbox_exe.clone())
                 .await?;
         }
-        Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
-            SandboxCommand::Macos(mut seatbelt_cli) => {
-                reject_remote_mode_for_subcommand(
-                    root_remote.as_deref(),
-                    root_remote_auth_token_env.as_deref(),
-                    "sandbox macos",
-                )?;
-                prepend_config_flags(
-                    &mut seatbelt_cli.config_overrides,
-                    root_config_overrides.clone(),
-                );
-                codex_cli::run_command_under_seatbelt(
-                    seatbelt_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
+        Some(Subcommand::Sandbox(mut sandbox_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "sandbox",
+            )?;
+            let config_profile = sandbox_cli
+                .config_profile
+                .as_ref()
+                .or(interactive.config_profile_v2.as_ref());
+            let loader_overrides = loader_overrides_for_profile(config_profile)?;
+            prepend_config_flags(
+                &mut sandbox_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            #[cfg(target_os = "macos")]
+            codex_cli::run_command_under_seatbelt(
+                sandbox_cli,
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
+            )
+            .await?;
+            #[cfg(target_os = "linux")]
+            codex_cli::run_command_under_landlock(
+                sandbox_cli,
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
+            )
+            .await?;
+            #[cfg(target_os = "windows")]
+            codex_cli::run_command_under_windows_sandbox(
+                sandbox_cli,
+                arg0_paths.codex_linux_sandbox_exe.clone(),
+                loader_overrides,
+            )
+            .await?;
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+            {
+                let _ = loader_overrides;
+                anyhow::bail!("`codex sandbox` is not supported on this operating system");
             }
-            SandboxCommand::Linux(mut landlock_cli) => {
-                reject_remote_mode_for_subcommand(
-                    root_remote.as_deref(),
-                    root_remote_auth_token_env.as_deref(),
-                    "sandbox linux",
-                )?;
-                prepend_config_flags(
-                    &mut landlock_cli.config_overrides,
-                    root_config_overrides.clone(),
-                );
-                codex_cli::run_command_under_landlock(
-                    landlock_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
-            }
-            SandboxCommand::Windows(mut windows_cli) => {
-                reject_remote_mode_for_subcommand(
-                    root_remote.as_deref(),
-                    root_remote_auth_token_env.as_deref(),
-                    "sandbox windows",
-                )?;
-                prepend_config_flags(
-                    &mut windows_cli.config_overrides,
-                    root_config_overrides.clone(),
-                );
-                codex_cli::run_command_under_windows(
-                    windows_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
-            }
-        },
+        }
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
             DebugSubcommand::Models(cmd) => {
                 reject_remote_mode_for_subcommand(
@@ -1459,11 +1455,13 @@ fn profile_v2_for_subcommand<'a>(
         | Subcommand::Review(_)
         | Subcommand::Resume(_)
         | Subcommand::Fork(_)
+        | Subcommand::Mcp(_)
+        | Subcommand::Sandbox(_)
         | Subcommand::Debug(DebugCommand {
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -1488,7 +1486,8 @@ async fn run_exec_server_command(
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
         let config = load_exec_server_config(root_config_overrides, strict_config).await?;
         let auth_provider =
-            load_exec_server_remote_auth_provider(&config, cmd.use_agent_identity_auth).await?;
+            load_exec_server_remote_auth_provider(&config, &base_url, cmd.use_agent_identity_auth)
+                .await?;
         let mut remote_config = codex_exec_server::RemoteEnvironmentConfig::new(
             base_url,
             environment_id,
@@ -1518,6 +1517,7 @@ async fn run_exec_server_command(
 
 async fn load_exec_server_remote_auth_provider(
     config: &codex_core::config::Config,
+    base_url: &str,
     use_agent_identity_auth: bool,
 ) -> anyhow::Result<codex_api::SharedAuthProvider> {
     if use_agent_identity_auth {
@@ -1532,17 +1532,59 @@ async fn load_exec_server_remote_auth_provider(
 
     let auth = load_exec_server_remote_auth(
         config,
-        "remote exec-server registration requires ChatGPT authentication; run `codex login` first",
+        "remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY",
     )
     .await?;
 
-    if !auth.is_chatgpt_auth() {
+    if !is_supported_exec_server_remote_auth(&auth) {
         anyhow::bail!(
-            "remote exec-server registration requires ChatGPT authentication; API key and Agent Identity auth are not supported"
+            "remote exec-server registration requires ChatGPT authentication or API key authentication; Agent Identity auth requires --use-agent-identity-auth"
         );
     }
 
+    if auth.is_api_key_auth() {
+        validate_api_key_remote_host(base_url)?;
+    }
+
     Ok(codex_model_provider::auth_provider_from_auth(&auth))
+}
+
+fn is_supported_exec_server_remote_auth(auth: &CodexAuth) -> bool {
+    auth.is_chatgpt_auth() || auth.is_api_key_auth()
+}
+
+fn validate_api_key_remote_host(base_url: &str) -> anyhow::Result<()> {
+    let url = url::Url::parse(base_url)
+        .map_err(|err| anyhow::anyhow!("invalid remote exec-server registration URL: {err}"))?;
+    let host = url.host().ok_or_else(|| {
+        anyhow::anyhow!("remote exec-server registration URL must include a host")
+    })?;
+
+    let is_loopback = match &host {
+        url::Host::Domain(host) => host.eq_ignore_ascii_case("localhost"),
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+    };
+    let is_openai_host = match &host {
+        url::Host::Domain(host) => ["openai.com", "openai.org"].into_iter().any(|domain| {
+            host.eq_ignore_ascii_case(domain)
+                || host.to_ascii_lowercase().ends_with(&format!(".{domain}"))
+        }),
+        _ => false,
+    };
+    let is_allowed = match url.scheme() {
+        "https" => is_loopback || is_openai_host,
+        "http" => is_loopback,
+        _ => false,
+    };
+
+    if !is_allowed {
+        anyhow::bail!(
+            "remote exec-server API-key authentication is restricted to HTTPS openai.com and openai.org hosts and subdomains or loopback hosts"
+        );
+    }
+
+    Ok(())
 }
 
 async fn load_exec_server_config(
@@ -1753,22 +1795,16 @@ async fn run_debug_clear_memories_command(
         .build()
         .await?;
 
-    let state_path = state_db_path(config.sqlite_home.as_path());
-    let mut cleared_state_db = false;
-    if tokio::fs::try_exists(&state_path).await? {
-        let state_db =
-            StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
-                .await?;
-        state_db.clear_memory_data().await?;
-        cleared_state_db = true;
-    }
+    let memories_path = memories_db_path(config.sqlite_home.as_path());
+    let cleared_memories_db =
+        StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_home.as_path()).await?;
 
     clear_memory_roots_contents(&config.codex_home).await?;
 
-    let mut message = if cleared_state_db {
-        format!("Cleared memory state from {}.", state_path.display())
+    let mut message = if cleared_memories_db {
+        format!("Cleared memory state from {}.", memories_path.display())
     } else {
-        format!("No state db found at {}.", state_path.display())
+        format!("No memories db found at {}.", memories_path.display())
     };
     message.push_str(&format!(
         " Cleared memory directories under {}.",
@@ -2176,6 +2212,63 @@ mod tests {
     use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
 
+    #[test]
+    fn exec_server_remote_auth_accepts_api_key_auth() {
+        let auth = CodexAuth::from_api_key("sk-test");
+
+        assert!(is_supported_exec_server_remote_auth(&auth));
+    }
+
+    #[test]
+    fn exec_server_remote_api_key_auth_accepts_https_openai_domains() {
+        for base_url in [
+            "https://openai.com/api",
+            "https://service.openai.com/api",
+            "https://openai.org/api",
+            "https://service.openai.org/api",
+        ] {
+            assert!(validate_api_key_remote_host(base_url).is_ok());
+        }
+    }
+
+    #[test]
+    fn exec_server_remote_api_key_auth_accepts_http_loopback() {
+        for base_url in [
+            "http://localhost:8098/api",
+            "http://127.0.0.1:8098/api",
+            "http://[::1]:8098/api",
+        ] {
+            assert!(validate_api_key_remote_host(base_url).is_ok());
+        }
+    }
+
+    #[test]
+    fn exec_server_remote_api_key_auth_rejects_http_openai_domain() {
+        for base_url in [
+            "http://service.openai.com/api",
+            "http://service.openai.org/api",
+        ] {
+            let error = validate_api_key_remote_host(base_url)
+                .expect_err("reject plaintext OpenAI destination");
+
+            assert_eq!(
+                error.to_string(),
+                "remote exec-server API-key authentication is restricted to HTTPS openai.com and openai.org hosts and subdomains or loopback hosts"
+            );
+        }
+    }
+
+    #[test]
+    fn exec_server_remote_api_key_auth_rejects_suffix_spoof() {
+        let error = validate_api_key_remote_host("https://service.openai.org.evil.example/api")
+            .expect_err("reject suffix spoof");
+
+        assert_eq!(
+            error.to_string(),
+            "remote exec-server API-key authentication is restricted to HTTPS openai.com and openai.org hosts and subdomains or loopback hosts"
+        );
+    }
+
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let MultitoolCli {
@@ -2261,6 +2354,18 @@ mod tests {
         assert_eq!(
             profile_v2_for_args(&["codex", "--profile", "work", "debug", "prompt-input"])
                 .expect("debug prompt-input supports profile-v2")
+                .as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile", "work", "mcp", "list"])
+                .expect("mcp supports profile-v2")
+                .as_deref(),
+            Some("work")
+        );
+        assert_eq!(
+            profile_v2_for_args(&["codex", "--profile", "work", "sandbox"])
+                .expect("sandbox supports config profile")
                 .as_deref(),
             Some("work")
         );
@@ -2491,12 +2596,12 @@ mod tests {
         assert!(matches!(cli.subcommand, Some(Subcommand::Update)));
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
-    fn sandbox_macos_parses_permissions_profile() {
+    fn sandbox_parses_permissions_profile() {
         let cli = MultitoolCli::try_parse_from([
             "codex",
             "sandbox",
-            "macos",
             "--permissions-profile",
             ":workspace",
             "--",
@@ -2504,20 +2609,33 @@ mod tests {
         ])
         .expect("parse");
 
-        let Some(Subcommand::Sandbox(SandboxArgs {
-            cmd: SandboxCommand::Macos(command),
-        })) = cli.subcommand
-        else {
-            panic!("expected sandbox macos command");
+        let Some(Subcommand::Sandbox(command)) = cli.subcommand else {
+            panic!("expected sandbox command");
         };
 
         assert_eq!(command.permissions_profile.as_deref(), Some(":workspace"));
         assert_eq!(command.command, vec!["echo"]);
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
-    fn sandbox_macos_rejects_explicit_profile_controls_without_profile() {
-        let err = MultitoolCli::try_parse_from(["codex", "sandbox", "macos", "-C", "/tmp"])
+    fn sandbox_parses_config_profile() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "sandbox", "--profile", "work", "--", "echo"])
+                .expect("parse");
+
+        let Some(Subcommand::Sandbox(command)) = cli.subcommand else {
+            panic!("expected sandbox command");
+        };
+
+        assert_eq!(command.config_profile.as_deref(), Some("work"));
+        assert_eq!(command.command, vec!["echo"]);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn sandbox_rejects_explicit_profile_controls_without_profile() {
+        let err = MultitoolCli::try_parse_from(["codex", "sandbox", "-C", "/tmp"])
             .expect_err("parse should fail");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
@@ -2570,8 +2688,7 @@ mod tests {
 
     #[test]
     fn sandbox_full_auto_no_longer_parses() {
-        let result =
-            MultitoolCli::try_parse_from(["codex", "sandbox", "linux", "--full-auto", "--"]);
+        let result = MultitoolCli::try_parse_from(["codex", "sandbox", "--full-auto", "--"]);
 
         assert!(result.is_err());
     }

@@ -8,6 +8,7 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
+use crate::extensions::app_server_extension_event_sink;
 use crate::extensions::guardian_agent_spawner;
 use crate::extensions::thread_extensions;
 use crate::fs_watch::FsWatchManager;
@@ -310,7 +311,11 @@ impl MessageProcessor {
                 auth_manager.clone(),
                 session_source,
                 environment_manager,
-                thread_extensions(guardian_agent_spawner(thread_manager.clone())),
+                thread_extensions(
+                    guardian_agent_spawner(thread_manager.clone()),
+                    app_server_extension_event_sink(outgoing.clone()),
+                    auth_manager.clone(),
+                ),
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
                 state_db.clone(),
@@ -1071,6 +1076,9 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
+            }
+            ClientRequest::ThreadSearch { params, .. } => {
+                self.thread_processor.thread_search(params).await
             }
             ClientRequest::ThreadLoadedList { params, .. } => {
                 self.thread_processor.thread_loaded_list(params).await

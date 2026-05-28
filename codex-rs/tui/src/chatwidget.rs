@@ -10,7 +10,8 @@
 //! visible immediately.
 //!
 //! The transcript overlay is kept in sync by `App::overlay_forward_event`, which syncs a live tail
-//! during draws using `active_cell_transcript_key()` and `active_cell_transcript_lines()`. The
+//! during draws using `active_cell_transcript_key()` and
+//! `active_cell_transcript_hyperlink_lines()`. The
 //! cache key is designed to change when the active cell mutates in place or when its transcript
 //! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
 //! every draw.
@@ -77,6 +78,7 @@ use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
@@ -124,7 +126,6 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
-use codex_chatgpt::connectors as chatgpt_connectors;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
@@ -315,6 +316,7 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
+use crate::status::remote_connection::RemoteConnectionStatus;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
@@ -361,6 +363,7 @@ mod slash_dispatch;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+use self::skills::is_app_mentionable;
 mod plugins;
 use self::plugins::PluginInstallAuthFlowState;
 use self::plugins::PluginListFetchState;
@@ -371,6 +374,7 @@ mod model_popups;
 mod notifications;
 use self::notifications::Notification;
 mod permission_popups;
+mod permissions_menu;
 mod protocol;
 mod protocol_requests;
 mod rate_limits;
@@ -535,6 +539,7 @@ pub(crate) struct ChatWidget {
     initial_user_message: Option<UserMessage>,
     status_account_display: Option<StatusAccountDisplay>,
     runtime_model_provider_base_url: Option<String>,
+    pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
@@ -974,12 +979,19 @@ impl ChatWidget {
 
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
         let snapshot = self.feedback.snapshot(self.thread_id);
+        #[cfg(target_os = "windows")]
+        let include_windows_sandbox_log =
+            codex_windows_sandbox::current_log_file_path_for_codex_home(&self.config.codex_home)
+                .is_file();
+        #[cfg(not(target_os = "windows"))]
+        let include_windows_sandbox_log = false;
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
             self.thread_id
                 .map(|thread_id| format!("auto-review-rollout-{thread_id}.jsonl")),
+            include_windows_sandbox_log,
             snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);
@@ -1466,8 +1478,10 @@ impl ChatWidget {
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
-        self.app_event_tx
-            .send(AppEvent::FetchMcpInventory { detail });
+        self.app_event_tx.send(AppEvent::FetchMcpInventory {
+            detail,
+            thread_id: self.thread_id(),
+        });
     }
 
     /// Remove the MCP loading spinner if it is still the active cell.
@@ -1812,26 +1826,35 @@ impl ChatWidget {
         })
     }
 
-    /// Returns the active cell's transcript lines for a given terminal width.
+    /// Returns the active cell's annotated transcript lines for a given terminal width.
     ///
     /// This is a convenience for the transcript overlay live-tail path, and it intentionally
     /// filters out empty results so the overlay can treat "nothing to render" as "no tail". Callers
     /// should pass the same width the overlay uses; using a different width will cause wrapping
     /// mismatches between the main viewport and the transcript overlay.
-    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+    pub(crate) fn active_cell_transcript_hyperlink_lines(
+        &self,
+        width: u16,
+    ) -> Option<Vec<HyperlinkLine>> {
         let mut lines = Vec::new();
         if let Some(cell) = self.transcript.active_cell.as_ref() {
-            lines.extend(cell.transcript_lines(width));
+            lines.extend(cell.transcript_hyperlink_lines(width));
         }
         if let Some(hook_cell) = self.active_hook_cell.as_ref() {
             // Compute hook lines first so hidden hooks do not add a separator.
-            let hook_lines = hook_cell.transcript_lines(width);
+            let hook_lines = hook_cell.transcript_hyperlink_lines(width);
             if !hook_lines.is_empty() && !lines.is_empty() {
-                lines.push("".into());
+                lines.push(HyperlinkLine::from(""));
             }
             lines.extend(hook_lines);
         }
         (!lines.is_empty()).then_some(lines)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+        self.active_cell_transcript_hyperlink_lines(width)
+            .map(crate::terminal_hyperlinks::visible_lines)
     }
 
     /// Return a reference to the widget's current config (includes any

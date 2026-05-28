@@ -252,20 +252,16 @@ LIMIT 2
         parent_thread_id: ThreadId,
         status: Option<crate::DirectionalThreadSpawnEdgeStatus>,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        let mut query = String::from(
-            "SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ?",
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT child_thread_id FROM thread_spawn_edges WHERE parent_thread_id = ",
         );
-        if status.is_some() {
-            query.push_str(" AND status = ?");
-        }
-        query.push_str(" ORDER BY child_thread_id");
-
-        let mut sql = sqlx::query(query.as_str()).bind(parent_thread_id.to_string());
+        builder.push_bind(parent_thread_id.to_string());
         if let Some(status) = status {
-            sql = sql.bind(status.to_string());
+            builder.push(" AND status = ").push_bind(status.to_string());
         }
+        builder.push(" ORDER BY child_thread_id");
 
-        let rows = sql.fetch_all(self.pool.as_ref()).await?;
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
             .map(|row| {
                 ThreadId::try_from(row.try_get::<String, _>("child_thread_id")?).map_err(Into::into)
@@ -278,36 +274,48 @@ LIMIT 2
         root_thread_id: ThreadId,
         status: Option<crate::DirectionalThreadSpawnEdgeStatus>,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        let status_filter = if status.is_some() {
-            " AND status = ?"
-        } else {
-            ""
-        };
-        let query = format!(
+        let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 WITH RECURSIVE subtree(child_thread_id, depth) AS (
     SELECT child_thread_id, 1
     FROM thread_spawn_edges
-    WHERE parent_thread_id = ?{status_filter}
+    WHERE parent_thread_id =
+            "#,
+        );
+        builder.push_bind(root_thread_id.to_string());
+        if let Some(status) = status {
+            let status = status.to_string();
+            builder.push(" AND status = ").push_bind(status.clone());
+            builder.push(
+                r#"
     UNION ALL
     SELECT edge.child_thread_id, subtree.depth + 1
     FROM thread_spawn_edges AS edge
     JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
-    WHERE 1 = 1{status_filter}
+    WHERE status =
+                "#,
+            );
+            builder.push_bind(status);
+        } else {
+            builder.push(
+                r#"
+    UNION ALL
+    SELECT edge.child_thread_id, subtree.depth + 1
+    FROM thread_spawn_edges AS edge
+    JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
+                "#,
+            );
+        }
+        builder.push(
+            r#"
 )
 SELECT child_thread_id
 FROM subtree
 ORDER BY depth ASC, child_thread_id ASC
-            "#
+            "#,
         );
 
-        let mut sql = sqlx::query(query.as_str()).bind(root_thread_id.to_string());
-        if let Some(status) = status {
-            let status = status.to_string();
-            sql = sql.bind(status.clone()).bind(status);
-        }
-
-        let rows = sql.fetch_all(self.pool.as_ref()).await?;
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
             .map(|row| {
                 ThreadId::try_from(row.try_get::<String, _>("child_thread_id")?).map_err(Into::into)
@@ -971,6 +979,7 @@ ON CONFLICT(thread_id, position) DO NOTHING
             .execute(self.pool.as_ref())
             .await?;
         let rows_affected = result.rows_affected();
+        self.memories.delete_thread_memory(thread_id).await?;
         if rows_affected > 0 {
             self.thread_goals.delete_thread_goal(thread_id).await?;
         }
@@ -998,7 +1007,7 @@ fn one_thread_id_from_rows(
     }
 }
 
-pub(super) fn push_thread_select_columns(builder: &mut QueryBuilder<'_, Sqlite>) {
+pub(super) fn push_thread_select_columns(builder: &mut QueryBuilder<Sqlite>) {
     builder.push(
         r#"
 SELECT
@@ -1075,7 +1084,7 @@ pub struct ThreadFilterOptions<'a> {
 }
 
 pub(super) fn push_thread_filters<'a>(
-    builder: &mut QueryBuilder<'a, Sqlite>,
+    builder: &mut QueryBuilder<Sqlite>,
     options: ThreadFilterOptions<'a>,
 ) {
     let ThreadFilterOptions {
@@ -1155,7 +1164,7 @@ pub(super) fn push_thread_filters<'a>(
 }
 
 pub(super) fn push_thread_order_and_limit(
-    builder: &mut QueryBuilder<'_, Sqlite>,
+    builder: &mut QueryBuilder<Sqlite>,
     sort_key: SortKey,
     sort_direction: SortDirection,
     limit: usize,

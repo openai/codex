@@ -4,8 +4,8 @@ Experimental Python SDK for `codex app-server` JSON-RPC v2 over stdio, with a sm
 
 The generated wire-model layer is sourced from the pinned `openai-codex-cli-bin`
 runtime package and exposed as Pydantic models with snake_case Python fields
-that serialize back to the app-server’s camelCase wire format.
-The package root exports the ergonomic client API; public app-server value and
+that serialize back to the protocol's camelCase wire format.
+The package root exports the ergonomic client API; public Codex protocol value and
 event types live in `openai_codex.types`.
 
 ## Install
@@ -17,18 +17,18 @@ source .venv/bin/activate
 ```
 
 Published SDK builds pin an exact `openai-codex-cli-bin` runtime dependency
-with the same version as the SDK. Pass `AppServerConfig(codex_bin=...)` only
+with the same version as the SDK. Pass `CodexConfig(codex_bin=...)` only
 when you intentionally want to run against a specific local app-server binary.
 
 ## Quickstart
 
 ```python
-from openai_codex import Codex
+from openai_codex import Codex, Sandbox
 
 with Codex() as codex:
-    # Call login_api_key(...) first when this app-server session is not
+    # Call login_api_key(...) first when this Codex session is not
     # already authenticated.
-    thread = codex.thread_start(model="gpt-5")
+    thread = codex.thread_start(model="gpt-5", sandbox=Sandbox.workspace_write)
     result = thread.run("Say hello in one sentence.")
     print(result.final_response)
     print(len(result.items))
@@ -37,6 +37,29 @@ with Codex() as codex:
 `thread.run(...)` and `thread.turn(...).run()` return `TurnResult`. Its
 `final_response` is `None` when the turn completes without a final-answer or
 phase-less assistant message item.
+
+## Sandbox
+
+Use the same enum when creating a thread or changing its sandbox for a turn:
+
+```python
+from openai_codex import Codex, Sandbox
+
+with Codex() as codex:
+    thread = codex.thread_start(sandbox=Sandbox.workspace_write)
+    thread.run("Make the requested change.")
+    review = thread.run("Review the diff only.", sandbox=Sandbox.read_only)
+```
+
+Available presets:
+
+- `Sandbox.read_only`: read files without allowing writes.
+- `Sandbox.workspace_write`: the normal default for projects with a recorded trust decision; read files and write inside the workspace and configured writable roots.
+- `Sandbox.full_access`: run without filesystem access restrictions.
+
+When `sandbox=` is omitted, Codex uses its configured default. A sandbox
+passed to `run(...)` or `turn(...)` applies to that turn and subsequent turns
+on the thread.
 
 ## Login
 
@@ -64,7 +87,7 @@ with Codex() as codex:
 
 Use `login_chatgpt_device_code()` for device-code auth, `handle.cancel()` to
 stop an in-progress interactive login, and `logout()` to clear the active
-app-server account session.
+Codex account session.
 
 ## Docs map
 

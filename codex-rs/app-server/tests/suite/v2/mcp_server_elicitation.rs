@@ -308,11 +308,8 @@ struct ElicitationAppsMcpServer;
 
 impl ServerHandler for ElicitationAppsMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: rmcp::model::ProtocolVersion::V_2025_06_18,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..ServerInfo::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(rmcp::model::ProtocolVersion::V_2025_06_18)
     }
 
     async fn list_tools(

@@ -1129,6 +1129,115 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
 }
 
 #[cfg(unix)]
+#[tokio::test]
+async fn process_exec_tool_call_cancellation_allows_sigterm_cleanup() -> Result<()> {
+    let temp_dir = tempfile::TempDir::new()?;
+    let ready_marker = temp_dir.path().join("ready");
+    let cleanup_marker = temp_dir.path().join("cleanup");
+    let descendant_pid_marker = temp_dir.path().join("descendant-pid");
+    // The parent handles TERM and records cleanup, while a TERM-ignoring child
+    // proves cancellation still escalates any survivors in the process group.
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        r#"(trap '' TERM; sleep 60) &
+printf '%s' "$!" > "$DESCENDANT_PID_MARKER"
+trap 'printf cleaned > "$CLEANUP_MARKER"; exit 0' TERM
+printf ready > "$READY_MARKER"
+while :; do sleep 1; done"#
+            .to_string(),
+    ];
+    let cwd = codex_utils_absolute_path::AbsolutePathBuf::current_dir()?;
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+    env.insert(
+        "READY_MARKER".to_string(),
+        ready_marker.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "CLEANUP_MARKER".to_string(),
+        cleanup_marker.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "DESCENDANT_PID_MARKER".to_string(),
+        descendant_pid_marker.to_string_lossy().into_owned(),
+    );
+    let cancel_token = CancellationToken::new();
+    let cancel_tx = cancel_token.clone();
+    tokio::spawn(async move {
+        for _ in 0..50 {
+            if ready_marker.exists() {
+                cancel_tx.cancel();
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        cancel_tx.cancel();
+    });
+    let params = ExecParams {
+        command,
+        cwd: cwd.clone(),
+        expiration: ExecExpiration::DefaultTimeout.with_cancellation(cancel_token),
+        capture_policy: ExecCapturePolicy::ShellTool,
+        env,
+        network: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        justification: None,
+        arg0: None,
+    };
+
+    let result = timeout(
+        Duration::from_secs(5),
+        process_exec_tool_call(
+            params,
+            &PermissionProfile::Disabled,
+            &cwd,
+            &None,
+            /*use_legacy_landlock*/ false,
+            /*stdout_stream*/ None,
+        ),
+    )
+    .await
+    .expect("cancellation should stop the process promptly");
+    let output = result.expect("cancellation should return a non-timeout exec result");
+    assert!(!output.timed_out);
+    assert_eq!(
+        std::fs::read_to_string(cleanup_marker)?,
+        "cleaned",
+        "SIGTERM cleanup trap should run before cancellation falls back to a hard kill"
+    );
+    let descendant_pid = std::fs::read_to_string(descendant_pid_marker)?
+        .parse::<i32>()
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to parse descendant pid: {error}"),
+            )
+        })?;
+    let mut killed = false;
+    for _ in 0..20 {
+        if unsafe { libc::kill(descendant_pid, 0) } == -1
+            && let Some(libc::ESRCH) = std::io::Error::last_os_error().raw_os_error()
+        {
+            killed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if !killed {
+        unsafe {
+            libc::kill(descendant_pid, libc::SIGKILL);
+        }
+    }
+    assert!(
+        killed,
+        "TERM-ignoring descendant process with pid {descendant_pid} is still alive"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
 fn long_running_command() -> Vec<String> {
     vec![
         "/bin/sh".to_string(),

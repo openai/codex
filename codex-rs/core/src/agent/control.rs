@@ -262,10 +262,12 @@ impl AgentControl {
                 .await?
             }
             (Some(session_source), None) => {
+                let forked_from_thread_id = thread_spawn_parent_thread_id(&session_source);
                 Box::pin(state.spawn_new_thread_with_source(
                     config.clone(),
                     self.clone(),
                     session_source,
+                    forked_from_thread_id,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*persist_extended_history*/ false,
                     /*metrics_service_name*/ None,
@@ -315,6 +317,7 @@ impl AgentControl {
                     .services
                     .analytics_events_client,
                 client_metadata,
+                new_thread.thread.codex.session.session_id(),
                 new_thread.thread_id,
                 /*parent_thread_id*/ None,
                 thread_config,
@@ -487,6 +490,7 @@ impl AgentControl {
                 self.clone(),
                 session_source,
                 /*thread_source*/ Some(ThreadSource::Subagent),
+                /*forked_from_thread_id*/ Some(parent_thread_id),
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
@@ -1165,24 +1169,16 @@ impl AgentControl {
         let state = self.upgrade()?;
         let mut children_by_parent = HashMap::<ThreadId, Vec<(ThreadId, AgentMetadata)>>::new();
 
-        for thread_id in state.list_thread_ids().await {
-            let Ok(thread) = state.get_thread(thread_id).await else {
-                continue;
-            };
-            let snapshot = thread.config_snapshot().await;
-            let Some(parent_thread_id) = thread_spawn_parent_thread_id(&snapshot.session_source)
-            else {
-                continue;
-            };
+        for (parent_thread_id, child_thread_id) in state.list_live_thread_spawn_edges().await {
             children_by_parent
                 .entry(parent_thread_id)
                 .or_default()
                 .push((
-                    thread_id,
+                    child_thread_id,
                     self.state
-                        .agent_metadata_for_thread(thread_id)
+                        .agent_metadata_for_thread(child_thread_id)
                         .unwrap_or(AgentMetadata {
-                            agent_id: Some(thread_id),
+                            agent_id: Some(child_thread_id),
                             ..Default::default()
                         }),
                 ));

@@ -1273,7 +1273,6 @@ description: Visible only for ChatGPT
         codex_home.path().join("config.toml"),
         r#"[features]
 plugins = true
-plugin_hooks = true
 
 [[skills.config]]
 name = "demo-plugin:thread-summarizer"
@@ -1769,10 +1768,7 @@ struct PluginReadMcpServer {
 
 impl ServerHandler for PluginReadMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..ServerInfo::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     fn list_tools(

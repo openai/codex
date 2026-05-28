@@ -46,17 +46,11 @@ fn make_mcp_tool(
         callable_name: callable_name.to_string(),
         callable_namespace: callable_namespace.to_string(),
         namespace_description: None,
-        tool: Tool {
-            name: tool_name.to_string().into(),
-            title: None,
-            description: Some(format!("Test tool: {tool_name}").into()),
-            input_schema: Arc::new(JsonObject::default()),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        tool: Tool::new(
+            tool_name.to_string(),
+            format!("Test tool: {tool_name}"),
+            Arc::new(JsonObject::default()),
+        ),
         connector_id: connector_id.map(str::to_string),
         connector_name: connector_name.map(str::to_string),
         plugin_display_names: Vec::new(),
@@ -70,7 +64,7 @@ fn numbered_mcp_tools(count: usize) -> Vec<ToolInfo> {
             make_mcp_tool(
                 "rmcp",
                 &tool_name,
-                "mcp__rmcp__",
+                "mcp__rmcp",
                 &tool_name,
                 /*connector_id*/ None,
                 /*connector_name*/ None,
@@ -127,7 +121,7 @@ async fn always_defer_feature_defers_apps_too() {
         make_mcp_tool(
             "rmcp",
             "tool",
-            "mcp__rmcp__",
+            "mcp__rmcp",
             "tool",
             /*connector_id*/ None,
             /*connector_name*/ None,
@@ -156,7 +150,7 @@ async fn always_defer_feature_defers_apps_too() {
         .as_ref()
         .expect("MCP tools should be discoverable through tool_search");
     let deferred_tool_names = tool_names(deferred_tools);
-    assert!(deferred_tool_names.contains(&ToolName::namespaced("mcp__rmcp__", "tool")));
+    assert!(deferred_tool_names.contains(&ToolName::namespaced("mcp__rmcp", "tool")));
     assert!(deferred_tool_names.contains(&ToolName::namespaced(
         "mcp__codex_apps__calendar",
         "_create_event"

@@ -569,6 +569,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadListResponse,
     },
+    #[experimental("thread/search")]
+    ThreadSearch => "thread/search" {
+        params: v2::ThreadSearchParams,
+        serialization: None,
+        response: v2::ThreadSearchResponse,
+    },
     ThreadLoadedList => "thread/loaded/list" {
         params: v2::ThreadLoadedListParams,
         serialization: None,
@@ -2541,8 +2547,22 @@ mod tests {
             json!({
                 "method": "account/read",
                 "id": 6,
+                "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        let request = ClientRequest::GetAccount {
+            request_id: RequestId::Integer(7),
+            params: v2::GetAccountParams {
+                refresh_token: true,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/read",
+                "id": 7,
                 "params": {
-                    "refreshToken": false
+                    "refreshToken": true
                 }
             }),
             serde_json::to_value(&request)?,

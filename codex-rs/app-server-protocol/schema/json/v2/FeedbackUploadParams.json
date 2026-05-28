@@ -39,8 +39,7 @@
     }
   },
   "required": [
-    "classification",
-    "includeLogs"
+    "classification"
   ],
   "title": "FeedbackUploadParams",
   "type": "object"
