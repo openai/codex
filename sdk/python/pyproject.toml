@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openai-codex"
-version = "0.1.0b1"
+version = "0.0.0-dev"
 description = "Python SDK for Codex"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,11 +14,6 @@ keywords = ["codex", "sdk", "llm", "ai", "agents"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.132.0"]

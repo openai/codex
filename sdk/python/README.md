@@ -3,9 +3,6 @@
 Build Python applications that start Codex threads, run turns, stream progress,
 and control workspace access.
 
-> [!NOTE]
-> `openai-codex` is in beta. Public APIs may change before `1.0`.
-
 ## Install
 
 Install the SDK:
@@ -13,18 +10,6 @@ Install the SDK:
 ```bash
 pip install openai-codex
 ```
-
-For reproducible environments, install this release exactly:
-
-```bash
-pip install openai-codex==0.1.0b1
-```
-
-The SDK requires Python `>=3.10` and installs its compatible Codex runtime
-dependency automatically. While beta releases are the only published SDK
-releases, the normal install command selects the latest beta. After a stable
-release exists, use `pip install --pre openai-codex` to explicitly select a
-newer prerelease.
 
 ## Quickstart
 

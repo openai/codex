@@ -23,11 +23,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.12"
-
       - name: Validate tag and build Python SDK package
         shell: bash
         run: |
@@ -36,14 +31,6 @@ jobs:
           sdk_version="${GITHUB_REF_NAME#python-v}"
           if [[ ! "${sdk_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+b[0-9]+$ ]]; then
             echo "Python SDK release tags must identify a beta release, for example python-v0.1.0b1."
-            exit 1
-          fi
-
-          configured_version="$(
-            python -c 'import tomllib; print(tomllib.load(open("sdk/python/pyproject.toml", "rb"))["project"]["version"])'
-          )"
-          if [[ "${configured_version}" != "${sdk_version}" ]]; then
-            echo "Tag version ${sdk_version} does not match sdk/python/pyproject.toml version ${configured_version}."
             exit 1
           fi
 

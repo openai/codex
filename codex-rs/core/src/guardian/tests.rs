@@ -2106,7 +2106,13 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         assert_eq!(third_decision, ReviewDecision::Approved);
         let requests = server.requests().await;
         assert_eq!(requests.len(), 3);
+        let second_request_body = serde_json::from_slice::<serde_json::Value>(&requests[1])?;
         let third_request_body = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
+        assert_eq!(
+            second_request_body["prompt_cache_key"],
+            third_request_body["prompt_cache_key"],
+            "forked guardian review should reuse the trunk guardian prompt cache key"
+        );
         let third_request_body_text = third_request_body.to_string();
         assert!(
             third_request_body_text.contains("first guardian rationale"),

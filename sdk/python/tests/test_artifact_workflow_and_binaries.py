@@ -239,17 +239,17 @@ def test_runtime_distribution_name_is_consistent() -> None:
     )
 
 
-def test_source_sdk_package_pins_published_runtime() -> None:
-    """The source package metadata should pin the runtime wheel that ships schemas."""
+def test_source_sdk_template_pins_published_runtime() -> None:
+    """The source template should carry a development version and reviewed runtime pin."""
     script = _load_update_script_module()
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
 
     assert {
-        "sdk_version": pyproject["project"]["version"],
+        "sdk_template_version": pyproject["project"]["version"],
         "runtime_pin": script.pinned_runtime_version(),
         "dependencies": pyproject["project"]["dependencies"],
     } == {
-        "sdk_version": "0.1.0b1",
+        "sdk_template_version": "0.0.0-dev",
         "runtime_pin": "0.132.0",
         "dependencies": [
             "pydantic>=2.12",
@@ -319,7 +319,7 @@ def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
 
     assert {
         "package_name": runtime_setup.PACKAGE_NAME,
-        "sdk_version": pyproject["project"]["version"],
+        "sdk_template_version": pyproject["project"]["version"],
         "runtime_pin": runtime_setup.pinned_runtime_version(),
         "normalized_release_version": runtime_setup._normalized_package_version(
             "rust-v0.116.0-alpha.1"
@@ -327,7 +327,7 @@ def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
         "release_tag": runtime_setup._release_tag("0.116.0a1"),
     } == {
         "package_name": "openai-codex-cli-bin",
-        "sdk_version": "0.1.0b1",
+        "sdk_template_version": "0.0.0-dev",
         "runtime_pin": "0.132.0",
         "normalized_release_version": "0.116.0a1",
         "release_tag": "rust-v0.116.0-alpha.1",

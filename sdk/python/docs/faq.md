@@ -10,8 +10,7 @@ After a stable release exists, pass `--pre` to opt into newer prereleases.
 ## Why does the SDK install a runtime package?
 
 The SDK and runtime packages are versioned independently. Each SDK release
-pins one compatible runtime dependency, so `openai-codex==0.1.0b1` installs
-`openai-codex-cli-bin==0.132.0` automatically.
+pins and installs one compatible runtime dependency automatically.
 
 ## Thread vs turn
 
