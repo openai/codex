@@ -50,14 +50,14 @@ For broad Codex behavior, setup, customization, skills, plugins, MCP, hooks, `AG
 
 1. Reuse a same-thread manual and outline path when it is still fresh.
 2. Otherwise run the skill-local helper first in normal writable sessions. Skip it without trying only when the session is explicitly read-only, shell execution is unavailable, or visible policy shows no allowed temp cache.
-3. Choose the cache dir in this order: `$TMPDIR/openai-docs-cache` when `$TMPDIR` is visible and allowed, `%TEMP%\openai-docs-cache` when `%TEMP%` is visible and allowed, `%TMP%\openai-docs-cache` when `%TMP%` is visible and allowed, `/private/tmp/openai-docs-cache` when `/private/tmp` is visible and allowed, then `/tmp/openai-docs-cache` when `/tmp` is visible and allowed. Workspace-only write access is not enough for this temp cache.
-4. Run the helper with an explicit cache dir. The helper falls back to `curl` when native `fetch` is unavailable or when proxy env vars are present, so no shell-specific proxy prefix is required. Resolve `<skill-dir>` to this skill's actual directory; in copied local eval workdirs this is usually `.codex/skills/openai-docs`:
+3. By default, the helper chooses the first usable temp cache dir in this order: `$TMPDIR/openai-docs-cache`, `%TEMP%\openai-docs-cache`, `%TMP%\openai-docs-cache`, `/private/tmp/openai-docs-cache`, then `/tmp/openai-docs-cache`. Workspace-only write access is not enough for this temp cache.
+4. Run the helper directly unless you need to override the cache dir. The helper falls back to `curl` when native `fetch` is unavailable or when proxy env vars are present, so no shell-specific proxy prefix is required. Resolve `<skill-dir>` to this skill's actual directory; in copied local eval workdirs this is usually `.codex/skills/openai-docs`:
 
 ```bash
-node <skill-dir>/scripts/fetch-codex-manual.mjs --cache-dir <cache-dir>
+node <skill-dir>/scripts/fetch-codex-manual.mjs
 ```
 
-On Windows, use a cache dir rooted in `%TEMP%` or `%TMP%`; in PowerShell, `$env:TEMP\\openai-docs-cache` is the usual choice.
+If you need to override the cache dir, pass `--cache-dir <cache-dir>`. On Windows, the helper checks `%TEMP%` and `%TMP%` automatically; in PowerShell, `$env:TEMP\\openai-docs-cache` is a typical explicit override.
 
 Treat helper availability as established by explicit read-only/no-shell policy or an actual command result. A guessed sandbox or guessed helper failure is not enough to switch to Docs MCP or web lookup; after an actual helper command failure, continue to the narrowest official next source below.
 

@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import { inspect, promisify } from "node:util";
 
 const DEFAULT_MANUAL_URL = "https://developers.openai.com/codex/codex-manual.md";
+const DEFAULT_CACHE_DIR_NAME = "openai-docs-cache";
 const CACHE_FILE_NAME = "codex-manual.md";
 const OUTLINE_FILE_NAME = "codex-manual.outline.md";
 const HASH_HEADER = "x-content-sha256";
@@ -259,13 +260,49 @@ const usableCacheDir = async (cacheDir) => {
   return resolved;
 };
 
+const defaultCacheDirCandidates = () => {
+  const candidates = [];
+  const seen = new Set();
+  const pushCandidate = (candidate) => {
+    if (!candidate || seen.has(candidate)) return;
+    seen.add(candidate);
+    candidates.push(candidate);
+  };
+
+  [process.env.TMPDIR, process.env.TEMP, process.env.TMP].forEach((baseDir) => {
+    if (baseDir) {
+      pushCandidate(path.join(baseDir, DEFAULT_CACHE_DIR_NAME));
+    }
+  });
+
+  if (process.platform !== "win32") {
+    pushCandidate(`/private/tmp/${DEFAULT_CACHE_DIR_NAME}`);
+    pushCandidate(`/tmp/${DEFAULT_CACHE_DIR_NAME}`);
+  }
+
+  return candidates;
+};
+
+const resolveCacheDir = async (cacheDir) => {
+  if (cacheDir) {
+    return usableCacheDir(cacheDir);
+  }
+
+  for (const candidate of defaultCacheDirCandidates()) {
+    const usable = await usableCacheDir(candidate);
+    if (usable) return usable;
+  }
+
+  return null;
+};
+
 const cacheFilePath = (cacheDir) => path.join(cacheDir, CACHE_FILE_NAME);
 
 const outlineFilePath = (cacheDir) => path.join(cacheDir, OUTLINE_FILE_NAME);
 
 const manualLines = (manual) => {
   const lines = manual.replace(/\r\n/g, "\n").split("\n");
-  if (lines.at(-1) === "") lines.pop();
+  if (lines[lines.length - 1] === "") lines.pop();
   return lines;
 };
 
@@ -373,16 +410,10 @@ const fetchCodexManual = async ({
   cacheDir,
   timeoutMs = 30000,
 } = {}) => {
-  if (!cacheDir) {
-    throw new ManualFetchError(
-      "--cache-dir is required so the manual can be searched with local file tools."
-    );
-  }
-
-  const resolvedCacheDir = await usableCacheDir(cacheDir);
+  const resolvedCacheDir = await resolveCacheDir(cacheDir);
   if (!resolvedCacheDir) {
     throw new ManualFetchError(
-      "Manual cache directory is unavailable; use OpenAI Docs MCP fallback."
+      "Manual cache directory is unavailable; pass --cache-dir to override or use OpenAI Docs MCP fallback."
     );
   }
   await mkdir(resolvedCacheDir, { recursive: true });
