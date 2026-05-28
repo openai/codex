@@ -20,10 +20,14 @@ use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+#[cfg(unix)]
+use crate::tools::runtimes::apply_zsh_fork_path_prepend;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+#[cfg(unix)]
+use crate::tools::runtimes::zsh_fork_bin_dir_for_path;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -234,11 +238,28 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
         let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+        let explicit_env_overrides = req.explicit_env_overrides.clone();
+        #[cfg(unix)]
+        let mut zsh_fork_bin_dir = None;
+        #[cfg(not(unix))]
+        let zsh_fork_bin_dir = None;
+        #[cfg(unix)]
+        let (env, explicit_env_overrides) = {
+            let mut env = env;
+            let mut explicit_env_overrides = explicit_env_overrides;
+            if self.backend == ShellRuntimeBackend::ShellCommandZshFork
+                && let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_deref()
+            {
+                zsh_fork_bin_dir = zsh_fork_bin_dir_for_path(shell_zsh_path);
+                apply_zsh_fork_path_prepend(&mut env, &mut explicit_env_overrides, shell_zsh_path);
+            }
+            (env, explicit_env_overrides)
+        };
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
             session_shell.as_ref(),
             &req.cwd,
-            &req.explicit_env_overrides,
+            &explicit_env_overrides,
             &env,
         );
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
@@ -254,7 +275,15 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         };
 
         if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
-            match zsh_fork_backend::maybe_run_shell_command(req, attempt, ctx, &command).await? {
+            match zsh_fork_backend::maybe_run_shell_command(
+                req,
+                attempt,
+                ctx,
+                &command,
+                zsh_fork_bin_dir,
+            )
+            .await?
+            {
                 Some(out) => return Ok(out),
                 None => {
                     tracing::warn!(

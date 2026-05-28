@@ -23,8 +23,9 @@ pub(crate) async fn maybe_run_shell_command(
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     command: &[String],
+    zsh_fork_bin_dir: Option<String>,
 ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-    imp::maybe_run_shell_command(req, attempt, ctx, command).await
+    imp::maybe_run_shell_command(req, attempt, ctx, command, zsh_fork_bin_dir).await
 }
 
 /// Prepares unified exec to launch through the zsh-fork backend when the
@@ -76,8 +77,9 @@ mod imp {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
         command: &[String],
+        zsh_fork_bin_dir: Option<String>,
     ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-        unix_escalation::try_run_zsh_fork(req, attempt, ctx, command).await
+        unix_escalation::try_run_zsh_fork(req, attempt, ctx, command, zsh_fork_bin_dir).await
     }
 
     pub(super) async fn maybe_prepare_unified_exec(
@@ -118,8 +120,9 @@ mod imp {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
         command: &[String],
+        zsh_fork_bin_dir: Option<String>,
     ) -> Result<Option<ExecToolCallOutput>, ToolError> {
-        let _ = (req, attempt, ctx, command);
+        let _ = (req, attempt, ctx, command, zsh_fork_bin_dir);
         Ok(None)
     }
 

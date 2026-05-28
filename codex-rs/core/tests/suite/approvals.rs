@@ -46,6 +46,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::env;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -2524,6 +2526,166 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     )
     .await?;
     wait_for_completion_without_approval(&test).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn env_zsh_script_spawned_by_python_can_request_escalation_under_zsh_fork() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork env zsh nested escalation test")? else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = restrictive_workspace_write_profile();
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let outside_path = outside_dir.path().join("zsh-fork-env-zsh-escalated.txt");
+    let outside_path_arg = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
+    let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
+
+    let server = start_mock_server().await;
+    let outside_path_for_hook = outside_path.clone();
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        permission_profile.clone(),
+        move |home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).unwrap();
+            fs::write(rules_dir.join("default.rules"), &rules).unwrap();
+        },
+    )
+    .await?;
+
+    let script_path = test.cwd.path().join("runs-under-env-zsh");
+    fs::write(
+        &script_path,
+        format!(
+            "#!/usr/bin/env zsh\ntouch {outside_path_arg}\nprint -r -- nested-env-zsh-complete\n"
+        ),
+    )?;
+    let mut script_permissions = fs::metadata(&script_path)?.permissions();
+    script_permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, script_permissions)?;
+
+    let script_literal = serde_json::to_string(script_path.to_string_lossy().as_ref())?;
+    let python_script = format!(
+        "import subprocess; subprocess.run([{script_literal}], check=True, close_fds=False)"
+    );
+    let command = shlex::try_join(["python3", "-c", python_script.as_str()])?;
+
+    let call_id = "zsh-fork-env-zsh-nested-escalation";
+    let event = shell_event(
+        call_id,
+        &command,
+        /*timeout_ms*/ 30_000,
+        SandboxPermissions::UseDefault,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-zsh-fork-env-zsh-1"),
+            event,
+            ev_completed("resp-zsh-fork-env-zsh-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-zsh-fork-env-zsh-1", "done"),
+            ev_completed("resp-zsh-fork-env-zsh-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.cwd.path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run nested env zsh script through python".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.cwd.path().to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let approval_event = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected nested zsh script to request approval before completion");
+    };
+    assert!(
+        approval.command.iter().any(|arg| arg.ends_with("/touch"))
+            && approval
+                .command
+                .iter()
+                .any(|arg| arg == outside_path.to_string_lossy().as_ref()),
+        "expected approval for nested touch command, got: {:?}",
+        approval.command
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    wait_for_completion(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        result.exit_code.unwrap_or(0),
+        0,
+        "nested env zsh script should complete successfully: {}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("nested-env-zsh-complete"),
+        "nested script did not report completion: {}",
+        result.stdout
+    );
+    assert!(
+        outside_path.exists(),
+        "approved nested touch should create the out-of-workspace file"
+    );
 
     Ok(())
 }
