@@ -63,9 +63,9 @@ pub(crate) async fn run(cmd: SandboxSetupCommand) -> anyhow::Result<()> {
 pub(crate) fn parse_setup_command(
     sandbox_command: &[String],
 ) -> anyhow::Result<Option<SandboxSetupCommand>> {
-    if !sandbox_command
+    if sandbox_command
         .first()
-        .is_some_and(|command| command == "setup")
+        .is_none_or(|command| command != "setup")
     {
         return Ok(None);
     }
