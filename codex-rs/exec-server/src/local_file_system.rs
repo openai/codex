@@ -99,7 +99,9 @@ impl ExecutorFileSystem for LocalFileSystem {
     ) -> FileSystemResult<Vec<u8>> {
         let (file_system, sandbox) = self.file_system_for(sandbox)?;
         file_system
-            .read_file_range(path, offset, length, sandbox)
+            .read_file_range(
+                path, /*offset*/ offset, /*length*/ length, sandbox,
+            )
             .await
     }
 
@@ -185,7 +187,9 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
     ) -> FileSystemResult<Vec<u8>> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system
-            .read_file_range(path, offset, length, /*sandbox*/ None)
+            .read_file_range(
+                path, /*offset*/ offset, /*length*/ length, /*sandbox*/ None,
+            )
             .await
     }
 

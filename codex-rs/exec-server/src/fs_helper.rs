@@ -177,7 +177,12 @@ pub(crate) async fn run_direct_request(
                     .await
                     .map_err(map_fs_error)?,
                 (Some(offset), Some(length)) => file_system
-                    .read_file_range(&params.path, offset, length, /*sandbox*/ None)
+                    .read_file_range(
+                        &params.path,
+                        /*offset*/ offset,
+                        /*length*/ length,
+                        /*sandbox*/ None,
+                    )
                     .await
                     .map_err(map_fs_error)?,
                 _ => {

@@ -54,7 +54,12 @@ impl FileSystemHandler {
                 .map_err(map_fs_error)?,
             (Some(offset), Some(length)) => self
                 .file_system
-                .read_file_range(&params.path, offset, length, params.sandbox.as_ref())
+                .read_file_range(
+                    &params.path,
+                    /*offset*/ offset,
+                    /*length*/ length,
+                    params.sandbox.as_ref(),
+                )
                 .await
                 .map_err(map_fs_error)?,
             _ => {

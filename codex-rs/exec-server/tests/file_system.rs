@@ -373,8 +373,8 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
     let nested_file_range = file_system
         .read_file_range(
             &absolute_path(nested_file.clone()),
-            6,
-            4,
+            /*offset*/ 6,
+            /*length*/ 4,
             /*sandbox*/ None,
         )
         .await
