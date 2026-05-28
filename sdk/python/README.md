@@ -32,15 +32,14 @@ The SDK reuses your existing Codex authentication when one is already
 available:
 
 ```python
-from openai_codex import Codex, Sandbox
+from openai_codex import Codex
 
 with Codex() as codex:
-    thread = codex.thread_start(sandbox=Sandbox.workspace_write)
+    thread = codex.thread_start()
     result = thread.run("Explain this repository in three bullets.")
     print(result.final_response)
 ```
 
-Use `Sandbox.workspace_write` for the normal workspace-editing experience.
 `thread.run(...)` returns a `TurnResult` containing the final response,
 collected items, and token usage.
 
@@ -58,41 +57,26 @@ with Codex() as codex:
     print(login.wait().success)
 ```
 
-Use `login_chatgpt_device_code()` for device-code login, or
-`login_api_key("sk-...")` for API-key authentication.
+For device-code login:
 
-## Sandbox Access
+```python
+with Codex() as codex:
+    login = codex.login_chatgpt_device_code()
+    print(login.verification_url, login.user_code)
+    login.wait()
+```
 
-Choose a named sandbox preset when you create a thread or start a later turn:
+For API-key login:
 
-| Preset | Access |
-| --- | --- |
-| `Sandbox.read_only` | Read files without writing. |
-| `Sandbox.workspace_write` | Read files and write within the workspace and configured writable roots. This is the default for workspace work. |
-| `Sandbox.full_access` | Run without filesystem access restrictions. |
-
-When `sandbox=` is omitted, Codex uses its configured default. A sandbox
-passed to `run(...)` or `turn(...)` applies to that turn and subsequent turns
-on that thread.
-
-## Errors And Retries
-
-SDK errors derive from `CodexError`. Use `retry_on_overload(...)` only for
-transient overload failures; invalid input and unsupported operations should
-be corrected rather than retried.
+```python
+with Codex() as codex:
+    codex.login_api_key("sk-...")
+```
 
 ## Built-In Help
 
 Use Python's standard `help(openai_codex)`, `help(Codex)`, or
 `python -m pydoc openai_codex` documentation tools.
-
-## Runtime And Versioning
-
-The SDK package version and runtime package version are independent.
-`openai-codex==0.1.0b1` pins the compatible runtime dependency
-`openai-codex-cli-bin==0.132.0`.
-
-Most users should let the SDK select that runtime automatically.
 
 ## Documentation
 
