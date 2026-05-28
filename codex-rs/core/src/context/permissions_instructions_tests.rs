@@ -6,6 +6,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
@@ -81,6 +82,52 @@ fn builds_permissions_from_profile() {
     assert!(text.contains("`sandbox_mode` is `workspace-write`"));
     assert!(text.contains("Network access is enabled."));
     assert!(text.contains(writable_root.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn builds_permissions_from_profile_with_denied_reads() {
+    let cwd = test_path_buf("/tmp");
+    let denied_root =
+        AbsolutePathBuf::from_absolute_path(cwd.join("blocked")).expect("absolute path");
+    let denied_glob = cwd.join("blocked").join("**");
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: denied_root.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: denied_glob.to_string_lossy().into_owned(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let instructions = PermissionsInstructions::from_permission_profile(
+        &permission_profile,
+        AskForApproval::OnRequest,
+        ApprovalsReviewer::AutoReview,
+        &Policy::empty(),
+        &cwd,
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
+    );
+    let text = instructions.body();
+    assert!(text.contains("## Denied filesystem reads"));
+    assert!(text.contains("Do not request escalation or additional permissions"));
+    assert!(text.contains(denied_root.to_string_lossy().as_ref()));
+    assert!(text.contains(&format!("glob `{}`", denied_glob.to_string_lossy())));
 }
 
 #[test]
