@@ -2277,7 +2277,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
             ),
             (
                 "/tmp/ignored.sock".to_string(),
-                NetworkUnixSocketPermission::None,
+                NetworkUnixSocketPermission::Deny,
             ),
         ])),
         allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
@@ -2301,7 +2301,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
             "allowedDomains": ["api.openai.com"],
             "deniedDomains": ["blocked.example.com"],
             "unixSockets": {
-                "/tmp/ignored.sock": "none",
+                "/tmp/ignored.sock": "deny",
                 "/tmp/proxy.sock": "allow"
             },
             "allowUnixSockets": ["/tmp/proxy.sock"],

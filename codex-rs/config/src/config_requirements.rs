@@ -245,14 +245,14 @@ impl NetworkUnixSocketPermissionsToml {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkUnixSocketPermissionToml {
     Allow,
-    None,
+    Deny,
 }
 
 impl std::fmt::Display for NetworkUnixSocketPermissionToml {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let permission = match self {
             Self::Allow => "allow",
-            Self::None => "none",
+            Self::Deny => "deny",
         };
         f.write_str(permission)
     }
@@ -2868,6 +2868,7 @@ command = "python3 /enterprise/hooks/pre.py"
 
             [experimental_network.unix_sockets]
             "/tmp/example.sock" = "allow"
+            "/tmp/blocked.sock" = "deny"
         "#;
 
         let source = RequirementSource::CloudRequirements;
@@ -2912,10 +2913,16 @@ command = "python3 /enterprise/hooks/pre.py"
         assert_eq!(
             sourced_network.value.unix_sockets.as_ref(),
             Some(&NetworkUnixSocketPermissionsToml {
-                entries: BTreeMap::from([(
-                    "/tmp/example.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::Allow,
-                )]),
+                entries: BTreeMap::from([
+                    (
+                        "/tmp/blocked.sock".to_string(),
+                        NetworkUnixSocketPermissionToml::Deny,
+                    ),
+                    (
+                        "/tmp/example.sock".to_string(),
+                        NetworkUnixSocketPermissionToml::Allow,
+                    ),
+                ]),
             })
         );
         assert_eq!(sourced_network.value.allow_local_binding, Some(false));
@@ -3053,7 +3060,7 @@ command = "python3 /enterprise/hooks/pre.py"
                 ),
                 (
                     "/tmp/ignored.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::None,
+                    NetworkUnixSocketPermissionToml::Deny,
                 ),
             ]),
         };
