@@ -1,8 +1,12 @@
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::ReadDenyMatcher;
+use codex_sandboxing::EffectiveFilesystemPermissions;
+use codex_sandboxing::FilesystemPermissionsContext;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::path::Path;
@@ -24,14 +28,40 @@ pub fn resolve_windows_deny_read_paths(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &AbsolutePathBuf,
 ) -> Result<Vec<AbsolutePathBuf>, String> {
+    let file_system_sandbox_policy = file_system_sandbox_policy
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(cwd));
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let effective_file_system = EffectiveFilesystemPermissions::from_profile(
+        &permission_profile,
+        FilesystemPermissionsContext {
+            policy_evaluation_cwd: cwd,
+        },
+    )
+    .map_err(|err| err.to_string())?;
+    resolve_windows_deny_read_paths_from_effective_permissions(&effective_file_system, cwd)
+}
+
+/// Resolves effective read-deny entries into concrete Windows ACL targets.
+pub fn resolve_windows_deny_read_paths_from_effective_permissions(
+    effective_file_system: &EffectiveFilesystemPermissions,
+    cwd: &AbsolutePathBuf,
+) -> Result<Vec<AbsolutePathBuf>, String> {
     let mut paths = Vec::new();
     let mut seen = HashSet::new();
 
-    for path in file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd.as_path()) {
-        push_absolute_path(&mut paths, &mut seen, path.into_path_buf())?;
+    for path in &effective_file_system.unreadable_roots {
+        push_absolute_path(&mut paths, &mut seen, path.to_path_buf())?;
     }
 
-    let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd.as_path());
+    let unreadable_globs = effective_file_system
+        .unreadable_globs
+        .iter()
+        .map(|glob| glob.pattern().to_string())
+        .collect::<Vec<_>>();
     if unreadable_globs.is_empty() {
         return Ok(paths);
     }
@@ -53,7 +83,7 @@ pub fn resolve_windows_deny_read_paths(
 
     for pattern in unreadable_globs {
         let mut seen_scan_dirs = HashSet::new();
-        let scan_plan = glob_scan_plan(&pattern, file_system_sandbox_policy.glob_scan_max_depth);
+        let scan_plan = glob_scan_plan(&pattern, effective_file_system.glob_scan_max_depth);
         collect_existing_glob_matches(
             &scan_plan.root,
             &matcher,

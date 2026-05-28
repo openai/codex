@@ -31,6 +31,7 @@ codex-utils-pty = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-otel = { workspace = true }
+codex-sandboxing = { workspace = true }
 dunce = "1.0"
 glob = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }

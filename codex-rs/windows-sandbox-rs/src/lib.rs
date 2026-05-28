@@ -124,6 +124,7 @@ pub use deny_read_acl::apply_deny_read_acls;
 #[cfg(target_os = "windows")]
 pub use deny_read_acl::plan_deny_read_acl_paths;
 pub use deny_read_resolver::resolve_windows_deny_read_paths;
+pub use deny_read_resolver::resolve_windows_deny_read_paths_from_effective_permissions;
 #[cfg(target_os = "windows")]
 pub use deny_read_state::sync_persistent_deny_read_acls;
 #[cfg(target_os = "windows")]
