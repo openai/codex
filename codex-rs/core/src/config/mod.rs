@@ -785,6 +785,10 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Token budget for hook-provided additional context before it is spilled to disk.
+    /// Unset uses the default limit; set to `0` to disable spilling for hook additional context.
+    pub hook_additional_context_token_limit: Option<usize>,
+
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
@@ -3368,6 +3372,7 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
+            hook_additional_context_token_limit: cfg.hook_additional_context_token_limit,
             agent_max_threads,
             agent_max_depth,
             agent_roles,

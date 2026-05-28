@@ -3275,6 +3275,7 @@ async fn build_hooks_for_config(
         legacy_notify_argv: config.notify.clone(),
         feature_enabled: config.features.enabled(Feature::CodexHooks),
         bypass_hook_trust: config.bypass_hook_trust,
+        additional_context_token_limit: config.hook_additional_context_token_limit,
         config_layer_stack: Some(config.config_layer_stack.clone()),
         plugin_hook_sources,
         plugin_hook_load_warnings,

@@ -4792,6 +4792,12 @@
       },
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
     },
+    "hook_additional_context_token_limit": {
+      "description": "Token budget for hook-provided additional context before it is spilled to disk. Unset uses the default limit; set to `0` to disable spilling for hook additional context.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "hooks": {
       "allOf": [
         {

@@ -356,6 +356,22 @@ consolidation_model = "gpt-5.2"
     );
 }
 
+#[tokio::test]
+async fn load_config_reads_hook_additional_context_token_limit() {
+    let cfg = toml::from_str::<ConfigToml>("hook_additional_context_token_limit = 4096\n")
+        .expect("TOML deserialization should succeed");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(Some(4096), config.hook_additional_context_token_limit);
+}
+
 #[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(

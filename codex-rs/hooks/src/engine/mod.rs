@@ -102,6 +102,7 @@ pub(crate) struct ClaudeHooksEngine {
     warnings: Vec<String>,
     shell: CommandShell,
     output_spiller: HookOutputSpiller,
+    additional_context_token_limit: Option<usize>,
 }
 
 impl ClaudeHooksEngine {
@@ -112,6 +113,7 @@ impl ClaudeHooksEngine {
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
         shell: CommandShell,
+        additional_context_token_limit: Option<usize>,
     ) -> Self {
         if !enabled {
             return Self {
@@ -119,6 +121,7 @@ impl ClaudeHooksEngine {
                 warnings: Vec::new(),
                 shell,
                 output_spiller: HookOutputSpiller::new(),
+                additional_context_token_limit,
             };
         }
 
@@ -134,6 +137,7 @@ impl ClaudeHooksEngine {
             warnings: discovered.warnings,
             shell,
             output_spiller: HookOutputSpiller::new(),
+            additional_context_token_limit,
         }
     }
 
@@ -266,8 +270,13 @@ impl ClaudeHooksEngine {
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {
+        let token_limit = match self.additional_context_token_limit {
+            Some(0) => None,
+            Some(limit) => Some(limit),
+            None => Some(crate::DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT),
+        };
         self.output_spiller
-            .maybe_spill_texts(session_id, texts)
+            .maybe_spill_texts_with_limit(session_id, texts, token_limit)
             .await
     }
 

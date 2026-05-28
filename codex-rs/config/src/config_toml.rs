@@ -279,6 +279,10 @@ pub struct ConfigToml {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Token budget for hook-provided additional context before it is spilled to disk.
+    /// Unset uses the default limit; set to `0` to disable spilling for hook additional context.
+    pub hook_additional_context_token_limit: Option<usize>,
+
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,

@@ -1293,6 +1293,59 @@ async fn session_start_hook_spills_large_additional_context() -> Result<()> {
 }
 
 #[tokio::test]
+async fn session_start_hook_keeps_large_additional_context_inline_when_limit_is_zero() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello from the reef"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let additional_context = "remember the reef ".repeat(800);
+
+    let mut builder = test_codex()
+        .with_pre_build_hook({
+            let additional_context = additional_context.clone();
+            move |home| {
+                if let Err(error) = write_session_start_hook_with_context(home, &additional_context)
+                {
+                    panic!("failed to write session start hook test fixture: {error}");
+                }
+            }
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config.hook_additional_context_token_limit = Some(0);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let request = response.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    assert!(
+        developer_messages
+            .iter()
+            .any(|message| message == &additional_context),
+        "expected unspilled hook additional context, got {developer_messages:?}"
+    );
+    assert!(
+        developer_messages
+            .iter()
+            .all(|message| spilled_hook_output_path(message).is_none()),
+        "hook additional context should not spill when limit is zero"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn pre_tool_use_hook_spills_large_additional_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

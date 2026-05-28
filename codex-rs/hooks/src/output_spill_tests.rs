@@ -40,3 +40,21 @@ async fn large_hook_output_spills_to_file() -> Result<()> {
     assert_eq!(fs::read_to_string(path).await?, text);
     Ok(())
 }
+
+#[tokio::test]
+async fn zero_limit_keeps_large_hook_output_inline() -> Result<()> {
+    let dir = tempdir()?;
+    let text = "hook output ".repeat(1_000);
+    let output_dir = AbsolutePathBuf::from_absolute_path(dir.path())?.join(HOOK_OUTPUTS_DIR);
+    let spiller = HookOutputSpiller {
+        output_dir: output_dir.clone(),
+    };
+
+    let output = spiller
+        .maybe_spill_text_with_limit(ThreadId::new(), text.clone(), Some(0))
+        .await;
+
+    assert_eq!(output, text);
+    assert!(!output_dir.exists());
+    Ok(())
+}
