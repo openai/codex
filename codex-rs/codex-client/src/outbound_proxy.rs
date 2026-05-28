@@ -347,11 +347,13 @@ fn cache_system_proxy_decision(
 ) {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut cache) = cache.lock() {
+        let now = Instant::now();
+        cache.retain(|_, cached| cached.expires_at > now);
         cache.insert(
             system_proxy_cache_key(request_url, include_auto_detect),
             CachedSystemProxyDecision {
                 decision,
-                expires_at: Instant::now() + SYSTEM_PROXY_CACHE_TTL,
+                expires_at: now + SYSTEM_PROXY_CACHE_TTL,
             },
         );
     }
