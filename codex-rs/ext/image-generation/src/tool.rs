@@ -255,7 +255,7 @@ fn truncate_images(
     generated_images.drain(..drop_generated);
     excess -= drop_generated;
     let drop_user = excess.min(user_images.len());
-    user_images.drain(..drop_user);
+    user_images.truncate(user_images.len() - drop_user);
     excess -= drop_user;
     generated_images.drain(..excess);
 

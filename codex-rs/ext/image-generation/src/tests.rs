@@ -164,10 +164,10 @@ fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
         expected_edit_request(
             "edit the last generated image",
             &[
+                "data:image/png;base64,e",
                 "data:image/png;base64,d",
                 "data:image/png;base64,c",
                 "data:image/png;base64,b",
-                "data:image/png;base64,a",
                 "data:image/png;base64,generated",
             ]
         )
