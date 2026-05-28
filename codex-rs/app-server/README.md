@@ -23,7 +23,7 @@ Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports 
 
 Supported transports:
 
-- stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
+- stdio (`--stdio` or `--listen stdio://`, default): newline-delimited JSON (JSONL)
 - websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
 - unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
 - off (`--listen off`): do not expose a local transport
