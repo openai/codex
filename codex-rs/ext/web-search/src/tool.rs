@@ -147,11 +147,9 @@ fn command_action(commands: &SearchCommands) -> WebSearchAction {
                 .find
                 .as_deref()
                 .and_then(|operations| operations.first())
-                .and_then(|operation| {
-                    literal_url(&operation.ref_id).map(|url| WebSearchAction::FindInPage {
-                        url: Some(url),
-                        pattern: Some(operation.pattern.clone()),
-                    })
+                .map(|operation| WebSearchAction::FindInPage {
+                    url: literal_url(&operation.ref_id),
+                    pattern: Some(operation.pattern.clone()),
                 })
         })
         .unwrap_or(WebSearchAction::Other)
@@ -192,7 +190,7 @@ mod tests {
     use super::command_action;
 
     #[test]
-    fn command_action_reports_queries_and_literal_navigation_urls() {
+    fn command_action_reports_queries_and_navigation_detail() {
         let cases = [
             (
                 r#"{"image_query":[{"q":"waterfalls"},{"q":"mountains"}]}"#,
@@ -211,6 +209,13 @@ mod tests {
                 r#"{"find":[{"ref_id":"https://example.com/docs","pattern":"install"}]}"#,
                 WebSearchAction::FindInPage {
                     url: Some("https://example.com/docs".to_string()),
+                    pattern: Some("install".to_string()),
+                },
+            ),
+            (
+                r#"{"find":[{"ref_id":"turn0search0","pattern":"install"}]}"#,
+                WebSearchAction::FindInPage {
+                    url: None,
                     pattern: Some("install".to_string()),
                 },
             ),
