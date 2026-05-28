@@ -3,6 +3,9 @@
 //! Strategy:
 //! - Inspect `_meta["openai/fileParams"]` to discover which tool arguments are
 //!   file inputs.
+//! - Inspect validated `_meta["openai/fileUploadConfig"]` metadata only for
+//!   Apps tools that visibly declare a write action before opting uploaded
+//!   local files into Library storage.
 //! - At tool execution time, upload those local files to OpenAI file storage
 //!   and rewrite only the declared arguments into the provided-file payload
 //!   shape expected by the downstream Apps tool.
@@ -16,11 +19,17 @@ use codex_api::upload_local_file;
 use codex_login::CodexAuth;
 use serde_json::Value as JsonValue;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OpenAIFileInputParams {
+    pub(crate) names: Vec<String>,
+    pub(crate) store_in_oai_library: bool,
+}
+
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     sess: &Session,
     turn_context: &TurnContext,
     arguments_value: Option<JsonValue>,
-    openai_file_input_params: Option<&[String]>,
+    openai_file_input_params: Option<&OpenAIFileInputParams>,
 ) -> Result<Option<JsonValue>, String> {
     let Some(openai_file_input_params) = openai_file_input_params else {
         return Ok(arguments_value);
@@ -34,14 +43,21 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     };
     let auth = sess.services.auth_manager.auth().await;
     let mut rewritten_arguments = arguments.clone();
+    let store_in_oai_library =
+        store_in_oai_library_for_openai_file_upload(openai_file_input_params);
 
-    for field_name in openai_file_input_params {
+    for field_name in &openai_file_input_params.names {
         let Some(value) = arguments.get(field_name) else {
             continue;
         };
-        let Some(uploaded_value) =
-            rewrite_argument_value_for_openai_files(turn_context, auth.as_ref(), field_name, value)
-                .await?
+        let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
+            turn_context,
+            auth.as_ref(),
+            field_name,
+            value,
+            store_in_oai_library,
+        )
+        .await?
         else {
             continue;
         };
@@ -55,11 +71,18 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     Ok(Some(JsonValue::Object(rewritten_arguments)))
 }
 
+fn store_in_oai_library_for_openai_file_upload(
+    openai_file_input_params: &OpenAIFileInputParams,
+) -> bool {
+    openai_file_input_params.store_in_oai_library
+}
+
 async fn rewrite_argument_value_for_openai_files(
     turn_context: &TurnContext,
     auth: Option<&CodexAuth>,
     field_name: &str,
     value: &JsonValue,
+    store_in_oai_library: bool,
 ) -> Result<Option<JsonValue>, String> {
     match value {
         JsonValue::String(path_or_file_ref) => {
@@ -69,6 +92,7 @@ async fn rewrite_argument_value_for_openai_files(
                 field_name,
                 /*index*/ None,
                 path_or_file_ref,
+                store_in_oai_library,
             )
             .await?;
             Ok(Some(rewritten))
@@ -85,6 +109,7 @@ async fn rewrite_argument_value_for_openai_files(
                     field_name,
                     Some(index),
                     path_or_file_ref,
+                    store_in_oai_library,
                 )
                 .await?;
                 rewritten_values.push(rewritten);
@@ -101,6 +126,7 @@ async fn build_uploaded_local_argument_value(
     field_name: &str,
     index: Option<usize>,
     file_path: &str,
+    store_in_oai_library: bool,
 ) -> Result<JsonValue, String> {
     #[allow(deprecated)]
     let resolved_path = turn_context.resolve_path(Some(file_path.to_string()));
@@ -119,6 +145,7 @@ async fn build_uploaded_local_argument_value(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         upload_auth.as_ref(),
         &resolved_path,
+        store_in_oai_library,
     )
     .await
     .map_err(|error| match index {
@@ -165,8 +192,25 @@ mod tests {
         assert_eq!(rewritten, arguments);
     }
 
+    #[test]
+    fn store_in_oai_library_comes_from_approved_tool_metadata() {
+        let openai_file_input_params = OpenAIFileInputParams {
+            names: Vec::new(),
+            store_in_oai_library: true,
+        };
+        assert!(store_in_oai_library_for_openai_file_upload(
+            &openai_file_input_params
+        ));
+        assert!(!store_in_oai_library_for_openai_file_upload(
+            &OpenAIFileInputParams {
+                names: Vec::new(),
+                store_in_oai_library: false,
+            },
+        ));
+    }
+
     #[tokio::test]
-    async fn build_uploaded_local_argument_value_uploads_local_file_path() {
+    async fn build_uploaded_local_argument_value_honors_upload_options() {
         use wiremock::Mock;
         use wiremock::MockServer;
         use wiremock::ResponseTemplate;
@@ -183,6 +227,7 @@ mod tests {
                 "file_name": "file_report.csv",
                 "file_size": 5,
                 "use_case": "codex",
+                "store_in_library": true,
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "file_id": "file_123",
@@ -232,6 +277,7 @@ mod tests {
             "file",
             /*index*/ None,
             "file_report.csv",
+            /*store_in_oai_library*/ true,
         )
         .await
         .expect("rewrite should upload the local file");
@@ -314,6 +360,7 @@ mod tests {
             Some(&auth),
             "file",
             &serde_json::json!("file_report.csv"),
+            /*store_in_oai_library*/ false,
         )
         .await
         .expect("rewrite should succeed");
@@ -431,6 +478,7 @@ mod tests {
             Some(&auth),
             "files",
             &serde_json::json!(["one.csv", "two.csv"]),
+            /*store_in_oai_library*/ false,
         )
         .await
         .expect("rewrite should succeed");
@@ -470,7 +518,10 @@ mod tests {
             Some(serde_json::json!({
                 "file": "/definitely/missing/file.csv",
             })),
-            Some(&["file".to_string()]),
+            Some(&OpenAIFileInputParams {
+                names: vec!["file".to_string()],
+                store_in_oai_library: false,
+            }),
         )
         .await
         .expect_err("missing file should fail");

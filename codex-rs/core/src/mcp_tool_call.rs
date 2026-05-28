@@ -15,6 +15,7 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
+use crate::mcp_openai_file::OpenAIFileInputParams;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
@@ -328,7 +329,7 @@ async fn handle_approved_mcp_tool_call(
         sess,
         turn_context,
         arguments_value.clone(),
-        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_ref()),
     )
     .await;
     let tool_input = match &rewrite {
@@ -976,13 +977,15 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_description: Option<String>,
     mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
-    openai_file_input_params: Option<Vec<String>>,
+    openai_file_input_params: Option<OpenAIFileInputParams>,
 }
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_META_KEY: &str = "openai/fileUploadConfig";
+const MCP_TOOL_OPENAI_FILE_UPLOAD_STORE_IN_OAI_LIBRARY_KEY: &str = "store_in_oai_library";
 
 async fn custom_mcp_tool_approval_mode(
     sess: &Session,
@@ -1444,8 +1447,10 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         None
     };
 
+    let annotations = tool_info.tool.annotations.clone();
+
     Some(McpToolApprovalMetadata {
-        annotations: tool_info.tool.annotations,
+        annotations: annotations.clone(),
         connector_id: tool_info.connector_id,
         connector_name: tool_info.connector_name,
         connector_description,
@@ -1464,6 +1469,8 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         openai_file_input_params: openai_file_input_params_for_server(
             server,
             tool_info.tool.meta.as_deref(),
+            tool_info.tool.input_schema.as_ref(),
+            annotations.as_ref(),
         ),
     })
 }
@@ -1471,10 +1478,38 @@ pub(crate) async fn lookup_mcp_tool_metadata(
 fn openai_file_input_params_for_server(
     server: &str,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
-) -> Option<Vec<String>> {
-    (server == CODEX_APPS_MCP_SERVER_NAME)
-        .then_some(declared_openai_file_input_param_names(meta))
-        .filter(|params| !params.is_empty())
+    _input_schema: &serde_json::Map<String, serde_json::Value>,
+    annotations: Option<&ToolAnnotations>,
+) -> Option<OpenAIFileInputParams> {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
+    let names = declared_openai_file_input_param_names(meta);
+    if names.is_empty() {
+        return None;
+    }
+
+    Some(OpenAIFileInputParams {
+        names,
+        store_in_oai_library: declared_openai_file_upload_store_in_oai_library(meta, annotations),
+    })
+}
+
+fn declared_openai_file_upload_store_in_oai_library(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    annotations: Option<&ToolAnnotations>,
+) -> bool {
+    let tool_opted_in = meta
+        .and_then(|meta| meta.get(MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_META_KEY))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|config| config.get(MCP_TOOL_OPENAI_FILE_UPLOAD_STORE_IN_OAI_LIBRARY_KEY))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    // Hidden upload formatting may only add Library persistence after the
+    // explicit Apps action visibly declares itself non-read-only.
+    tool_opted_in && annotations.and_then(|annotations| annotations.read_only_hint) == Some(false)
 }
 
 fn get_mcp_app_resource_uri(
