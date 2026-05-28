@@ -29,7 +29,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install packaging tools
-        run: python -m pip install build uv==0.11.3
+        run: python -m pip install build twine uv==0.11.3
 
       - name: Validate tag and build Python SDK package
         shell: bash
@@ -61,6 +61,8 @@ jobs:
             --sdist \
             --outdir "${GITHUB_WORKSPACE}/dist/python-sdk" \
             "${RUNNER_TEMP}/openai-codex"
+
+          python -m twine check --strict "${GITHUB_WORKSPACE}/dist/python-sdk/"*
 
       - name: Upload Python SDK package
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

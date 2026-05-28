@@ -1,5 +1,18 @@
 # FAQ
 
+## Is the Python SDK stable?
+
+`openai-codex` is a public beta. Install it with
+`pip install openai-codex`; public APIs may change before `1.0`. While beta
+releases are the only published SDK releases, pip selects the latest beta.
+After a stable release exists, pass `--pre` to opt into newer prereleases.
+
+## Why does the SDK install a runtime package?
+
+The SDK and runtime packages are versioned independently. Each SDK release
+pins one compatible runtime dependency, so `openai-codex==0.1.0b1` installs
+`openai-codex-cli-bin==0.132.0` automatically.
+
 ## Thread vs turn
 
 - A `Thread` is conversation state.
@@ -84,9 +97,9 @@ This avoids duplicate ways to do the same operation and keeps behavior explicit.
 
 Common causes:
 
-- published runtime package (`openai-codex-cli-bin`) is not installed
+- installation is incomplete and the pinned `openai-codex-cli-bin` dependency is missing
 - local `codex_bin` override points to a missing file
-- installed Codex runtime version older than the SDK schema
+- a custom local Codex executable does not support the SDK operation being used
 
 ## Why does a turn "hang"?
 
@@ -99,7 +112,8 @@ A turn is complete only when `turn/completed` arrives for that turn ID.
 
 Use `retry_on_overload(...)` for transient overload failures (`ServerBusyError`).
 
-Do not blindly retry all errors. For `InvalidParamsError` or `MethodNotFoundError`, fix inputs or update the runtime/schema version instead.
+Do not blindly retry all errors. For `InvalidParamsError` or
+`MethodNotFoundError`, fix the input or use the runtime pinned by the SDK.
 
 ## Common pitfalls
 

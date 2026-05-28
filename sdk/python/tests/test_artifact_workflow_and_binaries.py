@@ -258,6 +258,36 @@ def test_source_sdk_package_pins_published_runtime() -> None:
     }
 
 
+def test_source_sdk_package_declares_beta_documentation_and_release_files() -> None:
+    """Public package metadata should carry the beta docs and package license."""
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    readme = (ROOT / "README.md").read_text()
+
+    assert {
+        "description": pyproject["project"]["description"],
+        "is_beta": "Development Status :: 4 - Beta" in pyproject["project"]["classifiers"],
+        "license": pyproject["project"]["license"],
+        "documentation": pyproject["project"]["urls"]["Documentation"],
+        "sdist_include": pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"],
+        "readme_is_beta": "# OpenAI Codex Python SDK (Beta)" in readme,
+        "local_license_file": (ROOT / "LICENSE").exists(),
+    } == {
+        "description": "Python SDK for Codex",
+        "is_beta": True,
+        "license": "Apache-2.0",
+        "documentation": "https://github.com/openai/codex/tree/main/sdk/python/docs",
+        "sdist_include": [
+            "src/openai_codex/**",
+            "README.md",
+            "docs/**",
+            "examples/**",
+            "pyproject.toml",
+        ],
+        "readme_is_beta": True,
+        "local_license_file": False,
+    }
+
+
 def test_release_metadata_retries_without_invalid_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

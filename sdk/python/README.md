@@ -1,132 +1,105 @@
-# OpenAI Codex Python SDK (Experimental)
+# OpenAI Codex Python SDK (Beta)
 
-Experimental Python SDK for `codex app-server` JSON-RPC v2 over stdio, with a small default surface optimized for real scripts and apps.
+Build Python applications that start Codex threads, run turns, stream progress,
+and control workspace access.
 
-The generated wire-model layer is sourced from the pinned `openai-codex-cli-bin`
-runtime package and exposed as Pydantic models with snake_case Python fields
-that serialize back to the protocol's camelCase wire format.
-The package root exports the ergonomic client API; public Codex protocol value and
-event types live in `openai_codex.types`.
+> [!NOTE]
+> `openai-codex` is in beta. Public APIs may change before `1.0`.
 
 ## Install
 
+Install the SDK:
+
 ```bash
-cd sdk/python
-uv sync
-source .venv/bin/activate
+pip install openai-codex
 ```
 
-Published SDK builds pin an exact compatible `openai-codex-cli-bin` runtime
-dependency. Pass `CodexConfig(codex_bin=...)` only
-when you intentionally want to run against a specific local app-server binary.
+For reproducible environments, install this release exactly:
+
+```bash
+pip install openai-codex==0.1.0b1
+```
+
+The SDK requires Python `>=3.10` and installs its compatible Codex runtime
+dependency automatically. While beta releases are the only published SDK
+releases, the normal install command selects the latest beta. After a stable
+release exists, use `pip install --pre openai-codex` to explicitly select a
+newer prerelease.
 
 ## Quickstart
 
-```python
-from openai_codex import Codex, Sandbox
-
-with Codex() as codex:
-    # Call login_api_key(...) first when this Codex session is not
-    # already authenticated.
-    thread = codex.thread_start(model="gpt-5", sandbox=Sandbox.workspace_write)
-    result = thread.run("Say hello in one sentence.")
-    print(result.final_response)
-    print(len(result.items))
-```
-
-`thread.run(...)` and `thread.turn(...).run()` return `TurnResult`. Its
-`final_response` is `None` when the turn completes without a final-answer or
-phase-less assistant message item.
-
-## Sandbox
-
-Use the same enum when creating a thread or changing its sandbox for a turn:
+The SDK reuses your existing Codex authentication when one is already
+available:
 
 ```python
 from openai_codex import Codex, Sandbox
 
 with Codex() as codex:
     thread = codex.thread_start(sandbox=Sandbox.workspace_write)
-    thread.run("Make the requested change.")
-    review = thread.run("Review the diff only.", sandbox=Sandbox.read_only)
+    result = thread.run("Explain this repository in three bullets.")
+    print(result.final_response)
 ```
 
-Available presets:
+Use `Sandbox.workspace_write` for the normal workspace-editing experience.
+`thread.run(...)` returns a `TurnResult` containing the final response,
+collected items, and token usage.
 
-- `Sandbox.read_only`: read files without allowing writes.
-- `Sandbox.workspace_write`: the normal default for projects with a recorded trust decision; read files and write inside the workspace and configured writable roots.
-- `Sandbox.full_access`: run without filesystem access restrictions.
+## Authentication
 
-When `sandbox=` is omitted, Codex uses its configured default. A sandbox
-passed to `run(...)` or `turn(...)` applies to that turn and subsequent turns
-on the thread.
-
-## Login
-
-Use the auth helper that matches your app:
+Existing Codex authentication is reused automatically. To start ChatGPT
+browser login explicitly:
 
 ```python
 from openai_codex import Codex
 
 with Codex() as codex:
-    codex.login_api_key("sk-...")
-    account = codex.account()
-    print(account.account)
-```
-
-Interactive ChatGPT login returns a handle. Open the provided URL or device-code
-page, then wait for the matching completion event:
-
-```python
-with Codex() as codex:
     login = codex.login_chatgpt()
     print(login.auth_url)
-    completed = login.wait()
-    print(completed.success)
+    print(login.wait().success)
 ```
 
-Use `login_chatgpt_device_code()` for device-code auth, `handle.cancel()` to
-stop an in-progress interactive login, and `logout()` to clear the active
-Codex account session.
+Use `login_chatgpt_device_code()` for device-code login, or
+`login_api_key("sk-...")` for API-key authentication.
 
-## Docs map
+## Sandbox Access
 
-- Golden path tutorial: `docs/getting-started.md`
-- API reference (signatures + behavior): `docs/api-reference.md`
-- Common decisions and pitfalls: `docs/faq.md`
-- Runnable examples index: `examples/README.md`
-- Jupyter walkthrough notebook: `notebooks/sdk_walkthrough.ipynb`
+Choose a named sandbox preset when you create a thread or start a later turn:
 
-## Examples
+| Preset | Access |
+| --- | --- |
+| `Sandbox.read_only` | Read files without writing. |
+| `Sandbox.workspace_write` | Read files and write within the workspace and configured writable roots. This is the default for workspace work. |
+| `Sandbox.full_access` | Run without filesystem access restrictions. |
 
-Start here:
+When `sandbox=` is omitted, Codex uses its configured default. A sandbox
+passed to `run(...)` or `turn(...)` applies to that turn and subsequent turns
+on that thread.
 
-```bash
-cd sdk/python
-python examples/01_quickstart_constructor/sync.py
-python examples/01_quickstart_constructor/async.py
-```
+## Errors And Retries
 
-## Runtime
+SDK errors derive from `CodexError`. Use `retry_on_overload(...)` only for
+transient overload failures; invalid input and unsupported operations should
+be corrected rather than retried.
 
-Published SDK builds are pinned to an exact `openai-codex-cli-bin` package
-version, and that runtime package carries the platform-specific binary for the
-target wheel. SDK beta releases are versioned independently of runtime releases.
+## Built-In Help
 
-## Compatibility and versioning
+Use Python's standard `help(openai_codex)`, `help(Codex)`, or
+`python -m pydoc openai_codex` documentation tools.
 
-- Package: `openai-codex`
-- Runtime package: `openai-codex-cli-bin`
-- Python: `>=3.10`
-- Target protocol: Codex `app-server` JSON-RPC v2
-- Versioning rule: SDK releases pin one exact compatible Codex runtime version
+## Runtime And Versioning
 
-## Notes
+The SDK package version and runtime package version are independent.
+`openai-codex==0.1.0b1` pins the compatible runtime dependency
+`openai-codex-cli-bin==0.132.0`.
 
-- `Codex()` is eager and performs startup + `initialize` in the constructor.
-- Use context managers (`with Codex() as codex:`) to ensure shutdown.
-- Plain strings are accepted anywhere a turn input is accepted; they are
-  shorthand for `TextInput(...)`.
-- Prefer `thread.run("...")` for the common case. Use `thread.turn(...)` when
-  you need streaming, steering, or interrupt control.
-- For transient overload, use `retry_on_overload` from the package root.
+Most users should let the SDK select that runtime automatically.
+
+## Documentation
+
+- [Getting started](https://github.com/openai/codex/blob/main/sdk/python/docs/getting-started.md)
+- [API reference](https://github.com/openai/codex/blob/main/sdk/python/docs/api-reference.md)
+- [FAQ](https://github.com/openai/codex/blob/main/sdk/python/docs/faq.md)
+- [Examples](https://github.com/openai/codex/blob/main/sdk/python/examples/README.md)
+
+The package is licensed under the
+[repository Apache License 2.0](https://github.com/openai/codex/blob/main/LICENSE).

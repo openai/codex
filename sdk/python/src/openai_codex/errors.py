@@ -26,23 +26,23 @@ class CodexRpcError(JsonRpcError):
 
 
 class ParseError(CodexRpcError):
-    pass
+    """Raised when a request or response cannot be parsed."""
 
 
 class InvalidRequestError(CodexRpcError):
-    pass
+    """Raised when the runtime rejects the request shape."""
 
 
 class MethodNotFoundError(CodexRpcError):
-    pass
+    """Raised when the requested operation is unavailable."""
 
 
 class InvalidParamsError(CodexRpcError):
-    pass
+    """Raised when an operation receives invalid parameters."""
 
 
 class InternalRpcError(CodexRpcError):
-    pass
+    """Raised when the runtime reports an internal RPC failure."""
 
 
 class ServerBusyError(CodexRpcError):
