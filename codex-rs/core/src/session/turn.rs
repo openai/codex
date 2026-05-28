@@ -26,6 +26,7 @@ use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
+use crate::injection::extract_tool_mentions;
 use crate::injection::tool_kind_for_path;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
@@ -484,12 +485,43 @@ async fn build_skills_and_plugins(
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
     let explicitly_mentioned_apps = collect_explicit_app_ids(&user_input);
     let skills_outcome = turn_context.turn_skills.outcome.as_ref();
-    // Skill injection can contain app references, and plain skill mentions share
-    // resolution space with apps. Preserve explicit-turn behavior by resolving
-    // app inventory before finalizing any selected skill.
-    let has_explicit_skill_selection = turn_context.apps_enabled()
+    // Structured skill selections are unambiguous without app inventory. Load
+    // them before deciding whether the pending Apps MCP is a dependency of this
+    // turn, then reuse the injections below so loading and telemetry happen once.
+    let structured_skill_input = user_input
+        .iter()
+        .filter(|item| matches!(item, UserInput::Skill { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    let structured_mentioned_skills = collect_explicit_skill_mentions(
+        &structured_skill_input,
+        &skills_outcome.skills,
+        &skills_outcome.disabled_paths,
+        &HashMap::new(),
+    );
+    let SkillInjections {
+        items: mut skill_injections,
+        warnings: mut skill_warnings,
+    } = build_skill_injections(
+        &structured_mentioned_skills,
+        Some(skills_outcome),
+        Some(&turn_context.session_telemetry),
+        &sess.services.analytics_events_client,
+        tracking.clone(),
+    )
+    .await;
+    let structured_skill_may_reference_apps =
+        skill_injections_may_reference_apps(&skill_injections);
+    // Plain text skill mentions can collide with app slugs, so preserve their
+    // existing app-inventory resolution behavior.
+    let text_skill_input = user_input
+        .iter()
+        .filter(|item| matches!(item, UserInput::Text { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    let text_may_select_skill_requiring_app_resolution = turn_context.apps_enabled()
         && !collect_explicit_skill_mentions(
-            &user_input,
+            &text_skill_input,
             &skills_outcome.skills,
             &skills_outcome.disabled_paths,
             &HashMap::new(),
@@ -505,7 +537,8 @@ async fn build_skills_and_plugins(
     if turn_context.apps_enabled()
         && (!explicitly_mentioned_apps.is_empty()
             || mentioned_plugin_uses_apps
-            || has_explicit_skill_selection)
+            || structured_skill_may_reference_apps
+            || text_may_select_skill_requiring_app_resolution)
     {
         explicitly_requested_mcp_servers.insert(CODEX_APPS_MCP_SERVER_NAME.to_string());
     }
@@ -583,17 +616,28 @@ async fn build_skills_and_plugins(
         .await?;
     }
 
+    let structured_skill_paths = structured_mentioned_skills
+        .iter()
+        .map(|skill| &skill.path_to_skills_md)
+        .collect::<HashSet<_>>();
+    let remaining_mentioned_skills = mentioned_skills
+        .iter()
+        .filter(|skill| !structured_skill_paths.contains(&skill.path_to_skills_md))
+        .cloned()
+        .collect::<Vec<_>>();
     let SkillInjections {
-        items: skill_injections,
-        warnings: skill_warnings,
+        items: remaining_skill_injections,
+        warnings: remaining_skill_warnings,
     } = build_skill_injections(
-        &mentioned_skills,
+        &remaining_mentioned_skills,
         Some(skills_outcome),
         Some(&turn_context.session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),
     )
     .await;
+    skill_injections.extend(remaining_skill_injections);
+    skill_warnings.extend(remaining_skill_warnings);
 
     for message in skill_warnings {
         sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
@@ -725,6 +769,18 @@ async fn wait_for_explicit_mcp_servers(
         .await;
     }
     Some(())
+}
+
+fn skill_injections_may_reference_apps(
+    skill_injections: &[crate::injection::SkillInjection],
+) -> bool {
+    skill_injections.iter().any(|skill| {
+        let mentions = extract_tool_mentions(&skill.contents);
+        mentions.plain_names().next().is_some()
+            || mentions
+                .paths()
+                .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+    })
 }
 
 async fn track_turn_resolved_config_analytics(
