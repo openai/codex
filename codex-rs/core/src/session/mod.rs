@@ -549,37 +549,9 @@ impl Codex {
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
 
-        // Respect thread-start tools. When missing (resumed/forked threads), read from the db
-        // first, then fall back to rollout-file tools.
-        let persisted_tools = if dynamic_tools.is_empty() {
-            let thread_id = match &conversation_history {
-                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-                InitialHistory::Forked(_) => conversation_history.forked_from_id(),
-                InitialHistory::New | InitialHistory::Cleared => None,
-            };
-            match thread_id {
-                Some(thread_id) => {
-                    let state_db_ctx = if config.ephemeral {
-                        None
-                    } else if let Some(local_store) =
-                        thread_store.as_any().downcast_ref::<LocalThreadStore>()
-                    {
-                        local_store.state_db().await
-                    } else {
-                        None
-                    };
-                    state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
-                        .await
-                }
-                None => None,
-            }
-        } else {
-            None
-        };
+        // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {
-            persisted_tools
-                .or_else(|| conversation_history.get_dynamic_tools())
-                .unwrap_or_default()
+            conversation_history.get_dynamic_tools().unwrap_or_default()
         } else {
             dynamic_tools
         };

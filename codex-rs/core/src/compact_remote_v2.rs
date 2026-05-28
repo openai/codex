@@ -21,6 +21,7 @@ use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
+use crate::turn_metadata::CompactionTurnMetadata;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
@@ -105,6 +106,12 @@ async fn run_remote_compact_task_inner(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
+    let compaction_metadata = CompactionTurnMetadata::new(
+        trigger,
+        reason,
+        CompactionImplementation::ResponsesCompactionV2,
+        phase,
+    );
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -134,6 +141,7 @@ async fn run_remote_compact_task_inner(
         turn_context,
         client_session,
         initial_context_injection,
+        compaction_metadata,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -161,6 +169,7 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
     client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
+    compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<()> {
     let context_compaction_item = ContextCompactionItem::new();
     let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
@@ -208,7 +217,10 @@ async fn run_remote_compact_task_inner_impl(
         output_schema_strict: true,
     };
 
-    let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+    let window_id = sess.services.model_client.current_window_id();
+    let turn_metadata_header = turn_context
+        .turn_metadata_state
+        .current_header_value_for_compaction(&window_id, compaction_metadata);
     let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
         "model": turn_context.model_info.slug.as_str(),
         "instructions": prompt.base_instructions.text.as_str(),

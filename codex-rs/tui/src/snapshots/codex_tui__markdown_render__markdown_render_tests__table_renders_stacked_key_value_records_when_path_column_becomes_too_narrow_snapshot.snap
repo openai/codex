@@ -1,0 +1,40 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: "plain_lines(&text).join(\"\\n\")"
+---
+ Session
+  /Users/felipe.coury/.codex/
+  sessions/2026/05/25/rollout-2026-05-
+  25T18-13-09-019e60fc-0518-7c21-9596-
+  980fe97225ba.jsonl
+ Why useful
+  The large gallery from this thread:
+  emojis, links, emphasis, code,
+  alignment, paragraphs, and a 30+ row
+  table
+ Detected table blocks
+  7
+──────────────────────────────────────────
+ Session
+  /Users/felipe.coury/.codex/
+  sessions/2026/05/14/rollout-2026-05-
+  14T12-57-18-019e2734-e500-7011-8278-
+  975c94d06000.jsonl
+ Why useful
+  Explicit "markdown tables for testing"
+  session with several successive
+  assistant samples
+ Detected table blocks
+  16
+──────────────────────────────────────────
+ Session
+  /Users/felipe.coury/.codex/
+  sessions/2026/05/14/rollout-2026-05-
+  14T12-27-57-019e271a-064c-78c3-a5cd-
+  a6f20a0c1ad5.jsonl
+ Why useful
+  Explicit request for five tables
+  containing emojis, code, italics, and
+  varied cell content
+ Detected table blocks
+  10

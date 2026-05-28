@@ -325,14 +325,17 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
-                .underlined(),
+            crate::terminal_hyperlinks::osc8_hyperlink(
+                "https://developers.openai.com/codex/mcp",
+                "MCP docs",
+            )
+            .underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
     ];
 
-    PlainHistoryCell { lines }
+    PlainHistoryCell::new(lines)
 }
 
 #[cfg(test)]

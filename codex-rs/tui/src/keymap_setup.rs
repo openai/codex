@@ -1009,6 +1009,7 @@ mod tests {
             actions,
             vec![
                 "Composer.submit",
+                "Chat.interrupt_turn",
                 "Editor.insert_newline",
                 "Composer.queue",
                 "Global.open_external_editor",

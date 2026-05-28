@@ -13,12 +13,12 @@ import asyncio
 
 from openai_codex import (
     AsyncCodex,
+    Sandbox,
 )
 from openai_codex.types import (
     Personality,
     ReasoningEffort,
     ReasoningSummary,
-    SandboxPolicy,
 )
 
 REASONING_RANK = {
@@ -67,13 +67,6 @@ OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
-SANDBOX_POLICY = SandboxPolicy.model_validate(
-    {
-        "type": "readOnly",
-        "access": {"type": "fullAccess"},
-    }
-)
-
 
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
@@ -106,7 +99,7 @@ async def main() -> None:
             model=selected_model.model,
             output_schema=OUTPUT_SCHEMA,
             personality=Personality.pragmatic,
-            sandbox_policy=SANDBOX_POLICY,
+            sandbox=Sandbox.read_only,
             summary=ReasoningSummary.model_validate("concise"),
         )
         second = await second_turn.run()

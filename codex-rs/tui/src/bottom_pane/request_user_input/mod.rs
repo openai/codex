@@ -143,6 +143,7 @@ pub(crate) struct RequestUserInputOverlay {
     pending_submission_draft: Option<ComposerDraft>,
     confirm_unanswered: Option<ScrollState>,
     composer_submit_keys: Vec<KeyBinding>,
+    interrupt_turn_keys: Vec<KeyBinding>,
     list_keymap: ListKeymap,
 }
 
@@ -198,6 +199,7 @@ impl RequestUserInputOverlay {
             pending_submission_draft: None,
             confirm_unanswered: None,
             composer_submit_keys: keymap.composer.submit.clone(),
+            interrupt_turn_keys: keymap.chat.interrupt_turn.clone(),
             list_keymap: keymap.list,
         };
         overlay.reset_for_request();
@@ -506,8 +508,15 @@ impl RequestUserInputOverlay {
                 tips.push(FooterTip::new("ctrl + p / ctrl + n change question"));
             }
         }
-        if !(self.has_options() && notes_visible) {
-            tips.push(FooterTip::new("esc to interrupt"));
+        if let Some(interrupt_key) = self.interrupt_turn_keys.first()
+            && !(self.has_options()
+                && notes_visible
+                && *interrupt_key == crate::key_hint::plain(KeyCode::Esc))
+        {
+            tips.push(FooterTip::new(format!(
+                "{} to interrupt",
+                interrupt_key.display_label()
+            )));
         }
         tips
     }
@@ -1056,11 +1065,12 @@ impl BottomPaneView for RequestUserInputOverlay {
             return;
         }
 
-        if matches!(key_event.code, KeyCode::Esc) {
-            if self.has_options() && self.notes_ui_visible() {
-                self.clear_notes_and_focus_options();
-                return;
-            }
+        if matches!(key_event.code, KeyCode::Esc) && self.has_options() && self.notes_ui_visible() {
+            self.clear_notes_and_focus_options();
+            return;
+        }
+
+        if self.interrupt_turn_keys.is_pressed(key_event) {
             // TODO: Emit interrupted request_user_input results (including committed answers)
             // once core supports persisting them reliably without follow-up turn issues.
             self.app_event_tx.interrupt();
@@ -2041,6 +2051,40 @@ mod tests {
             tip_texts,
             vec!["ctrl + j to submit answer", "esc to interrupt"]
         );
+    }
+
+    #[test]
+    fn request_user_input_uses_remapped_interrupt_binding_while_notes_are_visible() {
+        let (tx, mut rx) = test_sender();
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.chat.interrupt_turn = vec![crate::key_hint::plain(KeyCode::F(12))];
+        let mut overlay = RequestUserInputOverlay::new_with_keymap(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            keymap,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.options_state.selected_idx = Some(0);
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+
+        let tips = overlay.footer_tips();
+        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            tip_texts,
+            vec![
+                "tab or esc to clear notes",
+                "enter to submit answer",
+                "f12 to interrupt",
+            ]
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::F(12)));
+
+        assert_eq!(overlay.done, true);
+        expect_interrupt_only(&mut rx);
     }
 
     #[test]
@@ -3167,6 +3211,26 @@ mod tests {
         let area = Rect::new(0, 0, 120, 10);
         insta::assert_snapshot!(
             "request_user_input_freeform_remapped_submit",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_freeform_remapped_interrupt_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.chat.interrupt_turn = vec![crate::key_hint::plain(KeyCode::F(12))];
+        let overlay = RequestUserInputOverlay::new_with_keymap(
+            request_event("turn-1", vec![question_without_options("q1", "Goal")]),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            keymap,
+        );
+        let area = Rect::new(0, 0, 120, 10);
+        insta::assert_snapshot!(
+            "request_user_input_freeform_remapped_interrupt",
             render_snapshot(&overlay, area)
         );
     }
