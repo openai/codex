@@ -7,12 +7,14 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
+use crate::engine::command_runner::run_command;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::NullableString;
@@ -111,11 +113,9 @@ pub(crate) async fn run(
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        request.target.event_name(),
-        Some(request.target.matcher_input()),
-    );
+    let event_name = request.target.event_name();
+    let matched =
+        dispatcher::select_handlers(handlers, event_name, Some(request.target.matcher_input()));
     if matched.is_empty() {
         return SessionStartOutcome {
             hook_events: Vec::new(),
@@ -180,15 +180,29 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        turn_id,
-        parse_completed,
-    )
-    .await;
+    let results = if event_name == HookEventName::SessionStart
+        && shell.env.contains_key(CODEX_ENV_FILE_ENV_VAR)
+    {
+        // Serialize hooks that share CODEX_ENV_FILE to preserve configured order.
+        let mut results = Vec::with_capacity(matched.len());
+        for (completion_order, handler) in matched.into_iter().enumerate() {
+            let result = run_command(shell, &handler, &input_json, request.cwd.as_path()).await;
+            let mut parsed = parse_completed(&handler, result, turn_id.clone());
+            parsed.completion_order = completion_order;
+            results.push(parsed);
+        }
+        results
+    } else {
+        dispatcher::execute_handlers(
+            shell,
+            matched,
+            input_json,
+            request.cwd.as_path(),
+            turn_id,
+            parse_completed,
+        )
+        .await
+    };
 
     let should_stop = results.iter().any(|result| result.data.should_stop);
     let stop_reason = results
@@ -505,6 +519,68 @@ mod tests {
                 kind: HookOutputEntryKind::Context,
                 text: "child context".to_string(),
             }]
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn session_start_hooks_write_env_file_in_configured_order() {
+        use std::collections::HashMap;
+        use std::fs;
+
+        use codex_protocol::ThreadId;
+        use tempfile::NamedTempFile;
+
+        use super::CODEX_ENV_FILE_ENV_VAR;
+        use super::SessionStartRequest;
+        use super::SessionStartSource;
+        use super::StartHookTarget;
+        use super::run;
+        use crate::engine::CommandShell;
+
+        let env_file = NamedTempFile::new().expect("create env file");
+        let shell = CommandShell {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string()],
+            env: HashMap::from([(
+                CODEX_ENV_FILE_ENV_VAR.to_string(),
+                env_file.path().display().to_string(),
+            )]),
+        };
+        let mut first = handler();
+        first.command = r#"sleep 1; printf 'export FIRST=1\n' >> "$CODEX_ENV_FILE""#.to_string();
+        let mut second = handler();
+        second.command = r#"grep -q 'export FIRST=1' "$CODEX_ENV_FILE" && printf 'export SECOND=1\n' >> "$CODEX_ENV_FILE""#.to_string();
+        second.display_order = 1;
+
+        let outcome = run(
+            &[first, second],
+            &shell,
+            SessionStartRequest {
+                session_id: ThreadId::new(),
+                cwd: test_path_buf("/tmp").abs(),
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                target: StartHookTarget::SessionStart {
+                    source: SessionStartSource::Startup,
+                },
+            },
+            /*turn_id*/ None,
+        )
+        .await;
+
+        assert_eq!(
+            outcome
+                .hook_events
+                .iter()
+                .map(|event| event.run.status)
+                .collect::<Vec<_>>(),
+            vec![HookRunStatus::Completed, HookRunStatus::Completed]
+        );
+        assert_eq!(
+            fs::read_to_string(env_file.path()).expect("read env file"),
+            "export FIRST=1\nexport SECOND=1\n"
         );
     }
 
