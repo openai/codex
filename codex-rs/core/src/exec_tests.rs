@@ -395,6 +395,32 @@ fn windows_restricted_token_skips_external_sandbox_policies() {
 }
 
 #[test]
+fn windows_exec_routing_skips_danger_full_access_policies() {
+    assert!(!should_route_through_windows_sandbox(
+        SandboxType::WindowsRestrictedToken,
+        &SandboxPolicy::DangerFullAccess,
+    ));
+}
+
+#[test]
+fn windows_exec_routing_skips_external_sandbox_policies() {
+    assert!(!should_route_through_windows_sandbox(
+        SandboxType::WindowsRestrictedToken,
+        &SandboxPolicy::ExternalSandbox {
+            network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+        },
+    ));
+}
+
+#[test]
+fn windows_exec_routing_keeps_restricted_policies() {
+    assert!(should_route_through_windows_sandbox(
+        SandboxType::WindowsRestrictedToken,
+        &SandboxPolicy::new_workspace_write_policy(),
+    ));
+}
+
+#[test]
 fn windows_restricted_token_runs_for_legacy_restricted_policies() {
     let policy = SandboxPolicy::new_read_only_policy();
     let file_system_policy = FileSystemSandboxPolicy::from(&policy);

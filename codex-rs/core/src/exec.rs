@@ -482,12 +482,24 @@ async fn get_raw_output_result(
     >,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if sandbox == SandboxType::WindowsRestrictedToken {
+    if should_route_through_windows_sandbox(sandbox, sandbox_policy) {
         return exec_windows_sandbox(params, sandbox_policy, windows_sandbox_filesystem_overrides)
             .await;
     }
 
     exec(params, network_sandbox_policy, stdout_stream, after_spawn).await
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn should_route_through_windows_sandbox(
+    sandbox: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+) -> bool {
+    sandbox == SandboxType::WindowsRestrictedToken
+        && !matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        )
 }
 
 #[cfg(target_os = "windows")]
