@@ -2767,6 +2767,10 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub cwd: PathBuf,
+    /// Effective workspace roots used to materialize symbolic
+    /// `:workspace_roots` filesystem permissions in `permission_profile`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5204,6 +5208,7 @@ mod tests {
         let item = TurnContextItem {
             turn_id: None,
             cwd: test_path_buf("/tmp"),
+            workspace_roots: None,
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
