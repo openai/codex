@@ -112,6 +112,85 @@ fn thread_turns_list_params_accepts_items_view() {
 }
 
 #[test]
+fn thread_resume_params_accept_turns_page_bootstrap() {
+    let params = serde_json::from_value::<ThreadResumeParams>(json!({
+        "threadId": "thr_123",
+        "initialTurnsPage": {
+            "limit": 25,
+            "sortDirection": "asc",
+            "itemsView": "full",
+        },
+    }))
+    .expect("thread resume params should deserialize");
+
+    assert_eq!(params.thread_id, "thr_123");
+    assert_eq!(
+        params.initial_turns_page,
+        Some(ThreadResumeInitialTurnsPageParams {
+            limit: Some(25),
+            sort_direction: Some(SortDirection::Asc),
+            items_view: Some(TurnItemsView::Full),
+        })
+    );
+}
+
+#[test]
+fn thread_resume_response_round_trips_initial_turns_page() {
+    let response = ThreadResumeResponse {
+        thread: Thread {
+            id: "thr_123".to_string(),
+            session_id: "thr_123".to_string(),
+            forked_from_id: None,
+            preview: String::new(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            status: ThreadStatus::Idle,
+            path: None,
+            cwd: absolute_path("tmp"),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::Exec,
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: Vec::new(),
+        },
+        model: "gpt-5".to_string(),
+        model_provider: "openai".to_string(),
+        service_tier: None,
+        cwd: absolute_path("tmp"),
+        runtime_workspace_roots: Vec::new(),
+        instruction_sources: Vec::new(),
+        approval_policy: AskForApproval::OnFailure,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox: SandboxPolicy::DangerFullAccess,
+        active_permission_profile: None,
+        reasoning_effort: None,
+        initial_turns_page: Some(TurnsPage {
+            data: Vec::new(),
+            next_cursor: Some("cursor_next".to_string()),
+            backwards_cursor: Some("cursor_back".to_string()),
+        }),
+    };
+
+    let value = serde_json::to_value(&response).expect("serialize thread resume response");
+    assert_eq!(
+        value.get("initialTurnsPage"),
+        Some(&json!({
+            "data": [],
+            "nextCursor": "cursor_next",
+            "backwardsCursor": "cursor_back",
+        }))
+    );
+    let decoded = serde_json::from_value::<ThreadResumeResponse>(value)
+        .expect("deserialize thread resume response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
 fn thread_turns_items_list_round_trips() {
     let params = ThreadTurnsItemsListParams {
         thread_id: "thr_123".to_string(),
@@ -3406,6 +3485,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(start.active_permission_profile, None);
     assert_eq!(resume.active_permission_profile, None);
+    assert_eq!(resume.initial_turns_page, None);
     assert_eq!(fork.active_permission_profile, None);
 }
 

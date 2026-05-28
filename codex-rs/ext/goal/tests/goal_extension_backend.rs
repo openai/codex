@@ -8,6 +8,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
+use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
@@ -28,6 +29,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -80,6 +82,38 @@ async fn installed_goal_tools_create_goal_and_fill_empty_preview() -> anyhow::Re
         metadata.preview.as_deref(),
         Some("ship goal extension backend")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_tools_hidden_for_ephemeral_threads() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    let tools = installed_tools_with_start(
+        runtime,
+        thread_id,
+        SessionSource::Cli,
+        /*persistent_thread_state_available*/ false,
+    )
+    .await;
+
+    assert_eq!(Vec::<String>::new(), tool_names(&tools));
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_tools_hidden_for_review_subagents() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    let tools = installed_tools_with_start(
+        runtime,
+        thread_id,
+        SessionSource::SubAgent(SubAgentSource::Review),
+        /*persistent_thread_state_available*/ true,
+    )
+    .await;
+
+    assert_eq!(Vec::<String>::new(), tool_names(&tools));
     Ok(())
 }
 
@@ -878,6 +912,21 @@ async fn installed_tools(
     runtime: Arc<codex_state::StateRuntime>,
     thread_id: ThreadId,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+    installed_tools_with_start(
+        runtime,
+        thread_id,
+        SessionSource::Cli,
+        /*persistent_thread_state_available*/ true,
+    )
+    .await
+}
+
+async fn installed_tools_with_start(
+    runtime: Arc<codex_state::StateRuntime>,
+    thread_id: ThreadId,
+    session_source: SessionSource,
+    persistent_thread_state_available: bool,
+) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
     install_with_backend(
         &mut builder,
@@ -889,13 +938,12 @@ async fn installed_tools(
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = ExtensionData::new(thread_id.to_string());
-    let session_source = SessionSource::Cli;
     for contributor in registry.thread_lifecycle_contributors() {
         contributor
             .on_thread_start(ThreadStartInput {
                 config: &(),
                 session_source: &session_source,
-                persistent_thread_state_available: true,
+                persistent_thread_state_available,
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -907,6 +955,10 @@ async fn installed_tools(
         .iter()
         .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
         .collect()
+}
+
+fn tool_names(tools: &[Arc<dyn ToolExecutor<ToolCall>>]) -> Vec<String> {
+    tools.iter().map(|tool| tool.tool_name().name).collect()
 }
 
 struct GoalExtensionHarness {
@@ -1070,6 +1122,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         tool_name: codex_extension_api::ToolName::plain(tool_name),
         truncation_policy: TruncationPolicy::Bytes(1024),
         conversation_history: codex_extension_api::ConversationHistory::default(),
+        turn_item_emitter: Arc::new(NoopTurnItemEmitter),
         payload: ToolPayload::Function {
             arguments: arguments.to_string(),
         },

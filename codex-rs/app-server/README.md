@@ -281,6 +281,8 @@ To continue a stored session, call `thread/resume` with the `thread.id` you prev
 
 By default, `thread/resume` includes the reconstructed turn history in `thread.turns`. Experimental clients can pass `excludeTurns: true` to return only thread metadata and live resume state, then call `thread/turns/list` separately if they want to page the turn history over the network. In that mode the server also skips replaying restored `thread/tokenUsage/updated`, which avoids rebuilding turns just to attribute historical usage.
 
+Experimental clients that want the live resume subscription plus a turns page in one round trip can pass `initialTurnsPage`. It accepts the same `limit`, `sortDirection`, and `itemsView` controls as `thread/turns/list`; omitted controls use its defaults. The response includes `initialTurnsPage` with `nextCursor` and `backwardsCursor` for follow-up pagination.
+
 By default, resume uses the latest persisted `model` and `reasoningEffort` values associated with the thread. Supplying any of `model`, `modelProvider`, `config.model`, or `config.model_reasoning_effort` disables that persisted fallback and uses the explicit overrides plus normal config resolution instead.
 
 Example:
@@ -297,6 +299,24 @@ Example:
     "excludeTurns": true
 } }
 { "id": 12, "result": { "thread": { "id": "thr_123", "turns": [], … } } }
+
+{ "method": "thread/resume", "id": 13, "params": {
+    "threadId": "thr_123",
+    "excludeTurns": true,
+    "initialTurnsPage": {
+        "limit": 20,
+        "sortDirection": "desc",
+        "itemsView": "summary"
+    }
+} }
+{ "id": 13, "result": {
+    "thread": { "id": "thr_123", "turns": [], … },
+    "initialTurnsPage": {
+        "data": [ ... ],
+        "nextCursor": "older-turns-cursor-or-null",
+        "backwardsCursor": "newer-turns-cursor-or-null"
+    }
+} }
 ```
 
 To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. The returned `thread.sessionId` identifies the current live session tree root. Root threads use their own `thread.id` as `thread.sessionId`; stored threads that are not loaded also report their own `thread.id`, because resuming one makes it the root of a new live session tree. When the source history includes persisted token usage, the server also emits `thread/tokenUsage/updated` for the new thread immediately after the response. If the source thread is actively running, the fork snapshots it as if the current turn had been interrupted first. Pass `ephemeral: true` when the fork should stay in-memory only:

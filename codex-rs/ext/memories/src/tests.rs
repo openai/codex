@@ -4,6 +4,7 @@ use std::sync::Arc;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::PromptSlot;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolContributor;
@@ -212,6 +213,7 @@ async fn add_ad_hoc_note_tool_creates_note_file() {
             tool_name: memory_tool_name(crate::ADD_AD_HOC_NOTE_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
             conversation_history: codex_extension_api::ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             payload: payload.clone(),
         })
         .await
@@ -253,6 +255,7 @@ async fn add_ad_hoc_note_tool_rejects_paths_as_filenames() {
             tool_name: memory_tool_name(crate::ADD_AD_HOC_NOTE_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
             conversation_history: codex_extension_api::ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             payload,
         })
         .await;
@@ -295,6 +298,7 @@ async fn read_tool_reads_memory_file() {
             tool_name: memory_tool_name(crate::READ_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
             conversation_history: codex_extension_api::ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             payload: payload.clone(),
         })
         .await
@@ -340,6 +344,7 @@ async fn search_tool_accepts_multiple_queries() {
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
             conversation_history: codex_extension_api::ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             payload: payload.clone(),
         })
         .await
@@ -411,6 +416,7 @@ async fn search_tool_accepts_windowed_all_match_mode() {
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
             conversation_history: codex_extension_api::ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             payload: payload.clone(),
         })
         .await
@@ -462,6 +468,7 @@ async fn search_tool_rejects_legacy_single_query() {
             tool_name: memory_tool_name(crate::SEARCH_TOOL_NAME),
             truncation_policy: TruncationPolicy::Bytes(1024),
             conversation_history: codex_extension_api::ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
             payload,
         })
         .await;

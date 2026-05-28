@@ -1,0 +1,16 @@
+[package]
+name = "codex-app-server-start-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+serde_json = { workspace = true }
+divan = { workspace = true }
+tempfile = { workspace = true }
