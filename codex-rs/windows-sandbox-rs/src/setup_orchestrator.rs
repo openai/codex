@@ -41,6 +41,9 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+const CODEX_CLI_PATH_ENV_VAR: &str = "CODEX_CLI_PATH";
+const SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-setup.exe";
+const RESOURCES_DIRNAME: &str = "codex-resources";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -556,25 +559,31 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-
-        // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
-        // that sibling folder before falling back to PATH.
-        let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
-        if resource_candidate.exists() {
-            return resource_candidate;
+    if let Some(path) = std::env::var_os(CODEX_CLI_PATH_ENV_VAR) {
+        if let Some(setup_exe) = find_setup_exe_for_current_exe(Path::new(&path)) {
+            return setup_exe;
         }
     }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(setup_exe) = find_setup_exe_for_current_exe(&exe) {
+            return setup_exe;
+        }
+    }
+    PathBuf::from(SETUP_EXE_FILENAME)
+}
+
+fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    let candidate = dir.join(SETUP_EXE_FILENAME);
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    // Standalone installs keep Windows helper binaries under
+    // `codex-resources/` next to `codex.exe`, so elevation needs to probe
+    // that sibling folder before falling back to PATH.
+    let resource_candidate = dir.join(RESOURCES_DIRNAME).join(SETUP_EXE_FILENAME);
+    resource_candidate.exists().then_some(resource_candidate)
 }
 
 fn report_helper_failure(
@@ -942,8 +951,12 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::CODEX_CLI_PATH_ENV_VAR;
+    use super::RESOURCES_DIRNAME;
+    use super::SETUP_EXE_FILENAME;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
+    use super::find_setup_exe;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
@@ -965,6 +978,32 @@ mod tests {
             .iter()
             .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
             .collect()
+    }
+
+    #[test]
+    fn find_setup_exe_prefers_packaged_codex_cli_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_root = tmp.path().join("OpenAI.Codex_package");
+        let package_bin = package_root.join("bin");
+        let package_resources = package_root.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&package_bin).expect("create package bin");
+        fs::create_dir_all(&package_resources).expect("create package resources");
+        let codex_exe = package_bin.join("codex.exe");
+        fs::write(&codex_exe, "").expect("write codex exe");
+        let expected_setup = package_resources.join(SETUP_EXE_FILENAME);
+        fs::write(&expected_setup, "").expect("write setup exe");
+
+        let previous = std::env::var_os(CODEX_CLI_PATH_ENV_VAR);
+        // Helper subprocesses may run from copied AppData binaries, but setup refresh
+        // should still resolve the packaged setup helper when the parent CLI advertises it.
+        unsafe { std::env::set_var(CODEX_CLI_PATH_ENV_VAR, &codex_exe) };
+
+        assert_eq!(find_setup_exe(), expected_setup);
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var(CODEX_CLI_PATH_ENV_VAR, value) },
+            None => unsafe { std::env::remove_var(CODEX_CLI_PATH_ENV_VAR) },
+        }
     }
 
     #[test]
