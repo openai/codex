@@ -152,7 +152,7 @@ done
 
 # Zig enables UBSan for debug C builds by default. Rust links these objects
 # without Zig's sanitizer runtime, so keep native dependencies uninstrumented.
-exec "${zig_bin}" cc -target "${zig_target}" -fno-sanitize=undefined "\${args[@]}"
+exec "${zig_bin}" cc -target "${zig_target}" "\${args[@]}" -fno-sanitize=undefined
 EOF
   cat >"${cxx}" <<EOF
 #!/usr/bin/env bash
@@ -211,7 +211,7 @@ done
 
 # Zig enables UBSan for debug C++ builds by default. Rust links these objects
 # without Zig's sanitizer runtime, so keep native dependencies uninstrumented.
-exec "${zig_bin}" c++ -target "${zig_target}" -fno-sanitize=undefined "\${args[@]}"
+exec "${zig_bin}" c++ -target "${zig_target}" "\${args[@]}" -fno-sanitize=undefined
 EOF
   chmod +x "${cc}" "${cxx}"
 
