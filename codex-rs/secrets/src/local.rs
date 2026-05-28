@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -199,75 +200,107 @@ impl SecretsBackend for LocalSecretsBackend {
 }
 
 fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    write_file_atomically_with_nonce(path, contents, nonce)
+}
+
+fn write_file_atomically_with_nonce(path: &Path, contents: &[u8], nonce: u128) -> Result<()> {
     let dir = path.parent().with_context(|| {
         format!(
             "failed to compute parent directory for secrets file at {}",
             path.display()
         )
     })?;
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    let tmp_path = dir.join(format!(
-        ".{LOCAL_SECRETS_FILENAME}.tmp-{}-{nonce}",
-        std::process::id()
-    ));
+    let mut last_create_error: Option<io::Error> = None;
 
-    {
-        let mut tmp_file = fs::OpenOptions::new()
+    for attempt in 0..8 {
+        let tmp_path = temp_secrets_path(dir, nonce, attempt);
+        match fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&tmp_path)
-            .with_context(|| {
-                format!(
-                    "failed to create temp secrets file at {}",
-                    tmp_path.display()
-                )
-            })?;
-        tmp_file.write_all(contents).with_context(|| {
-            format!(
-                "failed to write temp secrets file at {}",
-                tmp_path.display()
-            )
-        })?;
-        tmp_file.sync_all().with_context(|| {
-            format!("failed to sync temp secrets file at {}", tmp_path.display())
-        })?;
-    }
+        {
+            Ok(mut tmp_file) => {
+                tmp_file.write_all(contents).with_context(|| {
+                    format!(
+                        "failed to write temp secrets file at {}",
+                        tmp_path.display()
+                    )
+                })?;
+                tmp_file.sync_all().with_context(|| {
+                    format!("failed to sync temp secrets file at {}", tmp_path.display())
+                })?;
 
-    match fs::rename(&tmp_path, path) {
-        Ok(()) => Ok(()),
-        Err(initial_error) => {
-            #[cfg(target_os = "windows")]
-            {
-                if path.exists() {
-                    fs::remove_file(path).with_context(|| {
-                        format!(
-                            "failed to remove existing secrets file at {} before replace",
-                            path.display()
-                        )
-                    })?;
-                    fs::rename(&tmp_path, path).with_context(|| {
-                        format!(
-                            "failed to replace secrets file at {} with {}",
-                            path.display(),
-                            tmp_path.display()
-                        )
-                    })?;
-                    return Ok(());
-                }
+                return match fs::rename(&tmp_path, path) {
+                    Ok(()) => Ok(()),
+                    Err(initial_error) => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            if path.exists() {
+                                fs::remove_file(path).with_context(|| {
+                                    format!(
+                                        "failed to remove existing secrets file at {} before replace",
+                                        path.display()
+                                    )
+                                })?;
+                                fs::rename(&tmp_path, path).with_context(|| {
+                                    format!(
+                                        "failed to replace secrets file at {} with {}",
+                                        path.display(),
+                                        tmp_path.display()
+                                    )
+                                })?;
+                                return Ok(());
+                            }
+                        }
+
+                        let _ = fs::remove_file(&tmp_path);
+                        Err(initial_error).with_context(|| {
+                            format!(
+                                "failed to atomically replace secrets file at {} with {}",
+                                path.display(),
+                                tmp_path.display()
+                            )
+                        })
+                    }
+                };
             }
-
-            let _ = fs::remove_file(&tmp_path);
-            Err(initial_error).with_context(|| {
-                format!(
-                    "failed to atomically replace secrets file at {} with {}",
-                    path.display(),
-                    tmp_path.display()
-                )
-            })
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                last_create_error = Some(err);
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "failed to create temp secrets file at {}",
+                        tmp_path.display()
+                    )
+                });
+            }
         }
     }
+
+    let tmp_path = temp_secrets_path(dir, nonce, 7);
+    Err(last_create_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "temp secrets file name collided too many times",
+        )
+    }))
+    .with_context(|| {
+        format!(
+            "failed to create temp secrets file at {}",
+            tmp_path.display()
+        )
+    })
+}
+
+fn temp_secrets_path(dir: &Path, nonce: u128, attempt: u8) -> PathBuf {
+    dir.join(format!(
+        ".{LOCAL_SECRETS_FILENAME}.tmp-{}-{nonce}-{attempt}",
+        std::process::id()
+    ))
 }
 
 fn generate_passphrase() -> Result<SecretString> {
@@ -406,6 +439,30 @@ mod tests {
             .collect();
         assert_eq!(filenames, vec![LOCAL_SECRETS_FILENAME.to_string()]);
         assert_eq!(backend.get(&scope, &name)?, Some("two".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn write_file_atomically_retries_after_temp_name_collision() -> Result<()> {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let secrets_dir = codex_home.path().join("secrets");
+        fs::create_dir_all(&secrets_dir)?;
+        let path = secrets_dir.join(LOCAL_SECRETS_FILENAME);
+        let collision_path =
+            temp_secrets_path(&secrets_dir, /*nonce*/ 123, /*attempt*/ 0);
+        fs::write(&collision_path, b"stale temp file")?;
+
+        write_file_atomically_with_nonce(
+            &path,
+            br#"{"version":1,"secrets":{}}"#,
+            /*nonce*/ 123,
+        )?;
+
+        assert_eq!(fs::read_to_string(&path)?, r#"{"version":1,"secrets":{}}"#);
+        assert!(
+            collision_path.exists(),
+            "existing colliding temp file should be untouched"
+        );
         Ok(())
     }
 }
