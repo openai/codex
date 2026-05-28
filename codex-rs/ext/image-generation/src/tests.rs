@@ -88,7 +88,7 @@ async fn generated_output_returns_image_input_and_persists_artifact() {
                     "Generated images are saved to {} as {} by default.\n\
                      If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
                     tempdir.path().display(),
-                    tempdir.path().join("_image_id_.png").display(),
+                    tempdir.path().join("call-1.png").display(),
                 ),
             },
         ]

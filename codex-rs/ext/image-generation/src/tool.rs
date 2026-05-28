@@ -42,7 +42,6 @@ const IMAGE_MODEL: &str = "gpt-image-2";
 const MAX_EDIT_IMAGES: usize = 5;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
-const IMAGE_ID_PLACEHOLDER: &str = "<image_id>";
 
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
@@ -318,7 +317,7 @@ async fn persist_generated_image(
         "Generated images are saved to {} as {} by default.\n\
          If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
         output_dir.display(),
-        generated_image_output_path(output_dir, IMAGE_ID_PLACEHOLDER).display(),
+        generated_image_output_path(output_dir, call_id).display(),
     ))
 }
 
