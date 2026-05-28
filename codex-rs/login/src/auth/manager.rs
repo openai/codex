@@ -1694,6 +1694,9 @@ impl AuthManager {
         {
             return Ok(());
         }
+        // Some managed ChatGPT auth files are refreshed by an external provider
+        // and intentionally omit the refresh token. In that mode we should only
+        // reload storage and never start a competing OAuth refresh.
         if let Some(CodexAuth::Chatgpt(chatgpt_auth)) = auth_before_reload.as_ref()
             && !chatgpt_auth
                 .current_token_data()
@@ -1831,6 +1834,9 @@ impl AuthManager {
             Some(auth_dot_json) => auth_dot_json,
             None => return false,
         };
+        // Without a refresh token, freshness is owned by the external writer
+        // that updates auth.json; local proactive refresh would only compete
+        // with that owner.
         let Some(tokens) = auth_dot_json
             .tokens
             .as_ref()
