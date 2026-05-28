@@ -100,7 +100,7 @@ pub struct ConfigLayerEntry {
     pub raw_toml: Option<String>,
     pub version: String,
     pub disabled_reason: Option<String>,
-    hooks_config_folder_override: Option<AbsolutePathBuf>,
+    hook_key_config_folder_override: Option<AbsolutePathBuf>,
 }
 
 impl ConfigLayerEntry {
@@ -112,7 +112,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: None,
-            hooks_config_folder_override: None,
+            hook_key_config_folder_override: None,
         }
     }
 
@@ -124,7 +124,7 @@ impl ConfigLayerEntry {
             raw_toml: Some(raw_toml),
             version,
             disabled_reason: None,
-            hooks_config_folder_override: None,
+            hook_key_config_folder_override: None,
         }
     }
 
@@ -140,7 +140,7 @@ impl ConfigLayerEntry {
             raw_toml: None,
             version,
             disabled_reason: Some(disabled_reason.into()),
-            hooks_config_folder_override: None,
+            hook_key_config_folder_override: None,
         }
     }
 
@@ -152,11 +152,11 @@ impl ConfigLayerEntry {
         self.raw_toml.as_deref()
     }
 
-    pub(crate) fn with_hooks_config_folder_override(
+    pub(crate) fn with_hook_key_config_folder_override(
         mut self,
-        hooks_config_folder_override: Option<AbsolutePathBuf>,
+        hook_key_config_folder_override: Option<AbsolutePathBuf>,
     ) -> Self {
-        self.hooks_config_folder_override = hooks_config_folder_override;
+        self.hook_key_config_folder_override = hook_key_config_folder_override;
         self
     }
 
@@ -190,13 +190,18 @@ impl ConfigLayerEntry {
     }
 
     /// Returns the `.codex/` folder that should be used for hook declarations.
-    ///
-    /// Project layers normally use their own config folder. Linked Git worktrees
-    /// can instead point hook discovery at the matching folder from the root
-    /// checkout while the rest of the project config still comes from the
-    /// worktree.
     pub fn hooks_config_folder(&self) -> Option<AbsolutePathBuf> {
-        self.hooks_config_folder_override
+        self.config_folder()
+    }
+
+    /// Returns the `.codex/` folder that should be used for hook trust keys.
+    ///
+    /// Project layers normally use their own config folder for both declarations
+    /// and trust keys. Linked Git worktrees can instead key hook trust against
+    /// the matching root-checkout folder while loading declarations from the
+    /// active worktree.
+    pub fn hook_key_config_folder(&self) -> Option<AbsolutePathBuf> {
+        self.hook_key_config_folder_override
             .clone()
             .or_else(|| self.config_folder())
     }

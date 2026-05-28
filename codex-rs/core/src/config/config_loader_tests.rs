@@ -1936,7 +1936,7 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_hooks()
+async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_hook_keys()
 -> std::io::Result<()> {
     let tmp = tempdir()?;
     let repo_root = tmp.path().join("repo");
@@ -2003,11 +2003,23 @@ async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_h
     assert_eq!(
         project_layers[0].hooks_config_folder(),
         Some(AbsolutePathBuf::from_absolute_path(
-            repo_child.join(".codex")
+            worktree_child.join(".codex")
         )?)
     );
     assert_eq!(
         project_layers[1].hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            worktree_root.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_layers[0].hook_key_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_child.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        project_layers[1].hook_key_config_folder(),
         Some(AbsolutePathBuf::from_absolute_path(
             repo_root.join(".codex")
         )?)
@@ -2021,7 +2033,7 @@ async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_h
     );
     assert_eq!(
         project_hook_command(project_layers[0]),
-        Some("echo repo child hook")
+        Some("echo worktree child hook")
     );
     assert_eq!(
         project_layers[1]
@@ -2032,14 +2044,14 @@ async fn linked_worktree_project_layers_keep_worktree_config_but_use_root_repo_h
     );
     assert_eq!(
         project_hook_command(project_layers[1]),
-        Some("echo repo root hook")
+        Some("echo worktree root hook")
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_config_toml()
+async fn linked_worktree_project_layers_keep_empty_worktree_config_with_root_repo_hook_keys()
 -> std::io::Result<()> {
     let tmp = tempdir()?;
     let repo_root = tmp.path().join("repo");
@@ -2085,13 +2097,16 @@ async fn linked_worktree_project_layers_use_root_repo_hooks_without_worktree_con
     assert_eq!(
         project_layers[0].hooks_config_folder(),
         Some(AbsolutePathBuf::from_absolute_path(
-            repo_root.join(".codex")
+            worktree_root.join(".codex")
         )?)
     );
     assert_eq!(
-        project_hook_command(project_layers[0]),
-        Some("echo repo root hook")
+        project_layers[0].hook_key_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_root.join(".codex")
+        )?)
     );
+    assert_eq!(project_hook_command(project_layers[0]), None);
 
     Ok(())
 }

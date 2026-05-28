@@ -127,6 +127,7 @@ pub(crate) fn discover_handlers(
             }
 
             for (source_path, hook_events) in [json_hooks, toml_hooks].into_iter().flatten() {
+                let key_source_path = hook_key_source_path_for_layer(layer, &source_path);
                 append_hook_events(
                     &mut handlers,
                     &mut hook_entries,
@@ -134,7 +135,7 @@ pub(crate) fn discover_handlers(
                     &mut display_order,
                     HookHandlerSource {
                         path: &source_path,
-                        key_source: source_path.display().to_string(),
+                        key_source: key_source_path.display().to_string(),
                         source: hook_source,
                         is_managed,
                         bypass_hook_trust: policy.bypass_hook_trust,
@@ -354,10 +355,7 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
         ConfigLayerSource::System { file }
         | ConfigLayerSource::User { file, .. }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.clone(),
-        ConfigLayerSource::Project { dot_codex_folder } => layer
-            .hooks_config_folder()
-            .unwrap_or_else(|| dot_codex_folder.clone())
-            .join(CONFIG_TOML_FILE),
+        ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder.join(CONFIG_TOML_FILE),
         ConfigLayerSource::Mdm { domain, key } => {
             synthetic_layer_path(&format!("<mdm:{domain}:{key}>/{CONFIG_TOML_FILE}"))
         }
@@ -366,6 +364,20 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
         }
         ConfigLayerSource::SessionFlags => synthetic_layer_path("<session-flags>/config.toml"),
     }
+}
+
+fn hook_key_source_path_for_layer(
+    layer: &ConfigLayerEntry,
+    source_path: &AbsolutePathBuf,
+) -> AbsolutePathBuf {
+    if matches!(layer.name, ConfigLayerSource::Project { .. })
+        && let Some(config_folder) = layer.hook_key_config_folder()
+        && let Some(file_name) = source_path.as_path().file_name()
+    {
+        return config_folder.join(file_name);
+    }
+
+    source_path.clone()
 }
 
 fn synthetic_layer_path(path: &str) -> AbsolutePathBuf {
