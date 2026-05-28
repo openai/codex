@@ -203,16 +203,29 @@ fn run_setup_refresh_inner(
         ),
         Some(&sandbox_dir(request.codex_home)),
     );
-    let status = cmd
-        .status()
-        .map_err(|e| {
+    let status = match cmd.status() {
+        Ok(status) => status,
+        Err(err) if should_retry_refresh_with_elevation(&err) => {
             log_note(
-                &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
+                &format!(
+                    "setup refresh: spawn for {} returned elevation-required error {}; retrying with explicit elevation",
+                    exe.display(),
+                    err
+                ),
                 Some(&sandbox_dir(request.codex_home)),
             );
-            e
-        })
-        .context("spawn setup refresh")?;
+            run_setup_exe(&payload, /*needs_elevation*/ true, request.codex_home)
+                .context("spawn setup refresh")?;
+            return Ok(());
+        }
+        Err(err) => {
+            log_note(
+                &format!("setup refresh: failed to spawn {}: {err}", exe.display()),
+                Some(&sandbox_dir(request.codex_home)),
+            );
+            return Err(err).context("spawn setup refresh");
+        }
+    };
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
@@ -221,6 +234,10 @@ fn run_setup_refresh_inner(
         return Err(anyhow!("setup refresh failed with status {status}"));
     }
     Ok(())
+}
+
+fn should_retry_refresh_with_elevation(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(740)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1453,5 +1470,14 @@ mod tests {
                 .into_iter()
                 .all(|path| roots.contains(&path))
         );
+    }
+
+    #[test]
+    fn refresh_retries_only_for_windows_elevation_required_error() {
+        let elevation_required = std::io::Error::from_raw_os_error(740);
+        let access_denied = std::io::Error::from_raw_os_error(5);
+
+        assert!(super::should_retry_refresh_with_elevation(&elevation_required));
+        assert!(!super::should_retry_refresh_with_elevation(&access_denied));
     }
 }
