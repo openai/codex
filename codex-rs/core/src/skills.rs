@@ -51,7 +51,7 @@ pub(crate) fn skills_load_input_from_config(
     )
 }
 
-pub(crate) fn environment_path_ref(
+pub(crate) fn environment_path(
     environment_id: String,
     file_system: Arc<dyn ExecutorFileSystem>,
     path: AbsolutePathBuf,

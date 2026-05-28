@@ -4120,12 +4120,12 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .skills_for_cwd(
             &crate::skills_load_input_from_config(
                 &parent_config,
-                Some(crate::environment_path_ref(
+                Some(crate::environment_path(
                     codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                     Arc::clone(&skill_fs),
                     parent_config.cwd.clone(),
                 )),
-                Some(crate::environment_path_ref(
+                Some(crate::environment_path(
                     codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                     Arc::clone(&skill_fs),
                     parent_config.cwd.clone(),
@@ -4695,15 +4695,15 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let path_ref = crate::environment_path_ref(
+    let cwd = crate::environment_path(
         codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         environment.get_filesystem(),
         per_turn_config.cwd.clone(),
     );
     let skills_input = crate::skills_load_input_from_config(
         &per_turn_config,
-        Some(path_ref.clone()),
-        Some(path_ref),
+        Some(cwd.clone()),
+        Some(cwd),
         effective_skill_roots,
     );
     let skills_outcome = Arc::new(
@@ -6538,15 +6538,15 @@ where
         .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let path_ref = crate::environment_path_ref(
+    let cwd = crate::environment_path(
         codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         environment.get_filesystem(),
         per_turn_config.cwd.clone(),
     );
     let skills_input = crate::skills_load_input_from_config(
         &per_turn_config,
-        Some(path_ref.clone()),
-        Some(path_ref),
+        Some(cwd.clone()),
+        Some(cwd),
         effective_skill_roots,
     );
     let skills_outcome = Arc::new(

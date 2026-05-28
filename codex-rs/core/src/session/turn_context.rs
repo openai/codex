@@ -1,7 +1,7 @@
 use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
-use crate::environment_path_ref;
+use crate::environment_path;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -678,7 +678,7 @@ impl Session {
             )
             .await;
         let cwd = primary_turn_environment.map(|turn_environment| {
-            environment_path_ref(
+            environment_path(
                 turn_environment.environment_id.clone(),
                 turn_environment.environment.get_filesystem(),
                 turn_environment.cwd.clone(),
