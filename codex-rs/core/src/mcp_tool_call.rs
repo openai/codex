@@ -15,6 +15,7 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
+use crate::mcp_openai_file::OpenAIFileInputParams;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
@@ -163,12 +164,19 @@ pub(crate) async fn handle_mcp_tool_call(
     } else {
         connectors::AppToolPolicy::default()
     };
-    let approval_mode = if server == CODEX_APPS_MCP_SERVER_NAME {
+    let approval_mode = if metadata
+        .as_ref()
+        .and_then(|metadata| metadata.openai_file_input_params.as_ref())
+        .is_some_and(|params| params.store_in_oai_library)
+    {
+        AppToolApproval::Prompt
+    } else if server == CODEX_APPS_MCP_SERVER_NAME {
         app_tool_policy.approval
     } else {
         custom_mcp_tool_approval_mode(sess.as_ref(), turn_context.as_ref(), &server, &tool_name)
             .await
     };
+    let approval_invocation = approval_visible_mcp_invocation(&invocation, metadata.as_ref());
 
     if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
         let result = notify_mcp_tool_call_skip(
@@ -204,7 +212,7 @@ pub(crate) async fn handle_mcp_tool_call(
         sess.as_ref(),
         turn_context.as_ref(),
         &call_id,
-        invocation.clone(),
+        approval_invocation.clone(),
         item_metadata.clone(),
     )
     .await;
@@ -213,7 +221,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &sess,
         turn_context,
         &call_id,
-        &invocation,
+        &approval_invocation,
         &hook_tool_name,
         metadata.as_ref(),
         approval_mode,
@@ -328,7 +336,7 @@ async fn handle_approved_mcp_tool_call(
         sess,
         turn_context,
         arguments_value.clone(),
-        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_ref()),
     )
     .await;
     let tool_input = match &rewrite {
@@ -976,13 +984,15 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_description: Option<String>,
     mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
-    openai_file_input_params: Option<Vec<String>>,
+    openai_file_input_params: Option<OpenAIFileInputParams>,
 }
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_META_KEY: &str = "openai/fileUploadConfig";
+const MCP_TOOL_OPENAI_FILE_UPLOAD_STORE_IN_OAI_LIBRARY_KEY: &str = "store_in_oai_library";
 
 async fn custom_mcp_tool_approval_mode(
     sess: &Session,
@@ -1464,6 +1474,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         openai_file_input_params: openai_file_input_params_for_server(
             server,
             tool_info.tool.meta.as_deref(),
+            tool_info.tool.input_schema.as_ref(),
         ),
     })
 }
@@ -1471,10 +1482,60 @@ pub(crate) async fn lookup_mcp_tool_metadata(
 fn openai_file_input_params_for_server(
     server: &str,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
-) -> Option<Vec<String>> {
-    (server == CODEX_APPS_MCP_SERVER_NAME)
-        .then_some(declared_openai_file_input_param_names(meta))
-        .filter(|params| !params.is_empty())
+    _input_schema: &serde_json::Map<String, serde_json::Value>,
+) -> Option<OpenAIFileInputParams> {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
+    let names = declared_openai_file_input_param_names(meta);
+    if names.is_empty() {
+        return None;
+    }
+
+    Some(OpenAIFileInputParams {
+        names,
+        store_in_oai_library: declared_openai_file_upload_store_in_oai_library(meta),
+    })
+}
+
+fn declared_openai_file_upload_store_in_oai_library(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    meta.and_then(|meta| meta.get(MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_META_KEY))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|config| config.get(MCP_TOOL_OPENAI_FILE_UPLOAD_STORE_IN_OAI_LIBRARY_KEY))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn approval_visible_mcp_invocation(
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> McpInvocation {
+    let Some(openai_file_input_params) =
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_ref())
+    else {
+        return invocation.clone();
+    };
+    if !openai_file_input_params.store_in_oai_library {
+        return invocation.clone();
+    }
+
+    let mut approval_arguments = invocation
+        .arguments
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    approval_arguments.insert(
+        MCP_TOOL_OPENAI_FILE_UPLOAD_STORE_IN_OAI_LIBRARY_KEY.to_string(),
+        serde_json::Value::Bool(true),
+    );
+    McpInvocation {
+        arguments: Some(serde_json::Value::Object(approval_arguments)),
+        ..invocation.clone()
+    }
 }
 
 fn get_mcp_app_resource_uri(

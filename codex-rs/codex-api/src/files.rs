@@ -98,6 +98,7 @@ pub async fn upload_local_file(
     base_url: &str,
     auth: &dyn AuthProvider,
     path: &Path,
+    store_in_oai_library: bool,
 ) -> Result<UploadedOpenAiFile, OpenAiFileError> {
     let metadata = tokio::fs::metadata(path)
         .await
@@ -129,12 +130,17 @@ pub async fn upload_local_file(
         .unwrap_or("file")
         .to_string();
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
+    let mut create_body = serde_json::json!({
+        "file_name": file_name,
+        "file_size": metadata.len(),
+        "use_case": OPENAI_FILE_USE_CASE,
+    });
+    if store_in_oai_library {
+        create_body["store_in_library"] = serde_json::Value::Bool(true);
+    }
+
     let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
-        .json(&serde_json::json!({
-            "file_name": file_name,
-            "file_size": metadata.len(),
-            "use_case": OPENAI_FILE_USE_CASE,
-        }))
+        .json(&create_body)
         .send()
         .await
         .map_err(|source| OpenAiFileError::Request {
@@ -363,9 +369,14 @@ mod tests {
         let path = dir.path().join("hello.txt");
         tokio::fs::write(&path, b"hello").await.expect("write file");
 
-        let uploaded = upload_local_file(&base_url, &chatgpt_auth(), &path)
-            .await
-            .expect("upload succeeds");
+        let uploaded = upload_local_file(
+            &base_url,
+            &chatgpt_auth(),
+            &path,
+            /*store_in_oai_library*/ false,
+        )
+        .await
+        .expect("upload succeeds");
 
         assert_eq!(uploaded.file_id, "file_123");
         assert_eq!(uploaded.uri, "sediment://file_123");
@@ -376,5 +387,70 @@ mod tests {
         assert_eq!(uploaded.file_name, "hello.txt");
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));
         assert_eq!(finalize_attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn upload_local_file_can_request_oai_library_storage() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .and(body_json(serde_json::json!({
+                "file_name": "library-note.txt",
+                "file_size": 7,
+                "use_case": "codex",
+                "store_in_library": true,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file_id": "file_library",
+                "upload_url": format!("{}/upload/file_library", server.uri()),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/file_library"))
+            .and(header("content-length", "7"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files/file_library/uploaded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/download/file_library", server.uri()),
+                "file_name": "library-note.txt",
+                "mime_type": "text/plain",
+                "file_size_bytes": 7,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let base_url = base_url_for(&server);
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("library-note.txt");
+        tokio::fs::write(&path, b"library")
+            .await
+            .expect("write file");
+
+        let uploaded = upload_local_file(
+            &base_url,
+            &chatgpt_auth(),
+            &path,
+            /*store_in_oai_library*/ true,
+        )
+        .await
+        .expect("upload succeeds");
+
+        assert_eq!(uploaded.file_id, "file_library");
+        assert_eq!(uploaded.uri, "sediment://file_library");
+        assert_eq!(
+            uploaded.download_url,
+            format!("{}/download/file_library", server.uri())
+        );
+
+        server.verify().await;
     }
 }
