@@ -6,6 +6,8 @@ use std::time::Duration;
 use crate::DB_FALLBACK_METRIC;
 use crate::DB_INIT_DURATION_METRIC;
 use crate::DB_INIT_METRIC;
+use crate::DB_RECOVERY_DURATION_METRIC;
+use crate::DB_RECOVERY_METRIC;
 use tracing::debug;
 
 /// Low-cardinality sink for SQLite startup and fallback telemetry.
@@ -92,6 +94,24 @@ pub fn record_fallback(
     );
 }
 
+pub(crate) fn record_recovery_result<T>(
+    telemetry: Option<&dyn DbTelemetry>,
+    db: DbKind,
+    duration: Duration,
+    trigger_error: &anyhow::Error,
+    result: &anyhow::Result<T>,
+) {
+    let outcome = DbOutcomeTags::from_result(result);
+    let tags = [
+        ("status", outcome.status),
+        ("db", db.as_str()),
+        ("error", outcome.error),
+        ("trigger_error", classify_error(trigger_error)),
+    ];
+    record_counter(telemetry, DB_RECOVERY_METRIC, &tags);
+    record_duration(telemetry, DB_RECOVERY_DURATION_METRIC, duration, &tags);
+}
+
 fn record_counter(telemetry: Option<&dyn DbTelemetry>, name: &str, tags: &[(&str, &str)]) {
     if let Some(telemetry) = resolve_telemetry(telemetry) {
         telemetry.counter(name, /*inc*/ 1, tags);
@@ -137,6 +157,9 @@ fn classify_error(err: &anyhow::Error) -> &'static str {
     for cause in err.chain() {
         if let Some(sqlx_err) = cause.downcast_ref::<sqlx::Error>() {
             return classify_sqlx_error(sqlx_err);
+        }
+        if error_message_is_corrupt(cause.to_string().as_str()) {
+            return "corrupt";
         }
         if cause
             .downcast_ref::<sqlx::migrate::MigrateError>()
@@ -187,6 +210,15 @@ fn classify_sqlite_code(code: &str) -> &'static str {
         Some(19) => "constraint",
         _ => "unknown",
     }
+}
+
+fn error_message_is_corrupt(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("database disk image is malformed")
+        || message.contains("file is not a database")
+        || message.contains("database schema is malformed")
+        || message.contains("database is corrupt")
+        || (message.contains("database") && message.contains("malformed"))
 }
 
 #[cfg(test)]

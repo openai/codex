@@ -95,3 +95,7 @@ pub const DB_INIT_METRIC: &str = "codex.sqlite.init.count";
 pub const DB_INIT_DURATION_METRIC: &str = "codex.sqlite.init.duration_ms";
 /// Rollout fallback attempts. Tags: [caller, reason]
 pub const DB_FALLBACK_METRIC: &str = "codex.sqlite.fallback.count";
+/// SQLite automatic recovery attempts. Tags: [status, db, error, trigger_error]
+pub const DB_RECOVERY_METRIC: &str = "codex.sqlite.recovery.count";
+/// SQLite automatic recovery latency. Tags: [status, db, error, trigger_error]
+pub const DB_RECOVERY_DURATION_METRIC: &str = "codex.sqlite.recovery.duration_ms";

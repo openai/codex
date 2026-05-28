@@ -1,14 +1,17 @@
+//! Rebuild recovered SQLite tables when the schema root page is gone.
+//!
+//! If page 1 is destroyed, SQLite's recovery extension cannot discover the
+//! sqlite_schema root. It can still recover orphaned sqlite_schema rows into
+//! lost_and_found, so this module rebuilds tables from those rows and then
+//! copies matching lost_and_found record groups back into the recreated tables.
+
 use super::quote_identifier;
 use anyhow::Context;
 use anyhow::Result;
+use sqlx::AssertSqlSafe;
 use sqlx::Row;
 use sqlx::SqlitePool;
 use tracing::warn;
-
-// If page 1 is destroyed, SQLite's recovery extension cannot discover the
-// sqlite_schema root. It can still recover orphaned sqlite_schema rows into
-// lost_and_found, so this module rebuilds tables from those rows and then
-// copies matching lost_and_found record groups back into the recreated tables.
 
 #[derive(Debug)]
 struct SchemaObject {
@@ -50,7 +53,9 @@ pub(super) async fn rebuild_from_recovered_schema_if_needed(pool: &SqlitePool) -
         .await?;
 
     for object in schema.iter().filter(|object| object.object_type == "table") {
-        sqlx::query(object.sql.as_str())
+        // Recovered sqlite_schema SQL is local database metadata, not
+        // interpolated user input.
+        sqlx::query(AssertSqlSafe(object.sql.clone()))
             .execute(pool)
             .await
             .with_context(|| format!("failed to recreate recovered table {}", object.name))?;
@@ -62,7 +67,12 @@ pub(super) async fn rebuild_from_recovered_schema_if_needed(pool: &SqlitePool) -
     }
 
     for object in schema.iter().filter(|object| object.object_type != "table") {
-        if let Err(err) = sqlx::query(object.sql.as_str()).execute(pool).await {
+        // Recovered sqlite_schema SQL is local database metadata, not
+        // interpolated user input.
+        if let Err(err) = sqlx::query(AssertSqlSafe(object.sql.clone()))
+            .execute(pool)
+            .await
+        {
             warn!(
                 "skipping recovered {} {} during lost_and_found rebuild: {err}",
                 object.object_type, object.name
@@ -181,7 +191,8 @@ async fn copy_lost_and_found_rows(
         column_names.join(", "),
         value_expressions.join(", ")
     );
-    sqlx::query(sql.as_str())
+    // Dynamic identifiers are quoted with quote_identifier before interpolation.
+    sqlx::query(AssertSqlSafe(sql))
         .bind(table.rootpage)
         .execute(pool)
         .await

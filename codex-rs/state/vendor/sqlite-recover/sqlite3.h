@@ -35,9 +35,9 @@ extern "C" {
 #ifdef SQLITE_VERSION_NUMBER
 # undef SQLITE_VERSION_NUMBER
 #endif
-#define SQLITE_VERSION        "3.46.0"
-#define SQLITE_VERSION_NUMBER 3046000
-#define SQLITE_SOURCE_ID      "2024-05-23 13:25:27 96c92aba00c8375bc32fafcdf12429c58bd8aabfcadab6683e35bbb9cdebf19e"
+#define SQLITE_VERSION        "3.51.3"
+#define SQLITE_VERSION_NUMBER 3051003
+#define SQLITE_SOURCE_ID      "2026-03-13 10:38:09 737ae4a34738ffa0c3ff7f9bb18df914dd1cad163f28fd6b6e114a344fe6d618"
 SQLITE_API SQLITE_EXTERN const char sqlite3_version[];
 SQLITE_API const char *sqlite3_libversion(void);
 SQLITE_API const char *sqlite3_sourceid(void);

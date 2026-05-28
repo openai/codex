@@ -361,7 +361,7 @@ async fn open_sqlite(
             if !recovery::is_malformed_sqlite_error(&err) {
                 return Err(err);
             }
-            recovery::recover_database(path, spec, migrator, &err).await?;
+            recovery::recover_database(path, spec, migrator, &err, telemetry_override).await?;
             connect_sqlite(options.clone(), spec, telemetry_override).await?
         }
     };
@@ -373,7 +373,7 @@ async fn open_sqlite(
                 return Err(err);
             }
             pool.close().await;
-            recovery::recover_database(path, spec, migrator, &err).await?;
+            recovery::recover_database(path, spec, migrator, &err, telemetry_override).await?;
             let pool = connect_sqlite(options, spec, telemetry_override).await?;
             migrate_sqlite(&pool, migrator, spec, telemetry_override).await?;
             Ok(pool)
@@ -507,6 +507,7 @@ mod tests {
     use super::state_db_path;
     use super::test_support::unique_temp_dir;
     use crate::DB_INIT_METRIC;
+    use crate::DB_RECOVERY_METRIC;
     use crate::DbTelemetry;
     use crate::migrations::STATE_MIGRATOR;
     use pretty_assertions::assert_eq;
@@ -515,6 +516,10 @@ mod tests {
     use sqlx::sqlite::SqliteConnectOptions;
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
+    use std::fs::OpenOptions;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+    use std::io::Write;
     use std::path::Path;
     use std::sync::Mutex;
 
@@ -660,6 +665,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_state_sqlite_recovers_malformed_database_on_startup() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let state_path = state_db_path(codex_home.as_path());
+        let pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&state_path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("open state db");
+        STATE_MIGRATOR
+            .run(&pool)
+            .await
+            .expect("apply current state schema");
+        let thread_id = "00000000-0000-0000-0000-000000000123";
+        sqlx::query(
+            r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode
+) VALUES (?, ?, 1, 1, 'cli', 'test-provider', ?, 'startup recovery', 'read-only', 'on-request')
+            "#,
+        )
+        .bind(thread_id)
+        .bind(codex_home.join("session.jsonl").display().to_string())
+        .bind(codex_home.as_path().display().to_string())
+        .execute(&pool)
+        .await
+        .expect("insert thread");
+        let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+            .fetch_one(&pool)
+            .await
+            .expect("read page size");
+        let migration_root_page: i64 = sqlx::query_scalar(
+            "SELECT rootpage FROM sqlite_schema WHERE name = '_sqlx_migrations'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read migration root page");
+        pool.close().await;
+        corrupt_page(
+            state_path.as_path(),
+            page_size.try_into().expect("page size should fit u64"),
+            migration_root_page
+                .try_into()
+                .expect("root page should fit u64"),
+        )
+        .expect("corrupt migration table page");
+
+        let telemetry = TestTelemetry::default();
+        let tolerant_migrator = runtime_state_migrator();
+        let recovered_pool =
+            open_state_sqlite(state_path.as_path(), &tolerant_migrator, Some(&telemetry))
+                .await
+                .expect("startup should recover malformed state db");
+        let title: String = sqlx::query_scalar("SELECT title FROM threads WHERE id = ?")
+            .bind(thread_id)
+            .fetch_one(&recovered_pool)
+            .await
+            .expect("recovered thread should exist");
+        recovered_pool.close().await;
+
+        assert_eq!(title, "startup recovery");
+        let integrity = sqlite_integrity_check(state_path.as_path())
+            .await
+            .expect("integrity check should run");
+        assert_eq!(integrity, vec!["ok".to_string()]);
+        let recovery_event = telemetry
+            .counters()
+            .into_iter()
+            .find(|event| event.name == DB_RECOVERY_METRIC)
+            .expect("recovery metric should be recorded");
+        assert_eq!(
+            recovery_event.tags,
+            BTreeMap::from([
+                ("db".to_string(), "state".to_string()),
+                ("error".to_string(), "none".to_string()),
+                ("status".to_string(), "success".to_string()),
+                ("trigger_error".to_string(), "corrupt".to_string()),
+            ])
+        );
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn init_records_successful_sqlite_init_phases_to_explicit_telemetry() {
         let codex_home = unique_temp_dir();
         let telemetry = TestTelemetry::default();
@@ -699,5 +800,15 @@ mod tests {
         runtime.pool.close().await;
         runtime.logs_pool.close().await;
         let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    fn corrupt_page(path: &Path, page_size: u64, page_number: u64) -> std::io::Result<()> {
+        let offset = page_size
+            .checked_mul(page_number.saturating_sub(1))
+            .ok_or_else(|| std::io::Error::other("corrupt page offset overflowed"))?;
+        let mut file = OpenOptions::new().write(true).open(path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(&[0; 16])?;
+        Ok(())
     }
 }

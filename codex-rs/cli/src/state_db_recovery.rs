@@ -18,9 +18,7 @@ pub(crate) fn is_locked(detail: &str) -> bool {
 
 pub(crate) fn confirm_repair(startup_error: &LocalStateDbStartupError) -> std::io::Result<bool> {
     eprintln!("Codex couldn't start because its local database appears to be damaged.");
-    eprintln!(
-        "Codex can try a last-resort startup repair by backing up those files and rebuilding empty local databases."
-    );
+    eprintln!("Codex can try to repair by backing up and rebuilding those files.");
     print_technical_details(startup_error);
     crate::confirm("Repair Codex local data now? [y/N]: ")
 }

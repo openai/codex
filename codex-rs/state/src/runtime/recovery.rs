@@ -1,7 +1,9 @@
 use super::RuntimeDbSpec;
+use crate::telemetry::DbTelemetry;
 use anyhow::Context;
 use anyhow::Result;
 use log::LevelFilter;
+use sqlx::AssertSqlSafe;
 use sqlx::ConnectOptions;
 use sqlx::Row;
 use sqlx::SqlitePool;
@@ -11,9 +13,14 @@ use sqlx::sqlite::SqlitePoolOptions;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::fs::TryLockError;
 use std::path::Path;
 use std::path::PathBuf;
+use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
@@ -23,11 +30,18 @@ mod recover_api;
 
 const SQLITE_CORRUPT: i32 = 11;
 const SQLITE_NOTADB: i32 = 26;
+const RECOVERY_LOCK_POLL: Duration = Duration::from_millis(100);
+const RECOVERY_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 struct RecoveryPaths {
     recovered_path: PathBuf,
     backup_paths: Vec<PathBuf>,
+}
+
+struct RecoveryLock {
+    _file: File,
+    waited: bool,
 }
 
 pub(super) fn is_malformed_sqlite_error(err: &anyhow::Error) -> bool {
@@ -51,7 +65,42 @@ pub(super) async fn recover_database(
     spec: RuntimeDbSpec,
     migrator: &Migrator,
     original_error: &anyhow::Error,
+    telemetry_override: Option<&dyn DbTelemetry>,
 ) -> Result<()> {
+    let started = Instant::now();
+    let result = recover_database_inner(path, spec, migrator, original_error).await;
+    crate::telemetry::record_recovery_result(
+        telemetry_override,
+        spec.kind,
+        started.elapsed(),
+        original_error,
+        &result,
+    );
+    result
+}
+
+async fn recover_database_inner(
+    path: &Path,
+    spec: RuntimeDbSpec,
+    migrator: &Migrator,
+    original_error: &anyhow::Error,
+) -> Result<()> {
+    let recovery_lock = acquire_recovery_lock(path).await.with_context(|| {
+        format!(
+            "failed to lock automatic recovery for {} at {}",
+            spec.label,
+            path.display()
+        )
+    })?;
+    if recovery_lock.waited && database_is_healthy(path, migrator).await {
+        warn!(
+            "{} at {} was usable after waiting for the recovery lock; skipping duplicate recovery",
+            spec.label,
+            path.display()
+        );
+        return Ok(());
+    }
+
     let recovery = prepare_recovery_paths(path).await.with_context(|| {
         format!(
             "failed to prepare automatic recovery for {} at {}",
@@ -121,6 +170,71 @@ fn print_status(message: String) {
     // Keep startup recovery status on stderr so stdout remains available for
     // command output and app-server JSON-RPC transports.
     eprintln!("{message}");
+}
+
+async fn acquire_recovery_lock(path: &Path) -> Result<RecoveryLock> {
+    let lock_path = recovery_lock_path(path);
+    tokio::task::spawn_blocking(move || {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path.as_path())
+            .with_context(|| format!("failed to open {}", lock_path.display()))?;
+        let started = Instant::now();
+        let mut waited = false;
+        loop {
+            match file.try_lock() {
+                Ok(()) => {
+                    return Ok(RecoveryLock {
+                        _file: file,
+                        waited,
+                    });
+                }
+                Err(TryLockError::WouldBlock) if started.elapsed() < RECOVERY_LOCK_TIMEOUT => {
+                    waited = true;
+                    thread::sleep(RECOVERY_LOCK_POLL);
+                }
+                Err(TryLockError::WouldBlock) => {
+                    anyhow::bail!(
+                        "timed out waiting for another Codex process to finish recovering {}",
+                        lock_path.display()
+                    );
+                }
+                Err(err) => {
+                    return Err(std::io::Error::from(err)).with_context(|| {
+                        format!("failed to lock recovery file {}", lock_path.display())
+                    });
+                }
+            }
+        }
+    })
+    .await
+    .context("recovery lock task panicked")?
+}
+
+fn recovery_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = OsString::from(path.as_os_str());
+    lock_path.push(".codex-recovery.lock");
+    PathBuf::from(lock_path)
+}
+
+async fn database_is_healthy(path: &Path, migrator: &Migrator) -> bool {
+    let Ok(pool) = open_recovered_pool(path).await else {
+        return false;
+    };
+    let result = async {
+        // Check integrity before migrations so a still-corrupt database is not
+        // modified just because another process held the recovery lock first.
+        assert_integrity_ok(&pool).await?;
+        migrator.run(&pool).await?;
+        assert_integrity_ok(&pool).await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    pool.close().await;
+    result.is_ok()
 }
 
 fn sqlx_error_is_malformed(err: &sqlx::Error) -> bool {
@@ -212,6 +326,19 @@ async fn run_recovery(path: &Path, recovered_path: &Path, migrator: &Migrator) -
     assert_integrity_ok(&pool).await?;
     match migrator.run(&pool).await {
         Ok(()) => {
+            if let Err(err) =
+                assert_expected_schema(&pool, recovered_path.as_path(), migrator).await
+            {
+                pool.close().await;
+                rebuild_recovered_database(recovered_path.as_path(), migrator)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to normalize recovered database after schema validation failure: {err}"
+                        )
+                    })?;
+                return Ok(());
+            }
             assert_integrity_ok(&pool).await?;
             pool.close().await;
         }
@@ -338,7 +465,8 @@ ORDER BY name
         "#,
         quote_identifier(schema)
     );
-    let rows = sqlx::query_scalar::<_, String>(sql.as_str())
+    // Dynamic identifiers are quoted with quote_identifier before interpolation.
+    let rows = sqlx::query_scalar::<_, String>(AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
     Ok(rows.into_iter().collect())
@@ -365,14 +493,16 @@ async fn copy_current_schema_table(pool: &SqlitePool, table: &str) -> Result<boo
     let sql = format!(
         "INSERT OR REPLACE INTO main.{table_name} ({column_list}) SELECT {column_list} FROM recovered.{table_name}"
     );
-    sqlx::query(sql.as_str()).execute(pool).await?;
+    // Dynamic identifiers are quoted with quote_identifier before interpolation.
+    sqlx::query(AssertSqlSafe(sql)).execute(pool).await?;
     Ok(true)
 }
 
 async fn copy_extra_recovered_table(pool: &SqlitePool, table: &str) -> Result<()> {
     let table_name = quote_identifier(table);
     let sql = format!("CREATE TABLE main.{table_name} AS SELECT * FROM recovered.{table_name}");
-    sqlx::query(sql.as_str()).execute(pool).await?;
+    // Dynamic identifiers are quoted with quote_identifier before interpolation.
+    sqlx::query(AssertSqlSafe(sql)).execute(pool).await?;
     Ok(())
 }
 
@@ -381,7 +511,8 @@ async fn table_columns(pool: &SqlitePool, schema: &str, table: &str) -> Result<V
         "SELECT name FROM {}.pragma_table_xinfo(?) WHERE hidden = 0 ORDER BY cid",
         quote_identifier(schema)
     );
-    Ok(sqlx::query_scalar::<_, String>(sql.as_str())
+    // Dynamic identifiers are quoted with quote_identifier before interpolation.
+    Ok(sqlx::query_scalar::<_, String>(AssertSqlSafe(sql))
         .bind(table)
         .fetch_all(pool)
         .await?)
@@ -412,6 +543,39 @@ WHERE type = 'table'
     Ok(())
 }
 
+async fn assert_expected_schema(
+    pool: &SqlitePool,
+    recovered_path: &Path,
+    migrator: &Migrator,
+) -> Result<()> {
+    let expected_path =
+        unique_sibling_path(recovered_path, "codex-recovery-schema-check", "sqlite").await?;
+    let expected_pool = match open_migrated_pool(expected_path.as_path(), migrator).await {
+        Ok(pool) => pool,
+        Err(err) => {
+            cleanup_sqlite_files(expected_path.as_path()).await;
+            return Err(err);
+        }
+    };
+    let expected_tables = user_tables(&expected_pool, "main").await;
+    expected_pool.close().await;
+    cleanup_sqlite_files(expected_path.as_path()).await;
+
+    let expected_tables = expected_tables?;
+    let actual_tables = user_tables(pool, "main").await?;
+    let missing_tables = expected_tables
+        .difference(&actual_tables)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_tables.is_empty() {
+        anyhow::bail!(
+            "recovered database is missing expected tables: {}",
+            missing_tables.join(", ")
+        );
+    }
+    Ok(())
+}
+
 async fn assert_integrity_ok(pool: &SqlitePool) -> Result<()> {
     let rows = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
         .fetch_all(pool)
@@ -423,6 +587,12 @@ async fn assert_integrity_ok(pool: &SqlitePool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+async fn cleanup_sqlite_files(path: &Path) {
+    for sqlite_path in sqlite_paths(path) {
+        let _ = tokio::fs::remove_file(sqlite_path).await;
+    }
 }
 
 async fn replace_with_recovered_database(path: &Path, recovered_path: &Path) -> Result<()> {
@@ -552,6 +722,9 @@ mod tests {
         tokio::fs::create_dir_all(temp_dir.as_path()).await?;
         let db_path = temp_dir.join("sample.sqlite");
         create_sample_db(db_path.as_path()).await?;
+        let sidecars = sqlite_sidecar_paths(db_path.as_path());
+        tokio::fs::write(sidecars[0].as_path(), b"stale wal").await?;
+        tokio::fs::write(sidecars[1].as_path(), b"stale shm").await?;
         corrupt_first_table_page(db_path.as_path())?;
 
         let err = anyhow::anyhow!("database disk image is malformed");
@@ -560,6 +733,7 @@ mod tests {
             super::super::STATE_DB,
             &Migrator::DEFAULT,
             &err,
+            /*telemetry_override*/ None,
         )
         .await?;
 
@@ -575,7 +749,57 @@ mod tests {
             })
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".bak"))
             .count();
-        assert_eq!(backup_count, 1);
+        assert_eq!(backup_count, 3);
+        assert!(!tokio::fs::try_exists(sidecars[0].as_path()).await?);
+        assert!(!tokio::fs::try_exists(sidecars[1].as_path()).await?);
+        let _ = tokio::fs::remove_dir_all(temp_dir.as_path()).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_skips_when_database_is_already_healthy() -> Result<()> {
+        let temp_dir = super::super::test_support::unique_temp_dir();
+        tokio::fs::create_dir_all(temp_dir.as_path()).await?;
+        let db_path = temp_dir.join("sample.sqlite");
+        create_sample_db(db_path.as_path()).await?;
+        let lock_path = recovery_lock_path(db_path.as_path());
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path.as_path())?;
+        lock_file.try_lock()?;
+
+        let db_path_for_task = db_path.clone();
+        let recovery_task = tokio::spawn(async move {
+            let err = anyhow::anyhow!("database disk image is malformed");
+            let migrator = Migrator::DEFAULT;
+            recover_database(
+                db_path_for_task.as_path(),
+                super::super::STATE_DB,
+                &migrator,
+                &err,
+                /*telemetry_override*/ None,
+            )
+            .await
+        });
+        tokio::time::sleep(RECOVERY_LOCK_POLL.saturating_mul(2)).await;
+        drop(lock_file);
+        recovery_task.await??;
+
+        let pool = open_recovered_pool(db_path.as_path()).await?;
+        let values: Vec<String> = sqlx::query_scalar("SELECT value FROM sample ORDER BY id")
+            .fetch_all(&pool)
+            .await?;
+        pool.close().await;
+        let backup_count = std::fs::read_dir(temp_dir.as_path())?
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".bak"))
+            .count();
+
+        assert_eq!(values, vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(backup_count, 0);
         let _ = tokio::fs::remove_dir_all(temp_dir.as_path()).await;
         Ok(())
     }
@@ -634,7 +858,14 @@ INSERT INTO threads (
         )?;
 
         let err = anyhow::anyhow!("database disk image is malformed");
-        recover_database(db_path.as_path(), super::super::STATE_DB, &migrator, &err).await?;
+        recover_database(
+            db_path.as_path(),
+            super::super::STATE_DB,
+            &migrator,
+            &err,
+            /*telemetry_override*/ None,
+        )
+        .await?;
 
         let pool = open_recovered_pool(db_path.as_path()).await?;
         let title: String = sqlx::query_scalar("SELECT title FROM threads WHERE id = ?")
@@ -717,7 +948,14 @@ INSERT INTO thread_dynamic_tools (
         )?;
 
         let err = anyhow::anyhow!("file is not a database");
-        recover_database(db_path.as_path(), super::super::STATE_DB, &migrator, &err).await?;
+        recover_database(
+            db_path.as_path(),
+            super::super::STATE_DB,
+            &migrator,
+            &err,
+            /*telemetry_override*/ None,
+        )
+        .await?;
 
         let pool = open_recovered_pool(db_path.as_path()).await?;
         let title: String = sqlx::query_scalar("SELECT title FROM threads WHERE id = ?")
@@ -754,6 +992,7 @@ INSERT INTO thread_dynamic_tools (
             super::super::STATE_DB,
             &Migrator::DEFAULT,
             &err,
+            /*telemetry_override*/ None,
         )
         .await
         .expect_err("recovery without schema should fail");
