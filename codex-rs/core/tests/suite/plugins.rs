@@ -331,6 +331,113 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_app_only_plugin_mention_waits_for_pending_apps_startup() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_connector_name_and_tools_list_delay(
+        &server,
+        "Google Calendar",
+        Some(Duration::from_millis(/*millis*/ 250)),
+    )
+    .await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    write_plugin_app_plugin(codex_home.as_ref());
+    let codex =
+        build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
+            .await?;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = mock.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    assert!(
+        developer_messages
+            .iter()
+            .any(|text| text.contains("Apps from this plugin")),
+        "expected plugin app guidance after delayed startup: {developer_messages:?}"
+    );
+    assert!(
+        tool_names(&request.body_json())
+            .iter()
+            .any(|name| name == "mcp__codex_apps__google_calendar"),
+        "expected explicitly invoked plugin app tools on the first turn"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicitly_selected_skill_waits_for_pending_apps_startup() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_connector_name_and_tools_list_delay(
+        &server,
+        "Google Calendar",
+        Some(Duration::from_millis(/*millis*/ 250)),
+    )
+    .await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = write_plugin_skill_plugin(codex_home.as_ref());
+    std::fs::write(
+        &skill_path,
+        "---\ndescription: inspect sample data\n---\n\nUse [$calendar](app://calendar).\n",
+    )
+    .expect("write plugin app skill");
+    let codex =
+        build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
+            .await?;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![codex_protocol::user_input::UserInput::Skill {
+                name: "sample:sample-search".into(),
+                path: skill_path,
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        tool_names(&mock.single_request().body_json())
+            .iter()
+            .any(|name| name == "mcp__codex_apps__google_calendar"),
+        "expected app referenced by selected skill on the first turn"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;

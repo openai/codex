@@ -483,11 +483,30 @@ async fn build_skills_and_plugins(
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
     let explicitly_mentioned_apps = collect_explicit_app_ids(&user_input);
+    let skills_outcome = turn_context.turn_skills.outcome.as_ref();
+    // Skill injection can contain app references, and plain skill mentions share
+    // resolution space with apps. Preserve explicit-turn behavior by resolving
+    // app inventory before finalizing any selected skill.
+    let has_explicit_skill_selection = turn_context.apps_enabled()
+        && !collect_explicit_skill_mentions(
+            &user_input,
+            &skills_outcome.skills,
+            &skills_outcome.disabled_paths,
+            &HashMap::new(),
+        )
+        .is_empty();
     let mut explicitly_requested_mcp_servers = mentioned_plugins
         .iter()
         .flat_map(|plugin| plugin.mcp_server_names.iter().cloned())
         .collect::<HashSet<_>>();
-    if turn_context.apps_enabled() && !explicitly_mentioned_apps.is_empty() {
+    let mentioned_plugin_uses_apps = mentioned_plugins
+        .iter()
+        .any(|plugin| !plugin.app_connector_ids.is_empty());
+    if turn_context.apps_enabled()
+        && (!explicitly_mentioned_apps.is_empty()
+            || mentioned_plugin_uses_apps
+            || has_explicit_skill_selection)
+    {
         explicitly_requested_mcp_servers.insert(CODEX_APPS_MCP_SERVER_NAME.to_string());
     }
     if !explicitly_requested_mcp_servers.is_empty() {
@@ -548,7 +567,6 @@ async fn build_skills_and_plugins(
     } else {
         Vec::new()
     };
-    let skills_outcome = turn_context.turn_skills.outcome.as_ref();
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
     let extension_injection_items =
         build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
