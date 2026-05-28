@@ -1112,7 +1112,6 @@ async fn installed_tools(
         &mut builder,
         runtime,
         /*metrics_client*/ None,
-        Arc::new(NoopResponseItemInjector),
         |_| true,
     );
     let registry = builder.build();
@@ -1122,6 +1121,7 @@ async fn installed_tools(
         contributor
             .on_thread_start(ThreadStartInput {
                 config: &(),
+                response_item_injector: Arc::new(NoopResponseItemInjector),
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -1161,7 +1161,6 @@ impl GoalExtensionHarness {
             &mut builder,
             runtime,
             /*metrics_client*/ None,
-            Arc::new(NoopResponseItemInjector),
             |_| true,
         );
         let registry = builder.build();
@@ -1171,6 +1170,7 @@ impl GoalExtensionHarness {
             contributor
                 .on_thread_start(ThreadStartInput {
                     config: &(),
+                    response_item_injector: Arc::new(NoopResponseItemInjector),
                     session_store: &session_store,
                     thread_store: &thread_store,
                 })

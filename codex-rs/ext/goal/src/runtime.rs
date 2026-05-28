@@ -327,7 +327,7 @@ impl GoalRuntimeHandle {
         if self
             .inner
             .response_item_injector
-            .inject_response_items(self.inner.thread_id, vec![item])
+            .inject_response_items(vec![item])
             .await
             .is_err()
         {

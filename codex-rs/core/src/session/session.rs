@@ -10,6 +10,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use std::sync::Weak;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -35,6 +36,25 @@ pub(crate) struct Session {
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
+}
+
+struct SessionResponseItemInjector {
+    session: Weak<Session>,
+}
+
+impl codex_extension_api::ResponseItemInjector for SessionResponseItemInjector {
+    fn inject_response_items<'a>(
+        &'a self,
+        items: Vec<ResponseInputItem>,
+    ) -> codex_extension_api::ResponseItemInjectionFuture<'a> {
+        let session = self.session.clone();
+        Box::pin(async move {
+            let Some(session) = session.upgrade() else {
+                return Err(items);
+            };
+            session.inject_response_items(items).await
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -961,13 +981,6 @@ impl Session {
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             let thread_extension_data =
                 codex_extension_api::ExtensionData::new(thread_id.to_string());
-            for contributor in extensions.thread_lifecycle_contributors() {
-                contributor.on_thread_start(codex_extension_api::ThreadStartInput {
-                    config: config.as_ref(),
-                    session_store: &session_extension_data,
-                    thread_store: &thread_extension_data,
-                }).await;
-            }
 
             let services = SessionServices {
                 // Initialize the MCP connection manager with an uninitialized
@@ -1062,6 +1075,20 @@ impl Session {
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);
+            }
+            let response_item_injector: Arc<dyn codex_extension_api::ResponseItemInjector> =
+                Arc::new(SessionResponseItemInjector {
+                    session: Arc::downgrade(&sess),
+                });
+            for contributor in sess.services.extensions.thread_lifecycle_contributors() {
+                contributor
+                    .on_thread_start(codex_extension_api::ThreadStartInput {
+                        config: config.as_ref(),
+                        response_item_injector: Arc::clone(&response_item_injector),
+                        session_store: &sess.services.session_extension_data,
+                        thread_store: &sess.services.thread_extension_data,
+                    })
+                    .await;
             }
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.

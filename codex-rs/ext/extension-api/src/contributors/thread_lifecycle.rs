@@ -1,11 +1,17 @@
+use std::sync::Arc;
+
 use crate::ExtensionData;
 use crate::HiddenContextMarker;
+use crate::ResponseItemInjector;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 
 /// Input supplied when the host starts a runtime for a thread.
 pub struct ThreadStartInput<'a, C> {
     /// Host configuration visible at thread start.
     pub config: &'a C,
+    /// Host-provided helper for injecting model-visible input into this
+    /// thread's active turn.
+    pub response_item_injector: Arc<dyn ResponseItemInjector>,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.

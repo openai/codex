@@ -5,7 +5,6 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ResponseItemInjector;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadIdleTurnContributor;
 use codex_extension_api::ThreadIdleTurnRequestFuture;
@@ -48,7 +47,6 @@ pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
     event_emitter: GoalEventEmitter,
     metrics: GoalMetrics,
-    response_item_injector: Arc<dyn ResponseItemInjector>,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
 }
 
@@ -63,14 +61,12 @@ impl<C> GoalExtension<C> {
         state_dbs: Arc<codex_state::StateRuntime>,
         event_sink: Arc<dyn ExtensionEventSink>,
         metrics_client: Option<MetricsClient>,
-        response_item_injector: Arc<dyn ResponseItemInjector>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
             state_dbs,
             event_emitter: GoalEventEmitter::new(event_sink),
             metrics: GoalMetrics::new(metrics_client),
-            response_item_injector,
             goals_enabled: Arc::new(goals_enabled),
         }
     }
@@ -95,7 +91,7 @@ where
                 Arc::clone(&self.state_dbs),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
-                Arc::clone(&self.response_item_injector),
+                Arc::clone(&input.response_item_injector),
                 accounting_state,
                 enabled,
             )
@@ -455,7 +451,6 @@ pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
     metrics_client: Option<MetricsClient>,
-    response_item_injector: Arc<dyn ResponseItemInjector>,
     goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
 ) where
     C: Send + Sync + 'static,
@@ -464,7 +459,6 @@ pub fn install_with_backend<C>(
         state_dbs,
         registry.event_sink(),
         metrics_client,
-        response_item_injector,
         goals_enabled,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
