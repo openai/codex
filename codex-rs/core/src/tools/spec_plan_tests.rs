@@ -380,6 +380,7 @@ async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
     plan.assert_visible_lacks(&["shell_command"]);
     plan.assert_registered_contains(&["exec_command", "write_stdin", "shell_command"]);
     assert_eq!(plan.exposure("shell_command"), ToolExposure::Hidden);
+    assert!(has_parameter(plan.visible_spec("exec_command"), "shell"));
 }
 
 #[tokio::test]
@@ -420,6 +421,39 @@ async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabl
         composed.assert_visible_contains(&["shell_command"]);
         composed.assert_visible_lacks(&["exec_command", "write_stdin"]);
     }
+}
+
+#[tokio::test]
+async fn zsh_fork_unified_exec_hides_shell_parameter() {
+    if !codex_utils_pty::conpty_supported() {
+        return;
+    }
+
+    let exe = codex_utils_absolute_path::AbsolutePathBuf::try_from(
+        std::env::current_exe().expect("current exe path"),
+    )
+    .expect("current exe should be absolute");
+
+    let plan = probe(|turn| {
+        set_features(
+            turn,
+            &[
+                Feature::ShellTool,
+                Feature::UnifiedExec,
+                Feature::ShellZshFork,
+                Feature::UnifiedExecZshFork,
+            ],
+        );
+        turn.unified_exec_shell_mode =
+            codex_tools::UnifiedExecShellMode::ZshFork(codex_tools::ZshForkConfig {
+                shell_zsh_path: exe.clone(),
+                main_execve_wrapper_exe: exe,
+            });
+    })
+    .await;
+
+    plan.assert_visible_contains(&["exec_command", "write_stdin"]);
+    assert!(!has_parameter(plan.visible_spec("exec_command"), "shell"));
 }
 
 #[tokio::test]
