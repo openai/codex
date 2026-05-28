@@ -69,8 +69,6 @@ pub(crate) struct BwrapOptions {
     /// Keep this uncapped by default so existing nested deny-read matches are
     /// masked before the sandboxed command starts.
     pub glob_scan_max_depth: Option<usize>,
-    /// Managed MITM CA trust bundle to expose inside the sandbox.
-    pub mitm_ca_trust_bundle_path: Option<PathBuf>,
 }
 
 impl Default for BwrapOptions {
@@ -79,7 +77,6 @@ impl Default for BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
             glob_scan_max_depth: None,
-            mitm_ca_trust_bundle_path: None,
         }
     }
 }
@@ -326,10 +323,6 @@ fn create_bwrap_flags(
         synthetic_mount_targets,
         protected_create_targets,
     };
-    append_mitm_ca_trust_bundle_args(
-        &mut bwrap_args,
-        options.mitm_ca_trust_bundle_path.as_deref(),
-    );
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     bwrap_args.args.push("--unshare-user".to_string());
@@ -355,27 +348,6 @@ fn create_bwrap_flags(
     bwrap_args.args.push("--".to_string());
     bwrap_args.args.extend(command);
     Ok(bwrap_args)
-}
-
-fn append_mitm_ca_trust_bundle_args(
-    bwrap_args: &mut BwrapArgs,
-    mitm_ca_trust_bundle_path: Option<&Path>,
-) {
-    let Some(mitm_ca_trust_bundle_path) = mitm_ca_trust_bundle_path else {
-        return;
-    };
-    append_mount_target_parent_dir_args(
-        &mut bwrap_args.args,
-        mitm_ca_trust_bundle_path,
-        Path::new("/"),
-    );
-    bwrap_args.args.push("--ro-bind".to_string());
-    bwrap_args
-        .args
-        .push(path_to_string(mitm_ca_trust_bundle_path));
-    bwrap_args
-        .args
-        .push(path_to_string(mitm_ca_trust_bundle_path));
 }
 
 /// Build the bubblewrap filesystem mounts for a given filesystem policy.
@@ -1374,11 +1346,6 @@ mod tests {
         assert_eq!(BwrapOptions::default().glob_scan_max_depth, None);
     }
 
-    #[test]
-    fn default_mitm_ca_trust_bundle_path_is_unset() {
-        assert_eq!(BwrapOptions::default().mitm_ca_trust_bundle_path, None);
-    }
-
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
             path: FileSystemPath::GlobPattern { pattern },
@@ -1444,29 +1411,6 @@ mod tests {
                 "/bin/true".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn mitm_ca_trust_bundle_mounts_exported_bundle_path() {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let mitm_ca_trust_bundle_path = temp_dir.path().join("proxy/ca-bundle.pem");
-        fs::create_dir_all(mitm_ca_trust_bundle_path.parent().unwrap())
-            .expect("create managed bundle dir");
-        fs::write(&mitm_ca_trust_bundle_path, "managed bundle").expect("write managed bundle");
-        let mut args = BwrapArgs {
-            args: Vec::new(),
-            preserved_files: Vec::new(),
-            synthetic_mount_targets: Vec::new(),
-            protected_create_targets: Vec::new(),
-        };
-
-        append_mitm_ca_trust_bundle_args(&mut args, Some(&mitm_ca_trust_bundle_path));
-
-        let bundle_path = path_to_string(&mitm_ca_trust_bundle_path);
-        assert!(args.args.windows(3).any(|window| {
-            window[0] == "--ro-bind" && window[1] == bundle_path && window[2] == bundle_path
-        }));
-        assert!(args.preserved_files.is_empty());
     }
 
     #[test]

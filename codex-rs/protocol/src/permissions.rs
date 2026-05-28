@@ -833,6 +833,38 @@ impl FileSystemSandboxPolicy {
         self
     }
 
+    /// Adds readable roots required by runtime plumbing unless the policy denies them.
+    pub fn with_required_readable_roots(
+        self,
+        cwd: &Path,
+        required_readable_roots: &[AbsolutePathBuf],
+    ) -> io::Result<Self> {
+        if self.has_full_disk_read_access() {
+            return Ok(self);
+        }
+
+        let read_deny_matcher = ReadDenyMatcher::new(&self, cwd);
+        if let Some(path) = required_readable_roots.iter().find(|path| {
+            read_deny_matcher
+                .as_ref()
+                .is_some_and(|matcher| matcher.is_read_denied(path.as_path()))
+                || resolve_candidate_path(path.as_path(), cwd).is_some_and(|path| {
+                    self.resolved_entries_with_cwd(cwd)
+                        .into_iter()
+                        .filter(|entry| path.as_path().starts_with(entry.path.as_path()))
+                        .max_by_key(resolved_entry_precedence)
+                        .is_some_and(|entry| entry.access == FileSystemAccessMode::Deny)
+                })
+        }) {
+            return Err(io::Error::other(format!(
+                "required readable root is denied by filesystem policy: {}",
+                path.as_path().display()
+            )));
+        }
+
+        Ok(self.with_additional_readable_roots(cwd, required_readable_roots))
+    }
+
     pub fn with_additional_writable_roots(
         mut self,
         cwd: &Path,

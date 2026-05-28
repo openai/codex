@@ -13,7 +13,6 @@ fn legacy_landlock_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ false,
         /*allow_network_for_proxy*/ false,
-        /*managed_mitm_ca_trust_bundle_path*/ None,
     );
     assert_eq!(
         default_bwrap.contains(&"--use-legacy-landlock".to_string()),
@@ -26,7 +25,6 @@ fn legacy_landlock_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
-        /*managed_mitm_ca_trust_bundle_path*/ None,
     );
     assert_eq!(
         legacy_landlock.contains(&"--use-legacy-landlock".to_string()),
@@ -46,7 +44,6 @@ fn proxy_flag_is_included_when_requested() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ true,
-        /*managed_mitm_ca_trust_bundle_path*/ None,
     );
     assert_eq!(
         args.contains(&"--allow-network-for-proxy".to_string()),
@@ -68,7 +65,6 @@ fn permission_profile_flag_is_included() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
-        /*managed_mitm_ca_trust_bundle_path*/ None,
     );
 
     assert_eq!(
@@ -81,26 +77,6 @@ fn permission_profile_flag_is_included() {
             .any(|window| window[0] == "--command-cwd" && window[1] == "/tmp/link"),
         true
     );
-}
-
-#[test]
-fn managed_mitm_ca_trust_bundle_flag_is_included_when_requested() {
-    let command = vec!["/bin/true".to_string()];
-    let command_cwd = Path::new("/tmp/link");
-    let cwd = Path::new("/tmp");
-
-    let args = create_linux_sandbox_command_args(
-        command,
-        command_cwd,
-        cwd,
-        /*use_legacy_landlock*/ false,
-        /*allow_network_for_proxy*/ true,
-        Some(Path::new("/tmp/ca-bundle.pem")),
-    );
-
-    assert!(args.windows(2).any(|window| {
-        window[0] == "--mitm-ca-trust-bundle" && window[1] == "/tmp/ca-bundle.pem"
-    }));
 }
 
 #[test]

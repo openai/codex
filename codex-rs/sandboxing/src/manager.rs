@@ -106,6 +106,7 @@ pub struct SandboxTransformRequest<'a> {
 #[derive(Debug)]
 pub enum SandboxTransformError {
     MissingLinuxSandboxExecutable,
+    ManagedMitmCaTrust(std::io::Error),
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -118,6 +119,7 @@ impl std::fmt::Display for SandboxTransformError {
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
+            Self::ManagedMitmCaTrust(err) => write!(f, "{err}"),
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -182,8 +184,25 @@ impl SandboxManager {
             windows_sandbox_private_desktop,
         } = request;
         let additional_permissions = command.additional_permissions.take();
-        let effective_permission_profile =
+        let mut effective_permission_profile =
             effective_permission_profile(permissions, additional_permissions.as_ref());
+        if let Some(network) = network {
+            network.validate_child_env(&command.env).map_err(|err| {
+                SandboxTransformError::ManagedMitmCaTrust(std::io::Error::other(err.to_string()))
+            })?;
+            let managed_mitm_ca_trust_bundle_paths = network
+                .managed_mitm_ca_trust_bundle_paths()
+                .into_iter()
+                .map(AbsolutePathBuf::from_absolute_path)
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(SandboxTransformError::ManagedMitmCaTrust)?;
+            effective_permission_profile = effective_permission_profile
+                .with_required_readable_roots(
+                    sandbox_policy_cwd,
+                    &managed_mitm_ca_trust_bundle_paths,
+                )
+                .map_err(SandboxTransformError::ManagedMitmCaTrust)?;
+        }
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
         let mut argv = Vec::with_capacity(1 + command.args.len());
@@ -218,8 +237,6 @@ impl SandboxManager {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
-                let managed_mitm_ca_trust_bundle_path =
-                    network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
                 #[cfg(target_os = "linux")]
                 ensure_linux_bubblewrap_is_supported(
                     &effective_file_system_policy,
@@ -234,7 +251,6 @@ impl SandboxManager {
                     sandbox_policy_cwd,
                     use_legacy_landlock,
                     allow_proxy_network,
-                    managed_mitm_ca_trust_bundle_path.as_deref(),
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(os_string_to_command_component(exe.as_os_str().to_owned()));

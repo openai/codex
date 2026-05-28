@@ -256,12 +256,25 @@ async fn run_command_under_sandbox(
     let network = network_proxy
         .as_ref()
         .map(codex_core::config::StartedNetworkProxy::proxy);
+    let mut runtime_permission_profile = config.permissions.effective_permission_profile();
+    if let Some(network) = network.as_ref() {
+        network.validate_child_env(&env)?;
+        let managed_mitm_ca_trust_bundle_paths = network
+            .managed_mitm_ca_trust_bundle_paths()
+            .into_iter()
+            .map(AbsolutePathBuf::from_absolute_path)
+            .collect::<std::io::Result<Vec<_>>>()?;
+        runtime_permission_profile = runtime_permission_profile.with_required_readable_roots(
+            permission_profile_cwd.as_path(),
+            &managed_mitm_ca_trust_bundle_paths,
+        )?;
+    }
 
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
-            let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
-            let network_sandbox_policy = config.permissions.network_sandbox_policy();
+            let (file_system_sandbox_policy, network_sandbox_policy) =
+                runtime_permission_profile.to_runtime_permissions();
             let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                 command,
                 file_system_sandbox_policy: &file_system_sandbox_policy,
@@ -281,8 +294,11 @@ async fn run_command_under_sandbox(
                 |env_map| {
                     env_map.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
                     if let Some(network) = network.as_ref() {
-                        network.apply_to_env(env_map);
+                        network
+                            .apply_to_env(env_map)
+                            .map_err(std::io::Error::other)?;
                     }
+                    Ok(())
                 },
             )
             .await?
@@ -293,19 +309,14 @@ async fn run_command_under_sandbox(
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
             let use_legacy_landlock = config.features.use_legacy_landlock();
-            let network_sandbox_policy = config.permissions.network_sandbox_policy();
-            let managed_mitm_ca_trust_bundle_path = match network.as_ref() {
-                Some(network) => network.managed_mitm_ca_trust_bundle_path(),
-                None => None,
-            };
+            let network_sandbox_policy = runtime_permission_profile.network_sandbox_policy();
             let args = create_linux_sandbox_command_args_for_permission_profile(
                 command,
                 cwd.as_path(),
-                &config.permissions.effective_permission_profile(),
+                &runtime_permission_profile,
                 permission_profile_cwd.as_path(),
                 use_legacy_landlock,
                 allow_network_for_proxy(managed_network_requirements_enabled),
-                managed_mitm_ca_trust_bundle_path.as_deref(),
             );
             spawn_debug_sandbox_child(
                 codex_linux_sandbox_exe,
@@ -316,8 +327,11 @@ async fn run_command_under_sandbox(
                 env,
                 |env_map| {
                     if let Some(network) = network.as_ref() {
-                        network.apply_to_env(env_map);
+                        network
+                            .apply_to_env(env_map)
+                            .map_err(std::io::Error::other)?;
                     }
+                    Ok(())
                 },
             )
             .await?
@@ -482,7 +496,7 @@ async fn spawn_debug_sandbox_child(
     cwd: PathBuf,
     network_sandbox_policy: NetworkSandboxPolicy,
     mut env: std::collections::HashMap<String, String>,
-    apply_env: impl FnOnce(&mut std::collections::HashMap<String, String>),
+    apply_env: impl FnOnce(&mut std::collections::HashMap<String, String>) -> std::io::Result<()>,
 ) -> std::io::Result<Child> {
     let mut cmd = TokioCommand::new(&program);
     #[cfg(unix)]
@@ -491,7 +505,7 @@ async fn spawn_debug_sandbox_child(
     let _ = arg0;
     cmd.args(args);
     cmd.current_dir(cwd);
-    apply_env(&mut env);
+    apply_env(&mut env)?;
     cmd.env_clear();
     cmd.envs(env);
 

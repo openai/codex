@@ -12,7 +12,6 @@ use clap::Parser;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -301,16 +300,16 @@ struct NetworkProxyRuntimeSettings {
     allow_local_binding: bool,
     allow_unix_sockets: Arc<[String]>,
     dangerously_allow_all_unix_sockets: bool,
-    mitm_ca_trust_bundle_path: Option<PathBuf>,
+    mitm_ca_trust_bundles: Option<crate::certs::ManagedMitmCaTrustBundles>,
 }
 
 impl NetworkProxyRuntimeSettings {
     fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
-        let mitm_ca_trust_bundle_path = if config.network.mitm {
+        let mitm_ca_trust_bundles = if config.network.mitm {
             let env = std::env::vars().collect();
             let cwd = std::env::current_dir()
                 .context("failed to resolve current dir for managed MITM CA")?;
-            Some(crate::certs::managed_ca_trust_bundle_path(&env, &cwd)?)
+            Some(crate::certs::managed_ca_trust_bundles(&env, &cwd)?)
         } else {
             None
         };
@@ -318,7 +317,7 @@ impl NetworkProxyRuntimeSettings {
             allow_local_binding: config.network.allow_local_binding,
             allow_unix_sockets: config.network.allow_unix_sockets().into(),
             dangerously_allow_all_unix_sockets: config.network.dangerously_allow_all_unix_sockets,
-            mitm_ca_trust_bundle_path,
+            mitm_ca_trust_bundles,
         })
     }
 }
@@ -489,7 +488,7 @@ fn apply_proxy_env_overrides(
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
-    mitm_ca_trust_bundle_path: Option<&Path>,
+    mitm_ca_trust_bundles: Option<&crate::certs::ManagedMitmCaTrustBundles>,
 ) {
     let http_proxy_url = format!("http://{http_addr}");
     let socks_proxy_url = format!("socks5h://{socks_addr}");
@@ -570,13 +569,16 @@ fn apply_proxy_env_overrides(
         }
     }
 
-    if let Some(mitm_ca_trust_bundle_path) = mitm_ca_trust_bundle_path {
-        let mitm_ca_trust_bundle_path = mitm_ca_trust_bundle_path.to_string_lossy();
-        set_env_keys(
-            env,
-            &crate::certs::CUSTOM_CA_ENV_KEYS,
-            &mitm_ca_trust_bundle_path,
-        );
+    if let Some(mitm_ca_trust_bundles) = mitm_ca_trust_bundles {
+        for key in crate::certs::CUSTOM_CA_ENV_KEYS {
+            env.insert(
+                key.to_string(),
+                mitm_ca_trust_bundles
+                    .path_for_env_key(key)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
     }
 }
 
@@ -617,23 +619,34 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
-    /// Returns the managed CA bundle child sandboxes should expose to TLS clients.
-    pub fn managed_mitm_ca_trust_bundle_path(&self) -> Option<PathBuf> {
-        self.runtime_settings().mitm_ca_trust_bundle_path
+    /// Returns the managed CA bundles child sandboxes should expose to TLS clients.
+    pub fn managed_mitm_ca_trust_bundle_paths(&self) -> Vec<PathBuf> {
+        self.runtime_settings()
+            .mitm_ca_trust_bundles
+            .map_or_else(Vec::new, |bundles| bundles.bundle_paths())
     }
 
-    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+    pub fn validate_child_env(&self, env: &HashMap<String, String>) -> Result<()> {
+        if let Some(mitm_ca_trust_bundles) = self.runtime_settings().mitm_ca_trust_bundles {
+            mitm_ca_trust_bundles.validate_child_env(env)?;
+        }
+        Ok(())
+    }
+
+    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) -> Result<()> {
         let runtime_settings = self.runtime_settings();
-        // Enforce proxying for child processes. We intentionally override existing values so
-        // command-level environment cannot bypass the managed proxy endpoint.
+        self.validate_child_env(env)?;
+        // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
+        // managed MITM CA vars either preserve startup trust or were rejected above.
         apply_proxy_env_overrides(
             env,
             self.http_addr,
             self.socks_addr,
             self.socks_enabled,
             runtime_settings.allow_local_binding,
-            runtime_settings.mitm_ca_trust_bundle_path.as_deref(),
+            runtime_settings.mitm_ca_trust_bundles.as_ref(),
         );
+        Ok(())
     }
 
     pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
@@ -819,6 +832,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
+    use std::path::Path;
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ports() {
@@ -1007,7 +1021,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
-            /*mitm_ca_trust_bundle_path*/ None,
+            /*mitm_ca_trust_bundles*/ None,
         );
 
         assert_eq!(
@@ -1071,7 +1085,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
-            /*mitm_ca_trust_bundle_path*/ None,
+            /*mitm_ca_trust_bundles*/ None,
         );
 
         for key in env.keys() {
@@ -1088,13 +1102,18 @@ mod tests {
     fn apply_proxy_env_overrides_sets_mitm_ca_trust_bundle_vars() {
         let mut env = HashMap::new();
         let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
+        let mitm_ca_trust_bundles = crate::certs::ManagedMitmCaTrustBundles {
+            default_path: mitm_ca_trust_bundle_path.to_path_buf(),
+            env_paths: HashMap::new(),
+            inherited_env_values: HashMap::new(),
+        };
         apply_proxy_env_overrides(
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
-            Some(mitm_ca_trust_bundle_path),
+            Some(&mitm_ca_trust_bundles),
         );
 
         for key in crate::certs::CUSTOM_CA_ENV_KEYS {
@@ -1121,7 +1140,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ false,
             /*allow_local_binding*/ true,
-            /*mitm_ca_trust_bundle_path*/ None,
+            /*mitm_ca_trust_bundles*/ None,
         );
 
         assert_eq!(
@@ -1140,7 +1159,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
-            /*mitm_ca_trust_bundle_path*/ None,
+            /*mitm_ca_trust_bundles*/ None,
         );
 
         assert_eq!(
@@ -1189,7 +1208,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
-            /*mitm_ca_trust_bundle_path*/ None,
+            /*mitm_ca_trust_bundles*/ None,
         );
 
         assert_eq!(
@@ -1212,7 +1231,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 48081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
-            /*mitm_ca_trust_bundle_path*/ None,
+            /*mitm_ca_trust_bundles*/ None,
         );
 
         assert_eq!(
@@ -1236,7 +1255,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 48081),
             /*socks_enabled*/ true,
             /*allow_local_binding*/ false,
-            /*mitm_ca_trust_bundle_path*/ None,
+            /*mitm_ca_trust_bundles*/ None,
         );
 
         assert_eq!(

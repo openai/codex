@@ -550,6 +550,22 @@ impl PermissionProfile {
             self.network_sandbox_policy(),
         )
     }
+
+    /// Adds required runtime-readable roots unless the current policy explicitly denies them.
+    pub fn with_required_readable_roots(
+        &self,
+        cwd: &Path,
+        required_readable_roots: &[AbsolutePathBuf],
+    ) -> io::Result<Self> {
+        let (file_system_sandbox_policy, network_sandbox_policy) = self.to_runtime_permissions();
+        let file_system_sandbox_policy = file_system_sandbox_policy
+            .with_required_readable_roots(cwd, required_readable_roots)?;
+        Ok(Self::from_runtime_permissions_with_enforcement(
+            self.enforcement(),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1837,6 +1853,34 @@ mod tests {
         assert_eq!(
             permission_profile.file_system_sandbox_policy(),
             file_system_sandbox_policy
+        );
+    }
+
+    #[test]
+    fn permission_profile_rejects_required_readable_root_under_read_deny() {
+        let cwd = tempdir().expect("tempdir");
+        let denied_path = cwd.path().join("managed-ca.pem");
+        let denied_path = AbsolutePathBuf::from_absolute_path(&denied_path).expect("absolute path");
+        let permission_profile = PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: denied_path.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            }]),
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        let err = permission_profile
+            .with_required_readable_roots(cwd.path(), std::slice::from_ref(&denied_path))
+            .expect_err("read deny should win");
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "required readable root is denied by filesystem policy: {}",
+                denied_path.as_path().display()
+            )
         );
     }
 

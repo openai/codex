@@ -27,7 +27,6 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,
     allow_network_for_proxy: bool,
-    managed_mitm_ca_trust_bundle_path: Option<&Path>,
 ) -> Vec<String> {
     let permission_profile_json = serde_json::to_string(permission_profile)
         .unwrap_or_else(|err| panic!("failed to serialize permission profile: {err}"));
@@ -54,15 +53,6 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
     }
-    if let Some(trust_bundle_path) = managed_mitm_ca_trust_bundle_path {
-        linux_cmd.push("--mitm-ca-trust-bundle".to_string());
-        linux_cmd.push(
-            trust_bundle_path
-                .to_str()
-                .unwrap_or_else(|| panic!("MITM CA trust bundle path must be valid UTF-8"))
-                .to_string(),
-        );
-    }
     linux_cmd.push("--".to_string());
     linux_cmd.extend(command);
     linux_cmd
@@ -77,7 +67,6 @@ fn create_linux_sandbox_command_args(
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,
     allow_network_for_proxy: bool,
-    managed_mitm_ca_trust_bundle_path: Option<&Path>,
 ) -> Vec<String> {
     let command_cwd = command_cwd
         .to_str()
@@ -100,16 +89,6 @@ fn create_linux_sandbox_command_args(
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
     }
-    if let Some(trust_bundle_path) = managed_mitm_ca_trust_bundle_path {
-        linux_cmd.push("--mitm-ca-trust-bundle".to_string());
-        linux_cmd.push(
-            trust_bundle_path
-                .to_str()
-                .unwrap_or_else(|| panic!("MITM CA trust bundle path must be valid UTF-8"))
-                .to_string(),
-        );
-    }
-
     // Separator so that command arguments starting with `-` are not parsed as
     // options of the helper itself.
     linux_cmd.push("--".to_string());
