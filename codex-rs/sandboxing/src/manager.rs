@@ -1,3 +1,6 @@
+use crate::EffectiveFilesystemPermissions;
+use crate::FilesystemPermissionsContext;
+use crate::FilesystemPermissionsError;
 #[cfg(target_os = "linux")]
 use crate::bwrap::WSL1_BWRAP_WARNING;
 #[cfg(target_os = "linux")]
@@ -80,6 +83,7 @@ pub struct SandboxExecRequest {
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub permission_profile: PermissionProfile,
+    pub effective_filesystem_permissions: EffectiveFilesystemPermissions,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
     pub arg0: Option<String>,
@@ -106,6 +110,8 @@ pub struct SandboxTransformRequest<'a> {
 #[derive(Debug)]
 pub enum SandboxTransformError {
     MissingLinuxSandboxExecutable,
+    InvalidPermissionProfileCwd(String),
+    EffectiveFilesystemPermissions(FilesystemPermissionsError),
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -118,6 +124,8 @@ impl std::fmt::Display for SandboxTransformError {
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
+            Self::InvalidPermissionProfileCwd(message) => f.write_str(message),
+            Self::EffectiveFilesystemPermissions(err) => write!(f, "{err}"),
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -186,6 +194,15 @@ impl SandboxManager {
             effective_permission_profile(permissions, additional_permissions.as_ref());
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
+        let policy_evaluation_cwd = AbsolutePathBuf::from_absolute_path(sandbox_policy_cwd)
+            .map_err(|err| SandboxTransformError::InvalidPermissionProfileCwd(err.to_string()))?;
+        let effective_filesystem_permissions = EffectiveFilesystemPermissions::from_profile(
+            &effective_permission_profile,
+            FilesystemPermissionsContext {
+                policy_evaluation_cwd: &policy_evaluation_cwd,
+            },
+        )
+        .map_err(SandboxTransformError::EffectiveFilesystemPermissions)?;
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
@@ -253,6 +270,7 @@ impl SandboxManager {
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             permission_profile: effective_permission_profile,
+            effective_filesystem_permissions,
             file_system_sandbox_policy: effective_file_system_policy,
             network_sandbox_policy: effective_network_policy,
             arg0: arg0_override,

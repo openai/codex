@@ -25,7 +25,7 @@ pub enum FilesystemPermissionsMode {
     External,
 }
 
-/// A deny-read glob accepted by the existing runtime matcher.
+/// A deny-read glob retained in effective filesystem enforcement inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedDenyGlob {
     pattern: String,
@@ -83,9 +83,11 @@ impl EffectiveFilesystemPermissions {
         if contains_unmaterialized_workspace_roots(&file_system_policy) {
             return Err(FilesystemPermissionsError::UnmaterializedWorkspaceRoots);
         }
+        // Direct enforcement queries have historically failed closed for malformed
+        // deny patterns. Platform lowering that expands concrete targets can still
+        // validate the patterns before acting on the filesystem.
         let read_deny_matcher =
-            ReadDenyMatcher::try_new(&file_system_policy, context.policy_evaluation_cwd.as_path())
-                .map_err(FilesystemPermissionsError::InvalidDenyGlob)?;
+            ReadDenyMatcher::new(&file_system_policy, context.policy_evaluation_cwd.as_path());
         let mode = match file_system_policy.kind {
             FileSystemSandboxKind::Restricted => FilesystemPermissionsMode::Restricted,
             FileSystemSandboxKind::Unrestricted => FilesystemPermissionsMode::Unrestricted,

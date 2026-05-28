@@ -218,6 +218,18 @@ fn transform_additional_permissions_preserves_denied_entries() {
         .expect("transform");
 
     assert_eq!(
+        exec_request
+            .effective_filesystem_permissions
+            .can_write(allowed_path.as_path()),
+        true
+    );
+    assert_eq!(
+        exec_request
+            .effective_filesystem_permissions
+            .can_read(denied_path.as_path()),
+        false
+    );
+    assert_eq!(
         exec_request.file_system_sandbox_policy,
         FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {

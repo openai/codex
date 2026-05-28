@@ -252,3 +252,28 @@ fn effective_permissions_preserve_accepted_deny_glob_matching() {
     );
     assert_eq!(effective.can_read(denied_path.as_path()), false);
 }
+
+#[test]
+fn effective_permissions_fail_closed_for_malformed_deny_globs() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = absolute_path(temp_dir.path());
+    let readable_path = cwd.join("readable.txt");
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: cwd.clone() },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: format!("{}/**/[z-a]", cwd.as_path().display()),
+            },
+            access: FileSystemAccessMode::Deny,
+        },
+    ]);
+    let permission_profile =
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+    let effective = derive_effective(&permission_profile, &cwd);
+
+    assert_eq!(effective.is_read_denied(readable_path.as_path()), true);
+    assert_eq!(effective.can_read(readable_path.as_path()), false);
+}

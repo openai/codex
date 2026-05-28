@@ -1,7 +1,9 @@
 use super::*;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_exec_server::LOCAL_FS;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -25,6 +27,24 @@ fn sample_patch() -> &'static str {
 *** Add File: hello.txt
 +hello
 *** End Patch"#
+}
+
+fn effective_permissions(
+    sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &AbsolutePathBuf,
+) -> codex_sandboxing::EffectiveFilesystemPermissions {
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    )
+    .materialize_project_roots_with_workspace_roots(std::slice::from_ref(cwd));
+    codex_sandboxing::EffectiveFilesystemPermissions::from_profile(
+        &permission_profile,
+        codex_sandboxing::FilesystemPermissionsContext {
+            policy_evaluation_cwd: cwd,
+        },
+    )
+    .expect("derive effective filesystem permissions")
 }
 
 async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
@@ -255,8 +275,9 @@ fn write_permissions_for_paths_skip_dirs_already_writable_under_workspace_root()
         /*exclude_tmpdir_env_var*/ true,
         /*exclude_slash_tmp*/ false,
     );
+    let effective_permissions = effective_permissions(&sandbox_policy, &cwd);
 
-    let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd);
+    let permissions = write_permissions_for_paths(&[file_path], &effective_permissions);
 
     assert_eq!(permissions, None);
 }
@@ -276,8 +297,9 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
         /*exclude_tmpdir_env_var*/ true,
         /*exclude_slash_tmp*/ true,
     );
+    let effective_permissions = effective_permissions(&sandbox_policy, &cwd_abs);
 
-    let permissions = write_permissions_for_paths(&[file_path], &sandbox_policy, &cwd_abs);
+    let permissions = write_permissions_for_paths(&[file_path], &effective_permissions);
     let expected_outside =
         dunce::simplified(&outside.canonicalize().expect("canonicalize outside dir")).abs();
 
