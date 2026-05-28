@@ -109,6 +109,7 @@ pub(crate) async fn run_codex_thread_interactive(
     emit_subagent_session_started(
         &parent_session.services.analytics_events_client,
         client_metadata,
+        codex.session.session_id(),
         codex.session.conversation_id,
         Some(parent_session.conversation_id),
         thread_config,
@@ -217,6 +218,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
+                        client_user_message_id: None,
                         trace: None,
                     })
                     .await;

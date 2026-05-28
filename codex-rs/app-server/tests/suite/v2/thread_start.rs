@@ -439,7 +439,14 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     assert_eq!(payload["events"].as_array().expect("events array").len(), 1);
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "new", "user");
+    assert_basic_thread_initialized_event(
+        event,
+        &thread.id,
+        &thread.session_id,
+        "mock-model",
+        "new",
+        "user",
+    );
     Ok(())
 }
 

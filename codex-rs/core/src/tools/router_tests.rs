@@ -306,19 +306,13 @@ fn mcp_tool_info(
         callable_name: tool_name.to_string(),
         callable_namespace: callable_namespace.to_string(),
         namespace_description: None,
-        tool: rmcp::model::Tool {
-            name: tool_name.to_string().into(),
-            title: None,
-            description: Some("Test MCP tool".to_string().into()),
-            input_schema: Arc::new(rmcp::model::object(json!({
+        tool: rmcp::model::Tool::new(
+            tool_name.to_string(),
+            "Test MCP tool",
+            Arc::new(rmcp::model::object(json!({
                 "type": "object",
             }))),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        ),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -338,7 +332,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         phase: None,
     };
     session
-        .record_into_history(std::slice::from_ref(&history_item), &turn)
+        .record_conversation_items(&turn, std::slice::from_ref(&history_item))
         .await;
 
     let router = ToolRouter::from_turn_context(

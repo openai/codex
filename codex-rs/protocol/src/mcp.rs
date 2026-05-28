@@ -26,6 +26,18 @@ impl std::fmt::Display for RequestId {
     }
 }
 
+/// Presentation metadata advertised by an initialized MCP server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerInfo {
+    pub name: String,
+    pub title: Option<String>,
+    pub version: String,
+    pub description: Option<String>,
+    pub icons: Option<Vec<serde_json::Value>>,
+    pub website_url: Option<String>,
+}
+
 /// Definition for a tool the client can call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -44,6 +45,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
@@ -62,10 +64,42 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
+use serde_json::Value as JsonValue;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use tracing::instrument;
+use tracing::trace;
+use tracing::trace_span;
 use tracing::warn;
+
+const MCP_UI_META_KEY: &str = "ui";
+const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
+const MCP_UI_MODEL_VISIBILITY: &str = "model";
+
+/// Returns whether a tool may be included in model-facing tool declarations.
+///
+/// Tools without visibility metadata remain visible.
+/// Tools with visibility metadata are hidden unless they explicitly include `model`.
+///
+/// <https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx#resource-discovery>
+pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
+    let Some(visibility) = tool
+        .tool
+        .meta
+        .as_deref()
+        .and_then(|meta| meta.get(MCP_UI_META_KEY))
+        .and_then(JsonValue::as_object)
+        .and_then(|ui| ui.get(MCP_UI_VISIBILITY_META_KEY))
+        .and_then(JsonValue::as_array)
+    else {
+        return true;
+    };
+
+    visibility
+        .iter()
+        .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
+}
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub struct McpConnectionManager {
@@ -378,13 +412,37 @@ impl McpConnectionManager {
     }
 
     /// Returns all tools with model-visible names normalized.
-    #[instrument(level = "trace", skip_all)]
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
-        for managed_client in self.clients.values() {
-            let Some(server_tools) = managed_client.listed_tools().await else {
+        for (server_name, managed_client) in &self.clients {
+            let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
+            let startup_complete = managed_client
+                .startup_complete
+                .load(std::sync::atomic::Ordering::Acquire);
+            trace!(
+                server_name = %server_name,
+                has_cached_tool_info_snapshot,
+                startup_complete,
+                "waiting for MCP server tools while building tool list"
+            );
+            let Some(server_tools) = managed_client
+                .listed_tools()
+                .instrument(trace_span!(
+                    "list_tools_for_server",
+                    server_name = %server_name,
+                    has_cached_tool_info_snapshot,
+                    startup_complete
+                ))
+                .await
+            else {
                 continue;
             };
+            trace!(
+                server_name = %server_name,
+                tool_count = server_tools.len(),
+                "listed MCP server tools while building tool list"
+            );
             tools.extend(
                 server_tools
                     .into_iter()
@@ -392,6 +450,31 @@ impl McpConnectionManager {
             );
         }
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+    }
+
+    /// Returns presentation metadata without waiting for uncached clients still initializing.
+    /// Cached values will be used if available and the server is still starting up.
+    pub async fn list_available_server_infos(&self) -> HashMap<String, McpServerInfo> {
+        let mut server_infos = HashMap::new();
+        for (server_name, client) in &self.clients {
+            if !client.startup_complete.load(Ordering::Acquire) {
+                if let Some(server_info) = client.cached_server_info.clone() {
+                    server_infos.insert(server_name.clone(), server_info);
+                }
+                continue;
+            }
+            match client.client().await {
+                Ok(managed_client) => {
+                    server_infos.insert(server_name.clone(), managed_client.server_info);
+                }
+                Err(_) => {
+                    if let Some(server_info) = client.cached_server_info.clone() {
+                        server_infos.insert(server_name.clone(), server_info);
+                    }
+                }
+            }
+        }
+        server_infos
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
@@ -429,6 +512,7 @@ impl McpConnectionManager {
         write_cached_codex_apps_tools_if_needed(
             CODEX_APPS_MCP_SERVER_NAME,
             managed_client.codex_apps_tools_cache_context.as_ref(),
+            &managed_client.server_info,
             &tools,
         );
         emit_duration(
@@ -483,9 +567,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
-                        meta: None,
-                        cursor: Some(next.clone()),
+                    let params = cursor.as_ref().map(|next| {
+                        PaginatedRequestParams::default().with_cursor(Some(next.clone()))
                     });
                     let response = match client.list_resources(params, timeout).await {
                         Ok(result) => result,
@@ -549,9 +632,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
-                        meta: None,
-                        cursor: Some(next.clone()),
+                    let params = cursor.as_ref().map(|next| {
+                        PaginatedRequestParams::default().with_cursor(Some(next.clone()))
                     });
                     let response = match client.list_resource_templates(params, timeout).await {
                         Ok(result) => result,

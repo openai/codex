@@ -129,6 +129,9 @@ pub struct Submission {
     pub id: String,
     /// Payload
     pub op: Op,
+    /// Client-provided id for the user message represented by `Op::UserInput`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_user_message_id: Option<String>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<W3cTraceContext>,
@@ -2164,6 +2167,8 @@ pub struct AgentMessageEvent {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, TS)]
 pub struct UserMessageEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
     pub message: String,
     /// Image URLs sourced from `UserInput::Image`. These are safe
     /// to replay in legacy UI history events and correspond to images sent to
@@ -2767,6 +2772,10 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub cwd: PathBuf,
+    /// Effective workspace roots used to materialize symbolic
+    /// `:workspace_roots` filesystem permissions in `permission_profile`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5088,6 +5097,7 @@ mod tests {
     #[test]
     fn user_message_event_serializes_empty_metadata_vectors() -> Result<()> {
         let event = UserMessageEvent {
+            client_id: None,
             message: "hello".to_string(),
             images: None,
             local_images: Vec::new(),
@@ -5133,7 +5143,7 @@ mod tests {
     #[test]
     fn user_message_item_legacy_event_preserves_image_details() {
         let local_path = PathBuf::from("/tmp/local.png");
-        let item = UserMessageItem::new(&[
+        let mut item = UserMessageItem::new(&[
             crate::user_input::UserInput::Image {
                 image_url: "https://example.com/first.png".to_string(),
                 detail: Some(ImageDetail::Original),
@@ -5147,6 +5157,7 @@ mod tests {
                 detail: Some(ImageDetail::Original),
             },
         ]);
+        item.client_id = Some("client-message-1".to_string());
 
         let EventMsg::UserMessage(event) = item.as_legacy_event() else {
             panic!("expected user message event");
@@ -5159,6 +5170,7 @@ mod tests {
                 "https://example.com/second.png".to_string(),
             ])
         );
+        assert_eq!(event.client_id, Some("client-message-1".to_string()));
         assert_eq!(event.image_details, vec![Some(ImageDetail::Original)]);
         assert_eq!(event.local_images, vec![local_path]);
         assert_eq!(event.local_image_details, vec![Some(ImageDetail::Original)]);
@@ -5204,6 +5216,7 @@ mod tests {
         let item = TurnContextItem {
             turn_id: None,
             cwd: test_path_buf("/tmp"),
+            workspace_roots: None,
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,

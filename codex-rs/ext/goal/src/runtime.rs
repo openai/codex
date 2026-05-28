@@ -20,6 +20,11 @@ pub struct GoalRuntimeHandle {
     inner: Arc<GoalRuntimeInner>,
 }
 
+pub(crate) struct GoalRuntimeConfig {
+    pub(crate) enabled: bool,
+    pub(crate) tools_available_for_thread: bool,
+}
+
 struct GoalRuntimeInner {
     thread_id: ThreadId,
     state_dbs: Arc<codex_state::StateRuntime>,
@@ -28,6 +33,7 @@ struct GoalRuntimeInner {
     thread_manager: Weak<ThreadManager>,
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
+    tools_available_for_thread: bool,
 }
 
 pub(crate) struct AccountedGoalProgress {
@@ -66,7 +72,7 @@ impl GoalRuntimeHandle {
         metrics: GoalMetrics,
         thread_manager: Weak<ThreadManager>,
         accounting_state: Arc<GoalAccountingState>,
-        enabled: bool,
+        config: GoalRuntimeConfig,
     ) -> Self {
         Self {
             inner: Arc::new(GoalRuntimeInner {
@@ -76,7 +82,8 @@ impl GoalRuntimeHandle {
                 metrics,
                 thread_manager,
                 accounting_state,
-                enabled: AtomicBool::new(enabled),
+                enabled: AtomicBool::new(config.enabled),
+                tools_available_for_thread: config.tools_available_for_thread,
             }),
         }
     }
@@ -87,6 +94,10 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn is_enabled(&self) -> bool {
         self.inner.enabled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn tools_visible(&self) -> bool {
+        self.is_enabled() && self.inner.tools_available_for_thread
     }
 
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -189,6 +200,54 @@ impl GoalRuntimeHandle {
         }
 
         self.inner.accounting_state.clear_active_goal();
+        Ok(())
+    }
+
+    pub async fn usage_limit_active_goal_for_turn(&self, turn_id: &str) -> Result<(), String> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        if !self
+            .inner
+            .accounting_state
+            .turn_is_current_active_goal(turn_id)
+        {
+            return Ok(());
+        }
+
+        let progress_event_id = format!("{turn_id}:usage-limit-progress");
+        self.account_active_goal_progress(
+            turn_id,
+            progress_event_id.as_str(),
+            codex_state::GoalAccountingMode::ActiveOnly,
+            BudgetLimitedGoalDisposition::ClearActive,
+        )
+        .await?;
+
+        let previous_status = self
+            .current_goal_status_for_metrics(/*expected_goal_id*/ None)
+            .await?;
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .usage_limit_active_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            return Ok(());
+        };
+        self.inner
+            .metrics
+            .record_terminal_if_status_changed(previous_status, &goal);
+        self.inner.accounting_state.clear_active_goal();
+        let goal = protocol_goal_from_state(goal);
+        self.inner.event_emitter.thread_goal_updated(
+            format!("{turn_id}:usage-limit"),
+            Some(turn_id.to_string()),
+            goal,
+        );
         Ok(())
     }
 

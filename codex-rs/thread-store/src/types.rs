@@ -529,8 +529,6 @@ pub struct ThreadMetadataPatch {
     pub git_info: Option<GitInfoPatch>,
     /// Thread memory behavior.
     pub memory_mode: Option<MemoryMode>,
-    /// Dynamic tools available to this thread.
-    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 impl ThreadMetadataPatch {
@@ -608,9 +606,6 @@ impl ThreadMetadataPatch {
         if next.memory_mode.is_some() {
             self.memory_mode = next.memory_mode;
         }
-        if next.dynamic_tools.is_some() {
-            self.dynamic_tools = next.dynamic_tools;
-        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -636,7 +631,6 @@ impl ThreadMetadataPatch {
             && self.first_user_message.is_none()
             && self.git_info.is_none()
             && self.memory_mode.is_none()
-            && self.dynamic_tools.is_none()
     }
 }
 

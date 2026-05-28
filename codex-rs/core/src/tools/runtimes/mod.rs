@@ -98,6 +98,44 @@ pub(crate) fn with_shell_env_file_read_permission(
     additional_permissions
 }
 
+#[cfg(unix)]
+fn prepend_path_entry(env: &mut HashMap<String, String>, path_entry: &str) -> String {
+    let updated_path = match env.get("PATH") {
+        Some(path) if !path.is_empty() => std::iter::once(path_entry)
+            .chain(path.split(':').filter(|entry| *entry != path_entry))
+            .collect::<Vec<_>>()
+            .join(":"),
+        _ => path_entry.to_string(),
+    };
+    env.insert("PATH".to_string(), updated_path.clone());
+    updated_path
+}
+
+#[cfg(unix)]
+pub(crate) fn prepend_zsh_fork_bin_to_path(
+    env: &mut HashMap<String, String>,
+    shell_zsh_path: &Path,
+) -> Option<String> {
+    let zsh_bin_dir = shell_zsh_path
+        .parent()
+        .map(|path| path.to_string_lossy().to_string())?;
+    Some(prepend_path_entry(env, &zsh_bin_dir))
+}
+
+#[cfg(unix)]
+pub(crate) fn apply_zsh_fork_path_prepend(
+    env: &mut HashMap<String, String>,
+    explicit_env_overrides: &mut HashMap<String, String>,
+    shell_zsh_path: &Path,
+) {
+    let Some(updated_path) = prepend_zsh_fork_bin_to_path(env, shell_zsh_path) else {
+        return;
+    };
+    // Snapshot wrapping restores explicit overrides after sourcing the shell
+    // snapshot, so capture this PATH override there as well.
+    explicit_env_overrides.insert("PATH".to_string(), updated_path);
+}
+
 pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
     command: &[String],
     shell_type: Option<&ShellType>,

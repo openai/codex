@@ -88,6 +88,7 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Search the web".to_string(),
                 text_elements: Vec::new(),
@@ -112,9 +113,12 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
     assert_eq!(requests.len(), 2);
 
     let first_response = requests[0].body_json();
-    assert!(
-        requests[0].tool_by_name("web", "run").is_some(),
-        "web.run should be sent to the model"
+    let web_run = requests[0]
+        .tool_by_name("web", "run")
+        .context("web.run should be sent to the model")?;
+    assert_eq!(
+        web_run.pointer("/parameters/properties/time/description"),
+        Some(&json!("Get time for the given UTC offsets."))
     );
     assert!(
         !has_hosted_web_search(&first_response),

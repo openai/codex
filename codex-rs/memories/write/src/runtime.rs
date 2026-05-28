@@ -153,7 +153,6 @@ impl MemoryStartupContext {
 
         StageOneRequestContext {
             model_info,
-            turn_metadata_header,
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -161,6 +160,7 @@ impl MemoryStartupContext {
             reasoning_effort: Some(reasoning_effort),
             reasoning_summary,
             service_tier: config_snapshot.service_tier,
+            turn_metadata_header,
         }
     }
 

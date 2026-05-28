@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
+use codex_mcp::tool_is_model_visible;
 
 use crate::config::Config;
 use crate::connectors;
@@ -51,7 +52,9 @@ pub(crate) fn build_mcp_tool_exposure(
 fn filter_non_codex_apps_mcp_tools_only(mcp_tools: &[McpToolInfo]) -> Vec<McpToolInfo> {
     mcp_tools
         .iter()
-        .filter(|tool| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+        .filter(|tool| {
+            tool.server_name != CODEX_APPS_MCP_SERVER_NAME && tool_is_model_visible(tool)
+        })
         .cloned()
         .collect()
 }
@@ -70,6 +73,9 @@ fn filter_codex_apps_mcp_tools(
         .iter()
         .filter(|tool| {
             if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+                return false;
+            }
+            if !tool_is_model_visible(tool) {
                 return false;
             }
             let Some(connector_id) = tool.connector_id.as_deref() else {

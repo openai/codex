@@ -56,6 +56,7 @@ const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
+const CANCELLATION_TERMINATION_GRACE_PERIOD: Duration = Duration::from_millis(50);
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -220,6 +221,17 @@ impl ExecExpiration {
             ExecExpiration::Cancellation(_) => None,
             ExecExpiration::TimeoutOrCancellation { timeout, .. } => {
                 Some(timeout.as_millis() as u64)
+            }
+        }
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn cancellation_token(&self) -> Option<CancellationToken> {
+        match self {
+            ExecExpiration::Timeout(_) | ExecExpiration::DefaultTimeout => None,
+            ExecExpiration::Cancellation(cancellation)
+            | ExecExpiration::TimeoutOrCancellation { cancellation, .. } => {
+                Some(cancellation.clone())
             }
         }
     }
@@ -423,7 +435,6 @@ pub(crate) async fn execute_exec_request(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
-    let sandbox_policy = exec_request.compatibility_sandbox_policy();
     let ExecRequest {
         command,
         cwd,
@@ -464,7 +475,6 @@ pub(crate) async fn execute_exec_request(
         stdout_stream,
         after_spawn,
         sandbox,
-        &sandbox_policy,
         &permission_profile,
         &windows_sandbox_policy_cwd,
         windows_sandbox_filesystem_overrides.as_ref(),
@@ -481,7 +491,6 @@ async fn get_raw_output_result(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
     #[cfg_attr(not(windows), allow(unused_variables))] sandbox: SandboxType,
-    #[cfg_attr(not(windows), allow(unused_variables))] sandbox_policy: &SandboxPolicy,
     #[cfg_attr(not(windows), allow(unused_variables))] permission_profile: &PermissionProfile,
     #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_policy_cwd: &AbsolutePathBuf,
     #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_filesystem_overrides: Option<
@@ -492,7 +501,6 @@ async fn get_raw_output_result(
     if sandbox == SandboxType::WindowsRestrictedToken {
         return exec_windows_sandbox(
             params,
-            sandbox_policy,
             permission_profile,
             windows_sandbox_policy_cwd,
             windows_sandbox_filesystem_overrides,
@@ -572,7 +580,6 @@ fn record_windows_sandbox_spawn_failure(
 #[cfg(target_os = "windows")]
 async fn exec_windows_sandbox(
     params: ExecParams,
-    sandbox_policy: &SandboxPolicy,
     permission_profile: &PermissionProfile,
     windows_sandbox_policy_cwd: &AbsolutePathBuf,
     windows_sandbox_filesystem_overrides: Option<&WindowsSandboxFilesystemOverrides>,
@@ -596,19 +603,18 @@ async fn exec_windows_sandbox(
         network.apply_to_env(&mut env);
     }
 
-    // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
-    // variants of ExecExpiration, not just timeout.
-    let timeout_ms = if capture_policy.uses_expiration() {
-        expiration.timeout_ms()
+    // Windows sandbox capture still receives timeout and cancellation separately.
+    let (cancellation, timeout_ms) = if capture_policy.uses_expiration() {
+        let cancellation = expiration.cancellation_token().map(|token| {
+            codex_windows_sandbox::WindowsSandboxCancellationToken::new(move || {
+                token.is_cancelled()
+            })
+        });
+        (cancellation, expiration.timeout_ms())
     } else {
-        None
+        (None, None)
     };
 
-    let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
-        CodexErr::Io(io::Error::other(format!(
-            "failed to serialize Windows sandbox policy: {err}"
-        )))
-    })?;
     let sandbox_cwd = windows_sandbox_policy_cwd.clone();
     let permission_profile = permission_profile.clone();
     let codex_home = find_codex_home().map_err(|err| {
@@ -643,6 +649,7 @@ async fn exec_windows_sandbox(
                     cwd: &cwd,
                     env_map: env,
                     timeout_ms,
+                    cancellation,
                     use_private_desktop: windows_sandbox_private_desktop,
                     proxy_enforced,
                     read_roots_override: elevated_read_roots_override.as_deref(),
@@ -655,13 +662,14 @@ async fn exec_windows_sandbox(
             )
         } else {
             run_windows_sandbox_capture_with_filesystem_overrides(
-                policy_str.as_str(),
+                &permission_profile,
                 &sandbox_cwd,
                 codex_home.as_ref(),
                 command,
                 &cwd,
                 env,
                 timeout_ms,
+                cancellation,
                 &additional_deny_read_paths,
                 &additional_deny_write_paths,
                 windows_sandbox_private_desktop,
@@ -1368,15 +1376,49 @@ async fn consume_output(
             (exit_status, false)
         }
         outcome = &mut expiration_wait => {
-            kill_child_process_group(&mut child)?;
-            child.start_kill()?;
-            let timed_out = matches!(outcome, Some(ExecExpirationOutcome::TimedOut));
-            let exit_status = if timed_out {
-                synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE)
-            } else {
-                synthetic_exit_status_for_code(/*code*/ 1)
-            };
-            (exit_status, timed_out)
+            match outcome {
+                Some(ExecExpirationOutcome::TimedOut) => {
+                    kill_child_process_group(&mut child)?;
+                    child.start_kill()?;
+                    (
+                        synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE),
+                        true,
+                    )
+                }
+                Some(ExecExpirationOutcome::Cancelled) => {
+                    // Let TERM-aware processes run cleanup briefly, then kill any
+                    // remaining members of the original process group.
+                    let process_group_id = child.id();
+                    let should_escalate = if let Some(process_group_id) = process_group_id {
+                        codex_utils_pty::process_group::terminate_process_group(process_group_id)?
+                    } else {
+                        false
+                    };
+                    match tokio::time::timeout(
+                        CANCELLATION_TERMINATION_GRACE_PERIOD,
+                        child.wait(),
+                    )
+                    .await
+                    {
+                        Ok(status) => {
+                            status?;
+                            if should_escalate
+                                && let Some(process_group_id) = process_group_id
+                            {
+                                codex_utils_pty::process_group::kill_process_group(
+                                    process_group_id,
+                                )?;
+                            }
+                        }
+                        Err(_) => {
+                            kill_child_process_group(&mut child)?;
+                            child.start_kill()?;
+                        }
+                    }
+                    (synthetic_exit_status_for_code(/*code*/ 1), false)
+                }
+                None => unreachable!("expiration wait only resolves while expiration is active"),
+            }
         }
         _ = tokio::signal::ctrl_c() => {
             kill_child_process_group(&mut child)?;
