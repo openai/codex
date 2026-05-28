@@ -391,7 +391,14 @@ impl CodexThread {
     #[cfg(test)]
     pub(crate) async fn append_message(&self, message: ResponseItem) -> CodexResult<String> {
         let submission_id = uuid::Uuid::new_v4().to_string();
-        self.codex.session.inject_starts_turn(vec![message]).await;
+        if let Err(items) = self.codex.session.inject_if_running(vec![message]).await {
+            self.codex
+                .session
+                .input_queue
+                .queue_response_items_for_next_turn(items)
+                .await;
+            self.codex.session.maybe_start_turn_for_pending_work().await;
+        }
 
         Ok(submission_id)
     }

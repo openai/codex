@@ -2,7 +2,6 @@ use super::input_queue::TurnInput;
 use super::session::Session;
 use super::turn_context::TurnContext;
 use codex_protocol::models::ResponseItem;
-use std::sync::Arc;
 
 impl Session {
     /// Returns the input if there is no active turn to inject into.
@@ -26,16 +25,6 @@ impl Session {
                 Ok(())
             }
             None => Err(input),
-        }
-    }
-
-    /// Injects items into active work, or queues them and starts a turn when idle.
-    pub(crate) async fn inject_starts_turn(self: &Arc<Self>, items: Vec<ResponseItem>) {
-        if let Err(items) = self.inject_if_running(items).await {
-            self.input_queue
-                .queue_response_items_for_next_turn(items)
-                .await;
-            self.maybe_start_turn_for_pending_work().await;
         }
     }
 
