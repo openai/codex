@@ -4,16 +4,19 @@ use std::sync::Weak;
 use codex_protocol::items::TurnItem;
 use codex_tools::ConversationHistory;
 use codex_tools::ExtensionTurnItem;
+use codex_tools::ImageGenerationCompletionFuture;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::TurnItemEmissionFuture;
 use codex_tools::TurnItemEmitter;
 
+use crate::context::ContextualUserFragment;
+use crate::context::ImageGenerationInstructions;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::stream_events_utils::finalize_image_generation_item;
+use crate::stream_events_utils::persist_image_generation_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -97,10 +100,10 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
         call_id: String,
         prompt: String,
         result: String,
-    ) -> TurnItemEmissionFuture<'a> {
+    ) -> ImageGenerationCompletionFuture<'a> {
         Box::pin(async move {
             let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
-                return;
+                return None;
             };
             let mut item = codex_protocol::items::ImageGenerationItem {
                 id: call_id,
@@ -109,18 +112,30 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
                 result,
                 saved_path: None,
             };
-            finalize_image_generation_item(session.as_ref(), turn.as_ref(), &mut item).await;
-            let mut started_item = item.clone();
-            started_item.status = "in_progress".to_string();
-            started_item.revised_prompt = None;
-            started_item.result.clear();
-            started_item.saved_path = None;
+            let output_hint =
+                persist_image_generation_item(session.as_ref(), turn.as_ref(), &mut item)
+                    .await
+                    .map(|saved_path| {
+                        let output_dir = saved_path
+                            .parent()
+                            .unwrap_or_else(|| turn.config.codex_home.clone());
+                        ImageGenerationInstructions::new(output_dir.display(), saved_path.display())
+                            .body()
+                    });
+            let started_item = codex_protocol::items::ImageGenerationItem {
+                id: item.id.clone(),
+                status: "in_progress".to_string(),
+                revised_prompt: None,
+                result: String::new(),
+                saved_path: None,
+            };
             session
                 .emit_turn_item_started(turn.as_ref(), &TurnItem::ImageGeneration(started_item))
                 .await;
             session
                 .emit_turn_item_completed(turn.as_ref(), TurnItem::ImageGeneration(item))
                 .await;
+            output_hint
         })
     }
 }
@@ -386,7 +401,9 @@ mod tests {
         assert_eq!(end.action, expected.action);
     }
 
-    struct ImageGenerationExtensionExecutor;
+    struct ImageGenerationExtensionExecutor {
+        output_hint: Arc<Mutex<Option<String>>>,
+    }
 
     #[async_trait::async_trait]
     impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for ImageGenerationExtensionExecutor {
@@ -409,13 +426,15 @@ mod tests {
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
-            call.turn_item_emitter
+            let output_hint = call
+                .turn_item_emitter
                 .image_generation_completed(
                     call.call_id,
                     "A tiny blue square".to_string(),
                     "cG5n".to_string(),
                 )
                 .await;
+            *self.output_hint.lock().await = output_hint;
             Ok(Box::new(codex_tools::JsonToolOutput::new(
                 json!({ "ok": true }),
             )))
@@ -424,7 +443,10 @@ mod tests {
 
     #[tokio::test]
     async fn image_generation_publication_is_finalized_by_core() {
-        let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
+        let output_hint = Arc::new(Mutex::new(None));
+        let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor {
+            output_hint: Arc::clone(&output_hint),
+        }));
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
         let expected_path = crate::stream_events_utils::image_generation_artifact_path(
             &turn.config.codex_home,
@@ -448,8 +470,6 @@ mod tests {
             .await
             .expect("extension call should succeed");
 
-        let instructions = rx.recv().await.expect("image path instructions event");
-        assert!(matches!(instructions.msg, EventMsg::RawResponseItem(_)));
         let started = rx.recv().await.expect("item started event");
         let EventMsg::ItemStarted(started) = started.msg else {
             panic!("expected item started event");
@@ -490,8 +510,20 @@ mod tests {
             }
         );
         assert_eq!(
-            std::fs::read(expected_path).expect("generated artifact should be saved"),
+            std::fs::read(&expected_path).expect("generated artifact should be saved"),
             b"png"
+        );
+        assert_eq!(
+            *output_hint.lock().await,
+            Some(format!(
+                "Generated images are saved to {} as {} by default.\n\
+                 If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
+                expected_path
+                    .parent()
+                    .expect("generated image path should have a parent")
+                    .display(),
+                expected_path.display(),
+            ))
         );
     }
 }
