@@ -7895,6 +7895,29 @@ async fn realtime_conversation_list_voices_emits_builtin_list() {
 }
 
 #[derive(Clone, Copy)]
+struct CompletingTask;
+
+impl SessionTask for CompletingTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.completing"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<TurnInput>,
+        _cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
 struct NeverEndingTask {
     kind: TaskKind,
     listen_to_cancellation_token: bool,
@@ -8236,6 +8259,86 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             ..
         }) if turn_id == tc.sub_id
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_finish_emits_thread_idle_lifecycle_after_active_turn_clears() {
+    struct ThreadIdleRecorder {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        idle_tx: async_channel::Sender<()>,
+        expected_thread_id: ThreadId,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadIdleRecorder {
+        async fn on_thread_idle(&self, input: codex_extension_api::ThreadIdleInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.idle_tx.send(()).await.expect("idle receiver open");
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (idle_tx, idle_rx) = async_channel::bounded(1);
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(Arc::new(ThreadIdleRecorder {
+        calls: Arc::clone(&calls),
+        idle_tx,
+        expected_thread_id: session.conversation_id,
+    }));
+    session.services.extensions = Arc::new(builder.build());
+
+    let session = Arc::new(session);
+    session
+        .spawn_task(Arc::new(turn_context), Vec::new(), CompletingTask)
+        .await;
+
+    timeout(StdDuration::from_secs(2), idle_rx.recv())
+        .await
+        .expect("thread idle lifecycle")
+        .expect("idle receiver open");
+    assert_eq!(1, calls.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(session.active_turn.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
+    struct ThreadIdleRecorder {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadIdleRecorder {
+        async fn on_thread_idle(&self, _input: codex_extension_api::ThreadIdleInput<'_>) {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(Arc::new(ThreadIdleRecorder {
+        calls: Arc::clone(&calls),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root(),
+            Vec::new(),
+            "pending trigger".to_string(),
+            /*trigger_turn*/ true,
+        ))
+        .await;
+
+    session.emit_thread_idle_lifecycle_if_idle().await;
+
+    assert_eq!(0, calls.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[tokio::test]

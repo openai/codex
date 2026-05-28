@@ -2,9 +2,6 @@ set working-directory := "codex-rs"
 set positional-arguments
 
 rust_min_stack := "8388608" # 8 MiB
-e2e_benchmark_packages := "codex-app-server-start-bench"
-e2e_codex_bin := if os() == "windows" { "./target/release/codex.exe" } else { "./target/release/codex" }
-e2e_smoke_codex_bin := if os() == "windows" { "./target/debug/codex.exe" } else { "./target/debug/codex" }
 
 # Display help
 help:
@@ -33,11 +30,6 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
-# Run end-to-end performance benchmarks that require a built Codex binary.
-bench-e2e *args:
-    cargo build --release -p codex-cli --bin codex
-    for package in {{ e2e_benchmark_packages }}; do CODEX_BIN="{{ e2e_codex_bin }}" cargo run --release -p "$package" -- --bench "$@"; done
-
 # Format Rust and Python SDK code.
 fmt:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
@@ -63,19 +55,13 @@ test *args:
     RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast "$@"
     just bench-smoke
 
-# Run unit-test-style benchmark targets managed entirely by Cargo.
-bench-unit *args:
+# Run explicit workspace benchmark targets.
+bench *args:
     cargo bench --workspace --bench '*' "$@"
 
-# Smoke Cargo-managed benchmarks and compile e2e runners without measured binaries.
+# Run benchmark targets once to ensure they start successfully.
 bench-smoke:
-    just bench-unit -- --test
-    for package in {{ e2e_benchmark_packages }}; do cargo build -p "$package" --bin "$package"; done
-
-# Run end-to-end performance benchmark targets once.
-bench-e2e-smoke:
-    cargo build -p codex-cli --bin codex
-    for package in {{ e2e_benchmark_packages }}; do CODEX_BIN="{{ e2e_smoke_codex_bin }}" cargo run -p "$package" -- --test; done
+    just bench -- --test
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`

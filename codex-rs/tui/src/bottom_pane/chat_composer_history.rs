@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::MentionBinding;
-use crate::mention_codec::decode_history_mentions;
+use crate::mention_codec::decode_history_mentions_with_at_mentions;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::TextElement;
 
@@ -47,7 +47,11 @@ impl HistoryEntry {
     /// recorded with the full `HistoryEntry` value built by the composer; using `new` for a local
     /// image or paste submission would make recall lose placeholder ownership.
     pub(crate) fn new(text: String) -> Self {
-        let decoded = decode_history_mentions(&text);
+        Self::new_with_at_mentions(text, /*at_mentions_enabled*/ true)
+    }
+
+    pub(crate) fn new_with_at_mentions(text: String, at_mentions_enabled: bool) -> Self {
+        let decoded = decode_history_mentions_with_at_mentions(&text, at_mentions_enabled);
         Self {
             text: decoded.text,
             text_elements: Vec::new(),
@@ -57,6 +61,7 @@ impl HistoryEntry {
                 .mentions
                 .into_iter()
                 .map(|mention| MentionBinding {
+                    sigil: mention.sigil,
                     mention: mention.mention,
                     path: mention.path,
                 })
@@ -132,6 +137,8 @@ pub(crate) struct ChatComposerHistory {
 
     /// Active incremental history search, if Ctrl+R search mode is open.
     search: Option<HistorySearchState>,
+    /// Whether persistent history restore should rehydrate `@` tool mentions.
+    at_mention_restore_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -226,7 +233,19 @@ impl ChatComposerHistory {
             history_cursor: None,
             last_history_text: None,
             search: None,
+            at_mention_restore_enabled: false,
         }
+    }
+
+    pub fn set_at_mention_restore_enabled(&mut self, enabled: bool) {
+        if self.at_mention_restore_enabled == enabled {
+            return;
+        }
+        self.at_mention_restore_enabled = enabled;
+        self.fetched_history.clear();
+        self.history_cursor = None;
+        self.last_history_text = None;
+        self.search = None;
     }
 
     /// Updates persistent history metadata when a new session is configured.
@@ -393,7 +412,9 @@ impl ChatComposerHistory {
             return HistoryEntryResponse::Ignored;
         }
 
-        let entry = entry.map(HistoryEntry::new);
+        let entry = entry.map(|entry| {
+            HistoryEntry::new_with_at_mentions(entry, self.at_mention_restore_enabled)
+        });
         if let Some(entry) = entry.clone() {
             self.fetched_history.insert(offset, entry);
         }
@@ -837,6 +858,75 @@ mod tests {
         assert_eq!(
             history.local_history.last().unwrap(),
             &HistoryEntry::new("world".to_string())
+        );
+    }
+
+    #[test]
+    fn persistent_restore_gates_at_mentions() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut history = ChatComposerHistory::new();
+        history.set_metadata(test_thread_id(), /*log_id*/ 42, /*entry_count*/ 1);
+
+        assert!(history.navigate_up(&tx).is_none());
+        let disabled = history.on_entry_response(
+            /*log_id*/ 42,
+            /*offset*/ 0,
+            Some("[@sample](plugin://sample@test) and [$figma](app://figma)".to_string()),
+            &tx,
+        );
+        assert_eq!(
+            disabled,
+            HistoryEntryResponse::Found(HistoryEntry {
+                text: "$sample and $figma".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+                mention_bindings: vec![
+                    MentionBinding {
+                        sigil: '$',
+                        mention: "sample".to_string(),
+                        path: "plugin://sample@test".to_string(),
+                    },
+                    MentionBinding {
+                        sigil: '$',
+                        mention: "figma".to_string(),
+                        path: "app://figma".to_string(),
+                    },
+                ],
+                pending_pastes: Vec::new(),
+            })
+        );
+
+        history.set_at_mention_restore_enabled(/*enabled*/ true);
+        assert!(history.navigate_up(&tx).is_none());
+        let enabled = history.on_entry_response(
+            /*log_id*/ 42,
+            /*offset*/ 0,
+            Some("[@sample](plugin://sample@test) and [$figma](app://figma)".to_string()),
+            &tx,
+        );
+        assert_eq!(
+            enabled,
+            HistoryEntryResponse::Found(HistoryEntry {
+                text: "@sample and $figma".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+                mention_bindings: vec![
+                    MentionBinding {
+                        sigil: '@',
+                        mention: "sample".to_string(),
+                        path: "plugin://sample@test".to_string(),
+                    },
+                    MentionBinding {
+                        sigil: '$',
+                        mention: "figma".to_string(),
+                        path: "app://figma".to_string(),
+                    },
+                ],
+                pending_pastes: Vec::new(),
+            })
         );
     }
 

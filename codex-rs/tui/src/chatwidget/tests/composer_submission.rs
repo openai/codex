@@ -570,6 +570,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         Vec::new(),
         Vec::new(),
         vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: user_skill_path.to_string_lossy().into_owned(),
         }],
@@ -605,6 +606,7 @@ async fn blocked_image_restore_preserves_mention_bindings() {
         path: PathBuf::from("/tmp/blocked.png"),
     }];
     let mention_bindings = vec![MentionBinding {
+        sigil: '$',
         mention: "file".to_string(),
         path: "/tmp/skills/file/SKILL.md".to_string(),
     }];
@@ -1236,6 +1238,7 @@ async fn submit_user_message_ignores_inaccessible_app_mentions_from_bindings() {
         remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
         mention_bindings: vec![MentionBinding {
+            sigil: '$',
             mention: "arabica-uae".to_string(),
             path: "app://arabica_uae".to_string(),
         }],
