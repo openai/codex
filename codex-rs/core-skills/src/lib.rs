@@ -18,7 +18,6 @@ pub use model::SkillError;
 pub use model::SkillLoadOutcome;
 pub use model::SkillMetadata;
 pub use model::SkillPolicy;
-pub use model::SkillRootPathRef;
 pub use model::filter_skill_load_outcome_for_product;
 pub use render::AvailableSkills;
 pub use render::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;

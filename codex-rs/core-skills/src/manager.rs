@@ -253,7 +253,7 @@ fn config_skills_cache_key(
                     SkillScope::Admin => 3,
                 };
                 (
-                    root.path.path_ref().clone(),
+                    root.path.clone(),
                     scope_rank,
                     root.plugin_id.clone(),
                 )

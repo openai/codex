@@ -14,7 +14,6 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
 use codex_core_skills::SkillMetadata;
-use codex_core_skills::SkillRootPathRef;
 use codex_core_skills::config_rules::SkillConfigRules;
 use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
@@ -661,7 +660,7 @@ pub async fn load_plugin_skills(
     let roots = plugin_skill_roots(plugin_root.path(), manifest_paths)
         .into_iter()
         .map(|path| SkillRoot {
-            path: SkillRootPathRef::new(plugin_root.with_path(path)),
+            path: plugin_root.with_path(path),
             scope: SkillScope::User,
             plugin_id: Some(plugin_id.as_key()),
             plugin_root: Some(plugin_root.clone()),

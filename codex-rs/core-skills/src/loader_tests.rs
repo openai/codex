@@ -145,7 +145,7 @@ fn normalized(path: &Path) -> AbsolutePathBuf {
         .abs()
 }
 
-fn skill_root_path_ref(path: AbsolutePathBuf) -> EnvironmentPathRef {
+fn env_path_ref(path: AbsolutePathBuf) -> EnvironmentPathRef {
     EnvironmentPathRef::new(
         LOCAL_ENVIRONMENT_ID.to_string(),
         Arc::clone(&LOCAL_FS),
@@ -155,7 +155,7 @@ fn skill_root_path_ref(path: AbsolutePathBuf) -> EnvironmentPathRef {
 
 fn local_skill_root(path: AbsolutePathBuf, scope: SkillScope) -> SkillRoot {
     SkillRoot {
-        path: SkillRootPathRef::new(skill_root_path_ref(path)),
+        path: env_path_ref(path),
         scope,
         plugin_id: None,
         plugin_root: None,
@@ -864,10 +864,10 @@ interface:
 
     let plugin_root_abs = plugin_root.abs();
     let outcome = load_skills_from_roots([SkillRoot {
-        path: SkillRootPathRef::new(skill_root_path_ref(plugin_root.join("skills").abs())),
+        path: env_path_ref(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
         plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_root: Some(skill_root_path_ref(plugin_root_abs.clone())),
+        plugin_root: Some(env_path_ref(plugin_root_abs.clone())),
     }])
     .await;
 
@@ -920,10 +920,10 @@ interface:
     );
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: SkillRootPathRef::new(skill_root_path_ref(plugin_root.join("skills").abs())),
+        path: env_path_ref(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
         plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_root: Some(skill_root_path_ref(plugin_root.abs())),
+        plugin_root: Some(env_path_ref(plugin_root.abs())),
     }])
     .await;
 
@@ -1271,10 +1271,10 @@ async fn namespaces_plugin_skills_using_plugin_name() {
     .unwrap();
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: SkillRootPathRef::new(skill_root_path_ref(plugin_root.join("skills").abs())),
+        path: env_path_ref(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
         plugin_id: Some("sample@test".to_string()),
-        plugin_root: Some(skill_root_path_ref(plugin_root.abs())),
+        plugin_root: Some(env_path_ref(plugin_root.abs())),
     }])
     .await;
 
@@ -1593,13 +1593,13 @@ async fn deduplicates_by_path_preferring_first_root() {
 
     let outcome = load_skills_from_roots([
         SkillRoot {
-            path: SkillRootPathRef::new(skill_root_path_ref(root.path().abs())),
+            path: env_path_ref(root.path().abs()),
             scope: SkillScope::Repo,
             plugin_id: None,
             plugin_root: None,
         },
         SkillRoot {
-            path: SkillRootPathRef::new(skill_root_path_ref(root.path().abs())),
+            path: env_path_ref(root.path().abs()),
             scope: SkillScope::User,
             plugin_id: None,
             plugin_root: None,
@@ -1891,7 +1891,7 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cfg = make_config(&codex_home).await;
 
-    let path_ref = skill_root_path_ref(cfg.cwd.clone());
+    let path_ref = env_path_ref(cfg.cwd.clone());
     let scopes: Vec<SkillScope> = super::skill_roots(
         Some(&path_ref),
         Some(&path_ref),
@@ -1911,13 +1911,13 @@ async fn skill_roots_include_admin_with_lowest_priority() {
 }
 
 #[tokio::test]
-async fn skill_roots_skip_local_roots_without_skill_root_path_ref() {
+async fn skill_roots_skip_local_roots_without_local_env_path_ref() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cfg = make_config(&codex_home).await;
 
-    let env_path_ref = skill_root_path_ref(cfg.cwd.clone());
+    let local_env_path_ref = env_path_ref(cfg.cwd.clone());
     let scopes: Vec<SkillScope> = super::skill_roots(
-        Some(&env_path_ref),
+        Some(&local_env_path_ref),
         /*skill_root_path_ref*/ None,
         &cfg.config_layer_stack,
         Vec::new(),

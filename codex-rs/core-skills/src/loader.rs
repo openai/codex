@@ -5,7 +5,6 @@ use crate::model::SkillInterface;
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
 use crate::model::SkillPolicy;
-use crate::model::SkillRootPathRef;
 use crate::model::SkillToolDependency;
 use crate::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -152,7 +151,7 @@ impl fmt::Display for SkillParseError {
 impl Error for SkillParseError {}
 
 pub struct SkillRoot {
-    pub path: SkillRootPathRef,
+    pub path: EnvironmentPathRef,
     pub scope: SkillScope,
     pub plugin_id: Option<String>,
     pub plugin_root: Option<EnvironmentPathRef>,
@@ -169,8 +168,7 @@ where
         HashMap::new();
     for root in roots {
         let root_path = canonicalize_for_skill_identity(root.path.path());
-        let root_path_ref =
-            SkillRootPathRef::new(root.path.path_ref().with_path(root_path.clone()));
+        let root_path_ref = root.path.with_path(root_path.clone());
         let fs = root_path_ref.file_system();
         let skills_before_root = outcome.skills.len();
         discover_skills_under_root(
@@ -264,7 +262,7 @@ async fn skill_roots_with_home_dir(
     );
     if let Some(skill_root_path_ref) = skill_root_path_ref {
         roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
-            path: SkillRootPathRef::new(skill_root_path_ref.with_path(root.path)),
+            path: skill_root_path_ref.with_path(root.path),
             scope: SkillScope::User,
             plugin_id: Some(root.plugin_id),
             plugin_root: Some(skill_root_path_ref.with_path(root.plugin_root)),
@@ -295,9 +293,7 @@ fn skill_roots_from_layer_stack_inner(
             ConfigLayerSource::Project { .. } => {
                 if let Some(env_path_ref) = env_path_ref {
                     roots.push(SkillRoot {
-                        path: SkillRootPathRef::new(
-                            env_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
-                        ),
+                        path: env_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
                         scope: SkillScope::Repo,
                         plugin_id: None,
                         plugin_root: None,
@@ -311,9 +307,7 @@ fn skill_roots_from_layer_stack_inner(
                 // Deprecated user skills location (`$CODEX_HOME/skills`), kept for backward
                 // compatibility.
                 roots.push(SkillRoot {
-                    path: SkillRootPathRef::new(
-                        skill_root_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
-                    ),
+                    path: skill_root_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
                     scope: SkillScope::User,
                     plugin_id: None,
                     plugin_root: None,
@@ -322,10 +316,8 @@ fn skill_roots_from_layer_stack_inner(
                 // `$HOME/.agents/skills` (user-installed skills).
                 if let Some(home_dir) = home_dir {
                     roots.push(SkillRoot {
-                        path: SkillRootPathRef::new(
-                            skill_root_path_ref
-                                .with_path(home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)),
-                        ),
+                        path: skill_root_path_ref
+                            .with_path(home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)),
                         scope: SkillScope::User,
                         plugin_id: None,
                         plugin_root: None,
@@ -335,9 +327,7 @@ fn skill_roots_from_layer_stack_inner(
                 // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
                 // special case (not a config layer).
                 roots.push(SkillRoot {
-                    path: SkillRootPathRef::new(
-                        skill_root_path_ref.with_path(system_cache_root_dir(&config_folder)),
-                    ),
+                    path: skill_root_path_ref.with_path(system_cache_root_dir(&config_folder)),
                     scope: SkillScope::System,
                     plugin_id: None,
                     plugin_root: None,
@@ -350,9 +340,7 @@ fn skill_roots_from_layer_stack_inner(
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
                 // `/etc/codex/skills` as admin-scoped skills.
                 roots.push(SkillRoot {
-                    path: SkillRootPathRef::new(
-                        skill_root_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
-                    ),
+                    path: skill_root_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
                     scope: SkillScope::Admin,
                     plugin_id: None,
                     plugin_root: None,
@@ -383,7 +371,7 @@ async fn repo_agents_skill_roots(
         let agents_skills = env_path_ref.with_path(dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME));
         match agents_skills.metadata().await {
             Ok(metadata) if metadata.is_directory => roots.push(SkillRoot {
-                path: SkillRootPathRef::new(agents_skills),
+                path: agents_skills,
                 scope: SkillScope::Repo,
                 plugin_id: None,
                 plugin_root: None,
@@ -473,7 +461,7 @@ fn dirs_between_project_root_and_cwd(
 
 fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
     let mut seen: HashSet<EnvironmentPathRef> = HashSet::new();
-    roots.retain(|root| seen.insert(root.path.path_ref().clone()));
+    roots.retain(|root| seen.insert(root.path.clone()));
 }
 
 fn canonicalize_for_skill_identity(path: &AbsolutePathBuf) -> AbsolutePathBuf {
@@ -481,15 +469,13 @@ fn canonicalize_for_skill_identity(path: &AbsolutePathBuf) -> AbsolutePathBuf {
 }
 
 async fn discover_skills_under_root(
-    root: &SkillRootPathRef,
+    root: &EnvironmentPathRef,
     scope: SkillScope,
     plugin_id: Option<&str>,
     plugin_root: Option<&EnvironmentPathRef>,
     outcome: &mut SkillLoadOutcome,
 ) {
-    let root = root
-        .path_ref()
-        .with_path(canonicalize_for_skill_identity(root.path()));
+    let root = root.with_path(canonicalize_for_skill_identity(root.path()));
     let plugin_root = plugin_root.map(|plugin_root| {
         plugin_root.with_path(canonicalize_for_skill_identity(plugin_root.path()))
     });

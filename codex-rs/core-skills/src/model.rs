@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::Arc;
-
 use codex_exec_server::EnvironmentPathRef;
-use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -44,27 +41,6 @@ impl SkillMetadata {
             }
             None => true,
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SkillRootPathRef(EnvironmentPathRef);
-
-impl SkillRootPathRef {
-    pub fn new(path_ref: EnvironmentPathRef) -> Self {
-        Self(path_ref)
-    }
-
-    pub fn path_ref(&self) -> &EnvironmentPathRef {
-        &self.0
-    }
-
-    pub fn path(&self) -> &AbsolutePathBuf {
-        self.0.path()
-    }
-
-    pub(crate) fn file_system(&self) -> Arc<dyn ExecutorFileSystem> {
-        self.0.file_system()
     }
 }
 
