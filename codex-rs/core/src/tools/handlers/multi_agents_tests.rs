@@ -52,6 +52,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -3754,20 +3755,33 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
 #[tokio::test]
 async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
     let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager();
-    let root = manager
-        .start_thread((*turn.config).clone())
-        .await
-        .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
-    session.conversation_id = root.thread_id;
     let mut config = (*turn.config).clone();
     config.agent_max_threads = Some(1);
     config
         .features
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
-    turn.config = Arc::new(config);
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("test config should allow sqlite");
+    let state_db = init_state_db(&config)
+        .await
+        .expect("sqlite state db should initialize");
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Some(state_db.clone()),
+    );
+    let root = manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    turn.config = Arc::new(config.clone());
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -3815,6 +3829,23 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
     assert_eq!(result.previous_status, AgentStatus::NotFound);
     assert_eq!(success, Some(true));
 
+    let open_children = state_db
+        .list_thread_spawn_children_with_status(
+            root.thread_id,
+            DirectionalThreadSpawnEdgeStatus::Open,
+        )
+        .await
+        .expect("open children should load");
+    assert_eq!(open_children, Vec::<ThreadId>::new());
+    let closed_children = state_db
+        .list_thread_spawn_children_with_status(
+            root.thread_id,
+            DirectionalThreadSpawnEdgeStatus::Closed,
+        )
+        .await
+        .expect("closed children should load");
+    assert_eq!(closed_children, vec![agent_id]);
+
     SpawnAgentHandlerV2::default()
         .handle(invocation(
             session.clone(),
@@ -3839,6 +3870,159 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
         .shutdown_live_agent(replacement_id)
         .await
         .expect("replacement should shut down");
+}
+
+#[tokio::test]
+async fn multi_agent_v2_resume_skips_stale_closed_task_name_target() {
+    let (_session, turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.agent_max_threads = Some(3);
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("test config should allow sqlite");
+    let state_db = init_state_db(&config)
+        .await
+        .expect("sqlite state db should initialize");
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Some(state_db.clone()),
+    );
+    let root = manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    let root_session = root.thread.codex.session.clone();
+    let control = root_session.services.agent_control.clone();
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            root_session.clone(),
+            root_session.new_default_turn().await,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "coordinate this task",
+                "task_name": "parent"
+            })),
+        ))
+        .await
+        .expect("parent spawn should succeed");
+    let parent_id = manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|thread_id| *thread_id != root.thread_id)
+        .expect("parent thread should be listed");
+    let parent_metadata = control
+        .get_agent_metadata(parent_id)
+        .expect("parent metadata should be registered");
+    let parent_thread = manager
+        .get_thread(parent_id)
+        .await
+        .expect("parent thread should be loaded");
+    let parent_session = parent_thread.codex.session.clone();
+    let parent_turn = parent_session.new_default_turn().await;
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            parent_session.clone(),
+            parent_turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("worker spawn should succeed");
+    let worker_id = manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|thread_id| *thread_id != root.thread_id && *thread_id != parent_id)
+        .expect("worker thread should be listed");
+    let stale_worker = manager
+        .remove_thread(&worker_id)
+        .await
+        .expect("worker thread should be loaded before removal");
+    stale_worker
+        .submit(Op::Shutdown {})
+        .await
+        .expect("removed worker thread should still accept shutdown");
+    stale_worker.wait_until_terminated().await;
+
+    let close_output = CloseAgentHandlerV2
+        .handle(invocation(
+            parent_session.clone(),
+            parent_session.new_default_turn().await,
+            "close_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("stale worker close should succeed");
+    let (close_content, close_success) = expect_text_output(close_output);
+    let close_result: close_agent::CloseAgentResult =
+        serde_json::from_str(&close_content).expect("close_agent result should be json");
+    assert_eq!(close_result.previous_status, AgentStatus::NotFound);
+    assert_eq!(close_success, Some(true));
+    let open_children = state_db
+        .list_thread_spawn_children_with_status(parent_id, DirectionalThreadSpawnEdgeStatus::Open)
+        .await
+        .expect("open children should load");
+    assert_eq!(open_children, Vec::<ThreadId>::new());
+    let closed_children = state_db
+        .list_thread_spawn_children_with_status(parent_id, DirectionalThreadSpawnEdgeStatus::Closed)
+        .await
+        .expect("closed children should load");
+    assert_eq!(closed_children, vec![worker_id]);
+
+    let _ = control
+        .shutdown_live_agent(parent_id)
+        .await
+        .expect("parent shutdown should succeed");
+    let resumed_parent_id = control
+        .resume_agent_from_rollout(
+            config.clone(),
+            parent_id,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: parent_metadata.agent_path.clone(),
+                agent_nickname: parent_metadata.agent_nickname.clone(),
+                agent_role: parent_metadata.agent_role.clone(),
+            }),
+        )
+        .await
+        .expect("parent resume should succeed");
+    assert_eq!(resumed_parent_id, parent_id);
+    assert_ne!(control.get_status(parent_id).await, AgentStatus::NotFound);
+    assert_eq!(control.get_status(worker_id).await, AgentStatus::NotFound);
+    let parent_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: root.thread_id,
+        depth: 1,
+        agent_path: parent_metadata.agent_path,
+        agent_nickname: parent_metadata.agent_nickname,
+        agent_role: parent_metadata.agent_role,
+    });
+    assert!(
+        control
+            .resolve_agent_reference(parent_id, &parent_source, "worker")
+            .await
+            .is_err()
+    );
+
+    let shutdown_report = manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    assert_eq!(shutdown_report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(shutdown_report.timed_out, Vec::<ThreadId>::new());
 }
 
 #[tokio::test]

@@ -814,13 +814,8 @@ impl AgentControl {
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
         let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
-        if let Ok(thread) = state.get_thread(agent_id).await
-            && let Some(state_db_ctx) = thread.state_db()
-            && let Err(err) = state_db_ctx
-                .set_thread_spawn_edge_status(agent_id, DirectionalThreadSpawnEdgeStatus::Closed)
-                .await
-        {
-            warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
+        if known_agent || state.get_thread(agent_id).await.is_ok() {
+            self.mark_thread_spawn_edge_closed(&state, agent_id).await?;
         }
         match Box::pin(self.shutdown_agent_tree(agent_id)).await {
             Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) if known_agent => {
@@ -828,6 +823,24 @@ impl AgentControl {
             }
             result => result,
         }
+    }
+
+    async fn mark_thread_spawn_edge_closed(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        agent_id: ThreadId,
+    ) -> CodexResult<()> {
+        let Some(state_db_ctx) = state.state_db() else {
+            return Ok(());
+        };
+        state_db_ctx
+            .set_thread_spawn_edge_status(agent_id, DirectionalThreadSpawnEdgeStatus::Closed)
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to persist thread-spawn edge status for {agent_id}: {err}"
+                ))
+            })
     }
 
     /// Shut down `agent_id` and any live descendants reachable from the in-memory spawn tree.
