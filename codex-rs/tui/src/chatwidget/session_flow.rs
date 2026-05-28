@@ -141,7 +141,10 @@ impl ChatWidget {
         {
             self.emit_forked_thread_event(forked_from_id, fork_parent_title);
         }
-        if !self.suppress_session_configured_redraw {
+        // Normal display queues session info into terminal history, which schedules the frame
+        // that commits the header and repaints the composer atomically. Redrawing before that
+        // history insert is processed can briefly show the composer without its header.
+        if display != SessionConfiguredDisplay::Normal {
             self.request_redraw();
         }
     }
