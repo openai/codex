@@ -1615,8 +1615,9 @@ image({
     async fn image_helper_rejects_unsupported_detail() {
         let service = CodeModeService::new();
 
-        let response = service
-            .execute(ExecuteRequest {
+        let response = execute(
+            &service,
+            ExecuteRequest {
                 source: r#"
 image({
   image_url: "https://example.com/image.jpg",
@@ -1626,9 +1627,9 @@ image({
                 .to_string(),
                 yield_time_ms: None,
                 ..execute_request("")
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await;
 
         assert_eq!(
             response,
