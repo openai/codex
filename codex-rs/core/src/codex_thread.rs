@@ -203,11 +203,11 @@ impl CodexThread {
         }
     }
 
-    pub async fn apply_external_goal_clear(&self) {
+    pub async fn apply_external_goal_clear(&self, goal: codex_state::ThreadGoal) {
         if let Err(err) = self
             .codex
             .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalClear)
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalClear { goal })
             .await
         {
             tracing::warn!("failed to apply external goal clear runtime effects: {err}");

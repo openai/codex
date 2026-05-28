@@ -241,7 +241,8 @@ impl GoalService {
             .await
             .map_err(|err| {
                 GoalServiceError::Internal(format!("failed to clear thread goal: {err}"))
-            })?;
+            })?
+            .is_some();
 
         if cleared
             && let Some(runtime) = self.runtime_for_thread(thread_id)

@@ -889,7 +889,7 @@ ON CONFLICT(id) DO UPDATE SET
         let rows_affected = result.rows_affected();
         self.memories.delete_thread_memory(thread_id).await?;
         if rows_affected > 0 {
-            self.thread_goals.delete_thread_goal(thread_id).await?;
+            let _ = self.thread_goals.delete_thread_goal(thread_id).await?;
         }
         Ok(rows_affected)
     }
