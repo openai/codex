@@ -32,7 +32,7 @@ pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
-use crate::default_client::build_reqwest_client;
+use crate::default_client::build_auth_reqwest_client_with_proxy_config;
 use crate::default_client::create_client;
 use crate::default_client::create_client_with_proxy_config;
 use crate::outbound_proxy::outbound_proxy_config_from_network_config;
@@ -223,7 +223,12 @@ impl CodexAuth {
                     "agent identity auth is missing an agent identity token.",
                 ));
             };
-            return Self::from_agent_identity_jwt(&agent_identity, chatgpt_base_url).await;
+            return Self::from_agent_identity_jwt_with_proxy_config(
+                &agent_identity,
+                chatgpt_base_url,
+                outbound_proxy_config,
+            )
+            .await;
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -250,12 +255,27 @@ impl CodexAuth {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
     ) -> std::io::Result<Option<Self>> {
+        Self::from_auth_storage_with_proxy_config(
+            codex_home,
+            auth_credentials_store_mode,
+            chatgpt_base_url,
+            /*outbound_proxy_config*/ None,
+        )
+        .await
+    }
+
+    pub async fn from_auth_storage_with_proxy_config(
+        codex_home: &Path,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<&str>,
+        outbound_proxy_config: Option<&OutboundProxyConfig>,
+    ) -> std::io::Result<Option<Self>> {
         load_auth(
             codex_home,
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
             chatgpt_base_url,
-            /*outbound_proxy_config*/ None,
+            outbound_proxy_config,
         )
         .await
     }
@@ -264,12 +284,28 @@ impl CodexAuth {
         jwt: &str,
         chatgpt_base_url: Option<&str>,
     ) -> std::io::Result<Self> {
+        Self::from_agent_identity_jwt_with_proxy_config(
+            jwt,
+            chatgpt_base_url,
+            /*outbound_proxy_config*/ None,
+        )
+        .await
+    }
+
+    pub async fn from_agent_identity_jwt_with_proxy_config(
+        jwt: &str,
+        chatgpt_base_url: Option<&str>,
+        outbound_proxy_config: Option<&OutboundProxyConfig>,
+    ) -> std::io::Result<Self> {
         let base_url = chatgpt_base_url
             .unwrap_or(DEFAULT_CHATGPT_BACKEND_BASE_URL)
             .trim_end_matches('/')
             .to_string();
-        let record = verified_agent_identity_record(jwt, &base_url).await?;
-        Ok(Self::AgentIdentity(AgentIdentityAuth::load(record).await?))
+        let outbound_proxy_config = agent_identity_bootstrap_proxy_config(outbound_proxy_config);
+        let record = verified_agent_identity_record(jwt, &base_url, outbound_proxy_config).await?;
+        Ok(Self::AgentIdentity(
+            AgentIdentityAuth::load_with_proxy_config(record, outbound_proxy_config).await?,
+        ))
     }
 
     pub fn auth_mode(&self) -> AuthMode {
@@ -499,13 +535,27 @@ fn read_non_empty_env_var(key: &str) -> Option<String> {
 async fn verified_agent_identity_record(
     jwt: &str,
     chatgpt_base_url: &str,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
 ) -> std::io::Result<AgentIdentityAuthRecord> {
     AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
-    let jwks = fetch_agent_identity_jwks(&build_reqwest_client(), chatgpt_base_url)
+    let client =
+        build_auth_reqwest_client_with_proxy_config(chatgpt_base_url, outbound_proxy_config)?;
+    let jwks = fetch_agent_identity_jwks(&client, chatgpt_base_url)
         .await
         .map_err(std::io::Error::other)?;
     let claims = decode_agent_identity_jwt(jwt, Some(&jwks)).map_err(std::io::Error::other)?;
     Ok(claims.into())
+}
+
+fn agent_identity_bootstrap_proxy_config(
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
+) -> Option<&OutboundProxyConfig> {
+    // Keep the proxy-aware bootstrap scoped to the Windows proxy rollout.
+    if cfg!(target_os = "windows") {
+        outbound_proxy_config
+    } else {
+        None
+    }
 }
 
 /// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
@@ -556,11 +606,33 @@ pub async fn login_with_access_token(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: Option<&str>,
 ) -> std::io::Result<()> {
+    login_with_access_token_with_proxy_config(
+        codex_home,
+        access_token,
+        auth_credentials_store_mode,
+        chatgpt_base_url,
+        /*outbound_proxy_config*/ None,
+    )
+    .await
+}
+
+pub async fn login_with_access_token_with_proxy_config(
+    codex_home: &Path,
+    access_token: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    chatgpt_base_url: Option<&str>,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
+) -> std::io::Result<()> {
     let base_url = chatgpt_base_url
         .unwrap_or(DEFAULT_CHATGPT_BACKEND_BASE_URL)
         .trim_end_matches('/')
         .to_string();
-    verified_agent_identity_record(access_token, &base_url).await?;
+    verified_agent_identity_record(
+        access_token,
+        &base_url,
+        agent_identity_bootstrap_proxy_config(outbound_proxy_config),
+    )
+    .await?;
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::AgentIdentity),
         openai_api_key: None,
@@ -773,9 +845,13 @@ async fn load_auth(
     }
 
     if let Some(agent_identity) = read_codex_access_token_from_env() {
-        return CodexAuth::from_agent_identity_jwt(&agent_identity, chatgpt_base_url)
-            .await
-            .map(Some);
+        return CodexAuth::from_agent_identity_jwt_with_proxy_config(
+            &agent_identity,
+            chatgpt_base_url,
+            outbound_proxy_config,
+        )
+        .await
+        .map(Some);
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.

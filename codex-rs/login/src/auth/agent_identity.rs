@@ -1,9 +1,10 @@
 use codex_agent_identity::AgentIdentityKey;
 use codex_agent_identity::register_agent_task;
+use codex_client::OutboundProxyConfig;
 use codex_protocol::account::PlanType as AccountPlanType;
 use std::env;
 
-use crate::default_client::build_reqwest_client;
+use crate::default_client::build_auth_reqwest_client_with_proxy_config;
 
 use super::storage::AgentIdentityAuthRecord;
 
@@ -18,14 +19,22 @@ pub struct AgentIdentityAuth {
 
 impl AgentIdentityAuth {
     pub async fn load(record: AgentIdentityAuthRecord) -> std::io::Result<Self> {
+        Self::load_with_proxy_config(record, /*outbound_proxy_config*/ None).await
+    }
+
+    pub(crate) async fn load_with_proxy_config(
+        record: AgentIdentityAuthRecord,
+        outbound_proxy_config: Option<&OutboundProxyConfig>,
+    ) -> std::io::Result<Self> {
         let agent_identity_authapi_base_url = agent_identity_authapi_base_url();
-        let process_task_id = register_agent_task(
-            &build_reqwest_client(),
+        let client = build_auth_reqwest_client_with_proxy_config(
             &agent_identity_authapi_base_url,
-            key(&record),
-        )
-        .await
-        .map_err(std::io::Error::other)?;
+            outbound_proxy_config,
+        )?;
+        let process_task_id =
+            register_agent_task(&client, &agent_identity_authapi_base_url, key(&record))
+                .await
+                .map_err(std::io::Error::other)?;
         Ok(Self {
             record,
             process_task_id,

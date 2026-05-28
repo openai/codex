@@ -10,6 +10,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
+use codex_cli::login_server_options_from_config;
 use codex_cli::read_access_token_from_stdin;
 use codex_cli::read_api_key_from_stdin;
 use codex_cli::run_login_status;
@@ -1639,9 +1640,13 @@ async fn load_exec_server_remote_auth_provider(
         let agent_identity_jwt = read_codex_access_token_from_env().ok_or_else(|| {
             anyhow::anyhow!("CODEX_ACCESS_TOKEN is required when --use-agent-identity-auth is set")
         })?;
-        let auth =
-            CodexAuth::from_agent_identity_jwt(&agent_identity_jwt, Some(&config.chatgpt_base_url))
-                .await?;
+        let login_server_opts = login_server_options_from_config(config);
+        let auth = CodexAuth::from_agent_identity_jwt_with_proxy_config(
+            &agent_identity_jwt,
+            Some(&config.chatgpt_base_url),
+            login_server_opts.outbound_proxy_config.as_ref(),
+        )
+        .await?;
         return Ok(codex_model_provider::auth_provider_from_auth(&auth));
     }
 

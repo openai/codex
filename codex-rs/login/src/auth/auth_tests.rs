@@ -3,6 +3,8 @@ use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
 use codex_app_server_protocol::AuthMode;
+use codex_client::OutboundProxyConfig;
+use codex_client::OutboundProxyMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
@@ -1130,6 +1132,63 @@ async fn agent_identity_plan_type_maps_raw_enterprise_alias() {
 #[serial(codex_auth_env)]
 async fn agent_identity_plan_type_maps_raw_education_alias() {
     assert_agent_identity_plan_alias(json!("education"), AccountPlanType::Edu).await;
+}
+
+#[test]
+fn agent_identity_bootstrap_proxy_config_is_scoped_to_windows() {
+    let proxy_config = OutboundProxyConfig {
+        mode: OutboundProxyMode::System,
+        proxy_url: Some("http://proxy.example.test:8080".to_string()),
+    };
+
+    let scoped = super::agent_identity_bootstrap_proxy_config(Some(&proxy_config));
+
+    if cfg!(target_os = "windows") {
+        assert_eq!(scoped, Some(&proxy_config));
+    } else {
+        assert_eq!(scoped, None);
+    }
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn agent_identity_auth_with_proxy_config_loads() {
+    let record = agent_identity_record("account-id");
+    let jwt =
+        signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("agent identity jwt");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/agent-identities/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_jwks_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/v1/agent/agent-runtime-id/task/register"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "task_id": "task-123",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let _authapi_guard =
+        EnvVarGuard::set("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &chatgpt_base_url);
+    let outbound_proxy_config = OutboundProxyConfig {
+        mode: OutboundProxyMode::Direct,
+        proxy_url: None,
+    };
+
+    let auth = CodexAuth::from_agent_identity_jwt_with_proxy_config(
+        &jwt,
+        Some(&chatgpt_base_url),
+        Some(&outbound_proxy_config),
+    )
+    .await
+    .expect("agent identity auth");
+
+    pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
+    server.verify().await;
 }
 
 async fn assert_agent_identity_plan_alias(

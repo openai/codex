@@ -13,7 +13,7 @@ use codex_core::config::Config;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
-use codex_login::login_with_access_token;
+use codex_login::login_with_access_token_with_proxy_config;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
@@ -113,6 +113,16 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
     );
 }
 
+pub fn login_server_options_from_config(config: &Config) -> ServerOptions {
+    ServerOptions::new(
+        config.codex_home.to_path_buf(),
+        CLIENT_ID.to_string(),
+        config.forced_chatgpt_workspace_id.clone(),
+        config.cli_auth_credentials_store_mode,
+    )
+    .with_network_config(config.network.as_ref())
+}
+
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<Vec<String>>,
@@ -198,6 +208,7 @@ pub async fn run_login_with_access_token(
     access_token: String,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+    let login_server_opts = login_server_options_from_config(&config);
     let _login_log_guard = init_login_file_logging(&config);
     tracing::info!("starting access token login flow");
 
@@ -206,11 +217,12 @@ pub async fn run_login_with_access_token(
         std::process::exit(1);
     }
 
-    match login_with_access_token(
+    match login_with_access_token_with_proxy_config(
         &config.codex_home,
         &access_token,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
+        login_server_opts.outbound_proxy_config.as_ref(),
     )
     .await
     {
@@ -369,11 +381,13 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+    let login_server_opts = login_server_options_from_config(&config);
 
-    match CodexAuth::from_auth_storage(
+    match CodexAuth::from_auth_storage_with_proxy_config(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
+        login_server_opts.outbound_proxy_config.as_ref(),
     )
     .await
     {
