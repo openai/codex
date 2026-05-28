@@ -694,6 +694,7 @@ fn fs_get_metadata_response_round_trips_minimal_fields() {
         is_directory: false,
         is_file: true,
         is_symlink: false,
+        size_bytes: Some(42),
         created_at_ms: 123,
         modified_at_ms: 456,
     };
@@ -705,6 +706,7 @@ fn fs_get_metadata_response_round_trips_minimal_fields() {
             "isDirectory": false,
             "isFile": true,
             "isSymlink": false,
+            "sizeBytes": 42,
             "createdAtMs": 123,
             "modifiedAtMs": 456,
         })
@@ -738,6 +740,8 @@ fn fs_read_file_response_round_trips_base64_data() {
 fn fs_read_file_params_round_trip() {
     let params = FsReadFileParams {
         path: absolute_path("tmp/example.txt"),
+        offset: Some(4),
+        length: Some(8),
     };
 
     let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
@@ -745,6 +749,8 @@ fn fs_read_file_params_round_trip() {
         value,
         json!({
             "path": absolute_path_string("tmp/example.txt"),
+            "offset": 4,
+            "length": 8,
         })
     );
 

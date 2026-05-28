@@ -370,6 +370,16 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(nested_file_contents, b"hello from trait");
+    let nested_file_range = file_system
+        .read_file_range(
+            &absolute_path(nested_file.clone()),
+            6,
+            4,
+            /*sandbox*/ None,
+        )
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(nested_file_range, b"from");
 
     let nested_file_text = file_system
         .read_file_text(&absolute_path(nested_file.clone()), /*sandbox*/ None)

@@ -171,10 +171,21 @@ pub(crate) async fn run_direct_request(
     let file_system = DirectFileSystem;
     match request {
         FsHelperRequest::ReadFile(params) => {
-            let data = file_system
-                .read_file(&params.path, /*sandbox*/ None)
-                .await
-                .map_err(map_fs_error)?;
+            let data = match (params.offset, params.length) {
+                (None, None) => file_system
+                    .read_file(&params.path, /*sandbox*/ None)
+                    .await
+                    .map_err(map_fs_error)?,
+                (Some(offset), Some(length)) => file_system
+                    .read_file_range(&params.path, offset, length, /*sandbox*/ None)
+                    .await
+                    .map_err(map_fs_error)?,
+                _ => {
+                    return Err(invalid_request(
+                        "fs/readFile requires offset and length together".to_string(),
+                    ));
+                }
+            };
             Ok(FsHelperPayload::ReadFile(FsReadFileResponse {
                 data_base64: STANDARD.encode(data),
             }))
@@ -215,6 +226,7 @@ pub(crate) async fn run_direct_request(
                 is_directory: metadata.is_directory,
                 is_file: metadata.is_file,
                 is_symlink: metadata.is_symlink,
+                size_bytes: metadata.size_bytes,
                 created_at_ms: metadata.created_at_ms,
                 modified_at_ms: metadata.modified_at_ms,
             }))

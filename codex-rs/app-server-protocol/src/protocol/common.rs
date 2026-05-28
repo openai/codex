@@ -1924,6 +1924,8 @@ mod tests {
             request_id: request_id(),
             params: v2::FsReadFileParams {
                 path: absolute_path("/tmp/file.txt"),
+                offset: None,
+                length: None,
             },
         };
         assert_eq!(fs_read.serialization_scope(), None);

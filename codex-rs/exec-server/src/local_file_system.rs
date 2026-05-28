@@ -7,6 +7,8 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncSeekExt;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
@@ -88,6 +90,19 @@ impl ExecutorFileSystem for LocalFileSystem {
         file_system.read_file(path, sandbox).await
     }
 
+    async fn read_file_range(
+        &self,
+        path: &AbsolutePathBuf,
+        offset: u64,
+        length: u64,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system
+            .read_file_range(path, offset, length, sandbox)
+            .await
+    }
+
     async fn write_file(
         &self,
         path: &AbsolutePathBuf,
@@ -159,6 +174,19 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
     ) -> FileSystemResult<Vec<u8>> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system.read_file(path, /*sandbox*/ None).await
+    }
+
+    async fn read_file_range(
+        &self,
+        path: &AbsolutePathBuf,
+        offset: u64,
+        length: u64,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .read_file_range(path, offset, length, /*sandbox*/ None)
+            .await
     }
 
     async fn write_file(
@@ -254,6 +282,27 @@ impl ExecutorFileSystem for DirectFileSystem {
         tokio::fs::read(path.as_path()).await
     }
 
+    async fn read_file_range(
+        &self,
+        path: &AbsolutePathBuf,
+        offset: u64,
+        length: u64,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        reject_sandbox_context(sandbox)?;
+        if length > MAX_READ_FILE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("file range is too large to read: limit is {MAX_READ_FILE_BYTES} bytes"),
+            ));
+        }
+        let mut file = tokio::fs::File::open(path.as_path()).await?;
+        file.seek(io::SeekFrom::Start(offset)).await?;
+        let mut bytes = Vec::new();
+        file.take(length).read_to_end(&mut bytes).await?;
+        Ok(bytes)
+    }
+
     async fn write_file(
         &self,
         path: &AbsolutePathBuf,
@@ -291,6 +340,7 @@ impl ExecutorFileSystem for DirectFileSystem {
             is_directory: metadata.is_dir(),
             is_file: metadata.is_file(),
             is_symlink: symlink_metadata.file_type().is_symlink(),
+            size_bytes: Some(metadata.len()),
             created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
             modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
         })

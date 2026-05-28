@@ -98,6 +98,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
             "isFile".to_string(),
             "isSymlink".to_string(),
             "modifiedAtMs".to_string(),
+            "sizeBytes".to_string(),
         ]
     );
 
@@ -108,6 +109,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
             is_directory: false,
             is_file: true,
             is_symlink: false,
+            size_bytes: Some(5),
             created_at_ms: stat.created_at_ms,
             modified_at_ms: stat.modified_at_ms,
         }
@@ -135,6 +137,8 @@ async fn fs_methods_return_error_when_local_environment_is_disabled() -> Result<
     let read_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(absolute_file),
+            offset: None,
+            length: None,
         })
         .await?;
     expect_error_message(&mut mcp, read_id, "local filesystem is not configured").await?;
@@ -222,6 +226,8 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(nested_file.clone()),
+            offset: None,
+            length: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -235,6 +241,27 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         read_response,
         FsReadFileResponse {
             data_base64: STANDARD.encode("hello from app-server"),
+        }
+    );
+
+    let ranged_read_request_id = mcp
+        .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+            path: absolute_path(nested_file.clone()),
+            offset: Some(6),
+            length: Some(4),
+        })
+        .await?;
+    let ranged_read_response: FsReadFileResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(ranged_read_request_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(
+        ranged_read_response,
+        FsReadFileResponse {
+            data_base64: STANDARD.encode("from"),
         }
     );
 
@@ -345,6 +372,8 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(file_path),
+            offset: None,
+            length: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -360,6 +389,30 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
             data_base64: STANDARD.encode(bytes),
         }
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_read_file_rejects_partial_range_params() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let file_path = codex_home.path().join("blob.bin");
+    std::fs::write(&file_path, "hello")?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let read_request_id = mcp
+        .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+            path: absolute_path(file_path),
+            offset: Some(0),
+            length: None,
+        })
+        .await?;
+    expect_error_message(
+        &mut mcp,
+        read_request_id,
+        "fs/readFile requires offset and length together",
+    )
+    .await?;
 
     Ok(())
 }

@@ -62,6 +62,37 @@ impl ExecutorFileSystem for SandboxedFileSystem {
                 sandbox,
                 FsHelperRequest::ReadFile(FsReadFileParams {
                     path: path.clone(),
+                    offset: None,
+                    length: None,
+                    sandbox: None,
+                }),
+            )
+            .await?
+            .expect_read_file()
+            .map_err(map_sandbox_error)?;
+        STANDARD.decode(response.data_base64).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("fs/readFile returned invalid base64 dataBase64: {err}"),
+            )
+        })
+    }
+
+    async fn read_file_range(
+        &self,
+        path: &AbsolutePathBuf,
+        offset: u64,
+        length: u64,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        let sandbox = require_platform_sandbox(sandbox)?;
+        let response = self
+            .run_sandboxed(
+                sandbox,
+                FsHelperRequest::ReadFile(FsReadFileParams {
+                    path: path.clone(),
+                    offset: Some(offset),
+                    length: Some(length),
                     sandbox: None,
                 }),
             )
@@ -139,6 +170,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
             is_directory: response.is_directory,
             is_file: response.is_file,
             is_symlink: response.is_symlink,
+            size_bytes: response.size_bytes,
             created_at_ms: response.created_at_ms,
             modified_at_ms: response.modified_at_ms,
         })

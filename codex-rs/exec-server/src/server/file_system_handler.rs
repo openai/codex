@@ -46,11 +46,23 @@ impl FileSystemHandler {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
-        let bytes = self
-            .file_system
-            .read_file(&params.path, params.sandbox.as_ref())
-            .await
-            .map_err(map_fs_error)?;
+        let bytes = match (params.offset, params.length) {
+            (None, None) => self
+                .file_system
+                .read_file(&params.path, params.sandbox.as_ref())
+                .await
+                .map_err(map_fs_error)?,
+            (Some(offset), Some(length)) => self
+                .file_system
+                .read_file_range(&params.path, offset, length, params.sandbox.as_ref())
+                .await
+                .map_err(map_fs_error)?,
+            _ => {
+                return Err(invalid_request(
+                    "fs/readFile requires offset and length together".to_string(),
+                ));
+            }
+        };
         Ok(FsReadFileResponse {
             data_base64: STANDARD.encode(bytes),
         })
@@ -101,6 +113,7 @@ impl FileSystemHandler {
             is_directory: metadata.is_directory,
             is_file: metadata.is_file,
             is_symlink: metadata.is_symlink,
+            size_bytes: metadata.size_bytes,
             created_at_ms: metadata.created_at_ms,
             modified_at_ms: metadata.modified_at_ms,
         })
@@ -223,6 +236,8 @@ mod tests {
             let response = handler
                 .read_file(FsReadFileParams {
                     path,
+                    offset: None,
+                    length: None,
                     sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
                         sandbox_policy,
                         sandbox_cwd.clone(),

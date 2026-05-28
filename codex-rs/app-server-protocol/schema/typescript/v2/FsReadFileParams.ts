@@ -10,4 +10,12 @@ export type FsReadFileParams = {
 /**
  * Absolute path to read.
  */
-path: AbsolutePathBuf, };
+path: AbsolutePathBuf,
+/**
+ * Optional byte offset for a bounded read.
+ */
+offset?: number,
+/**
+ * Optional maximum byte length for a bounded read.
+ */
+length?: number, };

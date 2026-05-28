@@ -9052,6 +9052,15 @@
             "description": "File modification time in Unix milliseconds when available, otherwise `0`.",
             "format": "int64",
             "type": "integer"
+          },
+          "sizeBytes": {
+            "description": "File size in bytes when available.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -9128,6 +9137,24 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Read a file from the host filesystem.",
         "properties": {
+          "length": {
+            "description": "Optional maximum byte length for a bounded read.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "Optional byte offset for a bounded read.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "path": {
             "allOf": [
               {

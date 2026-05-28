@@ -33,6 +33,7 @@ pub struct FileMetadata {
     pub is_directory: bool,
     pub is_file: bool,
     pub is_symlink: bool,
+    pub size_bytes: Option<u64>,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
 }
@@ -138,6 +139,34 @@ pub trait ExecutorFileSystem: Send + Sync {
         path: &AbsolutePathBuf,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>>;
+
+    /// Reads at most `length` bytes starting at `offset`.
+    async fn read_file_range(
+        &self,
+        path: &AbsolutePathBuf,
+        offset: u64,
+        length: u64,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        let bytes = self.read_file(path, sandbox).await?;
+        let start = usize::try_from(offset).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("file read range offset is too large: {err}"),
+            )
+        })?;
+        let length = usize::try_from(length).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("file read range length is too large: {err}"),
+            )
+        })?;
+        if start >= bytes.len() {
+            return Ok(Vec::new());
+        }
+        let end = start.saturating_add(length).min(bytes.len());
+        Ok(bytes[start..end].to_vec())
+    }
 
     /// Reads a file and decodes it as UTF-8 text.
     async fn read_file_text(

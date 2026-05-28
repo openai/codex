@@ -50,6 +50,34 @@ impl ExecutorFileSystem for RemoteFileSystem {
         let response = client
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
+                offset: None,
+                length: None,
+                sandbox: remote_sandbox_context(sandbox),
+            })
+            .await
+            .map_err(map_remote_error)?;
+        STANDARD.decode(response.data_base64).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("remote fs/readFile returned invalid base64 dataBase64: {err}"),
+            )
+        })
+    }
+
+    async fn read_file_range(
+        &self,
+        path: &AbsolutePathBuf,
+        offset: u64,
+        length: u64,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        trace!("remote fs read_file_range");
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let response = client
+            .fs_read_file(FsReadFileParams {
+                path: path.clone(),
+                offset: Some(offset),
+                length: Some(length),
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await
@@ -118,6 +146,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
             is_directory: response.is_directory,
             is_file: response.is_file,
             is_symlink: response.is_symlink,
+            size_bytes: response.size_bytes,
             created_at_ms: response.created_at_ms,
             modified_at_ms: response.modified_at_ms,
         })

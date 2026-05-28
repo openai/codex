@@ -837,6 +837,24 @@
     "FsReadFileParams": {
       "description": "Read a file from the host filesystem.",
       "properties": {
+        "length": {
+          "description": "Optional maximum byte length for a bounded read.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "description": "Optional byte offset for a bounded read.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "path": {
           "allOf": [
             {

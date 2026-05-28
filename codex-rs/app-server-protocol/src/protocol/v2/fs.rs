@@ -11,6 +11,14 @@ use ts_rs::TS;
 pub struct FsReadFileParams {
     /// Absolute path to read.
     pub path: AbsolutePathBuf,
+    /// Optional byte offset for a bounded read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "number")]
+    pub offset: Option<u64>,
+    /// Optional maximum byte length for a bounded read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "number")]
+    pub length: Option<u64>,
 }
 
 /// Base64-encoded file contents returned by `fs/readFile`.
@@ -77,6 +85,10 @@ pub struct FsGetMetadataResponse {
     pub is_file: bool,
     /// Whether the path itself is a symbolic link.
     pub is_symlink: bool,
+    /// File size in bytes when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "number")]
+    pub size_bytes: Option<u64>,
     /// File creation time in Unix milliseconds when available, otherwise `0`.
     #[ts(type = "number")]
     pub created_at_ms: i64,
