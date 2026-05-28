@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -44,6 +45,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
@@ -385,13 +387,13 @@ impl McpConnectionManager {
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for (server_name, managed_client) in &self.clients {
-            let has_startup_snapshot = managed_client.startup_snapshot.is_some();
+            let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
             let startup_complete = managed_client
                 .startup_complete
                 .load(std::sync::atomic::Ordering::Acquire);
             trace!(
                 server_name = %server_name,
-                has_startup_snapshot,
+                has_cached_tool_info_snapshot,
                 startup_complete,
                 "waiting for MCP server tools while building tool list"
             );
@@ -400,7 +402,7 @@ impl McpConnectionManager {
                 .instrument(trace_span!(
                     "list_tools_for_server",
                     server_name = %server_name,
-                    has_startup_snapshot,
+                    has_cached_tool_info_snapshot,
                     startup_complete
                 ))
                 .await
@@ -419,6 +421,31 @@ impl McpConnectionManager {
             );
         }
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+    }
+
+    /// Returns presentation metadata without waiting for uncached clients still initializing.
+    /// Cached values will be used if available and the server is still starting up.
+    pub async fn list_available_server_infos(&self) -> HashMap<String, McpServerInfo> {
+        let mut server_infos = HashMap::new();
+        for (server_name, client) in &self.clients {
+            if !client.startup_complete.load(Ordering::Acquire) {
+                if let Some(server_info) = client.cached_server_info.clone() {
+                    server_infos.insert(server_name.clone(), server_info);
+                }
+                continue;
+            }
+            match client.client().await {
+                Ok(managed_client) => {
+                    server_infos.insert(server_name.clone(), managed_client.server_info);
+                }
+                Err(_) => {
+                    if let Some(server_info) = client.cached_server_info.clone() {
+                        server_infos.insert(server_name.clone(), server_info);
+                    }
+                }
+            }
+        }
+        server_infos
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
@@ -456,6 +483,7 @@ impl McpConnectionManager {
         write_cached_codex_apps_tools_if_needed(
             CODEX_APPS_MCP_SERVER_NAME,
             managed_client.codex_apps_tools_cache_context.as_ref(),
+            &managed_client.server_info,
             &tools,
         );
         emit_duration(

@@ -11,6 +11,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
@@ -1999,6 +2000,80 @@ fn mcp_server_elicitation_response_serializes_nullable_content() {
             "action": "decline",
             "content": null,
             "_meta": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_serializes_absent_server_info_as_null() {
+    let response = ListMcpServerStatusResponse {
+        data: vec![McpServerStatus {
+            name: "not-ready".to_string(),
+            server_info: None,
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: McpAuthStatus::Unsupported,
+        }],
+        next_cursor: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(response).expect("response should serialize"),
+        json!({
+            "data": [{
+                "name": "not-ready",
+                "serverInfo": null,
+                "tools": {},
+                "resources": [],
+                "resourceTemplates": [],
+                "authStatus": "unsupported",
+            }],
+            "nextCursor": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
+    let response = ListMcpServerStatusResponse {
+        data: vec![McpServerStatus {
+            name: "initialized".to_string(),
+            server_info: Some(McpServerInfo {
+                name: "lookup-server".to_string(),
+                title: None,
+                version: "1.0.0".to_string(),
+                description: None,
+                icons: None,
+                website_url: None,
+            }),
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: McpAuthStatus::Unsupported,
+        }],
+        next_cursor: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(response).expect("response should serialize"),
+        json!({
+            "data": [{
+                "name": "initialized",
+                "serverInfo": {
+                    "name": "lookup-server",
+                    "title": null,
+                    "version": "1.0.0",
+                    "description": null,
+                    "icons": null,
+                    "websiteUrl": null,
+                },
+                "tools": {},
+                "resources": [],
+                "resourceTemplates": [],
+                "authStatus": "unsupported",
+            }],
+            "nextCursor": null,
         })
     );
 }
