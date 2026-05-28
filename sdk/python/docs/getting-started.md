@@ -14,7 +14,7 @@ pip install openai-codex
 For a reproducible install of this release:
 
 ```bash
-pip install openai-codex==0.1.0b1
+pip install openai-codex==0.1.0b2
 ```
 
 Requirements:
