@@ -33,6 +33,11 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -353,6 +358,64 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
     assert!(text.contains("The Codex agent has requested the following action:\n"));
     assert!(!text.contains("TRANSCRIPT DELTA"));
     assert_eq!(prompt.transcript_cursor.transcript_entry_count, 4);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Result<()> {
+    let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
+    session.conversation_id = fixed_guardian_parent_session_id();
+    let denied_root = test_path_buf("/repo/private").abs();
+    let denied_glob = test_path_buf("/repo/private/**").display().to_string();
+    turn.permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: denied_root.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: denied_glob.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let prompt = build_guardian_prompt_items_with_parent_turn(
+        session.as_ref(),
+        Some(turn.as_ref()),
+        Some("Sandbox denied reading /repo/private/secret.txt.".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["cat".to_string(), "/repo/private/secret.txt".to_string()],
+            cwd: test_path_buf("/repo").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::RequireEscalated,
+            additional_permissions: None,
+            justification: Some("Need to inspect the secret file.".to_string()),
+        },
+        GuardianPromptMode::Full,
+    )
+    .await?;
+
+    let text = guardian_prompt_text(&prompt.items);
+    assert!(text.contains("PARENT TURN PERMISSION CONTEXT START"));
+    assert!(text.contains("do not approve escalation whose purpose is to read them"));
+    assert!(text.contains(denied_root.to_string_lossy().as_ref()));
+    assert!(text.contains(&format!("glob `{denied_glob}`")));
 
     Ok(())
 }
