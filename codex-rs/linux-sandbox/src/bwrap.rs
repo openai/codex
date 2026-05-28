@@ -53,6 +53,8 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/run/current-system/sw",
 ];
 
+const HOST_USER_SERVICE_SOCKET_RELATIVE_PATHS: &[&str] = &["bus", "systemd/private"];
+
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
 
 /// Options that control how bubblewrap is invoked.
@@ -626,7 +628,54 @@ fn create_filesystem_args(
         append_unreadable_root_args(&mut bwrap_args, &unreadable_root, &allowed_write_paths)?;
     }
 
+    // A readable host-root view otherwise exposes user-session control sockets,
+    // even when direct writes are restricted. Apply this after writable mounts
+    // so broad grants cannot accidentally reopen them.
+    let host_user_service_socket_paths = host_user_service_socket_paths(unsafe { libc::geteuid() });
+    append_host_user_service_socket_masks(
+        &mut bwrap_args,
+        file_system_sandbox_policy,
+        cwd,
+        &allowed_write_paths,
+        &host_user_service_socket_paths,
+    )?;
+
     Ok(bwrap_args)
+}
+
+fn host_user_service_socket_paths(effective_uid: libc::uid_t) -> Vec<PathBuf> {
+    let user_runtime_dir = PathBuf::from(format!("/run/user/{effective_uid}"));
+    HOST_USER_SERVICE_SOCKET_RELATIVE_PATHS
+        .iter()
+        .map(|relative_path| user_runtime_dir.join(relative_path))
+        .collect()
+}
+
+fn append_host_user_service_socket_masks(
+    bwrap_args: &mut BwrapArgs,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+    allowed_write_paths: &[PathBuf],
+    socket_paths: &[PathBuf],
+) -> Result<()> {
+    if file_system_sandbox_policy.has_full_disk_write_access() {
+        return Ok(());
+    }
+
+    for socket_path in socket_paths {
+        if file_system_sandbox_policy.can_read_path_with_cwd(socket_path, cwd)
+            && !file_system_sandbox_policy.entries.iter().any(|entry| {
+                entry.access.can_read()
+                    && matches!(
+                        &entry.path,
+                        FileSystemPath::Path { path } if path.as_path() == socket_path
+                    )
+            })
+        {
+            append_unreadable_root_args(bwrap_args, socket_path, allowed_write_paths)?;
+        }
+    }
+    Ok(())
 }
 
 fn append_protected_create_targets_for_writable_root(
@@ -2005,10 +2054,21 @@ mod tests {
 
     #[test]
     fn mounts_dev_before_writable_dev_binds() {
-        let sandbox_policy = FileSystemSandboxPolicy::workspace_write(
+        let mut sandbox_policy = FileSystemSandboxPolicy::workspace_write(
             &[AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
             /*exclude_tmpdir_env_var*/ true,
             /*exclude_slash_tmp*/ true,
+        );
+        sandbox_policy.entries.extend(
+            host_user_service_socket_paths(unsafe { libc::geteuid() })
+                .into_iter()
+                .map(|path| FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: AbsolutePathBuf::from_absolute_path(path)
+                            .expect("absolute host user-service socket"),
+                    },
+                    access: FileSystemAccessMode::Write,
+                }),
         );
 
         let args = create_filesystem_args(
@@ -2562,6 +2622,89 @@ mod tests {
     }
 
     #[test]
+    fn restricted_profiles_mask_visible_host_user_service_sockets_by_default() {
+        use std::os::unix::net::UnixListener;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let bus = temp_dir.path().join("bus");
+        let systemd_private = temp_dir.path().join("systemd").join("private");
+        std::fs::create_dir(temp_dir.path().join("systemd")).expect("create systemd dir");
+        let _bus_listener = UnixListener::bind(&bus).expect("bind user bus socket");
+        let _systemd_listener =
+            UnixListener::bind(&systemd_private).expect("bind systemd private socket");
+        let mut args = empty_bwrap_args();
+
+        append_host_user_service_socket_masks(
+            &mut args,
+            &FileSystemSandboxPolicy::default(),
+            temp_dir.path(),
+            &[],
+            &[bus.clone(), systemd_private.clone()],
+        )
+        .expect("mask host user-service sockets");
+
+        assert_file_masked(&args.args, &bus);
+        assert_file_masked(&args.args, &systemd_private);
+    }
+
+    #[test]
+    fn explicit_host_user_service_socket_read_keeps_socket_visible() {
+        use std::os::unix::net::UnixListener;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let bus = temp_dir.path().join("bus");
+        let _listener = UnixListener::bind(&bus).expect("bind user bus socket");
+        let bus = AbsolutePathBuf::from_absolute_path(bus).expect("absolute bus socket");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: bus.clone() },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+        let mut args = empty_bwrap_args();
+
+        append_host_user_service_socket_masks(
+            &mut args,
+            &policy,
+            temp_dir.path(),
+            &[],
+            &[bus.as_path().to_path_buf()],
+        )
+        .expect("allow explicitly visible host user-service socket");
+
+        assert!(args.args.is_empty());
+    }
+
+    #[test]
+    fn unreadable_host_user_service_socket_is_not_mounted_for_masking() {
+        use std::os::unix::net::UnixListener;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let readable = temp_dir.path().join("readable");
+        let bus = temp_dir.path().join("bus");
+        std::fs::create_dir(&readable).expect("create readable dir");
+        let _listener = UnixListener::bind(&bus).expect("bind user bus socket");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::from_absolute_path(readable).expect("absolute readable"),
+            },
+            access: FileSystemAccessMode::Read,
+        }]);
+        let mut args = empty_bwrap_args();
+
+        append_host_user_service_socket_masks(&mut args, &policy, temp_dir.path(), &[], &[bus])
+            .expect("skip inaccessible host user-service socket");
+
+        assert!(args.args.is_empty());
+    }
+
+    #[test]
     fn unreadable_globs_expand_existing_matches_with_configured_depth() {
         if !ripgrep_available() {
             return;
@@ -2703,5 +2846,14 @@ mod tests {
             .iter()
             .map(|target| target.path().to_path_buf())
             .collect()
+    }
+
+    fn empty_bwrap_args() -> BwrapArgs {
+        BwrapArgs {
+            args: Vec::new(),
+            preserved_files: Vec::new(),
+            synthetic_mount_targets: Vec::new(),
+            protected_create_targets: Vec::new(),
+        }
     }
 }
