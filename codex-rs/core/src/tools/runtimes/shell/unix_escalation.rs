@@ -2,6 +2,7 @@ use super::ShellRequest;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::cancel_when_either;
+use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
@@ -1113,7 +1114,8 @@ fn map_exec_result(
         })));
     }
 
-    if record_filesystem_sandbox_violation(sandbox, &output).is_some() {
+    if is_likely_sandbox_denied(sandbox, &output) {
+        record_filesystem_sandbox_violation(sandbox, &output);
         return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
             network_policy_decision: None,
