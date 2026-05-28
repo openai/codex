@@ -1,0 +1,56 @@
+; macOS non-file runtime defaults included when a split filesystem policy requests `:minimal`.
+
+; Allow guarded vnodes.
+(allow system-mac-syscall (mac-policy-name "vnguard"))
+
+; Determine whether a container is expected.
+(allow system-mac-syscall
+  (require-all
+    (mac-policy-name "Sandbox")
+    (mac-syscall-number 67)))
+
+; Allow FSIOC_CAS_BSDFLAGS as alternate chflags.
+(allow system-fsctl (fsctl-command FSIOC_CAS_BSDFLAGS))
+
+; IOKit access for root domain services.
+(allow iokit-open
+  (iokit-registry-entry-class "RootDomainUserClient"))
+
+; macOS standard library queries opendirectoryd at startup.
+(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))
+
+; Allow IPC to analytics, logging, trust, and other system agents.
+(allow mach-lookup
+  (global-name "com.apple.analyticsd")
+  (global-name "com.apple.analyticsd.messagetracer")
+  (global-name "com.apple.appsleep")
+  (global-name "com.apple.bsd.dirhelper")
+  (global-name "com.apple.cfprefsd.agent")
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.diagnosticd")
+  (global-name "com.apple.dt.automationmode.reader")
+  (global-name "com.apple.espd")
+  (global-name "com.apple.logd")
+  (global-name "com.apple.logd.events")
+  (global-name "com.apple.runningboard")
+  (global-name "com.apple.secinitd")
+  (global-name "com.apple.system.DirectoryService.libinfo_v1")
+  (global-name "com.apple.system.logger")
+  (global-name "com.apple.system.notification_center")
+  (global-name "com.apple.system.opendirectoryd.membership")
+  (global-name "com.apple.trustd")
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.xpc.activity.unmanaged")
+  (local-name "com.apple.cfprefsd.agent"))
+
+; Allow IPC to the syslog socket for logging.
+(allow network-outbound (literal "/private/var/run/syslog"))
+
+; macOS notifications.
+(allow ipc-posix-shm-read*
+  (ipc-posix-name "apple.shm.notification_center"))
+
+; Audio and power management services.
+(allow mach-lookup (global-name "com.apple.audio.audiohald"))
+(allow mach-lookup (global-name "com.apple.audio.AudioComponentRegistrar"))
+(allow mach-lookup (global-name "com.apple.PowerManagement.control"))

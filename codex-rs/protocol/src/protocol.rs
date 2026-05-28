@@ -4218,7 +4218,30 @@ mod tests {
         }]);
         assert!(read_only.has_full_disk_read_access());
         assert!(!read_only.has_full_disk_write_access());
+        assert!(!read_only.include_platform_runtime_defaults());
         assert!(!read_only.include_platform_defaults());
+
+        let read_only_with_minimal_runtime = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+        assert!(read_only_with_minimal_runtime.has_full_disk_read_access());
+        assert!(read_only_with_minimal_runtime.include_platform_runtime_defaults());
+        assert!(!read_only_with_minimal_runtime.include_platform_defaults());
+        assert!(!read_only.is_semantically_equivalent_to(
+            &read_only_with_minimal_runtime,
+            std::path::Path::new("/")
+        ));
 
         let writable = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {

@@ -19,6 +19,8 @@ use url::Url;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_RESTRICTED_PLATFORM_RUNTIME_DEFAULTS: &str =
+    include_str!("restricted_platform_runtime_defaults.sbpl");
 const MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS: &str =
     include_str!("restricted_read_only_platform_defaults.sbpl");
 
@@ -705,6 +707,8 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
 
+    let include_platform_runtime_defaults =
+        file_system_sandbox_policy.include_platform_runtime_defaults();
     let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
     let deny_read_policy =
         build_seatbelt_unreadable_glob_policy(file_system_sandbox_policy, sandbox_policy_cwd);
@@ -715,6 +719,9 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
         deny_read_policy,
         network_policy,
     ];
+    if include_platform_runtime_defaults {
+        policy_sections.push(MACOS_RESTRICTED_PLATFORM_RUNTIME_DEFAULTS.to_string());
+    }
     if include_platform_defaults {
         policy_sections.push(MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS.to_string());
     }

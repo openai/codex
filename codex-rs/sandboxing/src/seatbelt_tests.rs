@@ -109,6 +109,65 @@ fn base_policy_allows_node_cpu_sysctls() {
 }
 
 #[test]
+fn minimal_runtime_allows_core_foundation_user_lookup_ipc_without_expanding_base_policy() {
+    assert!(
+        !MACOS_SEATBELT_BASE_POLICY.contains("(global-name \"com.apple.logd\")"),
+        "CoreFoundation startup logging should be scoped to minimal runtime policies:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+    assert!(
+        !MACOS_SEATBELT_BASE_POLICY
+            .contains("(global-name \"com.apple.system.notification_center\")"),
+        "CoreFoundation user lookup notifications should be scoped to minimal runtime policies:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+    assert!(
+        !MACOS_SEATBELT_BASE_POLICY.contains("(ipc-posix-name \"apple.shm.notification_center\")"),
+        "CoreFoundation notification shared memory should be scoped to minimal runtime policies:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+    ]);
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: Path::new("/"),
+        enforce_managed_network: false,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    });
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy.contains("(global-name \"com.apple.logd\")"),
+        "minimal runtime must allow CoreFoundation startup logging:\n{policy}"
+    );
+    assert!(
+        policy.contains("(global-name \"com.apple.system.notification_center\")"),
+        "minimal runtime must allow CoreFoundation user lookup notifications:\n{policy}"
+    );
+    assert!(
+        policy.contains("(ipc-posix-name \"apple.shm.notification_center\")"),
+        "minimal runtime must allow CoreFoundation notification shared memory:\n{policy}"
+    );
+    assert!(
+        !policy.contains("(subpath \"/private/tmp\")"),
+        "full disk read must not acquire minimal runtime temporary writes:\n{policy}"
+    );
+}
+
+#[test]
 fn base_policy_allows_kmp_registration_shm_read_create_and_unlink() {
     let expected = r##"(allow ipc-posix-shm-read-data
   ipc-posix-shm-write-create

@@ -154,16 +154,15 @@ fn add_helper_runtime_permissions(
     helper_read_roots: &[AbsolutePathBuf],
     cwd: &std::path::Path,
 ) {
-    if !file_system_policy.has_full_disk_read_access() {
-        let minimal_read_entry = FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::Minimal,
-            },
-            access: FileSystemAccessMode::Read,
-        };
-        if !file_system_policy.entries.contains(&minimal_read_entry) {
-            file_system_policy.entries.push(minimal_read_entry);
-        }
+    // `:minimal` includes native runtime permissions needed before the helper reaches Rust.
+    let minimal_read_entry = FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Minimal,
+        },
+        access: FileSystemAccessMode::Read,
+    };
+    if !file_system_policy.entries.contains(&minimal_read_entry) {
+        file_system_policy.entries.push(minimal_read_entry);
     }
 
     for helper_read_root in helper_read_roots {
@@ -359,6 +358,24 @@ mod tests {
         add_helper_runtime_permissions(&mut policy, /*helper_read_roots*/ &[], cwd.as_path());
 
         assert!(policy.include_platform_defaults());
+    }
+
+    #[test]
+    fn helper_permissions_enable_minimal_runtime_for_full_disk_read_profile() {
+        let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
+            .expect("absolute cwd");
+        let minimal_read_entry =
+            special_entry(FileSystemSpecialPath::Minimal, FileSystemAccessMode::Read);
+        let mut policy = restricted_policy(vec![special_entry(
+            FileSystemSpecialPath::Root,
+            FileSystemAccessMode::Read,
+        )]);
+
+        add_helper_runtime_permissions(&mut policy, /*helper_read_roots*/ &[], cwd.as_path());
+
+        assert!(policy.entries.contains(&minimal_read_entry));
+        assert!(policy.include_platform_runtime_defaults());
+        assert!(!policy.include_platform_defaults());
     }
 
     #[test]

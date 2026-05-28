@@ -1,4 +1,5 @@
-; macOS platform defaults included when a split filesystem policy requests `:minimal`.
+; macOS platform file defaults included when a split filesystem policy requests `:minimal`
+; without already granting full disk read access.
 
 ; Read access to standard system paths
 (allow file-read* file-test-existence
@@ -40,15 +41,6 @@
   (subpath "/System/iOSSupport/System/Library/SubFrameworks")
   (subpath "/usr/lib"))
 
-; Allow guarded vnodes.
-(allow system-mac-syscall (mac-policy-name "vnguard"))
-
-; Determine whether a container is expected.
-(allow system-mac-syscall
-  (require-all
-    (mac-policy-name "Sandbox")
-    (mac-syscall-number 67)))
-
 ; Allow resolution of standard system symlinks.
 (allow file-read-metadata file-test-existence
   (literal "/etc")
@@ -63,9 +55,6 @@
 ; Allow processes to get their current working directory.
 (allow file-read* file-test-existence
   (literal "/"))
-
-; Allow FSIOC_CAS_BSDFLAGS as alternate chflags.
-(allow system-fsctl (fsctl-command FSIOC_CAS_BSDFLAGS))
 
 ; Allow access to standard special files.
 (allow file-read* file-test-existence
@@ -109,52 +98,9 @@
 (allow file-read-metadata (subpath "/var"))
 (allow file-read-metadata (subpath "/private/var"))
 
-; IOKit access for root domain services.
-(allow iokit-open
-  (iokit-registry-entry-class "RootDomainUserClient"))
-
-; macOS Standard library queries opendirectoryd at startup
-(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))
-
-; Allow IPC to analytics, logging, trust, and other system agents.
-(allow mach-lookup
-  (global-name "com.apple.analyticsd")
-  (global-name "com.apple.analyticsd.messagetracer")
-  (global-name "com.apple.appsleep")
-  (global-name "com.apple.bsd.dirhelper")
-  (global-name "com.apple.cfprefsd.agent")
-  (global-name "com.apple.cfprefsd.daemon")
-  (global-name "com.apple.diagnosticd")
-  (global-name "com.apple.dt.automationmode.reader")
-  (global-name "com.apple.espd")
-  (global-name "com.apple.logd")
-  (global-name "com.apple.logd.events")
-  (global-name "com.apple.runningboard")
-  (global-name "com.apple.secinitd")
-  (global-name "com.apple.system.DirectoryService.libinfo_v1")
-  (global-name "com.apple.system.logger")
-  (global-name "com.apple.system.notification_center")
-  (global-name "com.apple.system.opendirectoryd.membership")
-  (global-name "com.apple.trustd")
-  (global-name "com.apple.trustd.agent")
-  (global-name "com.apple.xpc.activity.unmanaged")
-  (local-name "com.apple.cfprefsd.agent"))
-
-; Allow IPC to the syslog socket for logging.
-(allow network-outbound (literal "/private/var/run/syslog"))
-
-; macOS Notifications
-(allow ipc-posix-shm-read*
-  (ipc-posix-name "apple.shm.notification_center"))
-
 ; Regulatory domain support.
 (allow file-read*
   (literal "/private/var/db/eligibilityd/eligibility.plist"))
-
-; Audio and power management services.
-(allow mach-lookup (global-name "com.apple.audio.audiohald"))
-(allow mach-lookup (global-name "com.apple.audio.AudioComponentRegistrar"))
-(allow mach-lookup (global-name "com.apple.PowerManagement.control"))
 
 ; Allow reading the minimum system runtime so exec works.
 (allow file-read-data (subpath "/bin"))

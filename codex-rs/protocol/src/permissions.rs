@@ -213,6 +213,7 @@ struct ResolvedFileSystemEntry {
 struct FileSystemSemanticSignature {
     has_full_disk_read_access: bool,
     has_full_disk_write_access: bool,
+    include_platform_runtime_defaults: bool,
     include_platform_defaults: bool,
     readable_roots: Vec<AbsolutePathBuf>,
     writable_roots: Vec<WritableRoot>,
@@ -633,10 +634,9 @@ impl FileSystemSandboxPolicy {
         }
     }
 
-    /// Returns true when platform-default readable roots should be included.
-    pub fn include_platform_defaults(&self) -> bool {
-        !self.has_full_disk_read_access()
-            && matches!(self.kind, FileSystemSandboxKind::Restricted)
+    /// Returns true when minimum native runtime permissions should be included.
+    pub fn include_platform_runtime_defaults(&self) -> bool {
+        matches!(self.kind, FileSystemSandboxKind::Restricted)
             && self.entries.iter().any(|entry| {
                 matches!(
                     &entry.path,
@@ -645,6 +645,11 @@ impl FileSystemSandboxPolicy {
                             && entry.access.can_read()
                 )
             })
+    }
+
+    /// Returns true when platform-default readable roots should be included.
+    pub fn include_platform_defaults(&self) -> bool {
+        !self.has_full_disk_read_access() && self.include_platform_runtime_defaults()
     }
 
     pub fn resolve_access_with_cwd(&self, path: &Path, cwd: &Path) -> FileSystemAccessMode {
@@ -1233,6 +1238,7 @@ impl FileSystemSandboxPolicy {
         FileSystemSemanticSignature {
             has_full_disk_read_access: self.has_full_disk_read_access(),
             has_full_disk_write_access: self.has_full_disk_write_access(),
+            include_platform_runtime_defaults: self.include_platform_runtime_defaults(),
             include_platform_defaults: self.include_platform_defaults(),
             readable_roots: sorted_absolute_paths(self.get_readable_roots_with_cwd(cwd)),
             writable_roots: sorted_writable_roots(self.get_writable_roots_with_cwd(cwd)),
