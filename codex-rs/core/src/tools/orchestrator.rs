@@ -28,6 +28,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
+use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::error::CodexErr;
@@ -294,6 +295,8 @@ impl ToolOrchestrator {
                         network_policy_decision,
                     })));
                 }
+                let unsandboxed_allowed =
+                    unsandboxed_execution_allowed(&file_system_sandbox_policy);
                 // Under `Never` or `OnRequest`, do not retry without sandbox;
                 // surface a concise sandbox denial that preserves the
                 // original output.
@@ -314,6 +317,12 @@ impl ToolOrchestrator {
                             network_policy_decision,
                         })));
                     }
+                }
+                if !unsandboxed_allowed && network_approval_context.is_none() {
+                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                        output,
+                        network_policy_decision,
+                    })));
                 }
                 let retry_reason =
                     if let Some(network_approval_context) = network_approval_context.as_ref() {
@@ -357,14 +366,30 @@ impl ToolOrchestrator {
                         .await?;
                 }
 
-                let escalated_attempt = SandboxAttempt {
-                    sandbox: SandboxType::None,
+                let retry_sandbox = if unsandboxed_allowed {
+                    SandboxType::None
+                } else {
+                    self.sandbox.select_initial(
+                        &file_system_sandbox_policy,
+                        network_sandbox_policy,
+                        tool.sandbox_preference(),
+                        turn_ctx.windows_sandbox_level,
+                        managed_network_active,
+                    )
+                };
+                let retry_codex_linux_sandbox_exe = if unsandboxed_allowed {
+                    None
+                } else {
+                    turn_ctx.codex_linux_sandbox_exe.as_ref()
+                };
+                let retry_attempt = SandboxAttempt {
+                    sandbox: retry_sandbox,
                     permissions: &turn_ctx.permission_profile,
                     enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,
                     sandbox_cwd,
                     workspace_roots: workspace_roots.as_slice(),
-                    codex_linux_sandbox_exe: None,
+                    codex_linux_sandbox_exe: retry_codex_linux_sandbox_exe,
                     use_legacy_landlock,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,
                     windows_sandbox_private_desktop: turn_ctx
@@ -375,14 +400,9 @@ impl ToolOrchestrator {
                 };
 
                 // Second attempt.
-                let (retry_result, retry_deferred_network_approval) = Self::run_attempt(
-                    tool,
-                    req,
-                    tool_ctx,
-                    &escalated_attempt,
-                    managed_network_active,
-                )
-                .await;
+                let (retry_result, retry_deferred_network_approval) =
+                    Self::run_attempt(tool, req, tool_ctx, &retry_attempt, managed_network_active)
+                        .await;
                 retry_result.map(|output| OrchestratorRunResult {
                     output,
                     deferred_network_approval: retry_deferred_network_approval,
