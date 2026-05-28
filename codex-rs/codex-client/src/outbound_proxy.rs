@@ -22,6 +22,10 @@ use crate::route_diagnostics::RouteFailureClass;
 use crate::route_diagnostics::RouteSource;
 use crate::route_diagnostics::RouteTarget;
 use crate::route_diagnostics::SystemProxyEnvOverride;
+#[cfg(target_os = "windows")]
+use sha2::Digest;
+#[cfg(target_os = "windows")]
+use sha2::Sha256;
 use thiserror::Error;
 
 const SYSTEM_PROXY_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -360,6 +364,18 @@ fn cache_system_proxy_decision(
 }
 
 fn system_proxy_cache_key(request_url: &str, include_auto_detect: bool) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        // Keep URL-specific PAC decisions without retaining the raw routed URL.
+        let mut hasher = Sha256::new();
+        hasher.update(b"system-proxy-cache-v1\0");
+        hasher.update(request_url.as_bytes());
+        hasher.update(b"\0");
+        hasher.update([u8::from(include_auto_detect)]);
+        return format!("{:x}", hasher.finalize());
+    }
+
+    #[cfg(not(target_os = "windows"))]
     format!("{request_url}:auto_detect={include_auto_detect}")
 }
 
@@ -631,9 +647,14 @@ mod tests {
 
     #[test]
     fn system_proxy_cache_key_preserves_url_specific_pac_decisions() {
+        let request_url = "https://auth.openai.com/oauth/token?access_token=secret";
+        let cache_key = system_proxy_cache_key(request_url, false);
+
         assert_ne!(
-            system_proxy_cache_key("https://auth.openai.com/oauth/token", false),
+            cache_key,
             system_proxy_cache_key("https://auth.openai.com/oauth/revoke", false)
         );
+        #[cfg(target_os = "windows")]
+        assert!(!cache_key.contains(request_url));
     }
 }
