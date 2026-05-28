@@ -8556,27 +8556,13 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
     })
     .await??;
 
-    let continuation_request = responses
+    let goal_context_text = responses
         .requests()
         .into_iter()
-        .find(|request| request.body_contains_text("<codex_internal_context source=\"goal\">"))
-        .expect("expected a goal continuation request");
-    let body = continuation_request.body_json();
-    let goal_context_message = body["input"]
-        .as_array()
-        .expect("input should be an array")
-        .iter()
-        .find(|item| {
-            item.to_string()
-                .contains("<codex_internal_context source=\"goal\">")
-        })
+        .flat_map(|request| request.message_input_texts("user"))
+        .find(|text| text.contains("<codex_internal_context source=\"goal\">"))
         .expect("goal context message should be present");
-    assert_eq!(goal_context_message["role"].as_str(), Some("user"));
-    assert!(
-        goal_context_message
-            .to_string()
-            .contains("Continue working toward the active thread goal.")
-    );
+    assert!(goal_context_text.contains("Continue working toward the active thread goal."));
 
     Ok(())
 }

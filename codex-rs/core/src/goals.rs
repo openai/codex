@@ -1597,9 +1597,11 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseItem {
     goal_context_input_item(budget_limit_prompt(goal))
 }
 
-fn goal_context_input_item(prompt: String) -> ResponseInputItem {
-    InternalModelContextFragment::new(InternalContextSource::from_static("goal"), prompt)
-        .into_response_input_item()
+fn goal_context_input_item(prompt: String) -> ResponseItem {
+    ContextualUserFragment::into(InternalModelContextFragment::new(
+        InternalContextSource::from_static("goal"),
+        prompt,
+    ))
 }
 
 pub(crate) fn protocol_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
