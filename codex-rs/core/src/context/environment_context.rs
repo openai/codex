@@ -1,9 +1,11 @@
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::path::Path;
 
 use super::ContextualUserFragment;
 
@@ -13,6 +15,7 @@ pub(crate) struct EnvironmentContext {
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) network: Option<NetworkContext>,
+    pub(crate) filesystem: Option<FileSystemContext>,
     pub(crate) subagents: Option<String>,
 }
 
@@ -84,6 +87,55 @@ impl EnvironmentContextEnvironments {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct FileSystemContext {
+    unreadable_roots: Vec<String>,
+    unreadable_globs: Vec<String>,
+}
+
+impl FileSystemContext {
+    fn new(unreadable_roots: Vec<String>, unreadable_globs: Vec<String>) -> Option<Self> {
+        if unreadable_roots.is_empty() && unreadable_globs.is_empty() {
+            None
+        } else {
+            Some(Self {
+                unreadable_roots,
+                unreadable_globs,
+            })
+        }
+    }
+
+    fn from_permission_profile(permission_profile: &PermissionProfile, cwd: &Path) -> Option<Self> {
+        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
+        Self::new(
+            file_system_sandbox_policy
+                .get_unreadable_roots_with_cwd(cwd)
+                .into_iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect(),
+            file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd),
+        )
+    }
+
+    fn render(&self) -> String {
+        let mut rendered = "<filesystem><deny_read escalatable=\"false\">".to_string();
+        Self::push_rendered_element(&mut rendered, "paths", &self.unreadable_roots);
+        Self::push_rendered_element(&mut rendered, "globs", &self.unreadable_globs);
+        rendered.push_str("</deny_read></filesystem>");
+        rendered
+    }
+
+    fn push_rendered_element(rendered_filesystem: &mut String, name: &str, values: &[String]) {
+        if values.is_empty() {
+            return;
+        }
+
+        rendered_filesystem.push_str(&format!("<{name}>"));
+        rendered_filesystem.push_str(&values.join(","));
+        rendered_filesystem.push_str(&format!("</{name}>"));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct NetworkContext {
     allowed_domains: Vec<String>,
     denied_domains: Vec<String>,
@@ -129,6 +181,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
+            filesystem: None,
             subagents,
         }
     }
@@ -138,6 +191,7 @@ impl EnvironmentContext {
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
+        filesystem: Option<FileSystemContext>,
         subagents: Option<String>,
     ) -> Self {
         Self {
@@ -145,6 +199,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
+            filesystem,
             subagents,
         }
     }
@@ -157,6 +212,7 @@ impl EnvironmentContext {
             && self.current_date == other.current_date
             && self.timezone == other.timezone
             && self.network == other.network
+            && self.filesystem == other.filesystem
             && self.subagents == other.subagents
     }
 
@@ -165,6 +221,7 @@ impl EnvironmentContext {
         after: &EnvironmentContext,
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
+        let before_filesystem = Self::filesystem_from_turn_context_item(before);
         let environments = match &after.environments {
             EnvironmentContextEnvironments::Single(environment) => {
                 if before.cwd.as_path() != environment.cwd.as_path() {
@@ -186,17 +243,25 @@ impl EnvironmentContext {
         } else {
             before_network
         };
+        let filesystem = if before_filesystem != after.filesystem {
+            after.filesystem.clone()
+        } else {
+            before_filesystem
+        };
         EnvironmentContext::new_with_environments(
             environments,
             after.current_date.clone(),
             after.timezone.clone(),
             network,
+            filesystem,
             /*subagents*/ None,
         )
     }
 
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
-        Self::new(
+        #[allow(deprecated)]
+        let cwd = &turn_context.cwd;
+        let mut context = Self::new(
             EnvironmentContextEnvironment::from_turn_environments(
                 &turn_context.environments.turn_environments,
                 shell,
@@ -205,7 +270,10 @@ impl EnvironmentContext {
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
             /*subagents*/ None,
-        )
+        );
+        context.filesystem =
+            FileSystemContext::from_permission_profile(&turn_context.permission_profile, cwd);
+        context
     }
 
     pub(crate) fn from_turn_context_item(
@@ -216,11 +284,14 @@ impl EnvironmentContext {
             Ok(cwd) => cwd,
             Err(_) => AbsolutePathBuf::resolve_path_against_base(&turn_context_item.cwd, "/"),
         };
-        Self::new(
-            vec![EnvironmentContextEnvironment::legacy(cwd, shell)],
+        Self::new_with_environments(
+            EnvironmentContextEnvironments::from_vec(vec![EnvironmentContextEnvironment::legacy(
+                cwd, shell,
+            )]),
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
+            Self::filesystem_from_turn_context_item(turn_context_item),
             /*subagents*/ None,
         )
     }
@@ -265,6 +336,15 @@ impl EnvironmentContext {
             allowed_domains.clone(),
             denied_domains.clone(),
         ))
+    }
+
+    fn filesystem_from_turn_context_item(
+        turn_context_item: &TurnContextItem,
+    ) -> Option<FileSystemContext> {
+        FileSystemContext::from_permission_profile(
+            &turn_context_item.permission_profile(),
+            &turn_context_item.cwd,
+        )
     }
 }
 
@@ -323,6 +403,9 @@ impl ContextualUserFragment for EnvironmentContext {
                 // TODO(mbolin): Include this line if it helps the model.
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
+        }
+        if let Some(filesystem) = &self.filesystem {
+            lines.push(format!("  {}", filesystem.render()));
         }
         if let Some(subagents) = &self.subagents {
             lines.push("  <subagents>".to_string());

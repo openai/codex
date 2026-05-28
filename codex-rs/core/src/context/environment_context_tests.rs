@@ -80,6 +80,36 @@ fn serialize_environment_context_with_network() {
 }
 
 #[test]
+fn serialize_environment_context_with_filesystem_denied_reads() {
+    let mut context = EnvironmentContext::new(
+        vec![EnvironmentContextEnvironment {
+            id: "local".to_string(),
+            cwd: test_path_buf("/repo").abs(),
+            shell: fake_shell_name(),
+        }],
+        /*current_date*/ None,
+        /*timezone*/ None,
+        /*network*/ None,
+        /*subagents*/ None,
+    );
+    context.filesystem = FileSystemContext::new(
+        vec!["/repo/private".to_string()],
+        vec!["/repo/private/**".to_string()],
+    );
+
+    let expected = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <filesystem><deny_read escalatable="false"><paths>/repo/private</paths><globs>/repo/private/**</globs></deny_read></filesystem>
+</environment_context>"#,
+        test_path_buf("/repo").display()
+    );
+
+    assert_eq!(context.render(), expected);
+}
+
+#[test]
 fn serialize_read_only_environment_context() {
     let context = EnvironmentContext::new(
         Vec::new(),
