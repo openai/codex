@@ -2982,6 +2982,11 @@
           "default": null,
           "description": "Preferred layout for resume/fork session picker results."
         },
+        "show_mcp_startup_status": {
+          "default": false,
+          "description": "Show background MCP server startup status and optional failure diagnostics in the TUI. Defaults to `false`.",
+          "type": "boolean"
+        },
         "show_tooltips": {
           "default": true,
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",

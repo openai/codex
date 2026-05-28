@@ -810,7 +810,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
-            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(/*v*/ false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -978,6 +978,39 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
     let timeout_result =
         tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
     assert!(timeout_result.is_err());
+}
+
+#[tokio::test]
+async fn list_ready_or_cached_tools_skips_pending_client_without_cached_tool_info_snapshot() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        "optional".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(/*v*/ false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let tools = tokio::time::timeout(
+        Duration::from_millis(10),
+        manager.list_ready_or_cached_tools(),
+    )
+    .await
+    .expect("pending optional client should not block ready tool listing");
+    assert!(tools.is_empty());
 }
 
 #[tokio::test]

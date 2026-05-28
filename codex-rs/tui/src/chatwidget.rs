@@ -1853,6 +1853,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
+        self.sync_mcp_startup_status_config(config.tui_show_mcp_startup_status);
         self.config.features = config.features.clone();
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.realtime = config.realtime.clone();

@@ -255,58 +255,57 @@ impl AsyncManagedClient {
         None
     }
 
-    pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
-        let annotate_tools = |tools: Vec<ToolInfo>| {
-            let mut tools = tools;
-            for tool in &mut tools {
-                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                }
-
-                let plugin_names = match tool.connector_id.as_deref() {
-                    Some(connector_id) => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_connector_id(connector_id),
-                    None => self
-                        .tool_plugin_provenance
-                        .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
-                };
-                tool.plugin_display_names = plugin_names.to_vec();
-
-                if plugin_names.is_empty() {
-                    continue;
-                }
-
-                let plugin_source_note = if plugin_names.len() == 1 {
-                    format!("This tool is part of plugin `{}`.", plugin_names[0])
-                } else {
-                    format!(
-                        "This tool is part of plugins {}.",
-                        plugin_names
-                            .iter()
-                            .map(|plugin_name| format!("`{plugin_name}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                let description = tool
-                    .tool
-                    .description
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or("");
-                let annotated_description = if description.is_empty() {
-                    plugin_source_note
-                } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
-                    format!("{description} {plugin_source_note}")
-                } else {
-                    format!("{description}. {plugin_source_note}")
-                };
-                tool.tool.description = Some(Cow::Owned(annotated_description));
+    fn annotate_tools(&self, mut tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
+        for tool in &mut tools {
+            if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                tool.tool = tool_with_model_visible_input_schema(&tool.tool);
             }
-            tools
-        };
 
+            let plugin_names = match tool.connector_id.as_deref() {
+                Some(connector_id) => self
+                    .tool_plugin_provenance
+                    .plugin_display_names_for_connector_id(connector_id),
+                None => self
+                    .tool_plugin_provenance
+                    .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+            };
+            tool.plugin_display_names = plugin_names.to_vec();
+
+            if plugin_names.is_empty() {
+                continue;
+            }
+
+            let plugin_source_note = if plugin_names.len() == 1 {
+                format!("This tool is part of plugin `{}`.", plugin_names[0])
+            } else {
+                format!(
+                    "This tool is part of plugins {}.",
+                    plugin_names
+                        .iter()
+                        .map(|plugin_name| format!("`{plugin_name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let description = tool
+                .tool
+                .description
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("");
+            let annotated_description = if description.is_empty() {
+                plugin_source_note
+            } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+                format!("{description} {plugin_source_note}")
+            } else {
+                format!("{description}. {plugin_source_note}")
+            };
+            tool.tool.description = Some(Cow::Owned(annotated_description));
+        }
+        tools
+    }
+
+    pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if let Some(startup_tools) = self.cached_tool_info_snapshot_while_initializing()
         {
@@ -317,7 +316,17 @@ impl AsyncManagedClient {
                 Err(_) => self.cached_tool_info_snapshot.clone(),
             }
         };
-        tools.map(annotate_tools)
+        tools.map(|tools| self.annotate_tools(tools))
+    }
+
+    pub(crate) async fn listed_tools_if_ready_or_cached(&self) -> Option<Vec<ToolInfo>> {
+        if let Some(startup_tools) = self.cached_tool_info_snapshot_while_initializing() {
+            return Some(self.annotate_tools(startup_tools));
+        }
+        if !self.startup_complete.load(Ordering::Acquire) {
+            return None;
+        }
+        self.listed_tools().await
     }
 }
 

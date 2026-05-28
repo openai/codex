@@ -102,7 +102,9 @@ pub(crate) async fn list_accessible_and_enabled_connectors_from_manager(
     config: &Config,
 ) -> Vec<AppInfo> {
     with_app_enabled_state(
-        accessible_connectors_from_mcp_tools(&mcp_connection_manager.list_all_tools().await),
+        accessible_connectors_from_mcp_tools(
+            &mcp_connection_manager.list_ready_or_cached_tools().await,
+        ),
         config,
     )
     .into_iter()

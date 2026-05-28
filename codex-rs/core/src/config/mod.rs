@@ -705,6 +705,9 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
+    /// Show background MCP server startup status and optional failure diagnostics in the TUI.
+    pub tui_show_mcp_startup_status: bool,
+
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
@@ -3575,6 +3578,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_show_mcp_startup_status: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.show_mcp_startup_status)
+                .unwrap_or(false),
             model_availability_nux: cfg
                 .tui
                 .as_ref()

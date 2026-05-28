@@ -667,6 +667,11 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Show background MCP server startup status and optional failure diagnostics in the TUI.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub show_mcp_startup_status: bool,
+
     /// Start the composer in Vim mode (`Normal`) by default.
     /// Defaults to `false`.
     #[serde(default)]

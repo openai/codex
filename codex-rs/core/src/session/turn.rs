@@ -74,6 +74,7 @@ use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_git_repo_root_with_fs;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -450,7 +451,7 @@ async fn run_hooks_and_record_inputs(
 
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "MCP tool listing borrows the read guard across cancellation-aware await"
+    reason = "ready-or-cached tool inspection never awaits unresolved MCP startup"
 )]
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
@@ -481,6 +482,40 @@ async fn build_skills_and_plugins(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
+    let explicitly_mentioned_apps = collect_explicit_app_ids(&user_input);
+    let mut explicitly_requested_mcp_servers = mentioned_plugins
+        .iter()
+        .flat_map(|plugin| plugin.mcp_server_names.iter().cloned())
+        .collect::<HashSet<_>>();
+    if turn_context.apps_enabled() && !explicitly_mentioned_apps.is_empty() {
+        explicitly_requested_mcp_servers.insert(CODEX_APPS_MCP_SERVER_NAME.to_string());
+    }
+    if !explicitly_requested_mcp_servers.is_empty() {
+        let mut explicitly_requested_mcp_servers = explicitly_requested_mcp_servers
+            .into_iter()
+            .collect::<Vec<_>>();
+        explicitly_requested_mcp_servers.sort();
+        let readiness = {
+            let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+            mcp_connection_manager.wait_for_servers_ready(&explicitly_requested_mcp_servers)
+        };
+        let failures = match readiness.or_cancel(cancellation_token).await {
+            Ok(failures) => failures,
+            Err(_) => return None,
+        };
+        for failure in failures {
+            sess.send_event(
+                turn_context,
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "MCP dependency `{}` requested for this turn is unavailable: {}",
+                        failure.server, failure.error
+                    ),
+                }),
+            )
+            .await;
+        }
+    }
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
@@ -490,7 +525,7 @@ async fn build_skills_and_plugins(
             .mcp_connection_manager
             .read()
             .await
-            .list_all_tools()
+            .list_ready_or_cached_tools()
             .or_cancel(cancellation_token)
             .await
         {
@@ -563,7 +598,7 @@ async fn build_skills_and_plugins(
     );
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
-    let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
+    let mut explicitly_enabled_connectors = explicitly_mentioned_apps;
     explicitly_enabled_connectors.extend(skill_connector_ids);
     let connector_names_by_id = available_connectors
         .iter()
@@ -1075,7 +1110,7 @@ async fn run_sampling_request(
 
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "tool router construction reads through the session-owned manager guard"
+    reason = "ready-or-cached tool inspection never awaits unresolved MCP startup"
 )]
 #[instrument(level = "trace",
     skip_all,
@@ -1098,7 +1133,7 @@ pub(crate) async fn built_tools(
         .await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
+        .list_ready_or_cached_tools()
         .or_cancel(cancellation_token)
         .await?;
     drop(mcp_connection_manager);
