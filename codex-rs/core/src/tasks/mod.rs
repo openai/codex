@@ -7,7 +7,7 @@ mod user_shell;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_analytics::TurnTimingBreakdownFact;
+use codex_analytics::TurnTimingFact;
 use codex_analytics::TurnTokenUsageFact;
 use codex_extension_api::ExtensionData;
 use futures::future::BoxFuture;
@@ -824,7 +824,7 @@ impl Session {
         let timing = turn_context.turn_timing_state.timing_breakdown().await;
         self.services
             .analytics_events_client
-            .track_turn_timing(TurnTimingBreakdownFact {
+            .track_turn_timing(TurnTimingFact {
                 turn_id: turn_context.sub_id.clone(),
                 thread_id: self.conversation_id.to_string(),
                 request_start_delay_ms: timing.request_start_delay_ms,

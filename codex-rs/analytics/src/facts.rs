@@ -100,7 +100,7 @@ pub struct TurnTokenUsageFact {
 }
 
 #[derive(Clone)]
-pub struct TurnTimingBreakdownFact {
+pub struct TurnTimingFact {
     pub turn_id: String,
     pub thread_id: String,
     pub request_start_delay_ms: Option<u64>,
@@ -353,7 +353,7 @@ pub(crate) enum CustomAnalyticsFact {
     Compaction(Box<CodexCompactionEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
-    TurnTimingBreakdown(Box<TurnTimingBreakdownFact>),
+    TurnTiming(Box<TurnTimingFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),

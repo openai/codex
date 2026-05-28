@@ -133,10 +133,11 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     )?;
     assert_eq!(completed.thread_id, thread_id);
     assert_eq!(completed.turn.status, TurnStatus::Interrupted);
-    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "turn_timing").await?;
     assert_eq!(
         (
-            event["event_params"]["status"].as_str(),
+            event["event_params"]["thread_id"].as_str(),
+            event["event_params"]["turn_id"].as_str(),
             event["event_params"]["request_start_delay_ms"]
                 .as_u64()
                 .is_some(),
@@ -147,7 +148,13 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
                 .as_u64()
                 .is_some_and(|duration_ms| duration_ms > 0),
         ),
-        (Some("interrupted"), true, true, true)
+        (
+            Some(thread_id.as_str()),
+            Some(turn_id.as_str()),
+            true,
+            true,
+            true
+        )
     );
 
     Ok(())

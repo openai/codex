@@ -71,7 +71,7 @@ use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
-use crate::facts::TurnTimingBreakdownFact;
+use crate::facts::TurnTimingFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
@@ -338,8 +338,8 @@ fn sample_turn_token_usage_fact(thread_id: &str, turn_id: &str) -> TurnTokenUsag
     }
 }
 
-fn sample_turn_timing_breakdown_fact(thread_id: &str, turn_id: &str) -> TurnTimingBreakdownFact {
-    TurnTimingBreakdownFact {
+fn sample_turn_timing_fact(thread_id: &str, turn_id: &str) -> TurnTimingFact {
+    TurnTimingFact {
         turn_id: turn_id.to_string(),
         thread_id: thread_id.to_string(),
         request_start_delay_ms: Some(120),
@@ -3446,11 +3446,6 @@ fn turn_event_serializes_expected_shape() {
             reasoning_output_tokens: None,
             total_tokens: None,
             duration_ms: Some(1234),
-            request_start_delay_ms: Some(120),
-            sampling_duration_ms: Some(900),
-            blocking_tool_critical_path_duration_ms: Some(140),
-            approval_wait_duration_ms: Some(0),
-            finalize_duration_ms: Some(74),
             started_at: Some(455),
             completed_at: Some(456),
         },
@@ -3513,11 +3508,6 @@ fn turn_event_serializes_expected_shape() {
                 "reasoning_output_tokens": null,
                 "total_tokens": null,
                 "duration_ms": 1234,
-                "request_start_delay_ms": 120,
-                "sampling_duration_ms": 900,
-                "blocking_tool_critical_path_duration_ms": 140,
-                "approval_wait_duration_ms": 0,
-                "finalize_duration_ms": 74,
                 "started_at": 455,
                 "completed_at": 456
             }
@@ -3841,172 +3831,35 @@ async fn turn_lifecycle_emits_turn_event() {
         json!(13)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(321));
-    assert_eq!(
-        json!({
-            "request_start_delay_ms": payload["event_params"]["request_start_delay_ms"],
-            "sampling_duration_ms": payload["event_params"]["sampling_duration_ms"],
-            "blocking_tool_critical_path_duration_ms": payload["event_params"]["blocking_tool_critical_path_duration_ms"],
-            "approval_wait_duration_ms": payload["event_params"]["approval_wait_duration_ms"],
-            "finalize_duration_ms": payload["event_params"]["finalize_duration_ms"],
-        }),
-        json!({
-            "request_start_delay_ms": null,
-            "sampling_duration_ms": null,
-            "blocking_tool_critical_path_duration_ms": null,
-            "approval_wait_duration_ms": null,
-            "finalize_duration_ms": null,
-        })
-    );
 }
 
 #[tokio::test]
-async fn turn_timing_breakdown_fact_enriches_turn_event() {
+async fn turn_timing_fact_emits_dedicated_event() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
 
-    ingest_turn_prerequisites(
-        &mut reducer,
-        &mut out,
-        /*include_initialize*/ true,
-        /*include_resolved_config*/ true,
-        /*include_started*/ true,
-        /*include_token_usage*/ false,
-    )
-    .await;
     reducer
         .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::TurnTimingBreakdown(Box::new(
-                sample_turn_timing_breakdown_fact("thread-2", "turn-2"),
-            ))),
-            &mut out,
-        )
-        .await;
-    reducer
-        .ingest(
-            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
-                "thread-2",
-                "turn-2",
-                AppServerTurnStatus::Completed,
-                /*codex_error_info*/ None,
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnTiming(Box::new(
+                sample_turn_timing_fact("thread-2", "turn-2"),
             ))),
             &mut out,
         )
         .await;
 
-    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    let payload = serde_json::to_value(&out).expect("serialize timing event");
     assert_eq!(
-        json!({
-            "request_start_delay_ms": payload["event_params"]["request_start_delay_ms"],
-            "sampling_duration_ms": payload["event_params"]["sampling_duration_ms"],
-            "blocking_tool_critical_path_duration_ms": payload["event_params"]["blocking_tool_critical_path_duration_ms"],
-            "approval_wait_duration_ms": payload["event_params"]["approval_wait_duration_ms"],
-            "finalize_duration_ms": payload["event_params"]["finalize_duration_ms"],
-        }),
-        json!({
-            "request_start_delay_ms": 120,
-            "sampling_duration_ms": 900,
-            "blocking_tool_critical_path_duration_ms": 140,
-            "approval_wait_duration_ms": 0,
-            "finalize_duration_ms": 74,
-        })
-    );
-}
-
-#[tokio::test]
-async fn review_durations_roll_up_into_turn_approval_wait() {
-    let mut reducer = AnalyticsReducer::default();
-    let mut out = Vec::new();
-
-    ingest_turn_prerequisites(
-        &mut reducer,
-        &mut out,
-        /*include_initialize*/ true,
-        /*include_resolved_config*/ true,
-        /*include_started*/ true,
-        /*include_token_usage*/ false,
-    )
-    .await;
-    reducer
-        .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::TurnTimingBreakdown(Box::new(
-                TurnTimingBreakdownFact {
-                    turn_id: "turn-2".to_string(),
-                    thread_id: "thread-2".to_string(),
-                    request_start_delay_ms: Some(100),
-                    sampling_duration_ms: 400,
-                    blocking_tool_critical_path_duration_ms: 700,
-                },
-            ))),
-            &mut out,
-        )
-        .await;
-    reducer
-        .ingest(
-            AnalyticsFact::ServerRequest {
-                connection_id: 7,
-                request: Box::new(ServerRequest::CommandExecutionRequestApproval {
-                    request_id: RequestId::Integer(99),
-                    params: CommandExecutionRequestApprovalParams {
-                        thread_id: "thread-2".to_string(),
-                        turn_id: "turn-2".to_string(),
-                        item_id: "item-1".to_string(),
-                        started_at_ms: 1_000,
-                        approval_id: None,
-                        reason: None,
-                        network_approval_context: None,
-                        command: Some("echo hi".to_string()),
-                        cwd: None,
-                        command_actions: None,
-                        additional_permissions: None,
-                        proposed_execpolicy_amendment: None,
-                        proposed_network_policy_amendments: None,
-                        available_decisions: None,
-                    },
-                }),
+        payload,
+        json!([{
+            "event_type": "turn_timing",
+            "event_params": {
+                "thread_id": "thread-2",
+                "turn_id": "turn-2",
+                "request_start_delay_ms": 120,
+                "sampling_duration_ms": 900,
+                "blocking_tool_critical_path_duration_ms": 140,
             },
-            &mut out,
-        )
-        .await;
-    reducer
-        .ingest(
-            AnalyticsFact::ServerResponse {
-                completed_at_ms: 1_600,
-                response: Box::new(ServerResponse::CommandExecutionRequestApproval {
-                    request_id: RequestId::Integer(99),
-                    response: CommandExecutionRequestApprovalResponse {
-                        decision: CommandExecutionApprovalDecision::Accept,
-                    },
-                }),
-            },
-            &mut out,
-        )
-        .await;
-    reducer
-        .ingest(
-            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
-                "thread-2",
-                "turn-2",
-                AppServerTurnStatus::Completed,
-                /*codex_error_info*/ None,
-            ))),
-            &mut out,
-        )
-        .await;
-
-    let turn_event = out
-        .iter()
-        .find(|event| matches!(event, TrackEventRequest::TurnEvent(_)))
-        .expect("turn event should be emitted");
-    let payload = serde_json::to_value(turn_event).expect("serialize turn event");
-    assert_eq!(
-        json!({
-            "approval_wait_duration_ms": payload["event_params"]["approval_wait_duration_ms"],
-            "finalize_duration_ms": payload["event_params"]["finalize_duration_ms"],
-        }),
-        json!({
-            "approval_wait_duration_ms": 600,
-            "finalize_duration_ms": 34,
-        })
+        }])
     );
 }
 
