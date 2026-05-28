@@ -218,7 +218,6 @@ impl AgentControl {
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
         let state = self.upgrade()?;
-        self.reap_unusable_agents(&state).await;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
@@ -591,7 +590,6 @@ impl AgentControl {
         }
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
-        self.reap_unusable_agents(&state).await;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -764,38 +762,6 @@ impl AgentControl {
         result
     }
 
-    async fn reap_unusable_agents(&self, state: &Arc<ThreadManagerState>) {
-        for metadata in self.state.live_agents() {
-            let Some(thread_id) = metadata.agent_id else {
-                continue;
-            };
-            match state.get_thread(thread_id).await {
-                Ok(thread) => {
-                    if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
-                        if let Err(err) = self.mark_thread_spawn_edge_closed(state, thread_id).await
-                        {
-                            warn!("failed to close stale agent edge for {thread_id}: {err}");
-                            continue;
-                        }
-                        thread.wait_until_terminated().await;
-                        let _ = state.remove_thread(&thread_id).await;
-                        self.state.release_spawned_thread(thread_id);
-                    }
-                }
-                Err(CodexErr::ThreadNotFound(_)) => {
-                    if let Err(err) = self.mark_thread_spawn_edge_closed(state, thread_id).await {
-                        warn!("failed to close stale agent edge for {thread_id}: {err}");
-                        continue;
-                    }
-                    self.state.release_spawned_thread(thread_id);
-                }
-                Err(err) => {
-                    warn!("failed to inspect live agent {thread_id}: {err}");
-                }
-            }
-        }
-    }
-
     /// Submit a shutdown request for a live agent without marking it explicitly closed in
     /// persisted spawn-edge state.
     pub(crate) async fn shutdown_live_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
@@ -823,45 +789,42 @@ impl AgentControl {
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
         let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
-        let edge_close_result = if known_agent || state.get_thread(agent_id).await.is_ok() {
-            self.mark_thread_spawn_edge_closed(&state, agent_id).await
-        } else {
-            Ok(())
-        };
-        let shutdown_result = match Box::pin(self.shutdown_agent_tree(agent_id)).await {
+        match state.get_thread(agent_id).await {
+            Ok(thread) => {
+                if let Some(state_db_ctx) = thread.state_db()
+                    && let Err(err) = state_db_ctx
+                        .set_thread_spawn_edge_status(
+                            agent_id,
+                            DirectionalThreadSpawnEdgeStatus::Closed,
+                        )
+                        .await
+                {
+                    warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
+                }
+            }
+            Err(CodexErr::ThreadNotFound(_)) if known_agent => {
+                if let Some(state_db_ctx) = state.state_db()
+                    && let Err(err) = state_db_ctx
+                        .set_thread_spawn_edge_status(
+                            agent_id,
+                            DirectionalThreadSpawnEdgeStatus::Closed,
+                        )
+                        .await
+                {
+                    warn!("failed to persist stale thread-spawn edge status for {agent_id}: {err}");
+                }
+            }
+            Err(CodexErr::ThreadNotFound(_)) => {}
+            Err(err) => {
+                warn!("failed to inspect agent before close {agent_id}: {err}");
+            }
+        }
+        match Box::pin(self.shutdown_agent_tree(agent_id)).await {
             Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) if known_agent => {
                 Ok(String::new())
             }
             result => result,
-        };
-        match (edge_close_result, shutdown_result) {
-            (Err(edge_err), Err(shutdown_err)) => {
-                warn!(
-                    "failed to shut down agent {agent_id} after edge close failed: {shutdown_err}"
-                );
-                Err(edge_err)
-            }
-            (Err(edge_err), Ok(_)) => Err(edge_err),
-            (Ok(()), shutdown_result) => shutdown_result,
         }
-    }
-
-    async fn mark_thread_spawn_edge_closed(
-        &self,
-        state: &Arc<ThreadManagerState>,
-        agent_id: ThreadId,
-    ) -> CodexResult<()> {
-        let Some(state_db_ctx) = state.state_db() else {
-            return Ok(());
-        };
-        state_db_ctx
-            .set_thread_spawn_edge_status(agent_id, DirectionalThreadSpawnEdgeStatus::Closed)
-            .await
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to persist thread-spawn edge status for {agent_id}: {err}"
-                ))
-            })
     }
 
     /// Shut down `agent_id` and any live descendants reachable from the in-memory spawn tree.
@@ -984,7 +947,6 @@ impl AgentControl {
         path_prefix: Option<&str>,
     ) -> CodexResult<Vec<ListedAgent>> {
         let state = self.upgrade()?;
-        self.reap_unusable_agents(&state).await;
         let resolved_prefix = path_prefix
             .map(|prefix| {
                 current_session_source
