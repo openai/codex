@@ -191,7 +191,8 @@ async fn guardian_test_session_and_turn_with_base_url(
 
 async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnContext>) {
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -225,7 +226,6 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
 }
@@ -362,7 +362,8 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
     let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
     seed_guardian_parent_history(&session, &turn).await;
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -381,7 +382,6 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
 
@@ -516,7 +516,8 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
         )
         .await;
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -535,7 +536,6 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
 
@@ -1469,7 +1469,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -1488,7 +1489,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
     let second_request = GuardianApprovalRequest::Shell {
@@ -1513,7 +1513,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -1532,7 +1533,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
     let third_request = GuardianApprovalRequest::Shell {
@@ -2005,7 +2005,8 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
             ReviewDecision::Approved
         );
         session
-            .record_into_history(
+            .record_conversation_items(
+                turn.as_ref(),
                 &[
                     ResponseItem::Message {
                         id: None,
@@ -2024,7 +2025,6 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                         phase: None,
                     },
                 ],
-                turn.as_ref(),
             )
             .await;
 
@@ -2072,7 +2072,8 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
             "second guardian request was not observed"
         );
         session
-            .record_into_history(
+            .record_conversation_items(
+                turn.as_ref(),
                 &[
                     ResponseItem::Message {
                         id: None,
@@ -2091,7 +2092,6 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                         phase: None,
                     },
                 ],
-                turn.as_ref(),
             )
             .await;
 

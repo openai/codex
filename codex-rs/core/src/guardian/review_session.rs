@@ -790,12 +790,11 @@ async fn run_review_on_session(
 }
 
 async fn append_guardian_followup_reminder(review_session: &GuardianReviewSession) {
-    let turn_context = review_session.codex.session.new_default_turn().await;
     let reminder: ResponseItem = ContextualUserFragment::into(GuardianFollowupReviewReminder);
     review_session
         .codex
         .session
-        .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&reminder))
+        .inject_no_new_turn(vec![reminder], /*current_turn_context*/ None)
         .await;
 }
 

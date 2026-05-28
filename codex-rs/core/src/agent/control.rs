@@ -704,22 +704,6 @@ impl AgentControl {
         result
     }
 
-    /// Append a prebuilt message to an existing agent thread outside the normal user-input path.
-    #[cfg(test)]
-    pub(crate) async fn append_message(
-        &self,
-        agent_id: ThreadId,
-        message: ResponseItem,
-    ) -> CodexResult<String> {
-        let state = self.upgrade()?;
-        self.handle_thread_request_result(
-            agent_id,
-            &state,
-            state.append_message(agent_id, message).await,
-        )
-        .await
-    }
-
     pub(crate) async fn send_inter_agent_communication(
         &self,
         agent_id: ThreadId,

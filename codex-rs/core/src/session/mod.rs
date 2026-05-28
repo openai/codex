@@ -196,6 +196,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod config_lock;
 mod handlers;
+mod inject;
 mod input_queue;
 mod mcp;
 mod multi_agents;
@@ -324,7 +325,6 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -1842,27 +1842,11 @@ impl Session {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let fragment = ApprovedCommandPrefixSaved::new(prefixes);
-        let text = fragment.render();
-        let message: ResponseItem = ContextualUserFragment::into(fragment);
-
-        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
-                .await;
-            return;
-        }
-
-        if self
-            .inject_response_items(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-                phase: None,
-            }])
-            .await
-            .is_err()
-        {
-            warn!("no active turn found to record execpolicy amendment message for {sub_id}");
-        }
+        let message: ResponseItem =
+            ContextualUserFragment::into(ApprovedCommandPrefixSaved::new(prefixes));
+        let turn_context = self.turn_context_for_sub_id(sub_id).await;
+        self.inject_no_new_turn(vec![message], turn_context.as_deref())
+            .await;
     }
 
     pub(crate) async fn persist_network_policy_amendment(
@@ -1939,27 +1923,10 @@ impl Session {
         sub_id: &str,
         amendment: &NetworkPolicyAmendment,
     ) {
-        let fragment = NetworkRuleSaved::new(amendment);
-        let text = fragment.render();
-        let message: ResponseItem = ContextualUserFragment::into(fragment);
-
-        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
-                .await;
-            return;
-        }
-
-        if self
-            .inject_response_items(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-                phase: None,
-            }])
-            .await
-            .is_err()
-        {
-            warn!("no active turn found to record network policy amendment message for {sub_id}");
-        }
+        let message: ResponseItem = ContextualUserFragment::into(NetworkRuleSaved::new(amendment));
+        let turn_context = self.turn_context_for_sub_id(sub_id).await;
+        self.inject_no_new_turn(vec![message], turn_context.as_deref())
+            .await;
     }
 
     /// Emit an exec approval request event and await the user's decision.
@@ -2510,26 +2477,19 @@ impl Session {
         }
     }
 
-    /// Records input items: always append to conversation history and
-    /// persist these response items to rollout.
+    /// Records conversation items: append to history, persist to rollout, and
+    /// notify clients observing raw response items.
     pub(crate) async fn record_conversation_items(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items, turn_context).await;
+        {
+            let mut state = self.state.lock().await;
+            state.record_items(items.iter(), turn_context.truncation_policy);
+        }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
-    }
-
-    /// Append ResponseItems to the in-memory conversation history only.
-    pub(crate) async fn record_into_history(
-        &self,
-        items: &[ResponseItem],
-        turn_context: &TurnContext,
-    ) {
-        let mut state = self.state.lock().await;
-        state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
     async fn maybe_warn_on_server_model_mismatch(
@@ -3192,7 +3152,8 @@ impl Session {
 
         let mut pending_input = additional_context_input
             .into_iter()
-            .map(TurnInput::ResponseInputItem)
+            .map(ResponseItem::from)
+            .map(TurnInput::ResponseItem)
             .collect::<Vec<_>>();
         pending_input.push(TurnInput::UserInput(input));
         self.input_queue
@@ -3202,16 +3163,6 @@ impl Session {
             )
             .await;
         Ok(active_turn_id.clone())
-    }
-
-    /// Returns the input if there was no task running to inject into.
-    pub async fn inject_response_items(
-        &self,
-        input: Vec<ResponseInputItem>,
-    ) -> Result<(), Vec<ResponseInputItem>> {
-        self.input_queue
-            .inject_response_items(&self.active_turn, input)
-            .await
     }
 
     pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {

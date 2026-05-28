@@ -332,7 +332,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         phase: None,
     };
     session
-        .record_into_history(std::slice::from_ref(&history_item), &turn)
+        .record_conversation_items(&turn, std::slice::from_ref(&history_item))
         .await;
 
     let router = ToolRouter::from_turn_context(

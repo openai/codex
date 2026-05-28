@@ -13,7 +13,7 @@ use codex_code_mode::CodeModeTurnHost;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
 
@@ -134,7 +134,7 @@ impl CodeModeTurnHost for CoreTurnHost {
         }
         self.exec
             .session
-            .inject_response_items(vec![ResponseInputItem::CustomToolCallOutput {
+            .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
                 call_id,
                 name: Some(PUBLIC_TOOL_NAME.to_string()),
                 output: FunctionCallOutputPayload::from_text(text),
