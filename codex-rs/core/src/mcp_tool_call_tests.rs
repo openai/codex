@@ -344,15 +344,119 @@ fn openai_file_params_are_only_honored_for_codex_apps() {
         "openai/fileParams": ["file"],
     });
     let meta = meta.as_object();
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {},
+    });
+    let input_schema = input_schema.as_object().expect("input schema object");
 
     assert_eq!(
-        openai_file_input_params_for_server(CODEX_APPS_MCP_SERVER_NAME, meta),
-        Some(vec!["file".to_string()])
+        openai_file_input_params_for_server(CODEX_APPS_MCP_SERVER_NAME, meta, input_schema),
+        Some(OpenAIFileInputParams {
+            names: vec!["file".to_string()],
+            store_in_oai_library: false,
+        })
     );
     assert_eq!(
-        openai_file_input_params_for_server("minimaltest", meta),
+        openai_file_input_params_for_server("minimaltest", meta, input_schema),
         None
     );
+}
+
+#[test]
+fn openai_file_upload_config_requires_visible_required_true_arg() {
+    let valid_meta_value = serde_json::json!({
+        "openai/fileParams": ["file"],
+    });
+    let valid_meta = valid_meta_value.as_object();
+    let valid_input_schema_value = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "store_in_oai_library": {
+                "type": "boolean",
+                "const": true,
+            },
+        },
+        "required": ["store_in_oai_library"],
+    });
+    let valid_input_schema = valid_input_schema_value
+        .as_object()
+        .expect("input schema object");
+
+    assert_eq!(
+        openai_file_input_params_for_server(
+            CODEX_APPS_MCP_SERVER_NAME,
+            valid_meta,
+            valid_input_schema,
+        ),
+        Some(OpenAIFileInputParams {
+            names: vec!["file".to_string()],
+            store_in_oai_library: true,
+        })
+    );
+
+    for (meta, input_schema) in [
+        (
+            serde_json::json!({
+                "openai/fileParams": ["file"],
+                "openai/fileUploadConfig": {
+                    "store_in_oai_library_arg": "store_in_oai_library",
+                },
+            }),
+            valid_input_schema_value.clone(),
+        ),
+        (
+            serde_json::json!({
+                "openai/fileParams": ["file"],
+            }),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "confirm": {
+                        "type": "boolean",
+                        "const": true,
+                    },
+                },
+                "required": ["confirm"],
+            }),
+        ),
+        (
+            valid_meta_value.clone(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "store_in_oai_library": {
+                        "type": "boolean",
+                        "const": true,
+                    },
+                },
+            }),
+        ),
+        (
+            valid_meta_value.clone(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "store_in_oai_library": {
+                        "type": "boolean",
+                    },
+                },
+                "required": ["store_in_oai_library"],
+            }),
+        ),
+    ] {
+        assert_eq!(
+            openai_file_input_params_for_server(
+                CODEX_APPS_MCP_SERVER_NAME,
+                meta.as_object(),
+                input_schema.as_object().expect("input schema object"),
+            ),
+            Some(OpenAIFileInputParams {
+                names: vec!["file".to_string()],
+                store_in_oai_library: false,
+            })
+        );
+    }
 }
 
 #[test]
