@@ -89,7 +89,12 @@ pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::O
     Ok(modified.map(time::OffsetDateTime::from))
 }
 
-pub(crate) async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineReader> {
+/// Opens a rollout line reader that transparently handles plain `.jsonl` and `.jsonl.zst` files.
+///
+/// If the requested path disappears during a compression or decompression transition, this retries
+/// the matching plain/compressed sibling once so readers do not need to know which representation is
+/// currently stored on disk.
+pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineReader> {
     match open_rollout_line_reader_once(path).await {
         Ok(reader) => Ok(reader),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -191,7 +196,8 @@ pub(crate) fn should_skip_compressed_sibling(path: &Path) -> bool {
     is_compressed_rollout_path(path) && plain_rollout_path(path).exists()
 }
 
-pub(crate) struct RolloutLineReader {
+/// Line-oriented rollout reader returned by [`open_rollout_line_reader`].
+pub struct RolloutLineReader {
     inner: RolloutLineReaderInner,
 }
 
@@ -201,7 +207,8 @@ enum RolloutLineReaderInner {
 }
 
 impl RolloutLineReader {
-    pub(crate) async fn next_line(&mut self) -> io::Result<Option<String>> {
+    /// Reads the next JSONL record from the rollout.
+    pub async fn next_line(&mut self) -> io::Result<Option<String>> {
         match &mut self.inner {
             RolloutLineReaderInner::Plain(lines) => lines.next_line().await,
             RolloutLineReaderInner::Memory(lines) => lines.next().transpose(),
