@@ -13,7 +13,7 @@ jobs:
   build-python-sdk:
     if: github.repository == 'openai/codex'
     name: build-python-sdk
-    runs-on: ubuntu-latest
+    runs-on: macos-15-xlarge
     permissions:
       contents: read
 

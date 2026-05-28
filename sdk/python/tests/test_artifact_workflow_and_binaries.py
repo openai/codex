@@ -281,6 +281,7 @@ def test_source_sdk_package_declares_beta_documentation_and_release_files() -> N
             "README.md",
             "docs/**",
             "examples/**",
+            "_runtime_setup.py",
             "pyproject.toml",
         ],
         "readme_is_beta": True,
