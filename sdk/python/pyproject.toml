@@ -14,7 +14,6 @@ keywords = ["codex", "sdk", "llm", "ai", "agents"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.132.0"]
