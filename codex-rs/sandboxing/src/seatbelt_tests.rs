@@ -19,6 +19,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -48,6 +49,30 @@ fn assert_seatbelt_denied(stderr: &[u8], path: &Path) {
 
 fn absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::from_absolute_path(Path::new(path)).expect("absolute path")
+}
+
+fn effective_permissions(
+    file_system_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> crate::EffectiveFilesystemPermissions {
+    let policy_evaluation_cwd =
+        AbsolutePathBuf::from_absolute_path(cwd).expect("absolute sandbox policy cwd");
+    let file_system_policy = file_system_policy
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(
+            &policy_evaluation_cwd,
+        ));
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    crate::EffectiveFilesystemPermissions::from_profile(
+        &permission_profile,
+        crate::FilesystemPermissionsContext {
+            policy_evaluation_cwd: &policy_evaluation_cwd,
+        },
+    )
+    .expect("derive effective filesystem permissions")
 }
 
 fn seatbelt_policy_arg(args: &[String]) -> &str {
@@ -198,12 +223,12 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
             access: FileSystemAccessMode::Deny,
         },
     ]);
+    let effective_permissions = effective_permissions(&file_system_policy, Path::new("/"));
 
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/bin/true".to_string()],
-        file_system_sandbox_policy: &file_system_policy,
+        effective_filesystem_permissions: &effective_permissions,
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        sandbox_policy_cwd: Path::new("/"),
         enforce_managed_network: false,
         network: None,
         extra_allow_unix_sockets: &[],
@@ -270,12 +295,12 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
             access: FileSystemAccessMode::Deny,
         },
     ]);
+    let effective_permissions = effective_permissions(&file_system_policy, Path::new("/"));
 
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/bin/true".to_string()],
-        file_system_sandbox_policy: &file_system_policy,
+        effective_filesystem_permissions: &effective_permissions,
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        sandbox_policy_cwd: Path::new("/"),
         enforce_managed_network: false,
         network: None,
         extra_allow_unix_sockets: &[],
@@ -374,8 +399,9 @@ fn unreadable_glob_policy_includes_canonicalized_static_prefix() {
         path: FileSystemPath::GlobPattern { pattern },
         access: FileSystemAccessMode::Deny,
     });
+    let effective_permissions = effective_permissions(&policy, temp_dir.path());
 
-    let seatbelt_policy = build_seatbelt_unreadable_glob_policy(&policy, temp_dir.path());
+    let seatbelt_policy = build_seatbelt_unreadable_glob_policy(&effective_permissions);
 
     assert!(
         seatbelt_policy.contains(&format!(r#"(deny file-read* (regex #"{expected_regex}"))"#)),
@@ -573,12 +599,12 @@ fn create_seatbelt_args_allowlists_explicit_unix_socket_paths_without_proxy() {
         &SandboxPolicy::new_read_only_policy(),
         cwd.path(),
     );
+    let effective_permissions = effective_permissions(&file_system_policy, cwd.path());
     let extra_allow_unix_sockets = vec![absolute_path("/tmp/codex-browser-use")];
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
-        file_system_sandbox_policy: &file_system_policy,
+        effective_filesystem_permissions: &effective_permissions,
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
@@ -613,6 +639,7 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
         &SandboxPolicy::new_read_only_policy(),
         cwd.path(),
     );
+    let effective_permissions = effective_permissions(&file_system_policy, cwd.path());
     let network_socket = "/tmp/codex-proxy-use";
     let explicit_socket = "/tmp/codex-browser-use";
     let mut network_config = NetworkProxyConfig::default();
@@ -634,9 +661,8 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
 
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
-        file_system_sandbox_policy: &file_system_policy,
+        effective_filesystem_permissions: &effective_permissions,
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: Some(&network_proxy),
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
@@ -672,12 +698,12 @@ fn create_seatbelt_args_preserves_full_network_with_explicit_unix_socket_paths()
         &SandboxPolicy::new_read_only_policy(),
         cwd.path(),
     );
+    let effective_permissions = effective_permissions(&file_system_policy, cwd.path());
     let extra_allow_unix_sockets = vec![absolute_path("/tmp/codex-browser-use")];
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
-        file_system_sandbox_policy: &file_system_policy,
+        effective_filesystem_permissions: &effective_permissions,
         network_sandbox_policy: NetworkSandboxPolicy::Enabled,
-        sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,

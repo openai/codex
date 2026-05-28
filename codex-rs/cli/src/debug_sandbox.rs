@@ -17,6 +17,10 @@ use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+#[cfg(target_os = "macos")]
+use codex_sandboxing::EffectiveFilesystemPermissions;
+#[cfg(target_os = "macos")]
+use codex_sandboxing::FilesystemPermissionsContext;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile;
 #[cfg(target_os = "macos")]
@@ -260,13 +264,21 @@ async fn run_command_under_sandbox(
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
-            let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
-            let network_sandbox_policy = config.permissions.network_sandbox_policy();
+            let permission_profile = config.permissions.effective_permission_profile();
+            let network_sandbox_policy = permission_profile.network_sandbox_policy();
+            let effective_filesystem_permissions = EffectiveFilesystemPermissions::from_profile(
+                &permission_profile,
+                FilesystemPermissionsContext {
+                    policy_evaluation_cwd: &permission_profile_cwd,
+                },
+            )
+            .map_err(|err| {
+                anyhow::anyhow!("failed to derive effective filesystem permissions: {err}")
+            })?;
             let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                 command,
-                file_system_sandbox_policy: &file_system_sandbox_policy,
+                effective_filesystem_permissions: &effective_filesystem_permissions,
                 network_sandbox_policy,
-                sandbox_policy_cwd: permission_profile_cwd.as_path(),
                 enforce_managed_network: false,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,

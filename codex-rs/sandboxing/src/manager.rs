@@ -217,9 +217,8 @@ impl SandboxManager {
 
                 let mut args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                     command: os_argv_to_strings(argv),
-                    file_system_sandbox_policy: &effective_file_system_policy,
+                    effective_filesystem_permissions: &effective_filesystem_permissions,
                     network_sandbox_policy: effective_network_policy,
-                    sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
                     extra_allow_unix_sockets: &[],

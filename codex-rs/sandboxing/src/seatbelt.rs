@@ -1,7 +1,10 @@
+use crate::EffectiveFilesystemPermissions;
+use crate::FilesystemPermissionsContext;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
 use codex_network_proxy::proxy_url_env_value;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
@@ -404,9 +407,8 @@ fn seatbelt_protected_metadata_name_regex(root: &AbsolutePathBuf, name: &str) ->
 }
 
 fn protected_metadata_names_for_writable_root(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     writable_root: &WritableRoot,
-    cwd: &Path,
 ) -> Vec<String> {
     let mut names = writable_root.protected_metadata_names.clone();
     for name in PROTECTED_METADATA_PATH_NAMES {
@@ -414,7 +416,7 @@ fn protected_metadata_names_for_writable_root(
             continue;
         }
         let path = writable_root.root.join(*name);
-        if !file_system_sandbox_policy.can_write_path_with_cwd(path.as_path(), cwd) {
+        if !effective_filesystem_permissions.can_write(path.as_path()) {
             names.push((*name).to_string());
         }
     }
@@ -422,25 +424,24 @@ fn protected_metadata_names_for_writable_root(
 }
 
 fn build_seatbelt_unreadable_glob_policy(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
 ) -> String {
     // Seatbelt does not understand the filesystem policy's glob syntax directly.
     // Convert each unreadable pattern into an anchored regex deny rule and apply
     // it to both reads and unlink-style writes so a denied path cannot be probed
     // through destructive filesystem operations.
-    let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
-    if unreadable_globs.is_empty() {
+    if effective_filesystem_permissions.unreadable_globs.is_empty() {
         return String::new();
     }
 
     let mut policy_components = Vec::new();
-    for pattern in unreadable_globs {
+    for glob in &effective_filesystem_permissions.unreadable_globs {
+        let pattern = glob.pattern();
         let mut regexes = BTreeSet::new();
-        if let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern) {
+        if let Some(regex) = seatbelt_regex_for_unreadable_glob(pattern) {
             regexes.insert(regex);
         }
-        if let Some(pattern) = canonicalize_glob_static_prefix_for_sandbox(&pattern)
+        if let Some(pattern) = canonicalize_glob_static_prefix_for_sandbox(pattern)
             && let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern)
         {
             regexes.insert(regex);
@@ -573,15 +574,31 @@ fn create_seatbelt_command_args_for_legacy_policy(
     enforce_managed_network: bool,
     network: Option<&NetworkProxy>,
 ) -> Vec<String> {
+    let legacy_workspace_root = AbsolutePathBuf::from_absolute_path(sandbox_policy_cwd)
+        .unwrap_or_else(|err| panic!("sandbox policy cwd should be absolute: {err}"));
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         sandbox_policy,
         sandbox_policy_cwd,
+    )
+    .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&legacy_workspace_root));
+    let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
     );
+    let effective_filesystem_permissions = EffectiveFilesystemPermissions::from_profile(
+        &permission_profile,
+        FilesystemPermissionsContext {
+            policy_evaluation_cwd: &legacy_workspace_root,
+        },
+    )
+    .unwrap_or_else(|err| {
+        panic!("legacy filesystem policy should yield effective permissions: {err}")
+    });
     create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command,
-        file_system_sandbox_policy: &file_system_sandbox_policy,
-        network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
-        sandbox_policy_cwd,
+        effective_filesystem_permissions: &effective_filesystem_permissions,
+        network_sandbox_policy,
         enforce_managed_network,
         network,
         extra_allow_unix_sockets: &[],
@@ -591,9 +608,8 @@ fn create_seatbelt_command_args_for_legacy_policy(
 #[derive(Debug)]
 pub struct CreateSeatbeltCommandArgsParams<'a> {
     pub command: Vec<String>,
-    pub file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    pub effective_filesystem_permissions: &'a EffectiveFilesystemPermissions,
     pub network_sandbox_policy: NetworkSandboxPolicy,
-    pub sandbox_policy_cwd: &'a Path,
     pub enforce_managed_network: bool,
     pub network: Option<&'a NetworkProxy>,
     pub extra_allow_unix_sockets: &'a [AbsolutePathBuf],
@@ -602,18 +618,16 @@ pub struct CreateSeatbeltCommandArgsParams<'a> {
 pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -> Vec<String> {
     let CreateSeatbeltCommandArgsParams {
         command,
-        file_system_sandbox_policy,
+        effective_filesystem_permissions,
         network_sandbox_policy,
-        sandbox_policy_cwd,
         enforce_managed_network,
         network,
         extra_allow_unix_sockets,
     } = args;
 
-    let unreadable_roots =
-        file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
+    let unreadable_roots = effective_filesystem_permissions.unreadable_roots.clone();
     let (file_write_policy, file_write_dir_params) =
-        if file_system_sandbox_policy.has_full_disk_write_access() {
+        if effective_filesystem_permissions.has_full_disk_write_access() {
             if unreadable_roots.is_empty() {
                 // Allegedly, this is more permissive than `(allow file-write*)`.
                 (
@@ -635,14 +649,14 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
             build_seatbelt_access_policy(
                 "file-write*",
                 "WRITABLE_ROOT",
-                file_system_sandbox_policy
-                    .get_writable_roots_with_cwd(sandbox_policy_cwd)
-                    .into_iter()
+                effective_filesystem_permissions
+                    .writable_roots
+                    .iter()
+                    .cloned()
                     .map(|root| SeatbeltAccessRoot {
                         protected_metadata_names: protected_metadata_names_for_writable_root(
-                            file_system_sandbox_policy,
+                            effective_filesystem_permissions,
                             &root,
-                            sandbox_policy_cwd,
                         ),
                         root: root.root,
                         excluded_subpaths: root.read_only_subpaths,
@@ -652,7 +666,7 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
         };
 
     let (file_read_policy, file_read_dir_params) =
-        if file_system_sandbox_policy.has_full_disk_read_access() {
+        if effective_filesystem_permissions.has_full_disk_read_access() {
             if unreadable_roots.is_empty() {
                 (
                     "; allow read-only file operations\n(allow file-read*)".to_string(),
@@ -677,9 +691,10 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
             let (policy, params) = build_seatbelt_access_policy(
                 "file-read*",
                 "READABLE_ROOT",
-                file_system_sandbox_policy
-                    .get_readable_roots_with_cwd(sandbox_policy_cwd)
-                    .into_iter()
+                effective_filesystem_permissions
+                    .readable_roots
+                    .iter()
+                    .cloned()
                     .map(|root| SeatbeltAccessRoot {
                         excluded_subpaths: unreadable_roots
                             .iter()
@@ -705,9 +720,8 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
 
-    let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
-    let deny_read_policy =
-        build_seatbelt_unreadable_glob_policy(file_system_sandbox_policy, sandbox_policy_cwd);
+    let include_platform_defaults = effective_filesystem_permissions.include_platform_defaults;
+    let deny_read_policy = build_seatbelt_unreadable_glob_policy(effective_filesystem_permissions);
     let mut policy_sections = vec![
         MACOS_SEATBELT_BASE_POLICY.to_string(),
         file_read_policy,
