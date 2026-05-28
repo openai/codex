@@ -147,31 +147,6 @@ pub(crate) struct TurnMetadataBag {
 }
 
 impl TurnMetadataBag {
-    fn new(
-        request_kind: Option<TurnMetadataRequestKind>,
-        session_id: Option<String>,
-        thread_id: Option<String>,
-        forked_from_thread_id: Option<ThreadId>,
-        parent_thread_id: Option<ThreadId>,
-        subagent_kind: Option<&'static str>,
-        thread_source: Option<ThreadSource>,
-        turn_id: Option<String>,
-        sandbox: Option<String>,
-    ) -> Self {
-        Self {
-            request_kind,
-            session_id,
-            thread_id,
-            forked_from_thread_id,
-            parent_thread_id,
-            subagent_kind,
-            thread_source,
-            turn_id,
-            workspaces: BTreeMap::new(),
-            sandbox,
-        }
-    }
-
     fn with_workspace_git_metadata(
         mut self,
         repo_root: Option<String>,
@@ -244,17 +219,18 @@ pub async fn build_turn_metadata_header(
         get_has_changes(cwd),
     );
     let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
-    TurnMetadataBag::new(
-        Some(TurnMetadataRequestKind::Memory),
-        /*session_id*/ None,
-        /*thread_id*/ None,
-        /*forked_from_thread_id*/ None,
-        /*parent_thread_id*/ None,
-        /*subagent_kind*/ None,
-        /*thread_source*/ None,
-        /*turn_id*/ None,
-        sandbox.map(ToString::to_string),
-    )
+    TurnMetadataBag {
+        request_kind: Some(TurnMetadataRequestKind::Memory),
+        session_id: None,
+        thread_id: None,
+        forked_from_thread_id: None,
+        parent_thread_id: None,
+        subagent_kind: None,
+        thread_source: None,
+        turn_id: None,
+        workspaces: BTreeMap::new(),
+        sandbox: sandbox.map(ToString::to_string),
+    }
     .with_workspace_git_metadata(
         repo_root,
         Some(WorkspaceGitMetadata {
@@ -302,17 +278,28 @@ impl TurnMetadataState {
             )
             .to_string(),
         );
-        let base_metadata = TurnMetadataBag::new(
-            /*request_kind*/ None,
-            Some(session_id),
-            Some(thread_id),
+        let subagent_kind = match session_source {
+            SessionSource::SubAgent(subagent_source) => Some(subagent_source.kind()),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Custom(_)
+            | SessionSource::Internal(_)
+            | SessionSource::Unknown => None,
+        };
+        let base_metadata = TurnMetadataBag {
+            request_kind: None,
+            session_id: Some(session_id),
+            thread_id: Some(thread_id),
             forked_from_thread_id,
-            session_source.parent_thread_id(),
-            session_source.subagent_kind(),
+            parent_thread_id: session_source.parent_thread_id(),
+            subagent_kind,
             thread_source,
-            Some(turn_id),
+            turn_id: Some(turn_id),
+            workspaces: BTreeMap::new(),
             sandbox,
-        );
+        };
         let base_header = base_metadata.to_header_value();
 
         Self {

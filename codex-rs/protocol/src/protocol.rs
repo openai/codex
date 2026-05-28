@@ -2636,18 +2636,9 @@ impl SessionSource {
                 .is_some_and(|product| product.matches_product_restriction(products))
     }
 
-    pub fn subagent_kind(&self) -> Option<&'static str> {
-        self.subagent_source().map(SubAgentSource::kind)
-    }
-
     pub fn parent_thread_id(&self) -> Option<ThreadId> {
-        self.subagent_source()
-            .and_then(SubAgentSource::parent_thread_id)
-    }
-
-    fn subagent_source(&self) -> Option<&SubAgentSource> {
         match self {
-            SessionSource::SubAgent(subagent_source) => Some(subagent_source),
+            SessionSource::SubAgent(subagent_source) => subagent_source.parent_thread_id(),
             SessionSource::Cli
             | SessionSource::VSCode
             | SessionSource::Exec

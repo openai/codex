@@ -222,7 +222,7 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
-        None,
+        /*forked_from_thread_id*/ None,
         &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
