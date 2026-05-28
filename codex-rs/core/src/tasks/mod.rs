@@ -787,6 +787,12 @@ impl Session {
         if !cleared_active_turn {
             return;
         }
+        if let Err(err) = self
+            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+            .await
+        {
+            warn!("failed to apply goal runtime maybe-continue event: {err}");
+        }
         self.emit_thread_idle_lifecycle_if_idle().await;
     }
 
