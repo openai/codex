@@ -5,12 +5,14 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as _;
 use serde::de::value::Error as ValueDeserializerError;
 use serde::de::value::StrDeserializer;
 use std::collections::BTreeMap;
 use std::fmt;
+use toml::Value as TomlValue;
 use wildmatch::WildMatchPattern;
 
 use super::requirements_exec_policy::RequirementsExecPolicy;
@@ -749,7 +751,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub allowed_permissions: Option<Vec<String>>,
-    pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
+    pub remote_sandbox_config: Option<RemoteSandboxConfigsToml>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     pub allow_managed_hooks_only: Option<bool>,
     pub allow_appshots: Option<bool>,
@@ -766,6 +768,63 @@ pub struct ConfigRequirementsToml {
     pub network: Option<NetworkRequirementsToml>,
     pub permissions: Option<PermissionsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RemoteSandboxConfigsToml {
+    pub entries: Vec<RemoteSandboxConfigToml>,
+}
+
+impl RemoteSandboxConfigsToml {
+    fn matching_allowed_sandbox_modes(
+        &self,
+        hostname: &str,
+    ) -> Option<Vec<SandboxModeRequirement>> {
+        let mut matching_configs = self
+            .entries
+            .iter()
+            .filter(|config| hostname_matches_any_pattern(hostname, &config.hostname_patterns));
+        let first_config = matching_configs.next()?;
+        let mut allowed_sandbox_modes = first_config.allowed_sandbox_modes.clone();
+        for config in matching_configs {
+            allowed_sandbox_modes.retain(|mode| config.allowed_sandbox_modes.contains(mode));
+        }
+        Some(allowed_sandbox_modes)
+    }
+}
+
+impl From<Vec<RemoteSandboxConfigToml>> for RemoteSandboxConfigsToml {
+    fn from(entries: Vec<RemoteSandboxConfigToml>) -> Self {
+        Self { entries }
+    }
+}
+
+impl<'de> Deserialize<'de> for RemoteSandboxConfigsToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match TomlValue::deserialize(deserializer)? {
+            TomlValue::Array(entries) => Ok(Self {
+                entries: entries
+                    .into_iter()
+                    .map(RemoteSandboxConfigToml::deserialize)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(D::Error::custom)?,
+            }),
+            TomlValue::Table(entries) => {
+                let entries = entries
+                    .into_iter()
+                    .map(|(_, entry)| RemoteSandboxConfigToml::deserialize(entry))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(D::Error::custom)?;
+                Ok(Self { entries })
+            }
+            value => Err(D::Error::custom(format!(
+                "expected array or table for remote_sandbox_config, got {value:?}"
+            ))),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -999,13 +1058,12 @@ impl ConfigRequirementsToml {
         let Some(hostname) = hostname.and_then(normalize_hostname) else {
             return;
         };
-        let Some(matched_config) = remote_sandbox_config
-            .iter()
-            .find(|config| hostname_matches_any_pattern(&hostname, &config.hostname_patterns))
+        let Some(allowed_sandbox_modes) =
+            remote_sandbox_config.matching_allowed_sandbox_modes(&hostname)
         else {
             return;
         };
-        self.allowed_sandbox_modes = Some(matched_config.allowed_sandbox_modes.clone());
+        self.allowed_sandbox_modes = Some(allowed_sandbox_modes);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -2458,13 +2516,16 @@ allowed_approvals_reviewers = ["user"]
 
         assert_eq!(
             config.remote_sandbox_config,
-            Some(vec![RemoteSandboxConfigToml {
-                hostname_patterns: vec!["*.org".to_string(), "runner-??.ci".to_string()],
-                allowed_sandbox_modes: vec![
-                    SandboxModeRequirement::ReadOnly,
-                    SandboxModeRequirement::WorkspaceWrite,
-                ],
-            }])
+            Some(
+                vec![RemoteSandboxConfigToml {
+                    hostname_patterns: vec!["*.org".to_string(), "runner-??.ci".to_string()],
+                    allowed_sandbox_modes: vec![
+                        SandboxModeRequirement::ReadOnly,
+                        SandboxModeRequirement::WorkspaceWrite,
+                    ],
+                }]
+                .into()
+            )
         );
 
         let err = from_str::<ConfigRequirementsToml>(
@@ -2484,17 +2545,63 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn remote_sandbox_config_first_match_overrides_top_level() -> Result<()> {
+    fn deserialize_remote_sandbox_config_accepts_keyed_map() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+                [remote_sandbox_config.devboxes]
+                hostname_patterns = ["*.dev.example.com", "devbox-*"]
+                allowed_sandbox_modes = ["read-only", "workspace-write"]
+
+                [remote_sandbox_config.ci]
+                hostname_patterns = ["runner-*.ci.example.com", "*.ci.example.com"]
+                allowed_sandbox_modes = ["read-only", "danger-full-access"]
+            "#,
+        )?;
+
+        assert_eq!(
+            config.remote_sandbox_config,
+            Some(
+                vec![
+                    RemoteSandboxConfigToml {
+                        hostname_patterns: vec![
+                            "*.dev.example.com".to_string(),
+                            "devbox-*".to_string(),
+                        ],
+                        allowed_sandbox_modes: vec![
+                            SandboxModeRequirement::ReadOnly,
+                            SandboxModeRequirement::WorkspaceWrite,
+                        ],
+                    },
+                    RemoteSandboxConfigToml {
+                        hostname_patterns: vec![
+                            "runner-*.ci.example.com".to_string(),
+                            "*.ci.example.com".to_string(),
+                        ],
+                        allowed_sandbox_modes: vec![
+                            SandboxModeRequirement::ReadOnly,
+                            SandboxModeRequirement::DangerFullAccess,
+                        ],
+                    },
+                ]
+                .into()
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn remote_sandbox_config_matching_entries_intersect_and_override_top_level() -> Result<()> {
         let source = RequirementSource::CloudRequirements;
         let mut requirements_toml: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
 
-                [[remote_sandbox_config]]
+                [remote_sandbox_config.build]
                 hostname_patterns = ["build-*.example.com"]
                 allowed_sandbox_modes = ["read-only", "workspace-write"]
 
-                [[remote_sandbox_config]]
+                [remote_sandbox_config.build_01]
                 hostname_patterns = ["build-01.example.com"]
                 allowed_sandbox_modes = ["read-only", "danger-full-access"]
             "#,
@@ -2508,34 +2615,18 @@ allowed_approvals_reviewers = ["user"]
                 .allowed_sandbox_modes
                 .as_ref()
                 .map(|sourced| sourced.value.clone()),
-            Some(vec![
-                SandboxModeRequirement::ReadOnly,
-                SandboxModeRequirement::WorkspaceWrite,
-            ])
+            Some(vec![SandboxModeRequirement::ReadOnly])
         );
 
         let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
-        let root = if cfg!(windows) { "C:\\repo" } else { "/repo" };
-        let workspace_write_profile = PermissionProfile::workspace_write_with(
-            &[AbsolutePathBuf::from_absolute_path(root)?],
-            NetworkSandboxPolicy::Restricted,
-            /*exclude_tmpdir_env_var*/ false,
-            /*exclude_slash_tmp*/ false,
-        );
-        assert!(
-            requirements
-                .permission_profile
-                .can_set(&workspace_write_profile)
-                .is_ok()
-        );
         assert_eq!(
             requirements
                 .permission_profile
-                .can_set(&PermissionProfile::Disabled),
+                .can_set(&PermissionProfile::workspace_write()),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",
-                candidate: "DangerFullAccess".into(),
-                allowed: "[ReadOnly, WorkspaceWrite]".into(),
+                candidate: "WorkspaceWrite".into(),
+                allowed: "[ReadOnly]".into(),
                 requirement_source: source,
             })
         );

@@ -1802,7 +1802,7 @@ async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::
         r#"
             allowed_sandbox_modes = ["read-only"]
 
-            [[remote_sandbox_config]]
+            [remote_sandbox_config.any_host]
             hostname_patterns = ["*"]
             allowed_sandbox_modes = ["read-only", "workspace-write"]
         "#,
