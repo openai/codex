@@ -15,6 +15,8 @@ use crate::events::CodexDynamicToolCallEventParams;
 use crate::events::CodexDynamicToolCallEventRequest;
 use crate::events::CodexFileChangeEventParams;
 use crate::events::CodexFileChangeEventRequest;
+use crate::events::CodexGoalEventParams;
+use crate::events::CodexGoalEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexImageGenerationEventParams;
 use crate::events::CodexImageGenerationEventRequest;
@@ -33,6 +35,9 @@ use crate::events::CodexTurnSteerEventRequest;
 use crate::events::CodexWebSearchEventParams;
 use crate::events::CodexWebSearchEventRequest;
 use crate::events::FinalApprovalOutcome;
+use crate::events::GoalEventKind;
+use crate::events::GoalEventSource;
+use crate::events::GoalStatus;
 use crate::events::GuardianReviewEventParams;
 use crate::events::GuardianReviewEventPayload;
 use crate::events::GuardianReviewEventRequest;
@@ -105,6 +110,7 @@ use codex_app_server_protocol::RequestPermissionProfile;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
+use codex_app_server_protocol::ThreadGoalStatus as AppServerThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
@@ -212,6 +218,16 @@ impl<'a> AnalyticsDropSite<'a> {
         }
     }
 
+    fn goal(thread_id: &'a str) -> Self {
+        Self {
+            event_name: "goal",
+            thread_id,
+            turn_id: None,
+            review_id: None,
+            item_id: None,
+        }
+    }
+
     fn turn(thread_id: &'a str, turn_id: &'a str) -> Self {
         Self {
             event_name: "turn",
@@ -295,6 +311,8 @@ impl ThreadMetadataState {
 enum RequestState {
     TurnStart(PendingTurnStartState),
     TurnSteer(PendingTurnSteerState),
+    GoalSet { thread_id: String },
+    GoalClear { thread_id: String },
 }
 
 struct PendingTurnStartState {
@@ -592,6 +610,22 @@ impl AnalyticsReducer {
                     }),
                 );
             }
+            ClientRequest::ThreadGoalSet { params, .. } => {
+                self.requests.insert(
+                    (connection_id, request_id),
+                    RequestState::GoalSet {
+                        thread_id: params.thread_id,
+                    },
+                );
+            }
+            ClientRequest::ThreadGoalClear { params, .. } => {
+                self.requests.insert(
+                    (connection_id, request_id),
+                    RequestState::GoalClear {
+                        thread_id: params.thread_id,
+                    },
+                );
+            }
             _ => {}
         }
     }
@@ -815,6 +849,42 @@ impl AnalyticsReducer {
                 response,
             } => {
                 self.ingest_turn_steer_response(connection_id, request_id, response, out);
+            }
+            ClientResponse::ThreadGoalSet {
+                request_id,
+                response,
+            } => {
+                let Some(RequestState::GoalSet { thread_id }) =
+                    self.requests.remove(&(connection_id, request_id))
+                else {
+                    return;
+                };
+                self.emit_goal_event(
+                    connection_id,
+                    thread_id,
+                    GoalEventKind::Set,
+                    Some(analytics_goal_status(response.goal.status)),
+                    out,
+                );
+            }
+            ClientResponse::ThreadGoalClear {
+                request_id,
+                response,
+            } => {
+                let Some(RequestState::GoalClear { thread_id }) =
+                    self.requests.remove(&(connection_id, request_id))
+                else {
+                    return;
+                };
+                if response.cleared {
+                    self.emit_goal_event(
+                        connection_id,
+                        thread_id,
+                        GoalEventKind::Cleared,
+                        /*goal_status*/ None,
+                        out,
+                    );
+                }
             }
             _ => {}
         }
@@ -1051,6 +1121,7 @@ impl AnalyticsReducer {
                     out,
                 );
             }
+            RequestState::GoalSet { .. } | RequestState::GoalClear { .. } => {}
         }
     }
 
@@ -1402,6 +1473,44 @@ impl AnalyticsReducer {
                 created_at: pending_request.created_at,
             },
         }));
+    }
+
+    fn emit_goal_event(
+        &self,
+        connection_id: u64,
+        thread_id: String,
+        goal_event_kind: GoalEventKind,
+        goal_status: Option<GoalStatus>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(connection_state) = self.connections.get(&connection_id) else {
+            return;
+        };
+        let drop_site = AnalyticsDropSite::goal(&thread_id);
+        let Some(thread_metadata) = self
+            .threads
+            .get(drop_site.thread_id)
+            .and_then(|thread| thread.metadata.as_ref())
+        else {
+            warn_missing_analytics_context(&drop_site, MissingAnalyticsContext::ThreadMetadata);
+            return;
+        };
+        out.push(TrackEventRequest::Goal(Box::new(CodexGoalEventRequest {
+            event_type: "codex_goal_event",
+            event_params: CodexGoalEventParams {
+                thread_id,
+                session_id: thread_metadata.session_id.clone(),
+                turn_id: None,
+                app_server_client: connection_state.app_server_client.clone(),
+                runtime: connection_state.runtime.clone(),
+                thread_source: thread_metadata.thread_source,
+                subagent_source: thread_metadata.subagent_source.clone(),
+                parent_thread_id: thread_metadata.parent_thread_id.clone(),
+                goal_event_kind,
+                goal_event_source: GoalEventSource::AppServer,
+                goal_status,
+            },
+        })));
     }
 
     fn emit_review_event(
@@ -2568,6 +2677,17 @@ fn analytics_turn_status(status: codex_app_server_protocol::TurnStatus) -> Optio
         codex_app_server_protocol::TurnStatus::Failed => Some(TurnStatus::Failed),
         codex_app_server_protocol::TurnStatus::Interrupted => Some(TurnStatus::Interrupted),
         codex_app_server_protocol::TurnStatus::InProgress => None,
+    }
+}
+
+fn analytics_goal_status(status: AppServerThreadGoalStatus) -> GoalStatus {
+    match status {
+        AppServerThreadGoalStatus::Active => GoalStatus::Active,
+        AppServerThreadGoalStatus::Paused => GoalStatus::Paused,
+        AppServerThreadGoalStatus::Blocked => GoalStatus::Blocked,
+        AppServerThreadGoalStatus::UsageLimited => GoalStatus::UsageLimited,
+        AppServerThreadGoalStatus::BudgetLimited => GoalStatus::BudgetLimited,
+        AppServerThreadGoalStatus::Complete => GoalStatus::Complete,
     }
 }
 

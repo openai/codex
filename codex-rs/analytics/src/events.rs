@@ -62,6 +62,7 @@ pub(crate) enum TrackEventRequest {
     AppUsed(CodexAppUsedEventRequest),
     HookRun(CodexHookRunEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
+    Goal(Box<CodexGoalEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
     CommandExecution(CodexCommandExecutionEventRequest),
@@ -765,6 +766,51 @@ pub(crate) struct CodexCompactionEventParams {
 pub(crate) struct CodexCompactionEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexCompactionEventParams,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GoalEventKind {
+    Set,
+    Cleared,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GoalEventSource {
+    AppServer,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexGoalEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) session_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) goal_event_kind: GoalEventKind,
+    pub(crate) goal_event_source: GoalEventSource,
+    pub(crate) goal_status: Option<GoalStatus>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexGoalEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexGoalEventParams,
 }
 
 #[derive(Serialize)]

@@ -197,7 +197,10 @@ impl AnalyticsEventsClient {
     ) {
         if !matches!(
             request,
-            ClientRequest::TurnStart { .. } | ClientRequest::TurnSteer { .. }
+            ClientRequest::TurnStart { .. }
+                | ClientRequest::TurnSteer { .. }
+                | ClientRequest::ThreadGoalSet { .. }
+                | ClientRequest::ThreadGoalClear { .. }
         ) {
             return;
         }
@@ -311,6 +314,8 @@ impl AnalyticsEventsClient {
                 | ClientResponsePayload::ThreadFork(_)
                 | ClientResponsePayload::TurnStart(_)
                 | ClientResponsePayload::TurnSteer(_)
+                | ClientResponsePayload::ThreadGoalSet(_)
+                | ClientResponsePayload::ThreadGoalClear(_)
         ) {
             return;
         }

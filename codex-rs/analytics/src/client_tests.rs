@@ -19,6 +19,12 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadGoal;
+use codex_app_server_protocol::ThreadGoalClearParams;
+use codex_app_server_protocol::ThreadGoalClearResponse;
+use codex_app_server_protocol::ThreadGoalSetParams;
+use codex_app_server_protocol::ThreadGoalSetResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
@@ -112,6 +118,27 @@ fn sample_thread_archive_request() -> ClientRequest {
     ClientRequest::ThreadArchive {
         request_id: RequestId::Integer(3),
         params: ThreadArchiveParams {
+            thread_id: "thread-1".to_string(),
+        },
+    }
+}
+
+fn sample_thread_goal_set_request() -> ClientRequest {
+    ClientRequest::ThreadGoalSet {
+        request_id: RequestId::Integer(3),
+        params: ThreadGoalSetParams {
+            thread_id: "thread-1".to_string(),
+            objective: Some("finish task".to_string()),
+            status: Some(ThreadGoalStatus::Active),
+            token_budget: None,
+        },
+    }
+}
+
+fn sample_thread_goal_clear_request() -> ClientRequest {
+    ClientRequest::ThreadGoalClear {
+        request_id: RequestId::Integer(4),
+        params: ThreadGoalClearParams {
             thread_id: "thread-1".to_string(),
         },
     }
@@ -213,6 +240,25 @@ fn sample_turn_steer_response() -> ClientResponsePayload {
     })
 }
 
+fn sample_thread_goal_set_response() -> ClientResponsePayload {
+    ClientResponsePayload::ThreadGoalSet(ThreadGoalSetResponse {
+        goal: ThreadGoal {
+            thread_id: "thread-1".to_string(),
+            objective: "finish task".to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: None,
+            tokens_used: 0,
+            time_used_seconds: 0,
+            created_at: 1,
+            updated_at: 1,
+        },
+    })
+}
+
+fn sample_thread_goal_clear_response() -> ClientResponsePayload {
+    ClientResponsePayload::ThreadGoalClear(ThreadGoalClearResponse { cleared: true })
+}
+
 #[test]
 fn track_request_only_enqueues_analytics_relevant_requests() {
     let (client, mut receiver) = client_with_receiver();
@@ -220,6 +266,8 @@ fn track_request_only_enqueues_analytics_relevant_requests() {
     for (request_id, request) in [
         (RequestId::Integer(1), sample_turn_start_request()),
         (RequestId::Integer(2), sample_turn_steer_request()),
+        (RequestId::Integer(3), sample_thread_goal_set_request()),
+        (RequestId::Integer(4), sample_thread_goal_clear_request()),
     ] {
         client.track_request(/*connection_id*/ 7, request_id, &request);
         assert!(matches!(
@@ -231,7 +279,7 @@ fn track_request_only_enqueues_analytics_relevant_requests() {
     let ignored_request = sample_thread_archive_request();
     client.track_request(
         /*connection_id*/ 7,
-        RequestId::Integer(3),
+        RequestId::Integer(5),
         &ignored_request,
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
@@ -247,6 +295,8 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         (RequestId::Integer(3), sample_thread_fork_response()),
         (RequestId::Integer(4), sample_turn_start_response()),
         (RequestId::Integer(5), sample_turn_steer_response()),
+        (RequestId::Integer(6), sample_thread_goal_set_response()),
+        (RequestId::Integer(7), sample_thread_goal_clear_response()),
     ] {
         client.track_response(/*connection_id*/ 7, request_id, response);
         assert!(matches!(
@@ -257,7 +307,7 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
 
     client.track_response(
         /*connection_id*/ 7,
-        RequestId::Integer(6),
+        RequestId::Integer(8),
         ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));

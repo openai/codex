@@ -96,6 +96,7 @@ use wiremock::matchers::path;
 use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
+use super::analytics::wait_for_analytics_event_param;
 use super::analytics::wait_for_analytics_payload;
 
 #[cfg(windows)]
@@ -1165,7 +1166,8 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
 async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
@@ -1230,6 +1232,19 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/goal/updated"),
     )
     .await??;
+    let set_event = wait_for_analytics_event_param(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "codex_goal_event",
+        "goal_event_kind",
+        "set",
+    )
+    .await?;
+    assert_eq!(set_event["event_params"]["thread_id"], thread.id);
+    assert_eq!(set_event["event_params"]["session_id"], thread.session_id);
+    assert_eq!(set_event["event_params"]["turn_id"], json!(null));
+    assert_eq!(set_event["event_params"]["goal_event_source"], "app_server");
+    assert_eq!(set_event["event_params"]["goal_status"], "active");
 
     let clear_id = mcp
         .send_raw_request(
@@ -1252,6 +1267,21 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/goal/cleared"),
     )
     .await??;
+    let cleared_event = wait_for_analytics_event_param(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "codex_goal_event",
+        "goal_event_kind",
+        "cleared",
+    )
+    .await?;
+    assert_eq!(cleared_event["event_params"]["thread_id"], thread.id);
+    assert_eq!(
+        cleared_event["event_params"]["session_id"],
+        thread.session_id
+    );
+    assert_eq!(cleared_event["event_params"]["turn_id"], json!(null));
+    assert_eq!(cleared_event["event_params"]["goal_status"], json!(null));
 
     let get_id = mcp
         .send_raw_request(

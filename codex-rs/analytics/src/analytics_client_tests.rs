@@ -108,6 +108,13 @@ use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadGoal;
+use codex_app_server_protocol::ThreadGoalClearParams;
+use codex_app_server_protocol::ThreadGoalClearResponse;
+use codex_app_server_protocol::ThreadGoalSetParams;
+use codex_app_server_protocol::ThreadGoalSetResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSource as AppServerThreadSource;
@@ -264,6 +271,53 @@ fn sample_thread_resume_response_with_source(
         active_permission_profile: None,
         reasoning_effort: None,
     })
+}
+
+fn sample_thread_goal(thread_id: &str, status: ThreadGoalStatus) -> ThreadGoal {
+    ThreadGoal {
+        thread_id: thread_id.to_string(),
+        objective: "sensitive objective excluded from analytics".to_string(),
+        status,
+        token_budget: Some(1000),
+        tokens_used: 250,
+        time_used_seconds: 10,
+        created_at: 1,
+        updated_at: 2,
+    }
+}
+
+fn sample_thread_goal_set_request(thread_id: &str, request_id: i64) -> ClientRequest {
+    ClientRequest::ThreadGoalSet {
+        request_id: RequestId::Integer(request_id),
+        params: ThreadGoalSetParams {
+            thread_id: thread_id.to_string(),
+            objective: Some("sensitive objective excluded from analytics".to_string()),
+            status: Some(ThreadGoalStatus::Blocked),
+            token_budget: Some(Some(1000)),
+        },
+    }
+}
+
+fn sample_thread_goal_set_response(
+    thread_id: &str,
+    status: ThreadGoalStatus,
+) -> ClientResponsePayload {
+    ClientResponsePayload::ThreadGoalSet(ThreadGoalSetResponse {
+        goal: sample_thread_goal(thread_id, status),
+    })
+}
+
+fn sample_thread_goal_clear_request(thread_id: &str, request_id: i64) -> ClientRequest {
+    ClientRequest::ThreadGoalClear {
+        request_id: RequestId::Integer(request_id),
+        params: ThreadGoalClearParams {
+            thread_id: thread_id.to_string(),
+        },
+    }
+}
+
+fn sample_thread_goal_clear_response(cleared: bool) -> ClientResponsePayload {
+    ClientResponsePayload::ThreadGoalClear(ThreadGoalClearResponse { cleared })
 }
 
 fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest {
@@ -552,6 +606,27 @@ async fn ingest_initialize(reducer: &mut AnalyticsReducer, out: &mut Vec<TrackEv
             out,
         )
         .await;
+}
+
+async fn ingest_initialized_thread(
+    reducer: &mut AnalyticsReducer,
+    out: &mut Vec<TrackEventRequest>,
+    thread_id: &str,
+) {
+    ingest_initialize(reducer, out).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(1),
+                response: Box::new(sample_thread_start_response(
+                    thread_id, /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            out,
+        )
+        .await;
+    out.clear();
 }
 
 async fn ingest_turn_prerequisites(
@@ -4052,6 +4127,212 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
         json!(null)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(null));
+}
+
+#[tokio::test]
+async fn goal_set_response_emits_event_for_initialized_thread() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_initialized_thread(&mut reducer, &mut out, "thread-2").await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                request: Box::new(sample_thread_goal_set_request(
+                    "thread-2", /*request_id*/ 2,
+                )),
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                response: Box::new(sample_thread_goal_set_response(
+                    "thread-2",
+                    ThreadGoalStatus::Blocked,
+                )),
+            },
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize goal event");
+    assert_eq!(payload["event_type"], json!("codex_goal_event"));
+    assert_eq!(payload["event_params"]["thread_id"], json!("thread-2"));
+    assert_eq!(
+        payload["event_params"]["session_id"],
+        json!("session-thread-2")
+    );
+    assert_eq!(payload["event_params"]["turn_id"], json!(null));
+    assert_eq!(payload["event_params"]["goal_event_kind"], json!("set"));
+    assert_eq!(
+        payload["event_params"]["goal_event_source"],
+        json!("app_server")
+    );
+    assert_eq!(payload["event_params"]["goal_status"], json!("blocked"));
+    assert!(payload["event_params"].get("objective").is_none());
+    assert!(payload["event_params"].get("token_budget").is_none());
+    assert!(payload["event_params"].get("tokens_used").is_none());
+    assert!(payload["event_params"].get("time_used_seconds").is_none());
+}
+
+#[tokio::test]
+async fn goal_clear_emits_only_when_an_existing_goal_is_cleared() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_initialized_thread(&mut reducer, &mut out, "thread-2").await;
+    for (request_id, cleared) in [(2, false), (3, true)] {
+        reducer
+            .ingest(
+                AnalyticsFact::ClientRequest {
+                    connection_id: 7,
+                    request_id: RequestId::Integer(request_id),
+                    request: Box::new(sample_thread_goal_clear_request("thread-2", request_id)),
+                },
+                &mut out,
+            )
+            .await;
+        reducer
+            .ingest(
+                AnalyticsFact::ClientResponse {
+                    connection_id: 7,
+                    request_id: RequestId::Integer(request_id),
+                    response: Box::new(sample_thread_goal_clear_response(cleared)),
+                },
+                &mut out,
+            )
+            .await;
+    }
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize goal clear event");
+    assert_eq!(payload["event_type"], json!("codex_goal_event"));
+    assert_eq!(payload["event_params"]["goal_event_kind"], json!("cleared"));
+    assert_eq!(
+        payload["event_params"]["goal_event_source"],
+        json!("app_server")
+    );
+    assert_eq!(payload["event_params"]["goal_status"], json!(null));
+    assert_eq!(payload["event_params"]["turn_id"], json!(null));
+}
+
+#[tokio::test]
+async fn goal_set_error_discards_pending_request() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_initialized_thread(&mut reducer, &mut out, "thread-2").await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                request: Box::new(sample_thread_goal_set_request(
+                    "thread-2", /*request_id*/ 2,
+                )),
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ErrorResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                error: JSONRPCErrorError {
+                    code: -32600,
+                    message: "goal update failed".to_string(),
+                    data: None,
+                },
+                error_type: None,
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                response: Box::new(sample_thread_goal_set_response(
+                    "thread-2",
+                    ThreadGoalStatus::Active,
+                )),
+            },
+            &mut out,
+        )
+        .await;
+
+    assert!(out.is_empty());
+}
+
+#[tokio::test]
+async fn goal_events_require_initialized_context_and_ignore_notifications() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_initialize(&mut reducer, &mut out).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                request: Box::new(sample_thread_goal_set_request(
+                    "thread-2", /*request_id*/ 2,
+                )),
+            },
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                response: Box::new(sample_thread_goal_set_response(
+                    "thread-2",
+                    ThreadGoalStatus::Active,
+                )),
+            },
+            &mut out,
+        )
+        .await;
+    assert!(out.is_empty());
+
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut out,
+        )
+        .await;
+    out.clear();
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::ThreadGoalUpdated(
+                ThreadGoalUpdatedNotification {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: None,
+                    goal: sample_thread_goal("thread-2", ThreadGoalStatus::Active),
+                },
+            ))),
+            &mut out,
+        )
+        .await;
+
+    assert!(out.is_empty());
 }
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
