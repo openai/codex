@@ -14,18 +14,6 @@ Install the SDK:
 pip install openai-codex
 ```
 
-For reproducible environments, install this release exactly:
-
-```bash
-pip install openai-codex==0.1.0b1
-```
-
-The SDK requires Python `>=3.10` and installs its compatible Codex runtime
-dependency automatically. While beta releases are the only published SDK
-releases, the normal install command selects the latest beta. After a stable
-release exists, use `pip install --pre openai-codex` to explicitly select a
-newer prerelease.
-
 ## Quickstart
 
 The SDK reuses your existing Codex authentication when one is already
