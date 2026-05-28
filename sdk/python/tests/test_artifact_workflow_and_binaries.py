@@ -81,11 +81,7 @@ def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
     fmt_recipe = lines[fmt_index:next_recipe_index]
     actual = {
         "working_directory": lines[0],
-        "previous_comment": next(
-            line
-            for line in reversed(lines[:fmt_index])
-            if line.startswith("#")
-        ),
+        "previous_comment": next(line for line in reversed(lines[:fmt_index]) if line.startswith("#")),
         "commands": [line.strip() for line in fmt_recipe[1:] if line.strip()],
     }
     expected = {
