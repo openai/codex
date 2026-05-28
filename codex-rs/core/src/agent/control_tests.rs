@@ -1412,6 +1412,94 @@ async fn spawn_agent_releases_slot_after_shutdown() {
 }
 
 #[tokio::test]
+async fn spawn_agent_reaps_missing_agent_before_enforcing_limit() {
+    let max_threads = 1usize;
+    let (_home, config) = test_config_with_cli_overrides(vec![(
+        "agents.max_threads".to_string(),
+        TomlValue::Integer(max_threads as i64),
+    )])
+    .await;
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let control = manager.agent_control();
+
+    let stale_agent_id = control
+        .spawn_agent(
+            config.clone(),
+            text_input("hello"),
+            /*session_source*/ None,
+        )
+        .await
+        .expect("spawn_agent should succeed");
+    let stale_thread = manager
+        .remove_thread(&stale_agent_id)
+        .await
+        .expect("stale agent should be loaded before removal");
+    stale_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("removed thread should still accept shutdown");
+    stale_thread.wait_until_terminated().await;
+    assert_eq!(control.state.live_agents().len(), 1);
+
+    let replacement_agent_id = control
+        .spawn_agent(
+            config.clone(),
+            text_input("hello again"),
+            /*session_source*/ None,
+        )
+        .await
+        .expect("spawn_agent should reap the stale slot before enforcing the limit");
+    assert_eq!(control.state.live_agents().len(), 1);
+
+    let _ = control
+        .shutdown_live_agent(replacement_agent_id)
+        .await
+        .expect("shutdown replacement agent");
+}
+
+#[tokio::test]
+async fn list_agents_reaps_shutdown_agents() {
+    let (_home, config) = test_config().await;
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let control = manager.agent_control();
+
+    let agent_id = control
+        .spawn_agent(
+            config.clone(),
+            text_input("hello"),
+            /*session_source*/ None,
+        )
+        .await
+        .expect("spawn_agent should succeed");
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("agent thread should be loaded");
+    thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("agent should accept shutdown");
+    thread.wait_until_terminated().await;
+
+    let agents = control
+        .list_agents(&SessionSource::Exec, /*path_prefix*/ None)
+        .await
+        .expect("list_agents should succeed");
+    assert_eq!(agents, Vec::new());
+    assert_eq!(control.state.live_agents().len(), 0);
+}
+
+#[tokio::test]
 async fn spawn_agent_limit_shared_across_clones() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(

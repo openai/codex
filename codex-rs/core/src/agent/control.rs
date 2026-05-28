@@ -218,6 +218,7 @@ impl AgentControl {
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
         let state = self.upgrade()?;
+        self.reap_unusable_agents(&state).await;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
@@ -590,6 +591,7 @@ impl AgentControl {
         }
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
+        self.reap_unusable_agents(&state).await;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -762,6 +764,29 @@ impl AgentControl {
         result
     }
 
+    async fn reap_unusable_agents(&self, state: &Arc<ThreadManagerState>) {
+        for metadata in self.state.live_agents() {
+            let Some(thread_id) = metadata.agent_id else {
+                continue;
+            };
+            match state.get_thread(thread_id).await {
+                Ok(thread) => {
+                    if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+                        thread.wait_until_terminated().await;
+                        let _ = state.remove_thread(&thread_id).await;
+                        self.state.release_spawned_thread(thread_id);
+                    }
+                }
+                Err(CodexErr::ThreadNotFound(_)) => {
+                    self.state.release_spawned_thread(thread_id);
+                }
+                Err(err) => {
+                    warn!("failed to inspect live agent {thread_id}: {err}");
+                }
+            }
+        }
+    }
+
     /// Submit a shutdown request for a live agent without marking it explicitly closed in
     /// persisted spawn-edge state.
     pub(crate) async fn shutdown_live_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
@@ -788,6 +813,7 @@ impl AgentControl {
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
+        let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
         if let Ok(thread) = state.get_thread(agent_id).await
             && let Some(state_db_ctx) = thread.state_db()
             && let Err(err) = state_db_ctx
@@ -796,7 +822,12 @@ impl AgentControl {
         {
             warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
         }
-        Box::pin(self.shutdown_agent_tree(agent_id)).await
+        match Box::pin(self.shutdown_agent_tree(agent_id)).await {
+            Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) if known_agent => {
+                Ok(String::new())
+            }
+            result => result,
+        }
     }
 
     /// Shut down `agent_id` and any live descendants reachable from the in-memory spawn tree.
@@ -919,6 +950,7 @@ impl AgentControl {
         path_prefix: Option<&str>,
     ) -> CodexResult<Vec<ListedAgent>> {
         let state = self.upgrade()?;
+        self.reap_unusable_agents(&state).await;
         let resolved_prefix = path_prefix
             .map(|prefix| {
                 current_session_source
