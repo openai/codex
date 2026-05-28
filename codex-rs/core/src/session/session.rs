@@ -1039,7 +1039,6 @@ impl Session {
                     crate::guardian::prompt_cache_key_override_for_review_session(
                         &session_configuration.session_source,
                         session_configuration.forked_from_thread_id,
-                        config.as_ref(),
                     ),
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
