@@ -254,13 +254,6 @@ impl RequestOrigin {
             .or_else(|| default_port_for_scheme(&scheme))?;
         Some(Self { scheme, host, port })
     }
-
-    fn cache_key(&self, include_auto_detect: bool) -> String {
-        format!(
-            "{}://{}:{}:auto_detect={include_auto_detect}",
-            self.scheme, self.host, self.port
-        )
-    }
 }
 
 fn default_port_for_scheme(scheme: &str) -> Option<u16> {
@@ -292,12 +285,12 @@ fn resolve_system_proxy(
     origin: &RequestOrigin,
     include_auto_detect: bool,
 ) -> SystemProxyDecision {
-    if let Some(decision) = cached_system_proxy_decision(origin, include_auto_detect) {
+    if let Some(decision) = cached_system_proxy_decision(request_url, include_auto_detect) {
         return decision;
     }
 
     let decision = resolve_platform_system_proxy(request_url, origin, include_auto_detect);
-    cache_system_proxy_decision(origin, include_auto_detect, decision.clone());
+    cache_system_proxy_decision(request_url, include_auto_detect, decision.clone());
     decision
 }
 
@@ -332,12 +325,12 @@ static SYSTEM_PROXY_CACHE: OnceLock<Mutex<HashMap<String, CachedSystemProxyDecis
     OnceLock::new();
 
 fn cached_system_proxy_decision(
-    origin: &RequestOrigin,
+    request_url: &str,
     include_auto_detect: bool,
 ) -> Option<SystemProxyDecision> {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().ok()?;
-    let key = origin.cache_key(include_auto_detect);
+    let key = system_proxy_cache_key(request_url, include_auto_detect);
     let cached = cache.get(&key)?;
     if cached.expires_at > Instant::now() {
         return Some(cached.decision.clone());
@@ -347,20 +340,24 @@ fn cached_system_proxy_decision(
 }
 
 fn cache_system_proxy_decision(
-    origin: &RequestOrigin,
+    request_url: &str,
     include_auto_detect: bool,
     decision: SystemProxyDecision,
 ) {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut cache) = cache.lock() {
         cache.insert(
-            origin.cache_key(include_auto_detect),
+            system_proxy_cache_key(request_url, include_auto_detect),
             CachedSystemProxyDecision {
                 decision,
                 expires_at: Instant::now() + SYSTEM_PROXY_CACHE_TTL,
             },
         );
     }
+}
+
+fn system_proxy_cache_key(request_url: &str, include_auto_detect: bool) -> String {
+    format!("{request_url}:auto_detect={include_auto_detect}")
 }
 
 fn conventional_proxy_env_present() -> bool {
@@ -627,5 +624,13 @@ mod tests {
         assert!(no_proxy_matches_origin("*.openai.com", &origin));
         assert!(no_proxy_matches_origin("auth.openai.com:443", &origin));
         assert!(!no_proxy_matches_origin("auth.openai.com:8443", &origin));
+    }
+
+    #[test]
+    fn system_proxy_cache_key_preserves_url_specific_pac_decisions() {
+        assert_ne!(
+            system_proxy_cache_key("https://auth.openai.com/oauth/token", false),
+            system_proxy_cache_key("https://auth.openai.com/oauth/revoke", false)
+        );
     }
 }

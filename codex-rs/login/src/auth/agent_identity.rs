@@ -1,10 +1,11 @@
 use codex_agent_identity::AgentIdentityKey;
+use codex_agent_identity::agent_task_registration_url;
 use codex_agent_identity::register_agent_task;
 use codex_client::OutboundProxyConfig;
 use codex_protocol::account::PlanType as AccountPlanType;
 use std::env;
 
-use crate::default_client::build_auth_reqwest_client_with_proxy_config;
+use crate::default_client::build_default_reqwest_client_for_auth_route;
 
 use super::storage::AgentIdentityAuthRecord;
 
@@ -27,8 +28,10 @@ impl AgentIdentityAuth {
         outbound_proxy_config: Option<&OutboundProxyConfig>,
     ) -> std::io::Result<Self> {
         let agent_identity_authapi_base_url = agent_identity_authapi_base_url();
-        let client = build_auth_reqwest_client_with_proxy_config(
-            &agent_identity_authapi_base_url,
+        let task_registration_url =
+            agent_task_registration_url(&agent_identity_authapi_base_url, &record.agent_runtime_id);
+        let client = build_default_reqwest_client_for_auth_route(
+            &task_registration_url,
             outbound_proxy_config,
         )?;
         let process_task_id =

@@ -18,7 +18,7 @@ use super::manager::REVOKE_TOKEN_URL;
 use super::manager::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::storage::AuthDotJson;
 use super::util::try_parse_error_message;
-use crate::default_client::create_client_with_proxy_config;
+use crate::default_client::create_client_for_auth_route;
 use crate::token_data::TokenData;
 
 const REVOKE_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -61,8 +61,8 @@ pub(crate) async fn revoke_auth_tokens_with_proxy_config(
         return Ok(());
     };
 
-    let client = create_client_with_proxy_config(outbound_proxy_config);
     let endpoint = revoke_token_endpoint();
+    let client = create_client_for_auth_route(&endpoint, outbound_proxy_config)?;
     revoke_oauth_token(&client, endpoint.as_str(), token, kind, REVOKE_HTTP_TIMEOUT).await
 }
 

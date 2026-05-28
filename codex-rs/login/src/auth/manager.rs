@@ -17,6 +17,7 @@ use std::sync::atomic::Ordering;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
+use codex_agent_identity::agent_identity_jwks_url;
 use codex_agent_identity::decode_agent_identity_jwt;
 use codex_agent_identity::fetch_agent_identity_jwks;
 use codex_app_server_protocol::AuthMode;
@@ -32,14 +33,12 @@ pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
-use crate::default_client::build_auth_reqwest_client_with_proxy_config;
-use crate::default_client::create_client;
-use crate::default_client::create_client_with_proxy_config;
+use crate::default_client::build_default_reqwest_client_for_auth_route;
+use crate::default_client::create_client_for_auth_route;
 use crate::outbound_proxy::outbound_proxy_config_from_network_config;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::token_data::parse_jwt_expiration;
-use codex_client::CodexHttpClient;
 use codex_client::OutboundProxyConfig;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::NetworkConfigToml;
@@ -84,7 +83,6 @@ pub struct ChatgptAuthTokens {
 #[derive(Debug, Clone)]
 struct ChatgptAuthState {
     auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
-    client: CodexHttpClient,
 }
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
@@ -210,7 +208,6 @@ impl CodexAuth {
         outbound_proxy_config: Option<&OutboundProxyConfig>,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
-        let client = create_client_with_proxy_config(outbound_proxy_config);
         if auth_mode == ApiAuthMode::ApiKey {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
@@ -234,7 +231,6 @@ impl CodexAuth {
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
-            client,
         };
 
         match auth_mode {
@@ -467,10 +463,8 @@ impl CodexAuth {
             agent_identity: None,
         };
 
-        let client = create_client();
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
-            client,
         };
         let dummy_auth_id = NEXT_DUMMY_AUTH_ID.fetch_add(1, Ordering::Relaxed);
         let storage = create_auth_storage(
@@ -499,10 +493,6 @@ impl ChatgptAuth {
 
     fn storage(&self) -> &Arc<dyn AuthStorageBackend> {
         &self.storage
-    }
-
-    fn client(&self) -> &CodexHttpClient {
-        &self.state.client
     }
 }
 
@@ -538,8 +528,8 @@ async fn verified_agent_identity_record(
     outbound_proxy_config: Option<&OutboundProxyConfig>,
 ) -> std::io::Result<AgentIdentityAuthRecord> {
     AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
-    let client =
-        build_auth_reqwest_client_with_proxy_config(chatgpt_base_url, outbound_proxy_config)?;
+    let jwks_url = agent_identity_jwks_url(chatgpt_base_url);
+    let client = build_default_reqwest_client_for_auth_route(&jwks_url, outbound_proxy_config)?;
     let jwks = fetch_agent_identity_jwks(&client, chatgpt_base_url)
         .await
         .map_err(std::io::Error::other)?;
@@ -902,7 +892,7 @@ fn persist_tokens(
 // The caller is responsible for persisting any returned tokens.
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
-    client: &CodexHttpClient,
+    outbound_proxy_config: Option<&OutboundProxyConfig>,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
         client_id: CLIENT_ID,
@@ -911,6 +901,8 @@ async fn request_chatgpt_token_refresh(
     };
 
     let endpoint = refresh_token_endpoint();
+    let client = create_client_for_auth_route(&endpoint, outbound_proxy_config)
+        .map_err(|err| RefreshTokenError::Transient(err.into()))?;
 
     // Use shared client factory to include standard headers
     let response = client
@@ -2020,7 +2012,9 @@ impl AuthManager {
         auth: &ChatgptAuth,
         refresh_token: String,
     ) -> Result<(), RefreshTokenError> {
-        let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
+        let refresh_response =
+            request_chatgpt_token_refresh(refresh_token, self.outbound_proxy_config.as_ref())
+                .await?;
 
         persist_tokens(
             auth.storage(),
