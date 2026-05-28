@@ -15,6 +15,7 @@ use crate::logging::log_note;
 use crate::sandbox_bin_dir;
 
 const DEV_BUILD_VERSION_SENTINEL: &str = "0.0.0";
+const CODEX_CLI_PATH_ENV_VAR: &str = "CODEX_CLI_PATH";
 const RESOURCES_DIRNAME: &str = "codex-resources";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -49,8 +50,7 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 }
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(candidate) = source_path_for_exe(&exe, kind.file_name())
+    if let Some(candidate) = source_path_for_helper(kind.file_name())
     {
         return candidate;
     }
@@ -179,13 +179,41 @@ fn store_helper_path(cache_key: String, path: PathBuf) {
 }
 
 fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
-    source_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
+    source_path_for_helper(kind.file_name()).ok_or_else(|| {
         anyhow!(
-            "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
-            exe.display()
+            "helper not found next to CODEX_CLI_PATH or current executable, or under {RESOURCES_DIRNAME}"
         )
     })
+}
+
+pub(crate) fn source_path_for_helper(file_name: &str) -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok();
+    let cli_path_hint = std::env::var_os(CODEX_CLI_PATH_ENV_VAR).map(PathBuf::from);
+    source_path_for_helper_candidates(
+        file_name,
+        current_exe.as_deref(),
+        cli_path_hint.as_deref(),
+    )
+}
+
+fn source_path_for_helper_candidates(
+    file_name: &str,
+    current_exe: Option<&Path>,
+    cli_path_hint: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(cli_path_hint) = cli_path_hint
+        && let Some(candidate) = source_path_for_exe(cli_path_hint, file_name)
+    {
+        return Some(candidate);
+    }
+
+    if let Some(current_exe) = current_exe
+        && let Some(candidate) = source_path_for_exe(current_exe, file_name)
+    {
+        return Some(candidate);
+    }
+
+    None
 }
 
 fn source_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
@@ -355,6 +383,7 @@ mod tests {
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
+    use super::source_path_for_helper_candidates;
     use super::HelperExecutable;
     use super::DEV_BUILD_VERSION_SENTINEL;
     use super::RESOURCES_DIRNAME;
@@ -476,6 +505,55 @@ mod tests {
             source_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe").expect("helper path");
 
         assert_eq!(resolved, sibling_helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_prefers_codex_cli_path_hint() {
+        let tmp = TempDir::new().expect("tempdir");
+        let packaged_release_dir = tmp.path().join("packaged-release");
+        let embedded_dir = tmp.path().join("embedded-node");
+        fs::create_dir_all(packaged_release_dir.join(RESOURCES_DIRNAME))
+            .expect("create packaged resources");
+        fs::create_dir_all(&embedded_dir).expect("create embedded dir");
+        let packaged_exe = packaged_release_dir.join("codex.exe");
+        let packaged_helper = packaged_release_dir
+            .join(RESOURCES_DIRNAME)
+            .join("codex-command-runner.exe");
+        let embedded_exe = embedded_dir.join("node.exe");
+        let embedded_helper = embedded_dir.join("codex-command-runner.exe");
+        fs::write(&packaged_exe, b"codex").expect("write packaged exe");
+        fs::write(&packaged_helper, b"packaged helper").expect("write packaged helper");
+        fs::write(&embedded_exe, b"node").expect("write embedded exe");
+        fs::write(&embedded_helper, b"embedded helper").expect("write embedded helper");
+
+        let resolved = source_path_for_helper_candidates(
+            "codex-command-runner.exe",
+            Some(&embedded_exe),
+            Some(&packaged_exe),
+        )
+        .expect("helper path");
+
+        assert_eq!(resolved, packaged_helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_falls_back_to_current_exe_without_cli_hint() {
+        let tmp = TempDir::new().expect("tempdir");
+        let embedded_dir = tmp.path().join("embedded-node");
+        fs::create_dir_all(&embedded_dir).expect("create embedded dir");
+        let embedded_exe = embedded_dir.join("node.exe");
+        let embedded_helper = embedded_dir.join("codex-command-runner.exe");
+        fs::write(&embedded_exe, b"node").expect("write embedded exe");
+        fs::write(&embedded_helper, b"embedded helper").expect("write embedded helper");
+
+        let resolved = source_path_for_helper_candidates(
+            "codex-command-runner.exe",
+            Some(&embedded_exe),
+            /*cli_path_hint*/ None,
+        )
+        .expect("helper path");
+
+        assert_eq!(resolved, embedded_helper);
     }
 
     #[test]

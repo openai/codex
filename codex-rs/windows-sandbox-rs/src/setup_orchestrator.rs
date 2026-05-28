@@ -13,6 +13,7 @@ use std::process::Stdio;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::source_path_for_helper;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
@@ -556,23 +557,8 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-
-        // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
-        // that sibling folder before falling back to PATH.
-        let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
-        if resource_candidate.exists() {
-            return resource_candidate;
-        }
+    if let Some(candidate) = source_path_for_helper("codex-windows-sandbox-setup.exe") {
+        return candidate;
     }
     PathBuf::from("codex-windows-sandbox-setup.exe")
 }
