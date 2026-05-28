@@ -477,7 +477,7 @@ fn legacy_capture_cancellation_is_not_reported_as_timeout() {
     let started_at = Instant::now();
     let result = run_windows_sandbox_capture(
         &permission_profile,
-        cwd.as_path(),
+        workspace_roots_for(cwd.as_path()).as_slice(),
         codex_home.path(),
         vec![
             pwsh.display().to_string(),
