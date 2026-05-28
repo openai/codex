@@ -1,15 +1,38 @@
 use super::*;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_sandboxing::EffectiveFilesystemPermissions;
+use codex_sandboxing::FilesystemPermissionsContext;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+
+fn effective_permissions(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &AbsolutePathBuf,
+) -> EffectiveFilesystemPermissions {
+    let file_system_sandbox_policy = file_system_sandbox_policy
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(cwd));
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    EffectiveFilesystemPermissions::from_profile(
+        &permission_profile,
+        FilesystemPermissionsContext {
+            policy_evaluation_cwd: cwd,
+        },
+    )
+    .expect("derive effective filesystem permissions")
+}
 
 #[test]
 fn test_writable_roots_constraint() {
@@ -36,13 +59,13 @@ fn test_writable_roots_constraint() {
 
     assert!(is_write_patch_constrained_to_writable_paths(
         &add_inside,
-        &workspace_only_file_system_policy,
+        &effective_permissions(&workspace_only_file_system_policy, &cwd),
         &cwd,
     ));
 
     assert!(!is_write_patch_constrained_to_writable_paths(
         &add_outside,
-        &workspace_only_file_system_policy,
+        &effective_permissions(&workspace_only_file_system_policy, &cwd),
         &cwd,
     ));
 
@@ -55,7 +78,7 @@ fn test_writable_roots_constraint() {
     );
     assert!(is_write_patch_constrained_to_writable_paths(
         &add_outside,
-        &file_system_policy_with_parent,
+        &effective_permissions(&file_system_policy_with_parent, &cwd),
         &cwd,
     ));
 }
@@ -77,7 +100,7 @@ fn external_sandbox_auto_approves_in_on_request() {
             &add_inside,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
+            &effective_permissions(&file_system_sandbox_policy, &cwd),
             &cwd,
             WindowsSandboxLevel::Disabled
         ),
@@ -108,7 +131,7 @@ fn granular_with_all_flags_true_matches_on_request_for_out_of_root_patch() {
             &add_outside,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
+            &effective_permissions(&file_system_sandbox_policy, &cwd),
             &cwd,
             WindowsSandboxLevel::Disabled,
         ),
@@ -125,7 +148,7 @@ fn granular_with_all_flags_true_matches_on_request_for_out_of_root_patch() {
                 mcp_elicitations: true,
             }),
             &permission_profile,
-            &file_system_sandbox_policy,
+            &effective_permissions(&file_system_sandbox_policy, &cwd),
             &cwd,
             WindowsSandboxLevel::Disabled,
         ),
@@ -159,7 +182,7 @@ fn granular_sandbox_approval_false_rejects_out_of_root_patch() {
                 mcp_elicitations: true,
             }),
             &permission_profile,
-            &file_system_sandbox_policy,
+            &effective_permissions(&file_system_sandbox_policy, &cwd),
             &cwd,
             WindowsSandboxLevel::Disabled,
         ),
@@ -180,7 +203,7 @@ fn read_only_policy_rejects_patch_with_read_only_reason() {
 
     assert!(!is_write_patch_constrained_to_writable_paths(
         &action,
-        &file_system_sandbox_policy,
+        &effective_permissions(&file_system_sandbox_policy, &cwd),
         &cwd,
     ));
     assert_eq!(
@@ -188,7 +211,7 @@ fn read_only_policy_rejects_patch_with_read_only_reason() {
             &action,
             AskForApproval::Never,
             &permission_profile,
-            &file_system_sandbox_policy,
+            &effective_permissions(&file_system_sandbox_policy, &cwd),
             &cwd,
             WindowsSandboxLevel::Disabled,
         ),
@@ -224,7 +247,7 @@ fn explicit_unreadable_paths_prevent_auto_approval_for_external_sandbox() {
 
     assert!(!is_write_patch_constrained_to_writable_paths(
         &action,
-        &file_system_sandbox_policy,
+        &effective_permissions(&file_system_sandbox_policy, &cwd),
         &cwd,
     ));
     assert_eq!(
@@ -232,7 +255,7 @@ fn explicit_unreadable_paths_prevent_auto_approval_for_external_sandbox() {
             &action,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
+            &effective_permissions(&file_system_sandbox_policy, &cwd),
             &cwd,
             WindowsSandboxLevel::Disabled,
         ),
@@ -268,7 +291,7 @@ fn explicit_read_only_subpaths_prevent_auto_approval_for_external_sandbox() {
 
     assert!(!is_write_patch_constrained_to_writable_paths(
         &action,
-        &file_system_sandbox_policy,
+        &effective_permissions(&file_system_sandbox_policy, &cwd),
         &cwd,
     ));
     assert_eq!(
@@ -276,7 +299,7 @@ fn explicit_read_only_subpaths_prevent_auto_approval_for_external_sandbox() {
             &action,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
+            &effective_permissions(&file_system_sandbox_policy, &cwd),
             &cwd,
             WindowsSandboxLevel::Disabled,
         ),
@@ -308,7 +331,7 @@ fn missing_project_dot_codex_config_requires_approval() {
 
     assert!(!is_write_patch_constrained_to_writable_paths(
         &action,
-        &file_system_sandbox_policy,
+        &effective_permissions(&file_system_sandbox_policy, &cwd),
         &cwd,
     ));
     assert_eq!(
@@ -316,7 +339,7 @@ fn missing_project_dot_codex_config_requires_approval() {
             &action,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
+            &effective_permissions(&file_system_sandbox_policy, &cwd),
             &cwd,
             WindowsSandboxLevel::Disabled,
         ),

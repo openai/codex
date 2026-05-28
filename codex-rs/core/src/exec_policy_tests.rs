@@ -1181,6 +1181,9 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
 
 #[test]
 fn managed_cwd_write_profile_is_not_read_only() {
+    let workspace_root_path = host_absolute_path(&["tmp", "project"]);
+    let workspace_root = AbsolutePathBuf::from_absolute_path(Path::new(&workspace_root_path))
+        .expect("absolute workspace root");
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -1194,7 +1197,8 @@ fn managed_cwd_write_profile_is_not_read_only() {
             },
             access: FileSystemAccessMode::Write,
         },
-    ]);
+    ])
+    .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace_root));
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &file_system_sandbox_policy,
         NetworkSandboxPolicy::Restricted,
@@ -1203,7 +1207,7 @@ fn managed_cwd_write_profile_is_not_read_only() {
     assert!(!profile_is_managed_read_only(
         &permission_profile,
         &file_system_sandbox_policy,
-        Path::new("/tmp/project")
+        Path::new(&workspace_root_path)
     ));
 }
 

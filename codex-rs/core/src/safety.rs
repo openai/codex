@@ -7,8 +7,8 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_sandboxing::EffectiveFilesystemPermissions;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -34,7 +34,7 @@ pub fn assess_patch_safety(
     action: &ApplyPatchAction,
     policy: AskForApproval,
     permission_profile: &PermissionProfile,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     cwd: &AbsolutePathBuf,
     windows_sandbox_level: WindowsSandboxLevel,
 ) -> SafetyCheck {
@@ -67,7 +67,7 @@ pub fn assess_patch_safety(
     // Even though the patch appears to be constrained to writable paths, it is
     // possible that paths in the patch are hard links to files outside the
     // writable roots, so we should still run `apply_patch` in a sandbox in that case.
-    if is_write_patch_constrained_to_writable_paths(action, file_system_sandbox_policy, cwd)
+    if is_write_patch_constrained_to_writable_paths(action, effective_filesystem_permissions, cwd)
         || matches!(policy, AskForApproval::OnFailure)
     {
         if matches!(
@@ -94,8 +94,7 @@ pub fn assess_patch_safety(
                         SafetyCheck::Reject {
                             reason: patch_rejection_reason(
                                 permission_profile,
-                                file_system_sandbox_policy,
-                                cwd,
+                                effective_filesystem_permissions,
                             )
                             .to_string(),
                         }
@@ -107,7 +106,7 @@ pub fn assess_patch_safety(
         }
     } else if rejects_sandbox_approval {
         SafetyCheck::Reject {
-            reason: patch_rejection_reason(permission_profile, file_system_sandbox_policy, cwd)
+            reason: patch_rejection_reason(permission_profile, effective_filesystem_permissions)
                 .to_string(),
         }
     } else {
@@ -117,15 +116,12 @@ pub fn assess_patch_safety(
 
 fn patch_rejection_reason(
     permission_profile: &PermissionProfile,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
 ) -> &'static str {
     match permission_profile {
         PermissionProfile::Managed { .. }
-            if !file_system_sandbox_policy.has_full_disk_write_access()
-                && file_system_sandbox_policy
-                    .get_writable_roots_with_cwd(cwd.as_path())
-                    .is_empty() =>
+            if !effective_filesystem_permissions.has_full_disk_write_access()
+                && effective_filesystem_permissions.writable_roots.is_empty() =>
         {
             PATCH_REJECTED_READ_ONLY_REASON
         }
@@ -137,7 +133,7 @@ fn patch_rejection_reason(
 
 fn is_write_patch_constrained_to_writable_paths(
     action: &ApplyPatchAction,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     cwd: &AbsolutePathBuf,
 ) -> bool {
     // Normalize a path by removing `.` and resolving `..` without touching the
@@ -166,7 +162,7 @@ fn is_write_patch_constrained_to_writable_paths(
             None => return false,
         };
 
-        file_system_sandbox_policy.can_write_path_with_cwd(&abs, cwd)
+        effective_filesystem_permissions.can_write(&abs)
     };
 
     for (path, change) in action.changes() {

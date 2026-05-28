@@ -270,7 +270,7 @@ async fn effective_patch_permissions(
     (
         Vec<AbsolutePathBuf>,
         crate::tools::handlers::EffectiveAdditionalPermissions,
-        codex_protocol::permissions::FileSystemSandboxPolicy,
+        EffectiveFilesystemPermissions,
     ),
     FunctionCallError,
 > {
@@ -281,7 +281,6 @@ async fn effective_patch_permissions(
     );
     let effective_permission_profile =
         effective_permission_profile(&turn.permission_profile(), granted_permissions.as_ref());
-    let file_system_sandbox_policy = effective_permission_profile.file_system_sandbox_policy();
     let effective_filesystem_permissions = EffectiveFilesystemPermissions::from_profile(
         &effective_permission_profile,
         FilesystemPermissionsContext {
@@ -304,7 +303,7 @@ async fn effective_patch_permissions(
     Ok((
         file_paths,
         effective_additional_permissions,
-        file_system_sandbox_policy,
+        effective_filesystem_permissions,
     ))
 }
 
@@ -363,11 +362,18 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
             .await
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
-                    effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes, &cwd)
-                        .await?;
-                match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
-                    .await
+                let (
+                    file_paths,
+                    effective_additional_permissions,
+                    effective_filesystem_permissions,
+                ) = effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes, &cwd)
+                    .await?;
+                match apply_patch::apply_patch(
+                    turn.as_ref(),
+                    &effective_filesystem_permissions,
+                    changes,
+                )
+                .await
                 {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
@@ -516,10 +522,14 @@ pub(crate) async fn intercept_apply_patch(
         .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-            let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
+            let (approval_keys, effective_additional_permissions, effective_filesystem_permissions) =
                 effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes, cwd).await?;
-            match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
-                .await
+            match apply_patch::apply_patch(
+                turn.as_ref(),
+                &effective_filesystem_permissions,
+                changes,
+            )
+            .await
             {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;

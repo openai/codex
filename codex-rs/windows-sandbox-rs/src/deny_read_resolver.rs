@@ -1,12 +1,9 @@
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::ReadDenyMatcher;
 use codex_sandboxing::EffectiveFilesystemPermissions;
-use codex_sandboxing::FilesystemPermissionsContext;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::path::Path;
@@ -25,28 +22,6 @@ struct GlobScanPlan {
 /// already exist under their literal scan root; future exact paths are handled
 /// later by materializing them before the deny ACE is applied.
 pub fn resolve_windows_deny_read_paths(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
-) -> Result<Vec<AbsolutePathBuf>, String> {
-    let file_system_sandbox_policy = file_system_sandbox_policy
-        .clone()
-        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(cwd));
-    let permission_profile = PermissionProfile::from_runtime_permissions(
-        &file_system_sandbox_policy,
-        NetworkSandboxPolicy::Restricted,
-    );
-    let effective_file_system = EffectiveFilesystemPermissions::from_profile(
-        &permission_profile,
-        FilesystemPermissionsContext {
-            policy_evaluation_cwd: cwd,
-        },
-    )
-    .map_err(|err| err.to_string())?;
-    resolve_windows_deny_read_paths_from_effective_permissions(&effective_file_system, cwd)
-}
-
-/// Resolves effective read-deny entries into concrete Windows ACL targets.
-pub fn resolve_windows_deny_read_paths_from_effective_permissions(
     effective_file_system: &EffectiveFilesystemPermissions,
     cwd: &AbsolutePathBuf,
 ) -> Result<Vec<AbsolutePathBuf>, String> {
@@ -219,10 +194,14 @@ fn effective_glob_scan_max_depth(
 mod tests {
     use super::glob_scan_plan;
     use super::resolve_windows_deny_read_paths;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
+    use codex_sandboxing::EffectiveFilesystemPermissions;
+    use codex_sandboxing::FilesystemPermissionsContext;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
@@ -246,6 +225,25 @@ mod tests {
             },
             access: FileSystemAccessMode::Deny,
         }
+    }
+
+    fn resolve_policy_deny_read_paths(
+        policy: &FileSystemSandboxPolicy,
+        cwd: &AbsolutePathBuf,
+    ) -> Result<Vec<AbsolutePathBuf>, String> {
+        let policy = policy
+            .clone()
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(cwd));
+        let permission_profile =
+            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+        let effective_file_system = EffectiveFilesystemPermissions::from_profile(
+            &permission_profile,
+            FilesystemPermissionsContext {
+                policy_evaluation_cwd: cwd,
+            },
+        )
+        .map_err(|err| err.to_string())?;
+        resolve_windows_deny_read_paths(&effective_file_system, cwd)
     }
 
     #[test]
@@ -304,7 +302,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![unreadable_path_entry(missing)]);
 
         assert_eq!(
-            resolve_windows_deny_read_paths(&policy, &cwd).expect("resolve"),
+            resolve_policy_deny_read_paths(&policy, &cwd).expect("resolve"),
             vec![
                 AbsolutePathBuf::from_absolute_path(
                     dunce::canonicalize(tmp.path())
@@ -332,7 +330,7 @@ mod tests {
             tmp.path().display()
         ))]);
 
-        let actual: HashSet<PathBuf> = resolve_windows_deny_read_paths(&policy, &cwd)
+        let actual: HashSet<PathBuf> = resolve_policy_deny_read_paths(&policy, &cwd)
             .expect("resolve")
             .into_iter()
             .map(AbsolutePathBuf::into_path_buf)
@@ -351,7 +349,7 @@ mod tests {
             tmp.path().display()
         ))]);
 
-        let err = resolve_windows_deny_read_paths(&policy, &cwd).expect_err("invalid glob");
+        let err = resolve_policy_deny_read_paths(&policy, &cwd).expect_err("invalid glob");
         assert!(
             err.contains("invalid deny-read glob pattern"),
             "unexpected error: {err}"
@@ -374,7 +372,7 @@ mod tests {
         ))]);
 
         assert_eq!(
-            resolve_windows_deny_read_paths(&policy, &cwd).expect("resolve"),
+            resolve_policy_deny_read_paths(&policy, &cwd).expect("resolve"),
             vec![AbsolutePathBuf::from_absolute_path(root_env).expect("absolute root env")]
         );
     }
@@ -397,7 +395,7 @@ mod tests {
             unreadable_glob_entry(format!("{}/**/*.env", alias_b.display())),
         ]);
 
-        let actual: HashSet<PathBuf> = resolve_windows_deny_read_paths(&policy, &cwd)
+        let actual: HashSet<PathBuf> = resolve_policy_deny_read_paths(&policy, &cwd)
             .expect("resolve")
             .into_iter()
             .map(AbsolutePathBuf::into_path_buf)

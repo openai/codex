@@ -6,7 +6,7 @@ use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_sandboxing::EffectiveFilesystemPermissions;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -32,14 +32,14 @@ pub(crate) struct ApplyPatchRuntimeInvocation {
 
 pub(crate) async fn apply_patch(
     turn_context: &TurnContext,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
-        file_system_sandbox_policy,
+        effective_filesystem_permissions,
         &action.cwd,
         turn_context.windows_sandbox_level,
     ) {

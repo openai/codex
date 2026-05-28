@@ -24,6 +24,8 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_sandboxing::EffectiveFilesystemPermissions;
+use codex_sandboxing::FilesystemPermissionsContext;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use thiserror::Error;
@@ -754,15 +756,32 @@ fn profile_is_managed_read_only(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     sandbox_cwd: &Path,
 ) -> bool {
-    matches!(permission_profile, PermissionProfile::Managed { .. })
-        && matches!(
+    if !matches!(permission_profile, PermissionProfile::Managed { .. })
+        || !matches!(
             file_system_sandbox_policy.kind,
             FileSystemSandboxKind::Restricted
         )
-        && !file_system_sandbox_policy.has_full_disk_write_access()
-        && file_system_sandbox_policy
-            .get_writable_roots_with_cwd(sandbox_cwd)
-            .is_empty()
+    {
+        return false;
+    }
+    let Ok(policy_evaluation_cwd) = AbsolutePathBuf::from_absolute_path(sandbox_cwd) else {
+        return true;
+    };
+    let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        permission_profile.enforcement(),
+        file_system_sandbox_policy,
+        permission_profile.network_sandbox_policy(),
+    );
+    let Ok(effective_filesystem_permissions) = EffectiveFilesystemPermissions::from_profile(
+        &effective_permission_profile,
+        FilesystemPermissionsContext {
+            policy_evaluation_cwd: &policy_evaluation_cwd,
+        },
+    ) else {
+        return true;
+    };
+    !effective_filesystem_permissions.has_full_disk_write_access()
+        && effective_filesystem_permissions.writable_roots.is_empty()
 }
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {
