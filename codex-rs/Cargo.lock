@@ -3031,7 +3031,6 @@ dependencies = [
  "codex-model-provider-info",
  "codex-protocol",
  "codex-tools",
- "codex-utils-output-truncation",
  "http 1.4.0",
  "pretty_assertions",
  "schemars 0.8.22",

@@ -36,7 +36,7 @@ use serde_json::Value;
 
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
-use crate::backend::ImageGenerationBackend;
+use crate::backend::CodexImagesBackend;
 
 const IMAGE_MODEL: &str = "gpt-image-2";
 const MAX_EDIT_IMAGES: usize = 5;
@@ -45,14 +45,14 @@ const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 const IMAGE_ID_PLACEHOLDER: &str = "<image_id>";
 
 #[derive(Clone)]
-pub(crate) struct ImageGenerationTool<B> {
-    backend: B,
+pub(crate) struct ImageGenerationTool {
+    backend: CodexImagesBackend,
     output_dir: PathBuf,
 }
 
-impl<B> ImageGenerationTool<B> {
+impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
-    pub(crate) fn new(backend: B, output_dir: PathBuf) -> Self {
+    pub(crate) fn new(backend: CodexImagesBackend, output_dir: PathBuf) -> Self {
         Self {
             backend,
             output_dir,
@@ -75,10 +75,7 @@ enum ImagegenAction {
 }
 
 #[async_trait::async_trait]
-impl<B> ToolExecutor<ToolCall> for ImageGenerationTool<B>
-where
-    B: ImageGenerationBackend,
-{
+impl ToolExecutor<ToolCall> for ImageGenerationTool {
     /// Keeps the tool in the existing image-generation Responses namespace.
     fn tool_name(&self) -> ToolName {
         ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
@@ -130,6 +127,7 @@ where
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum ImageRequest {
     Generate(ImageGenerationRequest),
     Edit(ImageEditRequest),
@@ -170,7 +168,7 @@ fn request_for_action(
     }
 }
 
-/// Selects edit inputs from the latest uploaded-image turn and newest later generated images.
+/// Selects edit context using the hosted imagegen anchor and truncation behavior.
 fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
     let latest_uploaded_images = history.iter().enumerate().rev().find_map(|(index, item)| {
         let ResponseItem::Message { role, content, .. } = item else {
@@ -181,6 +179,7 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
         }
         let images = content
             .iter()
+            .rev()
             .filter_map(|item| match item {
                 ContentItem::InputImage { image_url, .. } => Some(ImageUrl {
                     image_url: image_url.clone(),
@@ -190,14 +189,15 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
             .collect::<Vec<_>>();
         (!images.is_empty()).then_some((index, images))
     });
-    let (mut images, generated_start) = latest_uploaded_images
+    let (user_images, follow_up_start) = latest_uploaded_images
         .map_or_else(|| (Vec::new(), 0), |(index, images)| (images, index + 1));
-    images.extend(history[generated_start..].iter().rev().flat_map(|item| {
+    let mut generated_images = Vec::new();
+    for item in &history[follow_up_start..] {
         match item {
             ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
-                vec![ImageUrl {
+                generated_images.push(ImageUrl {
                     image_url: format!("data:image/png;base64,{result}"),
-                }]
+                });
             }
             ResponseItem::FunctionCallOutput { call_id, output }
                 if history.iter().any(|item| {
@@ -208,17 +208,14 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
                             namespace: Some(namespace),
                             call_id: function_call_id,
                             ..
-                        } if name == IMAGEGEN_TOOL_NAME
+                        } if function_call_id == call_id
+                            && name == IMAGEGEN_TOOL_NAME
                             && namespace == IMAGE_GEN_NAMESPACE
-                            && function_call_id == call_id
                     )
                 }) =>
             {
-                output
-                    .content_items()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|item| match item {
+                generated_images.extend(output.content_items().into_iter().flatten().filter_map(
+                    |item| match item {
                         FunctionCallOutputContentItem::InputImage { image_url, .. } => {
                             Some(ImageUrl {
                                 image_url: image_url.clone(),
@@ -226,8 +223,8 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
                         }
                         FunctionCallOutputContentItem::InputText { .. }
                         | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
-                    })
-                    .collect()
+                    },
+                ));
             }
             ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }
@@ -243,11 +240,28 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger
             | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::Other => Vec::new(),
+            | ResponseItem::Other => {}
         }
-    }));
-    images.truncate(MAX_EDIT_IMAGES);
-    images
+    }
+    truncate_images(user_images, generated_images)
+}
+
+/// Truncates edit inputs while preserving the newest generated image when possible.
+fn truncate_images(
+    mut user_images: Vec<ImageUrl>,
+    mut generated_images: Vec<ImageUrl>,
+) -> Vec<ImageUrl> {
+    let mut excess = (user_images.len() + generated_images.len()).saturating_sub(MAX_EDIT_IMAGES);
+    let drop_generated = excess.min(generated_images.len().saturating_sub(1));
+    generated_images.drain(..drop_generated);
+    excess -= drop_generated;
+    let drop_user = excess.min(user_images.len());
+    user_images.drain(..drop_user);
+    excess -= drop_user;
+    generated_images.drain(..excess);
+
+    user_images.extend(generated_images);
+    user_images
 }
 
 /// Parses the strict model-facing arguments for an image-generation call.
@@ -377,3 +391,7 @@ impl ToolOutput for GeneratedImageOutput {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

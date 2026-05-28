@@ -7,22 +7,6 @@ use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
 use http::HeaderMap;
 
-/// Executes standalone image API requests for the image-generation extension.
-///
-/// Implementations receive fully resolved API request values and must preserve the endpoint
-/// response shape. Tests may implement this with deterministic in-memory responses.
-pub(crate) trait ImageGenerationBackend: Clone + Send + Sync + 'static {
-    fn generate(
-        &self,
-        request: ImageGenerationRequest,
-    ) -> impl std::future::Future<Output = Result<ImageResponse, String>> + Send;
-
-    fn edit(
-        &self,
-        request: ImageEditRequest,
-    ) -> impl std::future::Future<Output = Result<ImageResponse, String>> + Send;
-}
-
 #[derive(Clone)]
 pub(crate) struct CodexImagesBackend {
     provider: SharedModelProvider,
@@ -52,11 +36,12 @@ impl CodexImagesBackend {
             auth,
         ))
     }
-}
 
-impl ImageGenerationBackend for CodexImagesBackend {
     /// Sends a standalone image generation request through the configured Images client.
-    async fn generate(&self, request: ImageGenerationRequest) -> Result<ImageResponse, String> {
+    pub(crate) async fn generate(
+        &self,
+        request: ImageGenerationRequest,
+    ) -> Result<ImageResponse, String> {
         self.client()
             .await?
             .generate(&request, HeaderMap::new())
@@ -65,7 +50,7 @@ impl ImageGenerationBackend for CodexImagesBackend {
     }
 
     /// Sends a standalone image edit request through the configured Images client.
-    async fn edit(&self, request: ImageEditRequest) -> Result<ImageResponse, String> {
+    pub(crate) async fn edit(&self, request: ImageEditRequest) -> Result<ImageResponse, String> {
         self.client()
             .await?
             .edit(&request, HeaderMap::new())
