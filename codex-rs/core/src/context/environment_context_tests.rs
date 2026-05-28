@@ -1,9 +1,21 @@
 use crate::shell::ShellType;
 
 use super::*;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::project_roots_glob_pattern;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnContextItem;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use std::path::PathBuf;
 
 fn fake_shell_name() -> String {
@@ -77,6 +89,93 @@ fn serialize_environment_context_with_network() {
     );
 
     assert_eq!(context.render(), expected);
+}
+
+fn workspace_write_permission_profile_with_private_denials() -> PermissionProfile {
+    PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(PathBuf::from("private"))),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: project_roots_glob_pattern(Path::new("private/**")),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    )
+}
+
+#[test]
+fn serialize_environment_context_with_full_filesystem_profile() {
+    let mut context = EnvironmentContext::new(
+        vec![EnvironmentContextEnvironment {
+            id: "local".to_string(),
+            cwd: test_path_buf("/repo").abs(),
+            shell: fake_shell_name(),
+        }],
+        /*current_date*/ None,
+        /*timezone*/ None,
+        /*network*/ None,
+        /*subagents*/ None,
+    );
+    context.filesystem = Some(FileSystemContext::from_permission_profile(
+        &workspace_write_permission_profile_with_private_denials(),
+        &[test_abs_path("/repo"), test_abs_path("/other-repo")],
+    ));
+
+    let expected = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <filesystem><workspace_roots><root>/repo</root><root>/other-repo</root></workspace_roots><permission_profile type="managed"><file_system type="restricted"><entry access="write"><path>/repo</path></entry><entry access="write"><path>/other-repo</path></entry><entry access="deny" escalatable="false"><path>/repo/private</path></entry><entry access="deny" escalatable="false"><path>/other-repo/private</path></entry><entry access="deny" escalatable="false"><glob>/repo/private/**</glob></entry><entry access="deny" escalatable="false"><glob>/other-repo/private/**</glob></entry></file_system></permission_profile></filesystem>
+</environment_context>"#,
+        test_path_buf("/repo").display()
+    );
+
+    assert_eq!(context.render(), expected);
+}
+
+#[test]
+fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
+    let item = TurnContextItem {
+        turn_id: None,
+        cwd: test_path_buf("/not-the-workspace"),
+        workspace_roots: Some(vec![test_abs_path("/repo"), test_abs_path("/other-repo")]),
+        current_date: None,
+        timezone: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: Some(workspace_write_permission_profile_with_private_denials()),
+        network: None,
+        file_system_sandbox_policy: None,
+        model: "gpt-5".to_string(),
+        personality: None,
+        collaboration_mode: None,
+        realtime_active: None,
+        effort: None,
+        summary: codex_protocol::config_types::ReasoningSummary::Auto,
+    };
+
+    let context = EnvironmentContext::from_turn_context_item(&item, fake_shell_name()).render();
+
+    assert!(
+        context.contains("<root>/repo</root><root>/other-repo</root>"),
+        "{context}"
+    );
+    assert!(context.contains("<path>/repo/private</path>"), "{context}");
+    assert!(!context.contains("/not-the-workspace/private"), "{context}");
 }
 
 #[test]
