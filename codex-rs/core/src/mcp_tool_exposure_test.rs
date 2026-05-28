@@ -13,6 +13,7 @@ use rmcp::model::Tool;
 use super::*;
 use crate::config::test_config;
 use crate::connectors::AppInfo;
+use crate::sensitive_connector_policy;
 
 fn make_connector(id: &str, name: &str) -> AppInfo {
     AppInfo {
@@ -97,7 +98,11 @@ async fn directly_exposes_small_effective_tool_sets() {
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
 
     let exposure = build_mcp_tool_exposure(
-        &mcp_tools, /*connectors*/ None, &config, /*search_tool_enabled*/ true,
+        &mcp_tools,
+        /*connectors*/ None,
+        &config,
+        /*search_tool_enabled*/ true,
+        &[],
     );
 
     assert_eq!(tool_names(&exposure.direct_tools), tool_names(&mcp_tools));
@@ -173,6 +178,7 @@ async fn excludes_tools_hidden_from_model_exposure() {
         Some(connectors.as_slice()),
         &config,
         /*search_tool_enabled*/ false,
+        &[],
     );
 
     assert_eq!(
@@ -188,7 +194,11 @@ async fn searches_large_effective_tool_sets() {
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
 
     let exposure = build_mcp_tool_exposure(
-        &mcp_tools, /*connectors*/ None, &config, /*search_tool_enabled*/ true,
+        &mcp_tools,
+        /*connectors*/ None,
+        &config,
+        /*search_tool_enabled*/ true,
+        &[],
     );
 
     assert!(exposure.direct_tools.is_empty());
@@ -231,6 +241,7 @@ async fn always_defer_feature_defers_apps_too() {
         Some(connectors.as_slice()),
         &config,
         /*search_tool_enabled*/ true,
+        &[],
     );
 
     assert!(exposure.direct_tools.is_empty());
@@ -244,4 +255,48 @@ async fn always_defer_feature_defers_apps_too() {
         "mcp__codex_apps__calendar",
         "_create_event"
     )));
+}
+
+#[tokio::test]
+async fn excludes_other_connector_tools_after_finances_was_used() {
+    let config = test_config().await;
+    let mcp_tools = vec![
+        make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "finances_search",
+            "mcp__codex_apps__finances",
+            "search",
+            Some(sensitive_connector_policy::FINANCES_CONNECTOR_ID),
+            Some("Finances"),
+        ),
+        make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_read",
+            "mcp__codex_apps__calendar",
+            "read",
+            Some("connector_calendar"),
+            Some("Calendar"),
+        ),
+    ];
+    let connectors = vec![
+        make_connector(
+            sensitive_connector_policy::FINANCES_CONNECTOR_ID,
+            "Finances",
+        ),
+        make_connector("connector_calendar", "Calendar"),
+    ];
+    let used_connector_ids = vec![sensitive_connector_policy::FINANCES_CONNECTOR_ID.to_string()];
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        Some(connectors.as_slice()),
+        &config,
+        /*search_tool_enabled*/ false,
+        &used_connector_ids,
+    );
+
+    assert_eq!(
+        tool_names(&exposure.direct_tools),
+        HashSet::from([ToolName::namespaced("mcp__codex_apps__finances", "search")])
+    );
 }

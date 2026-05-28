@@ -35,6 +35,26 @@ async fn clear_connector_selection_removes_entries() {
 }
 
 #[tokio::test]
+async fn record_used_connector_id_preserves_first_use_order() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+
+    assert_eq!(
+        state.record_used_connector_id("calendar"),
+        Some(vec!["calendar".to_string()])
+    );
+    assert_eq!(state.record_used_connector_id("calendar"), None);
+    assert_eq!(
+        state.record_used_connector_id("drive"),
+        Some(vec!["calendar".to_string(), "drive".to_string()])
+    );
+    assert_eq!(
+        state.get_used_connector_ids(),
+        vec!["calendar".to_string(), "drive".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);

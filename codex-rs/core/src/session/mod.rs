@@ -138,6 +138,7 @@ use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
+use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -1165,6 +1166,37 @@ impl Session {
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
         state.clear_connector_selection();
+    }
+
+    pub(crate) async fn record_used_connector_id(&self, connector_id: &str) {
+        let used_connector_ids = {
+            let mut state = self.state.lock().await;
+            state.record_used_connector_id(connector_id)
+        };
+        let Some(used_connector_ids) = used_connector_ids else {
+            return;
+        };
+
+        let Some(live_thread) = self.live_thread() else {
+            return;
+        };
+        if let Err(err) = live_thread
+            .update_metadata(
+                ThreadMetadataPatch {
+                    used_connector_ids: Some(used_connector_ids),
+                    ..Default::default()
+                },
+                /*include_archived*/ true,
+            )
+            .await
+        {
+            warn!("failed to persist used connector metadata: {err}");
+        }
+    }
+
+    pub(crate) async fn get_used_connector_ids(&self) -> Vec<String> {
+        let state = self.state.lock().await;
+        state.get_used_connector_ids()
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {

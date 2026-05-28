@@ -18,6 +18,7 @@ use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::sensitive_connector_policy;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
@@ -200,6 +201,41 @@ pub(crate) async fn handle_mcp_tool_call(
         .as_ref()
         .and_then(|metadata| metadata.connector_name.clone());
 
+    if server == CODEX_APPS_MCP_SERVER_NAME
+        && let Some(connector_id) = connector_id.as_deref()
+    {
+        let used_connector_ids = sess.get_used_connector_ids().await;
+        if !sensitive_connector_policy::connector_allowed_after_sensitive_usage(
+            &used_connector_ids,
+            connector_id,
+        ) {
+            let result = notify_mcp_tool_call_skip(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                &call_id,
+                invocation,
+                item_metadata.clone(),
+                "This conversation has used Finances. For security, other connectors are disabled for this thread.".to_string(),
+                /*already_started*/ false,
+            )
+            .await;
+            let status = if result.is_ok() { "ok" } else { "error" };
+            emit_mcp_call_metrics(
+                turn_context.as_ref(),
+                status,
+                &tool_name,
+                Some(connector_id),
+                connector_name.as_deref(),
+                /*duration*/ None,
+            );
+            return HandledMcpToolCall {
+                result: CallToolResult::from_result(result),
+                tool_input: arguments_value
+                    .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
+            };
+        }
+    }
+
     notify_mcp_tool_call_started(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -339,8 +375,14 @@ async fn handle_approved_mcp_tool_call(
     };
     let result = async {
         let rewritten_arguments = rewrite?;
-        let request_meta =
-            build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
+        let used_connector_ids = sess.get_used_connector_ids().await;
+        let request_meta = build_mcp_tool_call_request_meta(
+            turn_context,
+            &server,
+            call_id,
+            metadata,
+            &used_connector_ids,
+        );
         let result = execute_mcp_tool_call(
             sess,
             turn_context,
@@ -381,6 +423,11 @@ async fn handle_approved_mcp_tool_call(
         truncate_mcp_tool_result_for_event(&result),
     )
     .await;
+    if server == CODEX_APPS_MCP_SERVER_NAME
+        && let Some(connector_id) = connector_id
+    {
+        sess.record_used_connector_id(connector_id).await;
+    }
     maybe_track_codex_app_used(sess, turn_context, &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
@@ -931,6 +978,9 @@ async fn maybe_track_codex_app_used(
     let (connector_id, app_name) = metadata
         .map(|metadata| (metadata.connector_id, metadata.app_name))
         .unwrap_or((None, None));
+    if let Some(connector_id) = connector_id.as_deref() {
+        sess.record_used_connector_id(connector_id).await;
+    }
     let invocation_type = if let Some(connector_id) = connector_id.as_deref() {
         let mentioned_connector_ids = sess.get_connector_selection().await;
         if mentioned_connector_ids.contains(connector_id) {
@@ -1038,6 +1088,7 @@ fn build_mcp_tool_call_request_meta(
     server: &str,
     call_id: &str,
     metadata: Option<&McpToolApprovalMetadata>,
+    used_connector_ids: &[String],
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
 
@@ -1061,6 +1112,16 @@ fn build_mcp_tool_call_request_meta(
         codex_apps_meta.insert(
             "call_id".to_string(),
             serde_json::Value::String(call_id.to_string()),
+        );
+        codex_apps_meta.insert(
+            sensitive_connector_policy::USED_CONNECTOR_IDS_META_KEY.to_string(),
+            serde_json::Value::Array(
+                used_connector_ids
+                    .iter()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
         );
         request_meta.insert(
             MCP_TOOL_CODEX_APPS_META_KEY.to_string(),

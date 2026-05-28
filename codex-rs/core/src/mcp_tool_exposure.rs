@@ -7,6 +7,7 @@ use codex_mcp::tool_is_model_visible;
 
 use crate::config::Config;
 use crate::connectors;
+use crate::sensitive_connector_policy;
 
 pub(crate) const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 
@@ -20,6 +21,7 @@ pub(crate) fn build_mcp_tool_exposure(
     connectors: Option<&[connectors::AppInfo]>,
     config: &Config,
     search_tool_enabled: bool,
+    used_connector_ids: &[String],
 ) -> McpToolExposure {
     let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
     if let Some(connectors) = connectors {
@@ -27,6 +29,7 @@ pub(crate) fn build_mcp_tool_exposure(
             all_mcp_tools,
             connectors,
             config,
+            used_connector_ids,
         ));
     }
 
@@ -63,6 +66,7 @@ fn filter_codex_apps_mcp_tools(
     mcp_tools: &[McpToolInfo],
     connectors: &[connectors::AppInfo],
     config: &Config,
+    used_connector_ids: &[String],
 ) -> Vec<McpToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
@@ -81,7 +85,12 @@ fn filter_codex_apps_mcp_tools(
             let Some(connector_id) = tool.connector_id.as_deref() else {
                 return false;
             };
-            allowed.contains(connector_id) && connectors::codex_app_tool_is_enabled(config, tool)
+            allowed.contains(connector_id)
+                && sensitive_connector_policy::connector_allowed_after_sensitive_usage(
+                    used_connector_ids,
+                    connector_id,
+                )
+                && connectors::codex_app_tool_is_enabled(config, tool)
         })
         .cloned()
         .collect()

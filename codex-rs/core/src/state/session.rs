@@ -10,6 +10,7 @@ use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
 use crate::context_manager::ContextManager;
+use crate::sensitive_connector_policy;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
@@ -36,6 +37,7 @@ pub(crate) struct SessionState {
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
+    used_connector_ids: Vec<String>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     granted_permissions: Option<AdditionalPermissionProfile>,
     next_turn_is_first: bool,
@@ -56,6 +58,7 @@ impl SessionState {
             auto_compact_window: AutoCompactWindow::new(),
             startup_prewarm: None,
             active_connector_selection: HashSet::new(),
+            used_connector_ids: Vec::new(),
             pending_session_start_sources: VecDeque::new(),
             granted_permissions: None,
             next_turn_is_first: true,
@@ -220,6 +223,33 @@ impl SessionState {
     // Removes all currently tracked connector selections.
     pub(crate) fn clear_connector_selection(&mut self) {
         self.active_connector_selection.clear();
+    }
+
+    pub(crate) fn set_used_connector_ids(&mut self, used_connector_ids: Vec<String>) {
+        self.used_connector_ids = Vec::new();
+        for connector_id in used_connector_ids {
+            sensitive_connector_policy::append_used_connector_id(
+                &mut self.used_connector_ids,
+                &connector_id,
+            );
+        }
+    }
+
+    pub(crate) fn record_used_connector_id(&mut self, connector_id: &str) -> Option<Vec<String>> {
+        if self
+            .used_connector_ids
+            .iter()
+            .any(|used_connector_id| used_connector_id == connector_id)
+        {
+            return None;
+        }
+
+        self.used_connector_ids.push(connector_id.to_string());
+        Some(self.used_connector_ids.clone())
+    }
+
+    pub(crate) fn get_used_connector_ids(&self) -> Vec<String> {
+        self.used_connector_ids.clone()
     }
 
     pub(crate) fn queue_pending_session_start_source(

@@ -31,7 +31,8 @@ SELECT
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.used_connector_ids
 FROM threads
 WHERE threads.id = ?
             "#,
@@ -506,8 +507,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    used_connector_ids,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -547,6 +549,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(used_connector_ids_json(&metadata.used_connector_ids)?)
         .bind("enabled")
         .execute(self.pool.as_ref())
         .await?;
@@ -562,6 +565,19 @@ ON CONFLICT(id) DO NOTHING
     ) -> anyhow::Result<bool> {
         let result = sqlx::query("UPDATE threads SET memory_mode = ? WHERE id = ?")
             .bind(memory_mode)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn set_thread_used_connector_ids(
+        &self,
+        thread_id: ThreadId,
+        used_connector_ids: &[String],
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query("UPDATE threads SET used_connector_ids = ? WHERE id = ?")
+            .bind(used_connector_ids_json(used_connector_ids)?)
             .bind(thread_id.to_string())
             .execute(self.pool.as_ref())
             .await?;
@@ -712,8 +728,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    used_connector_ids,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -740,7 +757,8 @@ ON CONFLICT(id) DO UPDATE SET
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
     git_branch = COALESCE(threads.git_branch, excluded.git_branch),
-    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url)
+    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url),
+    used_connector_ids = threads.used_connector_ids
             "#,
         )
         .bind(metadata.id.to_string())
@@ -779,6 +797,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(used_connector_ids_json(&metadata.used_connector_ids)?)
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;
@@ -942,9 +961,15 @@ SELECT
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.used_connector_ids
 "#,
     );
+}
+
+fn used_connector_ids_json(used_connector_ids: &[String]) -> anyhow::Result<String> {
+    serde_json::to_string(used_connector_ids)
+        .map_err(|err| anyhow::anyhow!("failed to serialize used connector ids: {err}"))
 }
 
 pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
@@ -1142,6 +1167,51 @@ mod tests {
                 .await
                 .expect("memory mode should remain readable");
         assert_eq!(memory_mode, "disabled");
+    }
+
+    #[tokio::test]
+    async fn used_connector_ids_are_updated_explicitly_and_preserved_by_upsert() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("initial insert should succeed");
+        runtime
+            .set_thread_used_connector_ids(
+                thread_id,
+                &[
+                    "connector_calendar".to_string(),
+                    "connector_drive".to_string(),
+                ],
+            )
+            .await
+            .expect("used connector update should succeed");
+
+        metadata.title = "updated title".to_string();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("upsert should succeed");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(
+            persisted.used_connector_ids,
+            vec![
+                "connector_calendar".to_string(),
+                "connector_drive".to_string()
+            ]
+        );
     }
 
     #[tokio::test]

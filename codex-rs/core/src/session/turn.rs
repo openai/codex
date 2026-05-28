@@ -37,6 +37,7 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::sensitive_connector_policy;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -497,6 +498,7 @@ async fn build_skills_and_plugins(
     } else {
         Vec::new()
     };
+    let used_connector_ids = sess.get_used_connector_ids().await;
     let available_connectors = if turn_context.apps_enabled() {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
             loaded_plugins
@@ -505,7 +507,10 @@ async fn build_skills_and_plugins(
                 .map(|connector_id| connector_id.0),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         );
-        connectors::with_app_enabled_state(connectors, &turn_context.config)
+        sensitive_connector_policy::filter_connectors_after_sensitive_usage(
+            connectors::with_app_enabled_state(connectors, &turn_context.config),
+            &used_connector_ids,
+        )
     } else {
         Vec::new()
     };
@@ -558,6 +563,12 @@ async fn build_skills_and_plugins(
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&user_input);
     explicitly_enabled_connectors.extend(skill_connector_ids);
+    explicitly_enabled_connectors.retain(|connector_id| {
+        sensitive_connector_policy::connector_allowed_after_sensitive_usage(
+            &used_connector_ids,
+            connector_id,
+        )
+    });
     let connector_names_by_id = available_connectors
         .iter()
         .map(|connector| (connector.id.as_str(), connector.name.as_str()))
@@ -1055,9 +1066,13 @@ pub(crate) async fn built_tools(
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
         apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
+    let used_connector_ids = sess.get_used_connector_ids().await;
     let accessible_connectors_with_enabled_state =
         accessible_connectors.as_ref().map(|connectors| {
-            connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
+            sensitive_connector_policy::filter_connectors_after_sensitive_usage(
+                connectors::with_app_enabled_state(connectors.clone(), &turn_context.config),
+                &used_connector_ids,
+            )
         });
     let connectors = if apps_enabled {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
@@ -1067,10 +1082,12 @@ pub(crate) async fn built_tools(
                 .map(|connector_id| connector_id.0),
             accessible_connectors.clone().unwrap_or_default(),
         );
-        Some(connectors::with_app_enabled_state(
-            connectors,
-            &turn_context.config,
-        ))
+        Some(
+            sensitive_connector_policy::filter_connectors_after_sensitive_usage(
+                connectors::with_app_enabled_state(connectors, &turn_context.config),
+                &used_connector_ids,
+            ),
+        )
     } else {
         None
     };
@@ -1108,6 +1125,7 @@ pub(crate) async fn built_tools(
         connectors.as_deref(),
         &turn_context.config,
         search_tool_enabled(turn_context),
+        &used_connector_ids,
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
