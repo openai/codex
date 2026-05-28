@@ -150,7 +150,6 @@ pub(crate) struct AppServerStartedEventParams {
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) remote_control_enabled: bool,
     pub(crate) duration_ms: u64,
-    pub(crate) completed_at: u64,
 }
 
 #[derive(Serialize)]

@@ -22,7 +22,6 @@ use crate::facts::ThreadStartTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
-use crate::now_unix_seconds;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
@@ -172,7 +171,6 @@ impl AnalyticsEventsClient {
                 runtime: current_runtime_metadata(),
                 remote_control_enabled,
                 duration_ms,
-                completed_at: now_unix_seconds(),
             }),
         ));
     }

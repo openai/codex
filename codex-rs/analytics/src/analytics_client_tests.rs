@@ -1390,7 +1390,6 @@ fn app_server_started_event_serializes_expected_shape() {
             runtime: sample_runtime_metadata(),
             remote_control_enabled: true,
             duration_ms: 987,
-            completed_at: 12,
         },
     });
 
@@ -1408,8 +1407,7 @@ fn app_server_started_event_serializes_expected_shape() {
                     "runtime_arch": "aarch64"
                 },
                 "remote_control_enabled": true,
-                "duration_ms": 987,
-                "completed_at": 12
+                "duration_ms": 987
             }
         })
     );
@@ -1715,7 +1713,6 @@ async fn app_server_started_fact_emits_event() {
                     runtime: sample_runtime_metadata(),
                     remote_control_enabled: true,
                     duration_ms: 456,
-                    completed_at: 12,
                 },
             )),
             &mut events,
@@ -1735,8 +1732,7 @@ async fn app_server_started_fact_emits_event() {
                     "runtime_arch": "aarch64"
                 },
                 "remote_control_enabled": true,
-                "duration_ms": 456,
-                "completed_at": 12
+                "duration_ms": 456
             }
         }])
     );

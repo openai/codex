@@ -543,7 +543,6 @@ impl AnalyticsReducer {
                     runtime: input.runtime,
                     remote_control_enabled: input.remote_control_enabled,
                     duration_ms: input.duration_ms,
-                    completed_at: input.completed_at,
                 },
             },
         ));

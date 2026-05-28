@@ -279,7 +279,6 @@ pub(crate) struct AppServerStartedInput {
     pub runtime: CodexRuntimeMetadata,
     pub remote_control_enabled: bool,
     pub duration_ms: u64,
-    pub completed_at: u64,
 }
 
 pub struct ThreadStartTimingFact {
