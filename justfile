@@ -57,8 +57,8 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex {{args}}
 
-[unix]
 # Format Rust and Python SDK code.
+[unix]
 fmt:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
     uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
@@ -134,7 +134,7 @@ bazel-codex *args:
 [windows]
 [no-cd]
 bazel-codex *args:
-    bazel run //codex-rs/cli:codex -- {{args}}
+    bazel run //codex-rs/cli:codex --run_under='cd /d "{{invocation_directory_native()}}" &&' -- {{args}}
 
 [no-cd]
 bazel-lock-update:
@@ -227,4 +227,4 @@ log *args:
 
 [windows]
 log *args:
-    cargo run -p codex-state --bin logs_client -- {{args}}
+    cargo run -p codex-state --bin logs_client -- {{replace(args, "-- ", "")}}
