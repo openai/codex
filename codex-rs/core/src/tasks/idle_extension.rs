@@ -52,8 +52,13 @@ pub(crate) async fn maybe_start_turn(session: Arc<Session>) {
         return;
     }
 
-    // Probe before reserving so a thread with no idle-turn work stays freely available.
-    if next_idle_turn_candidate(&session).await.is_none() {
+    // Produce at most one idle-turn request. The validation below is the stale-request check.
+    let Some(candidate) = next_idle_turn_candidate(&session).await else {
+        return;
+    };
+
+    if has_active_or_pending_work(&session).await {
+        session.maybe_start_turn_for_pending_work().await;
         return;
     }
 
@@ -62,13 +67,6 @@ pub(crate) async fn maybe_start_turn(session: Arc<Session>) {
     if !reserve_idle_turn(&session).await {
         return;
     }
-
-    // Re-read the idle request after reservation. This drops any stale prompt that was produced
-    // before a goal/status/config change raced with the scheduler.
-    let Some(candidate) = next_idle_turn_candidate(&session).await else {
-        clear_reserved_idle_turn(&session).await;
-        return;
-    };
 
     if has_pending_work(&session).await {
         clear_reserved_idle_turn(&session).await;
@@ -236,12 +234,29 @@ fn idle_extension_input(request: ThreadIdleRequest) -> TurnInput {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
     use codex_extension_api::HiddenContext;
     use codex_extension_api::HiddenContextMarker;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseInputItem;
+    use pretty_assertions::assert_eq;
 
     use super::*;
+
+    struct CountingIdleTurnContributor(AtomicUsize);
+
+    impl codex_extension_api::ThreadIdleTurnContributor for CountingIdleTurnContributor {
+        fn request_thread_idle_turn<'a>(
+            &'a self,
+            _input: codex_extension_api::ThreadIdleInput<'a>,
+        ) -> codex_extension_api::ThreadIdleTurnRequestFuture<'a> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::ready(None))
+        }
+    }
 
     #[test]
     fn idle_extension_input_truncates_large_prompts() {
@@ -268,5 +283,20 @@ mod tests {
         assert!(text.contains("start"));
         assert!(text.contains("end"));
         assert!(text.len() < original_len);
+    }
+
+    #[tokio::test]
+    async fn idle_scheduler_requests_idle_turn_once() {
+        let (mut session, _turn_context) = crate::session::tests::make_session_and_context().await;
+        let contributor = Arc::new(CountingIdleTurnContributor(AtomicUsize::new(0)));
+        let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+        builder.thread_idle_turn_contributor(contributor.clone());
+        session.services.extensions = Arc::new(builder.build());
+        let session = Arc::new(session);
+
+        maybe_start_turn(Arc::clone(&session)).await;
+
+        assert_eq!(contributor.0.load(Ordering::SeqCst), 1);
+        assert!(session.active_turn.lock().await.is_none());
     }
 }

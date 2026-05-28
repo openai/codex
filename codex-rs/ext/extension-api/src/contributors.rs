@@ -81,9 +81,9 @@ pub type ThreadIdleTurnStartFuture<'a> = std::pin::Pin<Box<dyn Future<Output = b
 ///
 /// Implementations should normally return hidden context. Raw items are
 /// available for extensions that intentionally need unwrapped input. The host
-/// owns hidden-context wrapping, applies the declared idle-turn policy before
-/// calling into the contributor, and may ask the contributor to confirm the
-/// request again immediately before the turn starts.
+/// owns hidden-context wrapping, enforces the declared idle-turn policy before
+/// calling into the contributor, and validates returned requests immediately
+/// before starting a turn.
 pub trait ThreadIdleTurnContributor: Send + Sync {
     /// Returns the host scheduling policy for this contributor's idle turns.
     fn idle_turn_policy(&self) -> IdleTurnPolicy {
@@ -92,6 +92,10 @@ pub trait ThreadIdleTurnContributor: Send + Sync {
 
     /// Returns input to start an idle turn, if the extension still has work
     /// that should run without user input.
+    ///
+    /// The host calls this at most once per idle scheduling attempt. A returned
+    /// request can still be discarded if user work wins or validation fails, so
+    /// implementations should not treat this as a start notification.
     fn request_thread_idle_turn<'a>(
         &'a self,
         _input: ThreadIdleInput<'a>,
