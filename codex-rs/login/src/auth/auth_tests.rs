@@ -252,6 +252,51 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
+async fn chatgpt_auth_without_refresh_token_loads() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    let fake_jwt = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
+    })
+    .expect("failed to build fake jwt");
+    let auth_json_data = json!({
+        "auth_mode": "chatgpt",
+        "tokens": {
+            "id_token": fake_jwt,
+            "access_token": "test-access-token",
+            "account_id": WORKSPACE_ID_ALLOWED,
+        },
+        "last_refresh": Utc::now(),
+    });
+    std::fs::write(
+        get_auth_file(codex_home.path()),
+        serde_json::to_string_pretty(&auth_json_data).unwrap(),
+    )
+    .expect("failed to write auth file");
+
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("auth should load")
+    .expect("auth should be present");
+
+    let token_data = auth.get_token_data().expect("token data should load");
+    assert_eq!(auth.auth_mode(), AuthMode::Chatgpt);
+    assert_eq!(
+        auth.get_token().expect("access token should be available"),
+        "test-access-token"
+    );
+    assert!(!token_data.has_refresh_token());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
 async fn loads_api_key_from_auth_json() {
     let dir = tempdir().unwrap();
     let _access_token_guard = remove_access_token_env_var();

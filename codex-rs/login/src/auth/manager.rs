@@ -1694,6 +1694,14 @@ impl AuthManager {
         {
             return Ok(());
         }
+        if let Some(CodexAuth::Chatgpt(chatgpt_auth)) = auth_before_reload.as_ref()
+            && !chatgpt_auth
+                .current_token_data()
+                .is_some_and(|token_data| token_data.has_refresh_token())
+        {
+            self.reload().await;
+            return Ok(());
+        }
         let expected_account_id = auth_before_reload
             .as_ref()
             .and_then(CodexAuth::get_account_id);
@@ -1753,6 +1761,10 @@ impl AuthManager {
                         "Token data is not available.",
                     ))
                 })?;
+                if !token_data.has_refresh_token() {
+                    tracing::info!("Skipping token refresh because auth has no refresh token.");
+                    return Ok(());
+                }
                 self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
                     .await
             }
@@ -1819,9 +1831,14 @@ impl AuthManager {
             Some(auth_dot_json) => auth_dot_json,
             None => return false,
         };
-        if let Some(tokens) = auth_dot_json.tokens.as_ref()
-            && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
-        {
+        let Some(tokens) = auth_dot_json
+            .tokens
+            .as_ref()
+            .filter(|tokens| tokens.has_refresh_token())
+        else {
+            return false;
+        };
+        if let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token) {
             return expires_at
                 <= Utc::now()
                     + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES);

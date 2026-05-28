@@ -83,7 +83,7 @@ pub(crate) fn should_revoke_auth_tokens(
 
 fn revocable_token(auth_dot_json: &AuthDotJson) -> Option<(&str, RevokeTokenKind)> {
     let tokens = managed_chatgpt_tokens(auth_dot_json)?;
-    if !tokens.refresh_token.is_empty() {
+    if tokens.has_refresh_token() {
         Some((tokens.refresh_token.as_str(), RevokeTokenKind::Refresh))
     } else if !tokens.access_token.is_empty() {
         Some((tokens.access_token.as_str(), RevokeTokenKind::Access))

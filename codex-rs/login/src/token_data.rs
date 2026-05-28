@@ -19,9 +19,16 @@ pub struct TokenData {
     /// This is a JWT.
     pub access_token: String,
 
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub refresh_token: String,
 
     pub account_id: Option<String>,
+}
+
+impl TokenData {
+    pub(crate) fn has_refresh_token(&self) -> bool {
+        !self.refresh_token.is_empty()
+    }
 }
 
 /// Flat subset of useful claims in id_token from auth.json.
