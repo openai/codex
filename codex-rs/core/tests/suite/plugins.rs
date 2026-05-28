@@ -8,6 +8,8 @@ use std::time::Instant;
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -432,6 +434,77 @@ async fn explicitly_selected_skill_waits_for_pending_apps_startup() -> Result<()
             .iter()
             .any(|name| name == "mcp__codex_apps__google_calendar"),
         "expected app referenced by selected skill on the first turn"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selected_skill_rewaits_for_app_after_installing_mcp_dependency() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_connector_name_and_tools_list_delay(
+        &server,
+        "Google Calendar",
+        Some(Duration::from_secs(/*secs*/ 2)),
+    )
+    .await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = write_plugin_skill_plugin(codex_home.as_ref());
+    std::fs::write(
+        &skill_path,
+        "---\ndescription: inspect sample data\n---\n\nUse [$calendar](app://calendar).\n",
+    )
+    .expect("write plugin app skill");
+    let skill_agents_dir = skill_path.parent().expect("skill dir").join("agents");
+    std::fs::create_dir_all(&skill_agents_dir).expect("create skill agents dir");
+    let dependency_command = stdio_server_bin()?;
+    std::fs::write(
+        skill_agents_dir.join("openai.yaml"),
+        format!(
+            "dependencies:\n  tools:\n    - type: \"mcp\"\n      value: \"dependency\"\n      transport: \"stdio\"\n      command: \"{dependency_command}\"\n"
+        ),
+    )
+    .expect("write plugin skill dependencies");
+    let codex =
+        build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
+            .await?;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![codex_protocol::user_input::UserInput::Skill {
+                name: "sample:sample-search".into(),
+                path: skill_path,
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                permission_profile: Some(PermissionProfile::Disabled),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = mock.single_request();
+    assert!(
+        tool_names(&request.body_json())
+            .iter()
+            .any(|name| name == "mcp__codex_apps__google_calendar"),
+        "expected app referenced by selected skill after dependency installation refresh"
+    );
+    assert!(
+        request.tool_by_name("mcp__dependency", "echo").is_some(),
+        "expected newly installed MCP dependency on the first turn"
     );
 
     Ok(())

@@ -509,6 +509,8 @@ async fn build_skills_and_plugins(
     {
         explicitly_requested_mcp_servers.insert(CODEX_APPS_MCP_SERVER_NAME.to_string());
     }
+    let explicit_mcp_servers_to_rewait_after_skill_install =
+        explicitly_requested_mcp_servers.clone();
     wait_for_explicit_mcp_servers(
         sess,
         turn_context,
@@ -560,7 +562,7 @@ async fn build_skills_and_plugins(
         &skills_outcome.disabled_paths,
         &connector_slug_counts,
     );
-    let skill_dependency_servers = maybe_prompt_and_install_mcp_dependencies(
+    let mut skill_dependency_servers = maybe_prompt_and_install_mcp_dependencies(
         sess,
         turn_context,
         cancellation_token,
@@ -568,13 +570,18 @@ async fn build_skills_and_plugins(
         Some(sess.mcp_elicitation_reviewer()),
     )
     .await;
-    wait_for_explicit_mcp_servers(
-        sess,
-        turn_context,
-        cancellation_token,
-        skill_dependency_servers,
-    )
-    .await?;
+    if !skill_dependency_servers.is_empty() {
+        // Installing a dependency refreshes the manager and restarts any app or
+        // plugin server already awaited for this same explicit invocation.
+        skill_dependency_servers.extend(explicit_mcp_servers_to_rewait_after_skill_install);
+        wait_for_explicit_mcp_servers(
+            sess,
+            turn_context,
+            cancellation_token,
+            skill_dependency_servers,
+        )
+        .await?;
+    }
 
     let SkillInjections {
         items: skill_injections,
