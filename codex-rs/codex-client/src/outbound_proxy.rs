@@ -271,6 +271,7 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
     }
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SystemProxyDecision {
     Direct {
@@ -464,6 +465,7 @@ fn wildcard_host_match(pattern: &str, host: &str) -> bool {
     pattern.ends_with('*') || remaining.is_empty()
 }
 
+#[cfg(any(test, target_os = "windows"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedProxyListDecision {
     Direct,
@@ -472,6 +474,7 @@ enum ParsedProxyListDecision {
     Unavailable,
 }
 
+#[cfg(any(test, target_os = "windows"))]
 fn parse_proxy_list(input: &str, target_scheme: &str) -> ParsedProxyListDecision {
     let mut saw_unsupported = false;
     let mut http_fallback = None;
@@ -503,6 +506,7 @@ fn parse_proxy_list(input: &str, target_scheme: &str) -> ParsedProxyListDecision
     }
 }
 
+#[cfg(any(test, target_os = "windows"))]
 fn parse_proxy_token(token: &str, target_scheme: &str) -> ParsedProxyListDecision {
     if token.eq_ignore_ascii_case("DIRECT") {
         return ParsedProxyListDecision::Direct;
@@ -529,6 +533,7 @@ fn parse_proxy_token(token: &str, target_scheme: &str) -> ParsedProxyListDecisio
     proxy_url_from_hostport("http", token)
 }
 
+#[cfg(any(test, target_os = "windows"))]
 fn parse_proxy_key_token(token: &str, target_scheme: &str) -> Option<ParsedProxyListDecision> {
     let (key, value) = token.split_once('=')?;
     if key.trim().eq_ignore_ascii_case(target_scheme) {
@@ -538,6 +543,7 @@ fn parse_proxy_key_token(token: &str, target_scheme: &str) -> Option<ParsedProxy
     }
 }
 
+#[cfg(any(test, target_os = "windows"))]
 fn proxy_url_from_hostport(proxy_scheme: &str, hostport: &str) -> ParsedProxyListDecision {
     if hostport.is_empty() {
         return ParsedProxyListDecision::Unavailable;
@@ -548,6 +554,7 @@ fn proxy_url_from_hostport(proxy_scheme: &str, hostport: &str) -> ParsedProxyLis
     ParsedProxyListDecision::Proxy(format!("{proxy_scheme}://{hostport}"))
 }
 
+#[cfg(any(test, target_os = "windows"))]
 impl fmt::Display for ParsedProxyListDecision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
