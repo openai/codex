@@ -190,17 +190,18 @@ pub(crate) fn assert_thread_initialization_timing_event(
     thread_id: &str,
     initialization_mode: &str,
 ) {
+    let durations_are_numbers = [
+        "duration_ms",
+        "prepare_duration_ms",
+        "spawn_duration_ms",
+        "finalize_duration_ms",
+    ]
+    .map(|field| event["event_params"][field].as_u64().is_some());
     assert_eq!(
         serde_json::json!({
             "thread_id": event["event_params"]["thread_id"],
             "initialization_mode": event["event_params"]["initialization_mode"],
-            "durations_are_numbers": [
-                "duration_ms",
-                "prepare_duration_ms",
-                "spawn_duration_ms",
-                "finalize_duration_ms",
-            ]
-            .map(|field| event["event_params"][field].as_u64().is_some()),
+            "durations_are_numbers": durations_are_numbers,
         }),
         serde_json::json!({
             "thread_id": thread_id,
