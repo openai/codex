@@ -1554,7 +1554,6 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     .await?;
 
     let cwd_root = cwd.path().abs();
-    let memories_root = codex_home.path().join("memories").abs();
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![
@@ -1576,18 +1575,12 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 },
                 access: FileSystemAccessMode::Read,
             },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: memories_root.clone(),
-                },
-                access: FileSystemAccessMode::Write,
-            },
         ]),
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![memories_root],
+            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1816,7 +1809,7 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
 }
 
 #[tokio::test]
-async fn permission_profile_override_applies_runtime_roots_to_legacy_projection()
+async fn permission_profile_override_keeps_memories_root_out_of_legacy_projection()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
@@ -1851,7 +1844,7 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
 
     let memories_root = codex_home.path().join("memories").abs();
     assert!(
-        config
+        !config
             .permissions
             .file_system_sandbox_policy()
             .can_write_path_with_cwd(memories_root.as_path(), cwd.path())
@@ -1859,7 +1852,7 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![memories_root],
+            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -2757,9 +2750,6 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
             description: Some("Workspace access.".to_string()),
         }]
     );
-    let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("memories"),
-    )?)?;
     assert!(
         config
             .permissions
@@ -2769,7 +2759,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![external_write_path, memories_root],
+            writable_roots: vec![external_write_path],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -4514,13 +4504,15 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
 }
 
 #[tokio::test]
-async fn workspace_write_always_includes_memories_root_once() -> std::io::Result<()> {
+async fn workspace_write_includes_configured_writable_root_once_without_memories_root()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let memories_root = codex_home.path().join("memories");
+    let writable_root = codex_home.path().join("writable").abs();
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
-                writable_roots: vec![memories_root.abs()],
+                writable_roots: vec![writable_root.clone(), writable_root.clone()],
                 ..Default::default()
             }),
             ..Default::default()
@@ -4540,22 +4532,79 @@ async fn workspace_write_always_includes_memories_root_once() -> std::io::Result
         }
     } else {
         assert!(
-            memories_root.is_dir(),
-            "expected memories root directory to exist at {}",
+            !memories_root.exists(),
+            "expected config load not to create memories root at {}",
             memories_root.display()
         );
         let expected_memories_root = memories_root.abs();
         match &config.legacy_sandbox_policy() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert!(!writable_roots.contains(&expected_memories_root));
                 assert_eq!(
                     writable_roots
                         .iter()
-                        .filter(|root| **root == expected_memories_root)
+                        .filter(|root| **root == writable_root)
                         .count(),
                     1,
                     "expected single writable root entry for {}",
-                    expected_memories_root.display()
+                    writable_root.display()
                 );
+            }
+            other => panic!("expected workspace-write policy, got {other:?}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_tool_makes_memories_root_readable_without_creating_or_widening_writes()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let memories_root = codex_home.path().join("memories");
+    let memories_root_abs = memories_root.abs();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            features: Some(FeaturesToml::from(BTreeMap::from([(
+                "memories".to_string(),
+                true,
+            )]))),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(
+        !memories_root.exists(),
+        "expected config load not to create memories root at {}",
+        memories_root.display()
+    );
+    let file_system_policy = config.permissions.file_system_sandbox_policy();
+    assert!(file_system_policy.can_read_path_with_cwd(memories_root_abs.as_path(), cwd.path()));
+    assert!(!file_system_policy.can_write_path_with_cwd(memories_root_abs.as_path(), cwd.path()));
+
+    if cfg!(target_os = "windows") {
+        match &config.legacy_sandbox_policy() {
+            SandboxPolicy::ReadOnly { .. } => {}
+            other => panic!("expected read-only policy on Windows, got {other:?}"),
+        }
+    } else {
+        match &config.legacy_sandbox_policy() {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert!(!writable_roots.contains(&memories_root_abs));
             }
             other => panic!("expected workspace-write policy, got {other:?}"),
         }

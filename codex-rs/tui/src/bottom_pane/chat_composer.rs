@@ -111,7 +111,6 @@
 //! composer flushes/clears any in-flight burst state so it cannot leak into subsequent input.
 //!
 //! For the detailed burst state machine, see `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
-//! For a narrative overview of the combined state machine, see `docs/tui-chat-composer.md`.
 //!
 //! # PasteBurst Integration Points
 //!
@@ -3504,6 +3503,9 @@ impl ChatComposer {
             && self
                 .slash_input()
                 .is_editing_command_name(first_line, cursor);
+        let command_filter_text = caret_on_first_line
+            .then(|| slash_input::command_popup_filter_text(first_line, cursor))
+            .flatten();
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
@@ -3517,14 +3519,18 @@ impl ChatComposer {
         match &mut self.popups.active {
             ActivePopup::Command(popup) => {
                 if is_editing_slash_command_name {
-                    popup.on_composer_text_change(first_line.to_string());
+                    if let Some(command_filter_text) = command_filter_text.as_deref() {
+                        popup.on_composer_text_change(command_filter_text.to_string());
+                    }
                 } else {
                     self.popups.active = ActivePopup::None;
                 }
             }
             _ => {
-                if is_editing_slash_command_name {
-                    let command_popup = self.slash_input().command_popup(first_line);
+                if is_editing_slash_command_name
+                    && let Some(command_filter_text) = command_filter_text.as_deref()
+                {
+                    let command_popup = self.slash_input().command_popup(command_filter_text);
                     self.popups.active = ActivePopup::Command(command_popup);
                 }
             }

@@ -56,6 +56,7 @@ const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
+const CANCELLATION_TERMINATION_GRACE_PERIOD: Duration = Duration::from_millis(50);
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -1358,15 +1359,49 @@ async fn consume_output(
             (exit_status, false)
         }
         outcome = &mut expiration_wait => {
-            kill_child_process_group(&mut child)?;
-            child.start_kill()?;
-            let timed_out = matches!(outcome, Some(ExecExpirationOutcome::TimedOut));
-            let exit_status = if timed_out {
-                synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE)
-            } else {
-                synthetic_exit_status_for_code(/*code*/ 1)
-            };
-            (exit_status, timed_out)
+            match outcome {
+                Some(ExecExpirationOutcome::TimedOut) => {
+                    kill_child_process_group(&mut child)?;
+                    child.start_kill()?;
+                    (
+                        synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE),
+                        true,
+                    )
+                }
+                Some(ExecExpirationOutcome::Cancelled) => {
+                    // Let TERM-aware processes run cleanup briefly, then kill any
+                    // remaining members of the original process group.
+                    let process_group_id = child.id();
+                    let should_escalate = if let Some(process_group_id) = process_group_id {
+                        codex_utils_pty::process_group::terminate_process_group(process_group_id)?
+                    } else {
+                        false
+                    };
+                    match tokio::time::timeout(
+                        CANCELLATION_TERMINATION_GRACE_PERIOD,
+                        child.wait(),
+                    )
+                    .await
+                    {
+                        Ok(status) => {
+                            status?;
+                            if should_escalate
+                                && let Some(process_group_id) = process_group_id
+                            {
+                                codex_utils_pty::process_group::kill_process_group(
+                                    process_group_id,
+                                )?;
+                            }
+                        }
+                        Err(_) => {
+                            kill_child_process_group(&mut child)?;
+                            child.start_kill()?;
+                        }
+                    }
+                    (synthetic_exit_status_for_code(/*code*/ 1), false)
+                }
+                None => unreachable!("expiration wait only resolves while expiration is active"),
+            }
         }
         _ = tokio::signal::ctrl_c() => {
             kill_child_process_group(&mut child)?;

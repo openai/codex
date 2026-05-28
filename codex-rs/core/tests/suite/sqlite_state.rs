@@ -94,6 +94,104 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            responses::sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+
+    let dynamic_tool = DynamicToolSpec {
+        namespace: None,
+        name: "resume_lookup".to_string(),
+        description: "Look up a value after resume.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": { "query": { "type": "string" } },
+            "required": ["query"],
+            "additionalProperties": false,
+        }),
+        defer_loading: false,
+    };
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+    });
+    let base_test = builder.build(&server).await?;
+    let started = base_test
+        .thread_manager
+        .start_thread_with_tools(
+            base_test.config.clone(),
+            vec![dynamic_tool.clone()],
+            /*persist_extended_history*/ false,
+        )
+        .await?;
+    let rollout_path = started
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    started
+        .thread
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "persist this thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&started.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
+    });
+    let resumed = resume_builder
+        .resume(&server, base_test.home.clone(), rollout_path)
+        .await?;
+    resumed.submit_turn("use the restored tool").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let resumed_body = requests[1].body_json();
+    let tools = resumed_body
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .expect("resumed request tools");
+    let restored_tool = tools
+        .iter()
+        .find(|tool| tool.get("name") == Some(&json!(dynamic_tool.name.as_str())))
+        .expect("dynamic tool should be restored from rollout metadata");
+    assert_eq!(
+        restored_tool.get("description"),
+        Some(&json!(dynamic_tool.description.as_str()))
+    );
+    assert_eq!(
+        restored_tool.get("parameters"),
+        Some(&dynamic_tool.input_schema)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn backfill_scans_existing_rollouts() -> Result<()> {
     let server = start_mock_server().await;
 
@@ -101,32 +199,6 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
     let rollout_rel_path = format!("sessions/2026/01/27/rollout-2026-01-27T12-00-00-{uuid}.jsonl");
     let rollout_rel_path_for_hook = rollout_rel_path.clone();
-
-    let dynamic_tools = vec![
-        DynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            name: "geo_lookup".to_string(),
-            description: "lookup a city".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "required": ["city"],
-                "properties": { "city": { "type": "string" } }
-            }),
-            defer_loading: true,
-        },
-        DynamicToolSpec {
-            namespace: None,
-            name: "weather_lookup".to_string(),
-            description: "lookup weather".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "required": ["zip"],
-                "properties": { "zip": { "type": "string" } }
-            }),
-            defer_loading: false,
-        },
-    ];
-    let dynamic_tools_for_hook = dynamic_tools.clone();
 
     let mut builder = test_codex()
         .with_pre_build_hook(move |codex_home| {
@@ -150,7 +222,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     agent_role: None,
                     model_provider: None,
                     base_instructions: None,
-                    dynamic_tools: Some(dynamic_tools_for_hook),
+                    dynamic_tools: None,
                     memory_mode: None,
                 },
                 git: None,
@@ -216,17 +288,6 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     assert_eq!(metadata.rollout_path, rollout_path.to_path_buf());
     assert_eq!(metadata.model_provider, default_provider);
     assert!(metadata.first_user_message.is_some());
-
-    let mut stored_tools = None;
-    for _ in 0..40 {
-        stored_tools = db.get_dynamic_tools(thread_id).await?;
-        if stored_tools.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    let stored_tools = stored_tools.expect("dynamic tools should be stored");
-    assert_eq!(stored_tools, dynamic_tools);
 
     Ok(())
 }

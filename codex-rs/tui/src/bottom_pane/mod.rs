@@ -25,7 +25,9 @@ use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
+use crate::keymap::primary_binding;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
@@ -352,6 +354,12 @@ impl BottomPane {
     pub fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
         self.keymap = keymap.clone();
         self.composer.set_keymap_bindings(keymap);
+        let interrupt_binding = primary_binding(&keymap.chat.interrupt_turn);
+        self.pending_input_preview
+            .set_interrupt_binding(interrupt_binding);
+        if let Some(status) = self.status.as_mut() {
+            status.set_interrupt_binding(interrupt_binding);
+        }
         self.request_redraw();
     }
 
@@ -617,13 +625,12 @@ impl BottomPane {
                 .and_then(parse_slash_name)
                 .is_some_and(|(name, _, _)| name == "agent");
 
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
+            // If a task is running and a status line is visible, allow the
+            // configured action to interrupt even while the composer has focus.
             // When a popup is active, prefer dismissing it over interrupting the task.
-            if key_event.code == KeyCode::Esc
-                && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            if self.keymap.chat.interrupt_turn.is_pressed(key_event)
                 && self.is_task_running
-                && !is_agent_command
+                && !(is_agent_command && key_event.code == KeyCode::Esc)
                 && !self.composer.popup_active()
                 && !self.composer_should_handle_vim_insert_escape(key_event)
                 && let Some(status) = &self.status
@@ -989,6 +996,7 @@ impl BottomPane {
                 }
                 if let Some(status) = self.status.as_mut() {
                     status.set_interrupt_hint_visible(/*visible*/ true);
+                    status.set_interrupt_binding(primary_binding(&self.keymap.chat.interrupt_turn));
                 }
                 self.sync_status_inline_message();
                 self.request_redraw();
@@ -1017,6 +1025,9 @@ impl BottomPane {
                 self.frame_requester.clone(),
                 self.animations_enabled,
             ));
+            if let Some(status) = self.status.as_mut() {
+                status.set_interrupt_binding(primary_binding(&self.keymap.chat.interrupt_turn));
+            }
             self.sync_status_inline_message();
             self.request_redraw();
         }
@@ -2728,6 +2739,30 @@ mod tests {
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
+        );
+    }
+
+    #[test]
+    fn remapped_interrupt_turn_uses_configured_key_including_agent_drafts() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.chat.interrupt_turn = vec![crate::key_hint::plain(KeyCode::F(12))];
+        pane.set_keymap_bindings(&keymap);
+        pane.set_task_running(/*running*/ true);
+        pane.insert_str("/agent ");
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            rx.try_recv().is_err(),
+            "expected Esc to remain local after remapping interruption"
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected configured key to interrupt while `/agent` is being edited"
         );
     }
 

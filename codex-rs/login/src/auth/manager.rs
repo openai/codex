@@ -844,8 +844,8 @@ async fn request_chatgpt_token_refresh(
     } else {
         let body = response.text().await.unwrap_or_default();
         tracing::error!("Failed to refresh token: {status}: {body}");
-        if status == StatusCode::UNAUTHORIZED {
-            let failed = classify_refresh_token_failure(&body);
+        let failed = classify_refresh_token_failure(&body);
+        if status == StatusCode::UNAUTHORIZED || failed.reason != RefreshTokenFailedReason::Other {
             Err(RefreshTokenError::Permanent(failed))
         } else {
             let message = try_parse_error_message(&body);
@@ -871,7 +871,7 @@ fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
         tracing::warn!(
             backend_code = normalized_code.as_deref(),
             backend_body = body,
-            "Encountered unknown 401 response while refreshing token"
+            "Encountered unknown response while refreshing token"
         );
     }
 

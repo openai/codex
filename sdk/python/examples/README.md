@@ -14,25 +14,30 @@ multimodal or structured input lists.
 ## Prerequisites
 
 - Python `>=3.10`
-- Install SDK dependencies for the same Python interpreter you will use to run examples
+- Install the SDK for the same Python interpreter you will use to run examples
 
-Recommended setup (from `sdk/python`):
+Install the published beta:
 
 ```bash
-uv sync
+python -m pip install openai-codex
+```
+
+The SDK installs its pinned `openai-codex-cli-bin` runtime dependency.
+The pinned runtime version comes from the SDK package dependency.
+
+## Run From A Checkout
+
+Contributors using these checked-in scripts should install development
+dependencies from `sdk/python`:
+
+```bash
+uv sync --extra dev
 source .venv/bin/activate
 ```
 
-When running examples from this repo checkout, the SDK source uses the local
-tree and does not bundle a runtime binary. The helper in `examples/_bootstrap.py`
-uses the installed `openai-codex-cli-bin` runtime package.
-
-If the pinned `openai-codex-cli-bin` runtime is not already installed, the bootstrap
-will download the matching GitHub release artifact, stage a temporary local
-`openai-codex-cli-bin` package, install it into your active interpreter, and clean up
-the temporary files afterward.
-
-The pinned runtime version comes from the SDK package dependency.
+The examples bootstrap local SDK imports from `sdk/python/src`. If the pinned
+runtime is not already installed, the bootstrap installs the matching runtime
+package for the active interpreter and cleans up temporary files afterward.
 
 ## Run examples
 
@@ -43,10 +48,7 @@ python examples/<example-folder>/sync.py
 python examples/<example-folder>/async.py
 ```
 
-The examples bootstrap local imports from `sdk/python/src` automatically, so no
-SDK wheel install is required. You only need the Python dependencies for your
-active interpreter and an installed `openai-codex-cli-bin` runtime package (either
-already present or automatically provisioned by the bootstrap).
+The checked-in examples use the local SDK source tree automatically.
 
 ## Recommended first run
 

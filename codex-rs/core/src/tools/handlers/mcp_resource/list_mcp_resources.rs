@@ -82,10 +82,9 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
 
         let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
             if let Some(server_name) = server.clone() {
-                let params = cursor.clone().map(|value| PaginatedRequestParams {
-                    meta: None,
-                    cursor: Some(value),
-                });
+                let params = cursor
+                    .clone()
+                    .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
                 let result = session
                     .list_resources(&server_name, params)
                     .await
