@@ -1392,6 +1392,7 @@ async fn seed_pathless_store_thread(
 fn store_history_items() -> Vec<RolloutItem> {
     vec![RolloutItem::EventMsg(EventMsg::UserMessage(
         UserMessageEvent {
+            client_id: None,
             message: "history from store".to_string(),
             images: None,
             local_images: Vec::new(),

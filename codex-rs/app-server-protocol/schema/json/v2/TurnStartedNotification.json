@@ -645,7 +645,6 @@
         {
           "properties": {
             "clientId": {
-              "default": null,
               "type": [
                 "string",
                 "null"

@@ -214,7 +214,6 @@ pub enum ThreadItem {
     #[ts(rename_all = "camelCase")]
     UserMessage {
         id: String,
-        #[serde(default)]
         client_id: Option<String>,
         content: Vec<UserInput>,
     },

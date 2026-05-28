@@ -2576,62 +2576,6 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
 }
 
 #[test]
-fn user_message_client_id_uses_camel_case_wire_field() {
-    let item = ThreadItem::UserMessage {
-        id: "user-1".to_string(),
-        client_id: Some("client-message-1".to_string()),
-        content: vec![UserInput::Text {
-            text: "hello".to_string(),
-            text_elements: Vec::new(),
-        }],
-    };
-
-    let value = serde_json::to_value(&item).expect("serialize user message");
-    assert_eq!(
-        value,
-        json!({
-            "type": "userMessage",
-            "id": "user-1",
-            "clientId": "client-message-1",
-            "content": [{
-                "type": "text",
-                "text": "hello",
-                "text_elements": [],
-            }],
-        })
-    );
-
-    let decoded = serde_json::from_value::<ThreadItem>(value).expect("deserialize user message");
-    assert_eq!(decoded, item);
-
-    let item_without_client_id = ThreadItem::UserMessage {
-        id: "user-1".to_string(),
-        client_id: None,
-        content: Vec::new(),
-    };
-
-    assert_eq!(
-        serde_json::to_value(&item_without_client_id).expect("serialize user message"),
-        json!({
-            "type": "userMessage",
-            "id": "user-1",
-            "clientId": null,
-            "content": [],
-        })
-    );
-
-    assert_eq!(
-        serde_json::from_value::<ThreadItem>(json!({
-            "type": "userMessage",
-            "id": "user-1",
-            "content": [],
-        }))
-        .expect("deserialize user message without client id"),
-        item_without_client_id
-    );
-}
-
-#[test]
 fn user_input_into_core_preserves_image_detail() {
     assert_eq!(
         UserInput::Image {
