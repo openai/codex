@@ -1053,7 +1053,7 @@ async fn thread_goal_set_persists_resumable_stopped_statuses() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()> {
+async fn thread_goal_set_restarts_budget_limited_goal_with_changed_objective() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -1091,7 +1091,7 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
         mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
     )
     .await??;
-    let goal: ThreadGoalSetResponse = to_response(goal_resp)?;
+    let _goal: ThreadGoalSetResponse = to_response(goal_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("thread/goal/updated"),
@@ -1128,8 +1128,6 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
             Some(json!({
                 "threadId": thread_id.to_string(),
                 "objective": "keep polishing with clearer wording",
-                "status": "active",
-                "tokenBudget": 40,
             })),
         )
         .await?;
@@ -1149,14 +1147,13 @@ async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()>
         .await?
         .expect("thread metadata should still exist");
 
-    assert_eq!(persisted_goal.goal_id, updated_goal.goal_id);
+    assert_ne!(persisted_goal.goal_id, updated_goal.goal_id);
     assert_eq!(thread_metadata.preview.as_deref(), Some("keep polishing"));
     assert_eq!(edit.goal.objective, "keep polishing with clearer wording");
-    assert_eq!(edit.goal.status, ThreadGoalStatus::BudgetLimited);
+    assert_eq!(edit.goal.status, ThreadGoalStatus::Active);
     assert_eq!(edit.goal.token_budget, Some(40));
-    assert_eq!(edit.goal.tokens_used, 50);
-    assert_eq!(edit.goal.time_used_seconds, 12);
-    assert_eq!(edit.goal.created_at, goal.goal.created_at);
+    assert_eq!(edit.goal.tokens_used, 0);
+    assert_eq!(edit.goal.time_used_seconds, 0);
 
     Ok(())
 }

@@ -157,26 +157,41 @@ impl ThreadGoalRequestProcessor {
                 .map_err(|err| invalid_request(err.to_string()))?;
             if let Some(goal) = existing_goal.as_ref() {
                 let previous_status = ExternalGoalPreviousStatus::from(goal);
-                state_db
-                    .thread_goals()
-                    .update_thread_goal(
-                        thread_id,
-                        codex_state::GoalUpdate {
-                            objective: Some(objective.to_string()),
-                            status,
-                            token_budget: params.token_budget,
-                            expected_goal_id: Some(goal.goal_id.clone()),
-                        },
-                    )
-                    .await
-                    .and_then(|goal| {
-                        goal.ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "cannot update goal for thread {thread_id}: no goal exists"
-                            )
+                if goal.status == codex_state::ThreadGoalStatus::BudgetLimited
+                    && goal.objective != objective
+                {
+                    state_db
+                        .thread_goals()
+                        .replace_thread_goal(
+                            thread_id,
+                            objective,
+                            status.unwrap_or(codex_state::ThreadGoalStatus::Active),
+                            params.token_budget.unwrap_or(goal.token_budget),
+                        )
+                        .await
+                        .map(|goal| (goal, previous_status))
+                } else {
+                    state_db
+                        .thread_goals()
+                        .update_thread_goal(
+                            thread_id,
+                            codex_state::GoalUpdate {
+                                objective: Some(objective.to_string()),
+                                status,
+                                token_budget: params.token_budget,
+                                expected_goal_id: Some(goal.goal_id.clone()),
+                            },
+                        )
+                        .await
+                        .and_then(|goal| {
+                            goal.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "cannot update goal for thread {thread_id}: no goal exists"
+                                )
+                            })
                         })
-                    })
-                    .map(|goal| (goal, previous_status))
+                        .map(|goal| (goal, previous_status))
+                }
             } else {
                 let previous_status = ExternalGoalPreviousStatus::NewGoal;
                 state_db
