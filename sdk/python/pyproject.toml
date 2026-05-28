@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openai-codex"
-version = "0.1.0b2"
+version = "0.0.0-dev"
 description = "Python SDK for Codex"
 readme = "README.md"
 requires-python = ">=3.10"
