@@ -772,12 +772,21 @@ impl AgentControl {
             match state.get_thread(thread_id).await {
                 Ok(thread) => {
                     if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+                        if let Err(err) = self.mark_thread_spawn_edge_closed(state, thread_id).await
+                        {
+                            warn!("failed to close stale agent edge for {thread_id}: {err}");
+                            continue;
+                        }
                         thread.wait_until_terminated().await;
                         let _ = state.remove_thread(&thread_id).await;
                         self.state.release_spawned_thread(thread_id);
                     }
                 }
                 Err(CodexErr::ThreadNotFound(_)) => {
+                    if let Err(err) = self.mark_thread_spawn_edge_closed(state, thread_id).await {
+                        warn!("failed to close stale agent edge for {thread_id}: {err}");
+                        continue;
+                    }
                     self.state.release_spawned_thread(thread_id);
                 }
                 Err(err) => {
@@ -814,14 +823,26 @@ impl AgentControl {
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
         let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
-        if known_agent || state.get_thread(agent_id).await.is_ok() {
-            self.mark_thread_spawn_edge_closed(&state, agent_id).await?;
-        }
-        match Box::pin(self.shutdown_agent_tree(agent_id)).await {
+        let edge_close_result = if known_agent || state.get_thread(agent_id).await.is_ok() {
+            self.mark_thread_spawn_edge_closed(&state, agent_id).await
+        } else {
+            Ok(())
+        };
+        let shutdown_result = match Box::pin(self.shutdown_agent_tree(agent_id)).await {
             Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) if known_agent => {
                 Ok(String::new())
             }
             result => result,
+        };
+        match (edge_close_result, shutdown_result) {
+            (Err(edge_err), Err(shutdown_err)) => {
+                warn!(
+                    "failed to shut down agent {agent_id} after edge close failed: {shutdown_err}"
+                );
+                Err(edge_err)
+            }
+            (Err(edge_err), Ok(_)) => Err(edge_err),
+            (Ok(()), shutdown_result) => shutdown_result,
         }
     }
 
