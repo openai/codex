@@ -38,6 +38,23 @@ impl Session {
         }
     }
 
+    pub(crate) async fn emit_thread_idle_lifecycle_if_idle(&self) {
+        if self.active_turn.lock().await.is_some()
+            || self.input_queue.has_trigger_turn_mailbox_items().await
+        {
+            return;
+        }
+
+        for contributor in self.services.extensions.thread_lifecycle_contributors() {
+            contributor
+                .on_thread_idle(codex_extension_api::ThreadIdleInput {
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                })
+                .await;
+        }
+    }
+
     pub(super) async fn emit_turn_abort_lifecycle(
         &self,
         reason: TurnAbortReason,
