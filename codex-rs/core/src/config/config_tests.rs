@@ -8626,7 +8626,7 @@ async fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error
 }
 
 #[tokio::test]
-async fn test_untrusted_project_gets_workspace_write_sandbox() -> anyhow::Result<()> {
+async fn test_untrusted_project_gets_read_only_sandbox() -> anyhow::Result<()> {
     let config_with_untrusted = r#"
 [projects."/tmp/test"]
 trust_level = "untrusted"
@@ -8647,18 +8647,7 @@ trust_level = "untrusted"
     )
     .await;
 
-    // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
-    if cfg!(target_os = "windows") {
-        assert!(
-            matches!(resolution, SandboxPolicy::ReadOnly { .. }),
-            "Expected ReadOnly on Windows, got {resolution:?}"
-        );
-    } else {
-        assert!(
-            matches!(resolution, SandboxPolicy::WorkspaceWrite { .. }),
-            "Expected WorkspaceWrite for untrusted project, got {resolution:?}"
-        );
-    }
+    assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
 
     Ok(())
 }
@@ -9015,24 +9004,11 @@ async fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow:
         "Expected UnlessTrusted approval policy for untrusted project"
     );
 
-    // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
-    if cfg!(target_os = "windows") {
-        assert!(
-            matches!(
-                &config.legacy_sandbox_policy(),
-                SandboxPolicy::ReadOnly { .. }
-            ),
-            "Expected ReadOnly on Windows"
-        );
-    } else {
-        assert!(
-            matches!(
-                &config.legacy_sandbox_policy(),
-                SandboxPolicy::WorkspaceWrite { .. }
-            ),
-            "Expected WorkspaceWrite sandbox for untrusted project"
-        );
-    }
+    assert_eq!(
+        config.legacy_sandbox_policy(),
+        SandboxPolicy::new_read_only_policy(),
+        "Expected ReadOnly sandbox for untrusted project"
+    );
 
     Ok(())
 }

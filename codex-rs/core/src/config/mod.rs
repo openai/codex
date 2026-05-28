@@ -3845,28 +3845,33 @@ fn resolve_default_permissions<'a>(
     requirements_toml: &'a ConfigRequirementsToml,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<Option<&'a str>> {
-    let allowed_permissions = requirements_toml.allowed_permissions.as_ref();
-    let mut default_permissions = default_permissions_override.or(configured_default_permissions);
-    if let (Some(selected_permissions), Some(allowed_permissions)) =
-        (default_permissions, allowed_permissions)
-        && !is_builtin_permission_profile_name(selected_permissions)
-        && !allowed_permissions
-            .iter()
-            .any(|allowed_permission| allowed_permission == selected_permissions)
-    {
-        let Some(fallback_permissions) = allowed_permissions.first().map(String::as_str) else {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "requirements.toml allowed_permissions must include at least one profile",
-            ));
-        };
-        startup_warnings.push(format!(
-            "Configured value for `permission_profile` is disallowed by requirements; falling back from `{selected_permissions}` to required value `{fallback_permissions}`."
+    let selected_permissions = default_permissions_override.or(configured_default_permissions);
+    let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
+        return Ok(selected_permissions);
+    };
+    let Some(fallback_permissions) = allowed_permissions.first().map(String::as_str) else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "requirements.toml allowed_permissions must include at least one profile",
         ));
-        default_permissions = Some(fallback_permissions);
-    }
+    };
 
-    Ok(default_permissions)
+    match selected_permissions {
+        None => Ok(Some(fallback_permissions)),
+        Some(selected_permissions)
+            if allowed_permissions
+                .iter()
+                .any(|allowed_permission| allowed_permission == selected_permissions) =>
+        {
+            Ok(Some(selected_permissions))
+        }
+        Some(selected_permissions) => {
+            startup_warnings.push(format!(
+                "Configured value for `permission_profile` is disallowed by requirements; falling back from `{selected_permissions}` to required value `{fallback_permissions}`."
+            ));
+            Ok(Some(fallback_permissions))
+        }
+    }
 }
 
 fn validate_required_permission_profile_catalog(
