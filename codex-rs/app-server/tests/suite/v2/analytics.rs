@@ -182,5 +182,15 @@ pub(crate) fn assert_basic_thread_initialized_event(
         event["event_params"]["initialization_mode"],
         initialization_mode
     );
+    assert_eq!(
+        [
+            "duration_ms",
+            "prepare_duration_ms",
+            "spawn_duration_ms",
+            "finalize_duration_ms",
+        ]
+        .map(|field| event["event_params"][field].as_u64().is_some()),
+        [true, true, true, true]
+    );
     assert!(event["event_params"]["created_at"].as_u64().is_some());
 }

@@ -66,7 +66,7 @@ use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
-use crate::facts::ThreadStartTimingFact;
+use crate::facts::ThreadInitializationTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
@@ -1751,15 +1751,15 @@ async fn app_server_started_fact_emits_event() {
 }
 
 #[tokio::test]
-async fn thread_start_timing_fact_enriches_thread_initialized_event() {
+async fn thread_initialization_timing_fact_enriches_initialized_event() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
 
     ingest_initialize(&mut reducer, &mut events).await;
     reducer
         .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadStartTiming(
-                ThreadStartTimingFact {
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitializationTiming(
+                ThreadInitializationTimingFact {
                     thread_id: "thread-1".to_string(),
                     duration_ms: 222,
                     prepare_duration_ms: 12,
@@ -1784,13 +1784,21 @@ async fn thread_start_timing_fact_enriches_thread_initialized_event() {
         .await;
 
     let payload = serde_json::to_value(&events).expect("serialize events");
-    assert_eq!(payload[0]["event_type"], json!("codex_thread_initialized"));
-    assert_eq!(payload[0]["event_params"]["duration_ms"], json!(222));
-    assert_eq!(payload[0]["event_params"]["prepare_duration_ms"], json!(12));
-    assert_eq!(payload[0]["event_params"]["spawn_duration_ms"], json!(123));
     assert_eq!(
-        payload[0]["event_params"]["finalize_duration_ms"],
-        json!(87)
+        json!({
+            "event_type": payload[0]["event_type"],
+            "duration_ms": payload[0]["event_params"]["duration_ms"],
+            "prepare_duration_ms": payload[0]["event_params"]["prepare_duration_ms"],
+            "spawn_duration_ms": payload[0]["event_params"]["spawn_duration_ms"],
+            "finalize_duration_ms": payload[0]["event_params"]["finalize_duration_ms"],
+        }),
+        json!({
+            "event_type": "codex_thread_initialized",
+            "duration_ms": 222,
+            "prepare_duration_ms": 12,
+            "spawn_duration_ms": 123,
+            "finalize_duration_ms": 87,
+        })
     );
 }
 
@@ -2567,6 +2575,7 @@ fn subagent_thread_started_review_serializes_expected_shape() {
             subagent_source: SubAgentSource::Review,
             created_at: 123,
         },
+        ThreadInitializationTimingParams::default(),
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize review subagent event");
@@ -2617,6 +2626,7 @@ fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
             },
             created_at: 124,
         },
+        ThreadInitializationTimingParams::default(),
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize thread spawn subagent event");
@@ -2645,6 +2655,7 @@ fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
             subagent_source: SubAgentSource::MemoryConsolidation,
             created_at: 125,
         },
+        ThreadInitializationTimingParams::default(),
     ));
 
     let payload =
@@ -2671,6 +2682,7 @@ fn subagent_thread_started_other_serializes_expected_shape() {
             subagent_source: SubAgentSource::Other("guardian".to_string()),
             created_at: 126,
         },
+        ThreadInitializationTimingParams::default(),
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize other subagent event");
@@ -2693,6 +2705,7 @@ fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
             subagent_source: SubAgentSource::Other("guardian".to_string()),
             created_at: 126,
         },
+        ThreadInitializationTimingParams::default(),
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize auto-review subagent event");
@@ -2708,6 +2721,20 @@ async fn subagent_thread_started_publishes_without_initialize() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
 
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitializationTiming(
+                ThreadInitializationTimingFact {
+                    thread_id: "thread-review".to_string(),
+                    duration_ms: 222,
+                    prepare_duration_ms: 12,
+                    spawn_duration_ms: 123,
+                    finalize_duration_ms: 87,
+                },
+            )),
+            &mut events,
+        )
+        .await;
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
@@ -2730,13 +2757,30 @@ async fn subagent_thread_started_publishes_without_initialize() {
 
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
-    assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["product_client_id"],
         "codex-tui"
     );
-    assert_eq!(payload[0]["event_params"]["thread_source"], "subagent");
-    assert_eq!(payload[0]["event_params"]["subagent_source"], "review");
+    assert_eq!(
+        json!({
+            "event_type": payload[0]["event_type"],
+            "thread_source": payload[0]["event_params"]["thread_source"],
+            "subagent_source": payload[0]["event_params"]["subagent_source"],
+            "duration_ms": payload[0]["event_params"]["duration_ms"],
+            "prepare_duration_ms": payload[0]["event_params"]["prepare_duration_ms"],
+            "spawn_duration_ms": payload[0]["event_params"]["spawn_duration_ms"],
+            "finalize_duration_ms": payload[0]["event_params"]["finalize_duration_ms"],
+        }),
+        json!({
+            "event_type": "codex_thread_initialized",
+            "thread_source": "subagent",
+            "subagent_source": "review",
+            "duration_ms": 222,
+            "prepare_duration_ms": 12,
+            "spawn_duration_ms": 123,
+            "finalize_duration_ms": 87,
+        })
+    );
 }
 
 #[tokio::test]

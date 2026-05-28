@@ -290,7 +290,7 @@ pub(crate) struct AppServerStartedInput {
     pub duration_ms: u64,
 }
 
-pub struct ThreadStartTimingFact {
+pub struct ThreadInitializationTimingFact {
     pub thread_id: String,
     pub duration_ms: u64,
     pub prepare_duration_ms: u64,
@@ -349,7 +349,7 @@ pub(crate) enum AnalyticsFact {
 pub(crate) enum CustomAnalyticsFact {
     AppServerStarted(AppServerStartedInput),
     SubAgentThreadStarted(SubAgentThreadStartedInput),
-    ThreadStartTiming(ThreadStartTimingFact),
+    ThreadInitializationTiming(ThreadInitializationTimingFact),
     Compaction(Box<CodexCompactionEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),

@@ -158,7 +158,7 @@ pub(crate) struct AppServerStartedEventRequest {
     pub(crate) event_params: AppServerStartedEventParams,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Copy, Default, Serialize)]
 pub(crate) struct ThreadInitializationTimingParams {
     pub(crate) duration_ms: Option<u64>,
     pub(crate) prepare_duration_ms: Option<u64>,
@@ -1059,6 +1059,7 @@ pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {
 
 pub(crate) fn subagent_thread_started_event_request(
     input: SubAgentThreadStartedInput,
+    initialization_timing: ThreadInitializationTimingParams,
 ) -> ThreadInitializedEvent {
     let event_params = ThreadInitializedEventParams {
         thread_id: input.thread_id,
@@ -1079,7 +1080,7 @@ pub(crate) fn subagent_thread_started_event_request(
         parent_thread_id: input
             .parent_thread_id
             .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
-        initialization_timing: ThreadInitializationTimingParams::default(),
+        initialization_timing,
         created_at: input.created_at,
     };
     ThreadInitializedEvent {

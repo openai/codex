@@ -75,7 +75,7 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
-use crate::facts::ThreadStartTimingFact;
+use crate::facts::ThreadInitializationTimingFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -153,15 +153,7 @@ struct ConnectionState {
 struct ThreadAnalyticsState {
     connection_id: Option<u64>,
     metadata: Option<ThreadMetadataState>,
-    thread_start_timing: Option<ThreadStartTimingState>,
-}
-
-#[derive(Clone, Copy)]
-struct ThreadStartTimingState {
-    duration_ms: u64,
-    prepare_duration_ms: u64,
-    spawn_duration_ms: u64,
-    finalize_duration_ms: u64,
+    initialization_timing: Option<ThreadInitializationTimingParams>,
 }
 
 #[derive(Clone, Copy)]
@@ -479,8 +471,8 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
                 }
-                CustomAnalyticsFact::ThreadStartTiming(input) => {
-                    self.ingest_thread_start_timing(input);
+                CustomAnalyticsFact::ThreadInitializationTiming(input) => {
+                    self.ingest_thread_initialization_timing(input);
                 }
                 CustomAnalyticsFact::Compaction(input) => {
                     self.ingest_compaction(*input, out);
@@ -587,22 +579,23 @@ impl AnalyticsReducer {
         if thread_state.connection_id.is_none() {
             thread_state.connection_id = parent_connection_id;
         }
+        let initialization_timing = thread_state.initialization_timing.unwrap_or_default();
         out.push(TrackEventRequest::ThreadInitialized(
-            subagent_thread_started_event_request(input),
+            subagent_thread_started_event_request(input, initialization_timing),
         ));
     }
 
-    fn ingest_thread_start_timing(&mut self, input: ThreadStartTimingFact) {
-        let thread_start_timing = ThreadStartTimingState {
-            duration_ms: input.duration_ms,
-            prepare_duration_ms: input.prepare_duration_ms,
-            spawn_duration_ms: input.spawn_duration_ms,
-            finalize_duration_ms: input.finalize_duration_ms,
+    fn ingest_thread_initialization_timing(&mut self, input: ThreadInitializationTimingFact) {
+        let initialization_timing = ThreadInitializationTimingParams {
+            duration_ms: Some(input.duration_ms),
+            prepare_duration_ms: Some(input.prepare_duration_ms),
+            spawn_duration_ms: Some(input.spawn_duration_ms),
+            finalize_duration_ms: Some(input.finalize_duration_ms),
         };
         self.threads
             .entry(input.thread_id)
             .or_default()
-            .thread_start_timing = Some(thread_start_timing);
+            .initialization_timing = Some(initialization_timing);
     }
 
     fn ingest_guardian_review(
@@ -1346,9 +1339,6 @@ impl AnalyticsReducer {
         let thread_state = self.threads.entry(thread_id.clone()).or_default();
         thread_state.connection_id = Some(connection_id);
         thread_state.metadata = Some(thread_metadata.clone());
-        let thread_start_timing = matches!(initialization_mode, ThreadInitializationMode::New)
-            .then_some(thread_state.thread_start_timing)
-            .flatten();
         out.push(TrackEventRequest::ThreadInitialized(
             ThreadInitializedEvent {
                 event_type: "codex_thread_initialized",
@@ -1363,15 +1353,7 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
-                    initialization_timing: match thread_start_timing {
-                        Some(timing) => ThreadInitializationTimingParams {
-                            duration_ms: Some(timing.duration_ms),
-                            prepare_duration_ms: Some(timing.prepare_duration_ms),
-                            spawn_duration_ms: Some(timing.spawn_duration_ms),
-                            finalize_duration_ms: Some(timing.finalize_duration_ms),
-                        },
-                        None => ThreadInitializationTimingParams::default(),
-                    },
+                    initialization_timing: thread_state.initialization_timing.unwrap_or_default(),
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },

@@ -18,7 +18,7 @@ use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
-use crate::facts::ThreadStartTimingFact;
+use crate::facts::ThreadInitializationTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTimingBreakdownFact;
@@ -182,9 +182,9 @@ impl AnalyticsEventsClient {
         ));
     }
 
-    pub fn track_thread_start_timing(&self, fact: ThreadStartTimingFact) {
+    pub fn track_thread_initialization_timing(&self, fact: ThreadInitializationTimingFact) {
         self.record_fact(AnalyticsFact::Custom(
-            CustomAnalyticsFact::ThreadStartTiming(fact),
+            CustomAnalyticsFact::ThreadInitializationTiming(fact),
         ));
     }
 
