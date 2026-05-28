@@ -15,6 +15,7 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
+use crate::mcp_openai_file::OpenAIFileInputParams;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
@@ -328,7 +329,7 @@ async fn handle_approved_mcp_tool_call(
         sess,
         turn_context,
         arguments_value.clone(),
-        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_ref()),
     )
     .await;
     let tool_input = match &rewrite {
@@ -976,13 +977,14 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_description: Option<String>,
     mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
-    openai_file_input_params: Option<Vec<String>>,
+    openai_file_input_params: Option<OpenAIFileInputParams>,
 }
 
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const MCP_TOOL_OPENAI_FILE_UPLOAD_SAVE_TO_OPENAI_LIBRARY_KEY: &str = "save_to_openai_library";
 
 async fn custom_mcp_tool_approval_mode(
     sess: &Session,
@@ -1464,6 +1466,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         openai_file_input_params: openai_file_input_params_for_server(
             server,
             tool_info.tool.meta.as_deref(),
+            tool_info.tool.input_schema.as_ref(),
         ),
     })
 }
@@ -1471,10 +1474,58 @@ pub(crate) async fn lookup_mcp_tool_metadata(
 fn openai_file_input_params_for_server(
     server: &str,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
-) -> Option<Vec<String>> {
-    (server == CODEX_APPS_MCP_SERVER_NAME)
-        .then_some(declared_openai_file_input_param_names(meta))
-        .filter(|params| !params.is_empty())
+    input_schema: &serde_json::Map<String, serde_json::Value>,
+) -> Option<OpenAIFileInputParams> {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
+    let names = declared_openai_file_input_param_names(meta);
+    if names.is_empty() {
+        return None;
+    }
+
+    Some(OpenAIFileInputParams {
+        names,
+        store_in_oai_library: visible_required_true_input_schema_arg(
+            input_schema,
+            MCP_TOOL_OPENAI_FILE_UPLOAD_SAVE_TO_OPENAI_LIBRARY_KEY,
+        ),
+    })
+}
+
+fn visible_required_true_input_schema_arg(
+    input_schema: &serde_json::Map<String, serde_json::Value>,
+    argument_name: &str,
+) -> bool {
+    let is_required = input_schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|required| {
+            required
+                .iter()
+                .any(|required_name| required_name.as_str() == Some(argument_name))
+        });
+    if !is_required {
+        return false;
+    }
+
+    let Some(argument_schema) = input_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|properties| properties.get(argument_name))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+
+    argument_schema.get("const") == Some(&serde_json::Value::Bool(true))
+        || argument_schema
+            .get("enum")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|values| {
+                values.len() == 1 && values.first() == Some(&serde_json::Value::Bool(true))
+            })
 }
 
 fn get_mcp_app_resource_uri(

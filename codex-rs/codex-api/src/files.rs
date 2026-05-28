@@ -98,6 +98,7 @@ pub async fn upload_local_file(
     base_url: &str,
     auth: &dyn AuthProvider,
     path: &Path,
+    store_in_oai_library: bool,
 ) -> Result<UploadedOpenAiFile, OpenAiFileError> {
     let metadata = tokio::fs::metadata(path)
         .await
@@ -129,12 +130,17 @@ pub async fn upload_local_file(
         .unwrap_or("file")
         .to_string();
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
+    let mut create_body = serde_json::json!({
+        "file_name": file_name,
+        "file_size": metadata.len(),
+        "use_case": OPENAI_FILE_USE_CASE,
+    });
+    if store_in_oai_library {
+        create_body["store_in_library"] = serde_json::Value::Bool(true);
+    }
+
     let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
-        .json(&serde_json::json!({
-            "file_name": file_name,
-            "file_size": metadata.len(),
-            "use_case": OPENAI_FILE_USE_CASE,
-        }))
+        .json(&create_body)
         .send()
         .await
         .map_err(|source| OpenAiFileError::Request {
@@ -363,9 +369,14 @@ mod tests {
         let path = dir.path().join("hello.txt");
         tokio::fs::write(&path, b"hello").await.expect("write file");
 
-        let uploaded = upload_local_file(&base_url, &chatgpt_auth(), &path)
-            .await
-            .expect("upload succeeds");
+        let uploaded = upload_local_file(
+            &base_url,
+            &chatgpt_auth(),
+            &path,
+            /*store_in_oai_library*/ false,
+        )
+        .await
+        .expect("upload succeeds");
 
         assert_eq!(uploaded.file_id, "file_123");
         assert_eq!(uploaded.uri, "sediment://file_123");
