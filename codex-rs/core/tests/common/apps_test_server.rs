@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::test_codex::TestCodexBuilder;
 use crate::test_codex::test_codex;
 use anyhow::Result;
@@ -72,6 +74,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
+            /*tools_list_delay*/ None,
         )
         .await;
         Ok(Self {
@@ -83,6 +86,19 @@ impl AppsTestServer {
         server: &MockServer,
         connector_name: &str,
     ) -> Result<Self> {
+        Self::mount_with_connector_name_and_tools_list_delay(
+            server,
+            connector_name,
+            /*tools_list_delay*/ None,
+        )
+        .await
+    }
+
+    pub async fn mount_with_connector_name_and_tools_list_delay(
+        server: &MockServer,
+        connector_name: &str,
+        tools_list_delay: Option<Duration>,
+    ) -> Result<Self> {
         mount_oauth_metadata(server).await;
         mount_connectors_directory(server).await;
         mount_streamable_http_json_rpc(
@@ -91,6 +107,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ false,
             /*include_app_only_tool*/ false,
+            tools_list_delay,
         )
         .await;
         Ok(Self {
@@ -110,6 +127,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             matches!(tool_loading, AppsTestToolLoading::Searchable),
             /*include_app_only_tool*/ true,
+            /*tools_list_delay*/ None,
         )
         .await;
         Ok(Self {
@@ -264,6 +282,7 @@ async fn mount_streamable_http_json_rpc(
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    tools_list_delay: Option<Duration>,
 ) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
@@ -272,6 +291,7 @@ async fn mount_streamable_http_json_rpc(
             connector_description,
             searchable,
             include_app_only_tool,
+            tools_list_delay,
         })
         .mount(server)
         .await;
@@ -282,6 +302,7 @@ struct CodexAppsJsonRpcResponder {
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    tools_list_delay: Option<Duration>,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -475,7 +496,12 @@ impl Respond for CodexAppsJsonRpcResponder {
                         }
                     }));
                 }
-                ResponseTemplate::new(200).set_body_json(response)
+                let response = ResponseTemplate::new(/*s*/ 200).set_body_json(response);
+                if let Some(delay) = self.tools_list_delay {
+                    response.set_delay(delay)
+                } else {
+                    response
+                }
             }
             "tools/call" => {
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
