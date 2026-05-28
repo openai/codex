@@ -726,12 +726,12 @@ impl Session {
                     }),
                 });
             }
-            for notice in config.config_layer_stack.requirements_toml().deprecation_notices() {
+            for notice in config.config_layer_stack.config_deprecation_notices() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
                     msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
-                        summary: notice.summary,
-                        details: notice.details,
+                        summary: notice.summary.clone(),
+                        details: notice.details.clone(),
                     }),
                 });
             }

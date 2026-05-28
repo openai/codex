@@ -5,6 +5,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::CloudRequirementsLoadError;
 use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigDeprecationNotice;
 use codex_config::ConfigError;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStackOrdering;
@@ -1832,6 +1833,54 @@ async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::
             .permission_profile
             .can_set(&PermissionProfile::workspace_write())
             .is_ok()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_preserves_legacy_remote_sandbox_config_deprecation_notice() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let requirements: ConfigRequirementsToml = toml::from_str(
+        r#"
+            [[remote_sandbox_config]]
+            hostname_patterns = ["*"]
+            allowed_sandbox_modes = ["read-only", "workspace-write"]
+        "#,
+    )?;
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        cloud_requirements,
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(
+        layers.config_deprecation_notices(),
+        [ConfigDeprecationNotice {
+            summary: "`[[remote_sandbox_config]]` requirements are deprecated".to_string(),
+            details: Some(
+                "Use keyed `[remote_sandbox_config.<name>]` tables instead. Keep the same `hostname_patterns` and `allowed_sandbox_modes` fields under each named table."
+                    .to_string()
+            ),
+        }]
+    );
+    assert_eq!(layers.requirements_toml().remote_sandbox_config, None);
+    assert_eq!(
+        layers.requirements_toml().allowed_sandbox_modes,
+        Some(vec![
+            codex_config::SandboxModeRequirement::ReadOnly,
+            codex_config::SandboxModeRequirement::WorkspaceWrite,
+        ])
     );
 
     Ok(())

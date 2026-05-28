@@ -376,11 +376,13 @@ pub async fn load_config_layers_state(
         ));
     }
 
+    let config_deprecation_notices = config_requirements_toml.deprecation_notices().to_vec();
     let config_layer_stack = ConfigLayerStack::new(
         layers,
         config_requirements_toml.clone().try_into()?,
         config_requirements_toml.into_toml(),
     )?
+    .with_config_deprecation_notices(config_deprecation_notices)
     .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
     Ok(match startup_warnings {
         Some(startup_warnings) => config_layer_stack.with_startup_warnings(startup_warnings),

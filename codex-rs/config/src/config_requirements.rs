@@ -772,7 +772,9 @@ pub struct ConfigRequirementsToml {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigDeprecationNotice {
+    /// Concise summary of what is deprecated.
     pub summary: String,
+    /// Optional extra guidance, such as migration steps or rationale.
     pub details: Option<String>,
 }
 
@@ -897,6 +899,7 @@ pub struct ConfigRequirementsWithSources {
     pub network: Option<Sourced<NetworkRequirementsToml>>,
     pub permissions: Option<Sourced<PermissionsRequirementsToml>>,
     pub guardian_policy_config: Option<Sourced<String>>,
+    pub deprecation_notices: Vec<ConfigDeprecationNotice>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -914,6 +917,8 @@ impl ConfigRequirementsWithSources {
                 )+
             };
         }
+
+        self.extend_deprecation_notices(other.deprecation_notices());
 
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
@@ -981,6 +986,18 @@ impl ConfigRequirementsWithSources {
         }
     }
 
+    pub fn deprecation_notices(&self) -> &[ConfigDeprecationNotice] {
+        &self.deprecation_notices
+    }
+
+    fn extend_deprecation_notices(&mut self, notices: Vec<ConfigDeprecationNotice>) {
+        for notice in notices {
+            if !self.deprecation_notices.contains(&notice) {
+                self.deprecation_notices.push(notice);
+            }
+        }
+    }
+
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
@@ -1001,6 +1018,7 @@ impl ConfigRequirementsWithSources {
             network,
             permissions,
             guardian_policy_config,
+            deprecation_notices: _,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -1170,6 +1188,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             network,
             permissions,
             guardian_policy_config,
+            deprecation_notices: _,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -1459,6 +1478,7 @@ mod tests {
     }
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
+        let deprecation_notices = toml.deprecation_notices();
         let ConfigRequirementsToml {
             allowed_approval_policies,
             allowed_approvals_reviewers,
@@ -1509,6 +1529,7 @@ mod tests {
             permissions: permissions.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            deprecation_notices,
         }
     }
 
@@ -1729,6 +1750,7 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
+                deprecation_notices: Vec::new(),
             }
         );
     }
@@ -1772,6 +1794,7 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: None,
+                deprecation_notices: Vec::new(),
             }
         );
         Ok(())
@@ -1823,6 +1846,7 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: None,
+                deprecation_notices: Vec::new(),
             }
         );
         Ok(())
