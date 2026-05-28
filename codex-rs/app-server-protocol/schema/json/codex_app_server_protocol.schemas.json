@@ -716,6 +716,30 @@
             },
             "method": {
               "enum": [
+                "skills/extraRoots/set"
+              ],
+              "title": "Skills/extraRoots/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsExtraRootsSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skills/extraRoots/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "hooks/list"
               ],
               "title": "Hooks/listRequestMethod",
@@ -15119,6 +15143,27 @@
           "effectiveEnabled"
         ],
         "title": "SkillsConfigWriteResponse",
+        "type": "object"
+      },
+      "SkillsExtraRootsSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "extraRoots": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "extraRoots"
+        ],
+        "title": "SkillsExtraRootsSetParams",
+        "type": "object"
+      },
+      "SkillsExtraRootsSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SkillsExtraRootsSetResponse",
         "type": "object"
       },
       "SkillsListEntry": {

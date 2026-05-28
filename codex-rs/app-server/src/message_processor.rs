@@ -354,6 +354,8 @@ impl MessageProcessor {
             app_list_shutdown_token,
         );
         let catalog_processor = CatalogRequestProcessor::new(
+            outgoing.clone(),
+            Arc::clone(&skills_watcher),
             auth_manager.clone(),
             Arc::clone(&thread_manager),
             Arc::clone(&config),
@@ -1107,6 +1109,9 @@ impl MessageProcessor {
             }
             ClientRequest::SkillsList { params, .. } => {
                 self.catalog_processor.skills_list(params).await
+            }
+            ClientRequest::SkillsExtraRootsSet { params, .. } => {
+                self.catalog_processor.skills_extra_roots_set(params).await
             }
             ClientRequest::HooksList { params, .. } => {
                 self.catalog_processor.hooks_list(params).await

@@ -2627,6 +2627,27 @@ fn skills_list_params_serialization_uses_force_reload() {
 }
 
 #[test]
+fn skills_extra_roots_set_params_serialization_uses_extra_roots() {
+    assert_eq!(
+        serde_json::to_value(SkillsExtraRootsSetParams {
+            extra_roots: vec![absolute_path("tmp/skills")],
+        })
+        .unwrap(),
+        json!({
+            "extraRoots": [absolute_path_string("tmp/skills")],
+        }),
+    );
+}
+
+#[test]
+fn skills_extra_roots_set_params_rejects_relative_roots() {
+    let result = serde_json::from_value::<SkillsExtraRootsSetParams>(json!({
+        "extraRoots": ["relative/path"],
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
 fn plugin_source_serializes_local_git_and_remote_variants() {
     let local_path = if cfg!(windows) {
         r"C:\plugins\linear"
