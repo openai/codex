@@ -23,9 +23,21 @@ pub struct SkillsListParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
 
+    /// Explicit environment/cwd pairs to scan instead of legacy `cwds`.
+    #[ts(optional = nullable)]
+    pub environments: Option<Vec<SkillsListEnvironment>>,
+
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsListEnvironment {
+    pub environment_id: String,
+    pub cwd: AbsolutePathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

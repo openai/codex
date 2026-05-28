@@ -2604,20 +2604,25 @@ fn skills_list_params_serialization_uses_force_reload() {
     assert_eq!(
         serde_json::to_value(SkillsListParams {
             cwds: Vec::new(),
+            environments: None,
             force_reload: false,
         })
         .unwrap(),
-        json!({}),
+        json!({
+            "environments": null,
+        }),
     );
 
     assert_eq!(
         serde_json::to_value(SkillsListParams {
             cwds: vec![PathBuf::from("/repo")],
+            environments: None,
             force_reload: true,
         })
         .unwrap(),
         json!({
             "cwds": ["/repo"],
+            "environments": null,
             "forceReload": true,
         }),
     );

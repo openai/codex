@@ -228,6 +228,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
     let stale_skills_list_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environments: None,
             force_reload: true,
         })
         .await?;
@@ -278,6 +279,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
             let skills_list_request_id = mcp
                 .send_skills_list_request(SkillsListParams {
                     cwds: vec![cwd.path().to_path_buf()],
+                    environments: None,
                     force_reload: false,
                 })
                 .await?;
@@ -352,6 +354,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![repo_root.path().to_path_buf()],
+            environments: None,
             force_reload: true,
         })
         .await?;
@@ -381,7 +384,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
 }
 
 #[tokio::test]
-async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
+async fn skills_list_skips_skill_roots_when_environment_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     write_skill(&codex_home, "home-skill")?;
@@ -402,6 +405,7 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environments: None,
             force_reload: true,
         })
         .await?;
@@ -415,18 +419,7 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].cwd, cwd.path().to_path_buf());
     assert_eq!(data[0].errors, Vec::new());
-    assert!(
-        data[0]
-            .skills
-            .iter()
-            .any(|skill| skill.name == "home-skill")
-    );
-    assert!(
-        data[0]
-            .skills
-            .iter()
-            .all(|skill| skill.name != "repo-skill")
-    );
+    assert_eq!(data[0].skills, Vec::new());
     Ok(())
 }
 
@@ -442,6 +435,7 @@ async fn skills_list_accepts_relative_cwds() -> Result<()> {
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![relative_cwd.clone()],
+            environments: None,
             force_reload: true,
         })
         .await?;
@@ -473,6 +467,7 @@ async fn skills_list_preserves_requested_cwd_order() -> Result<()> {
                 first_cwd.path().to_path_buf(),
                 second_cwd.path().to_path_buf(),
             ],
+            environments: None,
             force_reload: true,
         })
         .await?;
@@ -507,6 +502,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     let first_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environments: None,
             force_reload: false,
         })
         .await?;
@@ -534,6 +530,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     let second_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environments: None,
             force_reload: false,
         })
         .await?;
@@ -554,6 +551,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     let third_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environments: None,
             force_reload: true,
         })
         .await?;
@@ -591,6 +589,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
     let initial_skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![codex_home.path().to_path_buf()],
+            environments: None,
             force_reload: true,
         })
         .await?;
@@ -664,6 +663,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
     let updated_skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![codex_home.path().to_path_buf()],
+            environments: None,
             force_reload: false,
         })
         .await?;

@@ -13,6 +13,15 @@ pub(crate) struct CatalogRequestProcessor {
 
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
+struct SkillsListTarget {
+    path_ref: codex_core::skills::EnvironmentPathRef,
+}
+
+struct ResolvedSkillsListTarget {
+    primary_cwd: codex_core::skills::EnvironmentPathRef,
+    config_layer_stack: ConfigLayerStack,
+}
+
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
     disabled_paths: &HashSet<AbsolutePathBuf>,
@@ -189,13 +198,22 @@ impl CatalogRequestProcessor {
     ) -> Result<(AbsolutePathBuf, ConfigLayerStack), String> {
         let cwd_abs =
             AbsolutePathBuf::relative_to_current_dir(cwd).map_err(|err| err.to_string())?;
+        let config_layer_stack = self.load_config_layers_for_cwd(cwd_abs.clone()).await?;
+
+        Ok((cwd_abs, config_layer_stack))
+    }
+
+    async fn load_config_layers_for_cwd(
+        &self,
+        cwd: AbsolutePathBuf,
+    ) -> Result<ConfigLayerStack, String> {
         let config_layer_stack = self
             .config_manager
-            .load_config_layers_for_cwd(cwd_abs.clone())
+            .load_config_layers_for_cwd(cwd)
             .await
             .map_err(|err| err.to_string())?;
 
-        Ok((cwd_abs, config_layer_stack))
+        Ok(config_layer_stack)
     }
 
     async fn load_latest_config(
@@ -206,6 +224,175 @@ impl CatalogRequestProcessor {
             .load_latest_config(fallback_cwd)
             .await
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
+    }
+
+    fn skills_list_targets(
+        &self,
+        cwds: Vec<PathBuf>,
+        environments: Option<Vec<codex_app_server_protocol::SkillsListEnvironment>>,
+    ) -> Result<
+        Vec<Result<SkillsListTarget, codex_app_server_protocol::SkillsListEntry>>,
+        JSONRPCErrorError,
+    > {
+        if environments.is_some() && !cwds.is_empty() {
+            return Err(invalid_request(
+                "skills/list cannot set both `cwds` and `environments`",
+            ));
+        }
+
+        let environment_manager = self.thread_manager.environment_manager();
+        match environments {
+            Some(environments) => environments
+                .into_iter()
+                .map(|environment| {
+                    let selected_environment = environment_manager
+                        .get_environment(&environment.environment_id)
+                        .ok_or_else(|| {
+                            invalid_request(format!(
+                                "unknown skills/list environment id `{}`",
+                                environment.environment_id
+                            ))
+                        })?;
+                    Ok(Ok(SkillsListTarget {
+                        path_ref: codex_core::skills::EnvironmentPathRef::new(
+                            Some(environment.environment_id),
+                            selected_environment.get_filesystem(),
+                            environment.cwd,
+                        ),
+                    }))
+                })
+                .collect(),
+            None => {
+                let cwds = if cwds.is_empty() {
+                    vec![self.config.cwd.to_path_buf()]
+                } else {
+                    cwds
+                };
+                let environment = environment_manager
+                    .default_environment()
+                    .map(|environment| {
+                        (
+                            environment_manager
+                                .default_environment_id()
+                                .map(str::to_string),
+                            environment,
+                        )
+                    })
+                    .or_else(|| {
+                        environment_manager
+                            .try_local_environment()
+                            .map(|environment| {
+                                (
+                                    Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
+                                    environment,
+                                )
+                            })
+                    });
+                Ok(cwds
+                    .into_iter()
+                    .map(|cwd| {
+                        let cwd = match AbsolutePathBuf::relative_to_current_dir(&cwd) {
+                            Ok(cwd) => cwd,
+                            Err(err) => {
+                                return Err(Self::skills_list_error_entry(cwd, err.to_string()));
+                            }
+                        };
+                        let Some((environment_id, environment)) = environment.as_ref() else {
+                            return Err(Self::skills_list_empty_entry(cwd.to_path_buf()));
+                        };
+                        Ok(SkillsListTarget {
+                            path_ref: codex_core::skills::EnvironmentPathRef::new(
+                                environment_id.clone(),
+                                environment.get_filesystem(),
+                                cwd,
+                            ),
+                        })
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    async fn resolve_skills_list_target(
+        &self,
+        target: SkillsListTarget,
+    ) -> Result<ResolvedSkillsListTarget, codex_app_server_protocol::SkillsListEntry> {
+        let SkillsListTarget { path_ref } = target;
+        match self
+            .load_config_layers_for_cwd(path_ref.path().clone())
+            .await
+        {
+            Ok(config_layer_stack) => Ok(ResolvedSkillsListTarget {
+                primary_cwd: path_ref,
+                config_layer_stack,
+            }),
+            Err(message) => Err(Self::skills_list_error_entry(
+                path_ref.path().to_path_buf(),
+                message,
+            )),
+        }
+    }
+
+    async fn load_skills_list_entry(
+        &self,
+        target: ResolvedSkillsListTarget,
+        config: &Config,
+        workspace_codex_plugins_enabled: bool,
+        force_reload: bool,
+    ) -> codex_app_server_protocol::SkillsListEntry {
+        let ResolvedSkillsListTarget {
+            primary_cwd,
+            config_layer_stack,
+        } = target;
+        let cwd = primary_cwd.path().to_path_buf();
+        let skill_root_path_ref = Some(primary_cwd.clone());
+        let effective_skill_roots = if workspace_codex_plugins_enabled {
+            let plugins_input = config
+                .plugins_config_input()
+                .with_skill_path_ref(skill_root_path_ref.clone());
+            self.thread_manager
+                .plugins_manager()
+                .effective_skill_roots_for_layer_stack(&config_layer_stack, &plugins_input)
+                .await
+        } else {
+            Vec::new()
+        };
+        let skills_input = codex_core::skills::SkillsLoadInput::new(
+            Some(primary_cwd),
+            skill_root_path_ref,
+            effective_skill_roots,
+            config_layer_stack,
+            config.bundled_skills_enabled(),
+        );
+        let outcome = self
+            .thread_manager
+            .skills_manager()
+            .skills_for_cwd(&skills_input, force_reload)
+            .await;
+        codex_app_server_protocol::SkillsListEntry {
+            cwd,
+            skills: skills_to_info(&outcome.skills, &outcome.disabled_paths),
+            errors: errors_to_info(&outcome.errors),
+        }
+    }
+
+    fn skills_list_empty_entry(cwd: PathBuf) -> codex_app_server_protocol::SkillsListEntry {
+        codex_app_server_protocol::SkillsListEntry {
+            cwd,
+            skills: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    fn skills_list_error_entry(
+        cwd: PathBuf,
+        message: String,
+    ) -> codex_app_server_protocol::SkillsListEntry {
+        codex_app_server_protocol::SkillsListEntry {
+            cwd: cwd.clone(),
+            skills: Vec::new(),
+            errors: vec![codex_app_server_protocol::SkillErrorInfo { path: cwd, message }],
+        }
     }
 
     async fn workspace_codex_plugins_enabled(
@@ -484,97 +671,37 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams { cwds, force_reload } = params;
-        let cwds = if cwds.is_empty() {
-            vec![self.config.cwd.to_path_buf()]
-        } else {
-            cwds
-        };
-
+        let SkillsListParams {
+            cwds,
+            environments,
+            force_reload,
+        } = params;
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let targets = self.skills_list_targets(cwds, environments)?;
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await;
-        let skills_manager = self.thread_manager.skills_manager();
-        let plugins_manager = self.thread_manager.plugins_manager();
-        let environment_manager = self.thread_manager.environment_manager();
-        let default_environment_id = environment_manager
-            .default_environment_id()
-            .map(str::to_string);
-        let fs = environment_manager
-            .default_environment()
-            .map(|environment| environment.get_filesystem());
-        let local_path_ref = Some(codex_core::skills::EnvironmentPathRef::new(
-            Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
-            Arc::clone(&codex_exec_server::LOCAL_FS),
-            config.cwd.clone(),
-        ));
-        let mut data = futures::stream::iter(cwds.into_iter().enumerate())
-            .map(|(index, cwd)| {
+        let mut data = futures::stream::iter(targets.into_iter().enumerate())
+            .map(|(index, target)| {
                 let config = &config;
-                let default_environment_id = default_environment_id.clone();
-                let fs = fs.clone();
-                let local_path_ref = local_path_ref.clone();
-                let plugins_manager = &plugins_manager;
-                let skills_manager = &skills_manager;
                 async move {
-                    let (cwd_abs, config_layer_stack) = match self.resolve_cwd_config(&cwd).await {
-                        Ok(resolved) => resolved,
-                        Err(message) => {
-                            let error_path = cwd.clone();
-                            return (
-                                index,
-                                codex_app_server_protocol::SkillsListEntry {
-                                    cwd,
-                                    skills: Vec::new(),
-                                    errors: vec![codex_app_server_protocol::SkillErrorInfo {
-                                        path: error_path,
-                                        message,
-                                    }],
-                                },
-                            );
-                        }
-                    };
-                    let effective_skill_roots = if workspace_codex_plugins_enabled {
-                        let plugins_input = config
-                            .plugins_config_input()
-                            .with_skill_path_ref(local_path_ref.clone());
-                        plugins_manager
-                            .effective_skill_roots_for_layer_stack(
-                                &config_layer_stack,
-                                &plugins_input,
-                            )
-                            .await
-                    } else {
-                        Vec::new()
-                    };
-                    let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        fs.clone().map(|file_system| {
-                            codex_core::skills::EnvironmentPathRef::new(
-                                default_environment_id,
-                                file_system,
-                                cwd_abs.clone(),
-                            )
-                        }),
-                        local_path_ref,
-                        effective_skill_roots,
-                        config_layer_stack,
-                        config.bundled_skills_enabled(),
-                    );
-                    let outcome = skills_manager
-                        .skills_for_cwd(&skills_input, force_reload)
-                        .await;
-                    let errors = errors_to_info(&outcome.errors);
-                    let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
-                    (
-                        index,
-                        codex_app_server_protocol::SkillsListEntry {
-                            cwd,
-                            skills,
-                            errors,
+                    let entry = match target {
+                        Ok(target) => match self.resolve_skills_list_target(target).await {
+                            Ok(target) => {
+                                self.load_skills_list_entry(
+                                    target,
+                                    config,
+                                    workspace_codex_plugins_enabled,
+                                    force_reload,
+                                )
+                                .await
+                            }
+                            Err(entry) => entry,
                         },
-                    )
+                        Err(entry) => entry,
+                    };
+                    (index, entry)
                 }
             })
             .buffer_unordered(SKILLS_LIST_CWD_CONCURRENCY)

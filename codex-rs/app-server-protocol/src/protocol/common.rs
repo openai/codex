@@ -1713,6 +1713,7 @@ mod tests {
             request_id: request_id(),
             params: v2::SkillsListParams {
                 cwds: Vec::new(),
+                environments: None,
                 force_reload: false,
             },
         };
