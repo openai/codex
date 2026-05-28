@@ -770,29 +770,12 @@ pub struct ConfigRequirementsToml {
     pub guardian_policy_config: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigDeprecationNotice {
-    /// Concise summary of what is deprecated.
-    pub summary: String,
-    /// Optional extra guidance, such as migration steps or rationale.
-    pub details: Option<String>,
-}
-
-const LEGACY_REMOTE_SANDBOX_CONFIG_SUMMARY: &str =
-    "`[[remote_sandbox_config]]` requirements are deprecated";
-const LEGACY_REMOTE_SANDBOX_CONFIG_DETAILS: &str = "Use keyed `[remote_sandbox_config.<name>]` tables instead. Keep the same `hostname_patterns` and `allowed_sandbox_modes` fields under each named table.";
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RemoteSandboxConfigsToml {
     pub entries: Vec<RemoteSandboxConfigToml>,
-    legacy_array_shape: bool,
 }
 
 impl RemoteSandboxConfigsToml {
-    fn uses_legacy_array_shape(&self) -> bool {
-        self.legacy_array_shape
-    }
-
     fn matching_allowed_sandbox_modes(
         &self,
         hostname: &str,
@@ -812,10 +795,7 @@ impl RemoteSandboxConfigsToml {
 
 impl From<Vec<RemoteSandboxConfigToml>> for RemoteSandboxConfigsToml {
     fn from(entries: Vec<RemoteSandboxConfigToml>) -> Self {
-        Self {
-            entries,
-            legacy_array_shape: false,
-        }
+        Self { entries }
     }
 }
 
@@ -825,24 +805,16 @@ impl<'de> Deserialize<'de> for RemoteSandboxConfigsToml {
         D: Deserializer<'de>,
     {
         match TomlValue::deserialize(deserializer)? {
-            TomlValue::Array(entries) => Ok(Self {
-                entries: entries
-                    .into_iter()
-                    .map(RemoteSandboxConfigToml::deserialize)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(D::Error::custom)?,
-                legacy_array_shape: true,
-            }),
+            TomlValue::Array(_) => Err(D::Error::custom(
+                "`[[remote_sandbox_config]]` is no longer supported; use keyed `[remote_sandbox_config.<name>]` tables instead",
+            )),
             TomlValue::Table(entries) => {
                 let entries = entries
                     .into_iter()
                     .map(|(_, entry)| RemoteSandboxConfigToml::deserialize(entry))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(D::Error::custom)?;
-                Ok(Self {
-                    entries,
-                    legacy_array_shape: false,
-                })
+                Ok(Self { entries })
             }
             value => Err(D::Error::custom(format!(
                 "expected array or table for remote_sandbox_config, got {value:?}"
@@ -899,7 +871,6 @@ pub struct ConfigRequirementsWithSources {
     pub network: Option<Sourced<NetworkRequirementsToml>>,
     pub permissions: Option<Sourced<PermissionsRequirementsToml>>,
     pub guardian_policy_config: Option<Sourced<String>>,
-    pub deprecation_notices: Vec<ConfigDeprecationNotice>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -917,8 +888,6 @@ impl ConfigRequirementsWithSources {
                 )+
             };
         }
-
-        self.extend_deprecation_notices(other.deprecation_notices());
 
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
@@ -986,18 +955,6 @@ impl ConfigRequirementsWithSources {
         }
     }
 
-    pub fn deprecation_notices(&self) -> &[ConfigDeprecationNotice] {
-        &self.deprecation_notices
-    }
-
-    fn extend_deprecation_notices(&mut self, notices: Vec<ConfigDeprecationNotice>) {
-        for notice in notices {
-            if !self.deprecation_notices.contains(&notice) {
-                self.deprecation_notices.push(notice);
-            }
-        }
-    }
-
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
@@ -1018,7 +975,6 @@ impl ConfigRequirementsWithSources {
             network,
             permissions,
             guardian_policy_config,
-            deprecation_notices: _,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -1091,21 +1047,6 @@ pub enum ResidencyRequirement {
 }
 
 impl ConfigRequirementsToml {
-    pub fn deprecation_notices(&self) -> Vec<ConfigDeprecationNotice> {
-        let mut notices = Vec::new();
-        if self
-            .remote_sandbox_config
-            .as_ref()
-            .is_some_and(RemoteSandboxConfigsToml::uses_legacy_array_shape)
-        {
-            notices.push(ConfigDeprecationNotice {
-                summary: LEGACY_REMOTE_SANDBOX_CONFIG_SUMMARY.to_string(),
-                details: Some(LEGACY_REMOTE_SANDBOX_CONFIG_DETAILS.to_string()),
-            });
-        }
-        notices
-    }
-
     pub fn apply_remote_sandbox_config(&mut self, hostname: Option<&str>) {
         let Some(remote_sandbox_config) = self.remote_sandbox_config.as_ref() else {
             return;
@@ -1188,7 +1129,6 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             network,
             permissions,
             guardian_policy_config,
-            deprecation_notices: _,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -1478,7 +1418,6 @@ mod tests {
     }
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
-        let deprecation_notices = toml.deprecation_notices();
         let ConfigRequirementsToml {
             allowed_approval_policies,
             allowed_approvals_reviewers,
@@ -1529,7 +1468,6 @@ mod tests {
             permissions: permissions.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            deprecation_notices,
         }
     }
 
@@ -1750,7 +1688,6 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
-                deprecation_notices: Vec::new(),
             }
         );
     }
@@ -1794,7 +1731,6 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: None,
-                deprecation_notices: Vec::new(),
             }
         );
         Ok(())
@@ -1846,7 +1782,6 @@ mod tests {
                 network: None,
                 permissions: None,
                 guardian_policy_config: None,
-                deprecation_notices: Vec::new(),
             }
         );
         Ok(())
@@ -2569,7 +2504,7 @@ allowed_approvals_reviewers = ["user"]
     #[test]
     fn deserialize_remote_sandbox_config_requires_hostname_patterns_list() -> Result<()> {
         let toml_str = r#"
-            [[remote_sandbox_config]]
+            [remote_sandbox_config.org]
             hostname_patterns = ["*.org", "runner-??.ci"]
             allowed_sandbox_modes = ["read-only", "workspace-write"]
         "#;
@@ -2585,13 +2520,12 @@ allowed_approvals_reviewers = ["user"]
                         SandboxModeRequirement::WorkspaceWrite,
                     ],
                 }],
-                legacy_array_shape: true,
             })
         );
 
         let err = from_str::<ConfigRequirementsToml>(
             r#"
-                [[remote_sandbox_config]]
+                [remote_sandbox_config.org]
                 hostname_patterns = "*.org"
                 allowed_sandbox_modes = ["read-only"]
             "#,
@@ -2603,6 +2537,24 @@ allowed_approvals_reviewers = ["user"]
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn deserialize_remote_sandbox_config_rejects_legacy_array() {
+        let err = from_str::<ConfigRequirementsToml>(
+            r#"
+                [[remote_sandbox_config]]
+                hostname_patterns = ["*.org"]
+                allowed_sandbox_modes = ["read-only"]
+            "#,
+        )
+        .expect_err("legacy remote_sandbox_config arrays should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("`[[remote_sandbox_config]]` is no longer supported"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -2647,42 +2599,6 @@ allowed_approvals_reviewers = ["user"]
                 .into()
             )
         );
-
-        Ok(())
-    }
-
-    #[test]
-    fn remote_sandbox_config_legacy_array_adds_deprecation_notice() -> Result<()> {
-        let config: ConfigRequirementsToml = from_str(
-            r#"
-                [[remote_sandbox_config]]
-                hostname_patterns = ["*.org"]
-                allowed_sandbox_modes = ["read-only"]
-            "#,
-        )?;
-
-        assert_eq!(
-            config.deprecation_notices(),
-            vec![ConfigDeprecationNotice {
-                summary: LEGACY_REMOTE_SANDBOX_CONFIG_SUMMARY.to_string(),
-                details: Some(LEGACY_REMOTE_SANDBOX_CONFIG_DETAILS.to_string()),
-            }]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn remote_sandbox_config_keyed_map_has_no_deprecation_notice() -> Result<()> {
-        let config: ConfigRequirementsToml = from_str(
-            r#"
-                [remote_sandbox_config.devboxes]
-                hostname_patterns = ["*.org"]
-                allowed_sandbox_modes = ["read-only"]
-            "#,
-        )?;
-
-        assert_eq!(config.deprecation_notices(), Vec::new());
 
         Ok(())
     }
@@ -2737,7 +2653,7 @@ allowed_approvals_reviewers = ["user"]
             r#"
                 allowed_sandbox_modes = ["read-only"]
 
-                [[remote_sandbox_config]]
+                [remote_sandbox_config.build]
                 hostname_patterns = ["build-*.example.com"]
                 allowed_sandbox_modes = ["read-only", "workspace-write"]
             "#,
@@ -2774,7 +2690,7 @@ allowed_approvals_reviewers = ["user"]
 
         let mut low_precedence: ConfigRequirementsToml = from_str(
             r#"
-                [[remote_sandbox_config]]
+                [remote_sandbox_config.ci]
                 hostname_patterns = ["runner-*.ci.example.com"]
                 allowed_sandbox_modes = ["read-only", "workspace-write"]
             "#,

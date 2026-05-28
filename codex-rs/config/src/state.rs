@@ -1,4 +1,3 @@
-use crate::config_requirements::ConfigDeprecationNotice;
 use crate::config_requirements::ConfigRequirements;
 use crate::config_requirements::ConfigRequirementsToml;
 
@@ -232,9 +231,6 @@ pub struct ConfigLayerStack {
     /// surfaced via APIs.
     requirements_toml: ConfigRequirementsToml,
 
-    /// Deprecation notices discovered while loading config requirements.
-    config_deprecation_notices: Vec<ConfigDeprecationNotice>,
-
     /// Whether execpolicy should skip `.rules` files from user and project config-layer folders.
     ignore_user_and_project_exec_policy_rules: bool,
 
@@ -257,7 +253,6 @@ impl ConfigLayerStack {
             user_layer_index,
             requirements,
             requirements_toml,
-            config_deprecation_notices: Vec::new(),
             ignore_user_and_project_exec_policy_rules: false,
             startup_warnings: None,
         })
@@ -268,14 +263,6 @@ impl ConfigLayerStack {
         ignore_user_and_project_exec_policy_rules: bool,
     ) -> Self {
         self.ignore_user_and_project_exec_policy_rules = ignore_user_and_project_exec_policy_rules;
-        self
-    }
-
-    pub fn with_config_deprecation_notices(
-        mut self,
-        config_deprecation_notices: Vec<ConfigDeprecationNotice>,
-    ) -> Self {
-        self.config_deprecation_notices = config_deprecation_notices;
         self
     }
 
@@ -355,10 +342,6 @@ impl ConfigLayerStack {
         &self.requirements_toml
     }
 
-    pub fn config_deprecation_notices(&self) -> &[ConfigDeprecationNotice] {
-        &self.config_deprecation_notices
-    }
-
     /// Creates a new [ConfigLayerStack] using the specified values to inject one
     /// user layer into the stack. If such a layer already exists, it is replaced;
     /// otherwise, it is inserted into the stack at the appropriate position
@@ -417,7 +400,6 @@ impl ConfigLayerStack {
             user_layer_index,
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),
-            config_deprecation_notices: self.config_deprecation_notices.clone(),
             ignore_user_and_project_exec_policy_rules: self
                 .ignore_user_and_project_exec_policy_rules,
             startup_warnings: self.startup_warnings.clone(),
@@ -460,7 +442,6 @@ impl ConfigLayerStack {
             user_layer_index,
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),
-            config_deprecation_notices: self.config_deprecation_notices.clone(),
             ignore_user_and_project_exec_policy_rules: self
                 .ignore_user_and_project_exec_policy_rules,
             startup_warnings: self.startup_warnings.clone(),
