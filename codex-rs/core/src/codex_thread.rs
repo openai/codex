@@ -167,7 +167,6 @@ impl CodexThread {
     }
 
     pub async fn emit_thread_resume_lifecycle(&self) {
-        let thread_settings = ThreadSettingsSnapshot::from(self.config_snapshot().await);
         for contributor in self
             .codex
             .session
@@ -177,7 +176,6 @@ impl CodexThread {
         {
             contributor
                 .on_thread_resume(codex_extension_api::ThreadResumeInput {
-                    thread_settings: &thread_settings,
                     session_store: &self.codex.session.services.session_extension_data,
                     thread_store: &self.codex.session.services.thread_extension_data,
                 })

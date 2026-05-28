@@ -5,9 +5,7 @@ use std::sync::atomic::Ordering;
 use codex_extension_api::HiddenContext;
 use codex_extension_api::ResponseItemInjector;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::ThreadGoal;
-use codex_protocol::protocol::ThreadSettingsSnapshot;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
@@ -227,42 +225,10 @@ impl GoalRuntimeHandle {
         Ok(())
     }
 
-    pub async fn restore_after_resume(
-        &self,
-        thread_settings: &ThreadSettingsSnapshot,
-    ) -> Result<(), String> {
-        if !self.is_enabled() {
-            return Ok(());
-        }
-        if matches!(thread_settings.collaboration_mode.mode, ModeKind::Plan) {
-            self.inner.accounting_state.clear_active_goal();
-            return Ok(());
-        }
-
-        let goal = self
-            .inner
-            .state_dbs
-            .thread_goals()
-            .get_thread_goal(self.thread_id())
-            .await
-            .map_err(|err| err.to_string())?;
-        match goal {
-            Some(goal) if goal.status == codex_state::ThreadGoalStatus::Active => {
-                self.inner
-                    .accounting_state
-                    .mark_idle_goal_active(goal.goal_id);
-                self.inner.metrics.record_resumed();
-            }
-            Some(_) | None => self.inner.accounting_state.clear_active_goal(),
-        }
-        Ok(())
-    }
-
     pub async fn idle_continuation_request(
         &self,
-        collaboration_mode: ModeKind,
     ) -> Result<Option<codex_extension_api::ThreadIdleRequest>, String> {
-        if !self.is_enabled() || matches!(collaboration_mode, ModeKind::Plan) {
+        if !self.is_enabled() {
             return Ok(None);
         }
 
@@ -282,9 +248,13 @@ impl GoalRuntimeHandle {
             return Ok(None);
         }
 
-        self.inner
+        let resumed_idle_goal = self
+            .inner
             .accounting_state
             .mark_idle_goal_active(goal.goal_id.clone());
+        if resumed_idle_goal {
+            self.inner.metrics.record_resumed();
+        }
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
         let request = continuation_steering_request(&goal).with_validation_key(goal_id);
@@ -293,10 +263,9 @@ impl GoalRuntimeHandle {
 
     pub async fn idle_continuation_is_current(
         &self,
-        collaboration_mode: ModeKind,
         expected_goal_id: Option<&str>,
     ) -> Result<bool, String> {
-        if !self.is_enabled() || matches!(collaboration_mode, ModeKind::Plan) {
+        if !self.is_enabled() {
             return Ok(false);
         }
         let Some(expected_goal_id) = expected_goal_id else {

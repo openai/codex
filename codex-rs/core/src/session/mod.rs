@@ -2667,11 +2667,6 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
-    pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
-        let state = self.state.lock().await;
-        state.session_configuration.thread_config_snapshot()
-    }
-
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(

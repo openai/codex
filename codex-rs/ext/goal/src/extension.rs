@@ -11,7 +11,6 @@ use codex_extension_api::ThreadIdleTurnRequestFuture;
 use codex_extension_api::ThreadIdleTurnStartFuture;
 use codex_extension_api::ThreadIdleTurnStartInput;
 use codex_extension_api::ThreadLifecycleContributor;
-use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCallOutcome;
@@ -98,19 +97,6 @@ where
         });
         runtime.set_enabled(enabled);
     }
-
-    async fn on_thread_resume(&self, input: ThreadResumeInput<'_>) {
-        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
-            return;
-        };
-
-        if let Err(err) = runtime.restore_after_resume(input.thread_settings).await {
-            tracing::warn!(
-                "failed to restore goal runtime after thread resume for {}: {err}",
-                runtime.thread_id()
-            );
-        }
-    }
 }
 
 impl<C> ThreadIdleTurnContributor for GoalExtension<C>
@@ -123,10 +109,7 @@ where
     ) -> ThreadIdleTurnRequestFuture<'a> {
         Box::pin(async move {
             let runtime = goal_runtime_handle(input.thread_store)?;
-            match runtime
-                .idle_continuation_request(input.thread_settings.collaboration_mode.mode)
-                .await
-            {
+            match runtime.idle_continuation_request().await {
                 Ok(request) => request,
                 Err(err) => {
                     tracing::warn!("failed to request idle goal continuation: {err}");
@@ -145,10 +128,7 @@ where
                 return false;
             };
             match runtime
-                .idle_continuation_is_current(
-                    input.thread_settings.collaboration_mode.mode,
-                    input.request.validation_key.as_deref(),
-                )
+                .idle_continuation_is_current(input.request.validation_key.as_deref())
                 .await
             {
                 Ok(should_start) => should_start,

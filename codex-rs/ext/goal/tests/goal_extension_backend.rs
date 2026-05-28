@@ -12,7 +12,6 @@ use codex_extension_api::ResponseInjectionItem;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadIdleRequest;
 use codex_extension_api::ThreadIdleTurnStartInput;
-use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
@@ -27,19 +26,15 @@ use codex_extension_api::TurnStopInput;
 use codex_goal_extension::GoalRuntimeHandle;
 use codex_goal_extension::install_with_backend;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
-use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TruncationPolicy;
@@ -520,6 +515,11 @@ async fn thread_idle_hook_requests_hidden_goal_continuation() -> anyhow::Result<
     assert!(
         harness
             .should_start_idle_turn(ModeKind::Default, &request)
+            .await
+    );
+    assert!(
+        !harness
+            .should_start_idle_turn(ModeKind::Plan, &request)
             .await
     );
     Ok(())
@@ -1028,7 +1028,7 @@ async fn external_goal_set_active_resets_baseline_without_live_thread() -> anyho
 }
 
 #[tokio::test]
-async fn thread_resume_rehydrates_active_goal_idle_accounting() -> anyhow::Result<()> {
+async fn idle_continuation_request_rehydrates_active_goal_idle_accounting() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -1043,7 +1043,28 @@ async fn thread_resume_rehydrates_active_goal_idle_accounting() -> anyhow::Resul
         .await?;
     let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
 
-    harness.resume_thread().await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    harness
+        .runtime_handle()
+        .prepare_external_goal_mutation()
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(ThreadGoalStatus::Active, protocol_status(goal.status));
+    assert_eq!(
+        0, goal.time_used_seconds,
+        "resume alone should not rehydrate idle accounting"
+    );
+
+    let _request = harness
+        .next_idle_turn(ModeKind::Default)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("active goal should request idle continuation"))?;
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     harness
         .runtime_handle()
@@ -1059,7 +1080,7 @@ async fn thread_resume_rehydrates_active_goal_idle_accounting() -> anyhow::Resul
     assert_eq!(ThreadGoalStatus::Active, protocol_status(goal.status));
     assert!(
         goal.time_used_seconds >= 1,
-        "resumed idle accounting should add elapsed wall-clock time"
+        "idle continuation request should add elapsed wall-clock time"
     );
     assert_eq!(
         vec![CapturedGoalEvent {
@@ -1074,7 +1095,7 @@ async fn thread_resume_rehydrates_active_goal_idle_accounting() -> anyhow::Resul
 }
 
 #[tokio::test]
-async fn thread_resume_in_plan_mode_does_not_rehydrate_idle_accounting() -> anyhow::Result<()> {
+async fn plan_mode_idle_policy_does_not_rehydrate_idle_accounting() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -1089,7 +1110,7 @@ async fn thread_resume_in_plan_mode_does_not_rehydrate_idle_accounting() -> anyh
         .await?;
     let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
 
-    harness.resume_thread_with_mode(ModeKind::Plan).await;
+    assert!(harness.next_idle_turn(ModeKind::Plan).await.is_none());
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     harness
         .runtime_handle()
@@ -1266,23 +1287,6 @@ impl GoalExtensionHarness {
         }
     }
 
-    async fn resume_thread(&self) {
-        self.resume_thread_with_mode(ModeKind::Default).await;
-    }
-
-    async fn resume_thread_with_mode(&self, mode: ModeKind) {
-        let thread_settings = thread_settings(mode);
-        for contributor in self.registry.thread_lifecycle_contributors() {
-            contributor
-                .on_thread_resume(ThreadResumeInput {
-                    thread_settings: &thread_settings,
-                    session_store: &self.session_store,
-                    thread_store: &self.thread_store,
-                })
-                .await;
-        }
-    }
-
     async fn notify_tool_finish(&self, turn_id: &str, call_id: &str, tool_name: &str) {
         let turn_store = ExtensionData::new(turn_id);
         let tool_name = codex_extension_api::ToolName::plain(tool_name);
@@ -1318,11 +1322,12 @@ impl GoalExtensionHarness {
     }
 
     async fn next_idle_turn(&self, mode: ModeKind) -> Option<ThreadIdleRequest> {
-        let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_idle_turn_contributors() {
+            if !idle_turn_policy_allows_mode(contributor.idle_turn_policy(), mode) {
+                continue;
+            }
             if let Some(request) = contributor
                 .request_thread_idle_turn(ThreadIdleInput {
-                    thread_settings: &thread_settings,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                 })
@@ -1335,11 +1340,12 @@ impl GoalExtensionHarness {
     }
 
     async fn should_start_idle_turn(&self, mode: ModeKind, request: &ThreadIdleRequest) -> bool {
-        let thread_settings = thread_settings(mode);
         for contributor in self.registry.thread_idle_turn_contributors() {
+            if !idle_turn_policy_allows_mode(contributor.idle_turn_policy(), mode) {
+                continue;
+            }
             if contributor
                 .should_start_thread_idle_turn(ThreadIdleTurnStartInput {
-                    thread_settings: &thread_settings,
                     request,
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
@@ -1462,27 +1468,11 @@ fn default_collaboration_mode() -> CollaborationMode {
     }
 }
 
-fn thread_settings(mode: ModeKind) -> ThreadSettingsSnapshot {
-    let mut collaboration_mode = default_collaboration_mode();
-    collaboration_mode.mode = mode;
-    let cwd = match std::env::current_dir().and_then(TryInto::try_into) {
-        Ok(cwd) => cwd,
-        Err(err) => panic!("test cwd should be absolute: {err}"),
-    };
-    ThreadSettingsSnapshot {
-        model: collaboration_mode.model().to_string(),
-        model_provider_id: "test-provider".to_string(),
-        service_tier: None,
-        approval_policy: AskForApproval::Never,
-        approvals_reviewer: ApprovalsReviewer::User,
-        permission_profile: PermissionProfile::workspace_write(),
-        active_permission_profile: None,
-        cwd,
-        reasoning_effort: None,
-        reasoning_summary: None,
-        personality: None,
-        collaboration_mode,
-    }
+fn idle_turn_policy_allows_mode(
+    policy: codex_extension_api::IdleTurnPolicy,
+    mode: ModeKind,
+) -> bool {
+    !matches!(mode, ModeKind::Plan) || policy.allows_plan_mode()
 }
 
 fn token_usage(

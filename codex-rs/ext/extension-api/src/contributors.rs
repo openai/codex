@@ -19,6 +19,7 @@ mod turn_lifecycle;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
+pub use thread_lifecycle::IdleTurnPolicy;
 pub use thread_lifecycle::ThreadIdleInput;
 pub use thread_lifecycle::ThreadIdleRequest;
 pub use thread_lifecycle::ThreadIdleTurnStartInput;
@@ -80,9 +81,15 @@ pub type ThreadIdleTurnStartFuture<'a> = std::pin::Pin<Box<dyn Future<Output = b
 ///
 /// Implementations should normally return hidden context. Raw items are
 /// available for extensions that intentionally need unwrapped input. The host
-/// owns hidden-context wrapping and may ask the contributor to confirm the
+/// owns hidden-context wrapping, applies the declared idle-turn policy before
+/// calling into the contributor, and may ask the contributor to confirm the
 /// request again immediately before the turn starts.
 pub trait ThreadIdleTurnContributor: Send + Sync {
+    /// Returns the host scheduling policy for this contributor's idle turns.
+    fn idle_turn_policy(&self) -> IdleTurnPolicy {
+        IdleTurnPolicy::default()
+    }
+
     /// Returns input to start an idle turn, if the extension still has work
     /// that should run without user input.
     fn request_thread_idle_turn<'a>(

@@ -3,7 +3,26 @@ use std::sync::Arc;
 use crate::ExtensionData;
 use crate::ResponseInjectionItem;
 use crate::ResponseItemInjector;
-use codex_protocol::protocol::ThreadSettingsSnapshot;
+
+/// Idle-turn scheduling policy declared by an extension contributor.
+///
+/// The default policy allows idle turns only outside plan mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IdleTurnPolicy {
+    allow_plan_mode: bool,
+}
+
+impl IdleTurnPolicy {
+    pub const fn allow_plan_mode() -> Self {
+        Self {
+            allow_plan_mode: true,
+        }
+    }
+
+    pub fn allows_plan_mode(self) -> bool {
+        self.allow_plan_mode
+    }
+}
 
 /// Input supplied when the host starts a runtime for a thread.
 pub struct ThreadStartInput<'a, C> {
@@ -20,8 +39,6 @@ pub struct ThreadStartInput<'a, C> {
 
 /// Input supplied when the host resumes an existing thread.
 pub struct ThreadResumeInput<'a> {
-    /// Current host-owned thread settings at resume time.
-    pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.
@@ -30,8 +47,6 @@ pub struct ThreadResumeInput<'a> {
 
 /// Input supplied when the host has no immediately pending thread work.
 pub struct ThreadIdleInput<'a> {
-    /// Current host-owned thread settings for the idle thread.
-    pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.
@@ -62,8 +77,6 @@ impl ThreadIdleRequest {
 
 /// Input supplied before the host starts an extension-requested idle turn.
 pub struct ThreadIdleTurnStartInput<'a> {
-    /// Host-owned thread settings for the default turn being started.
-    pub thread_settings: &'a ThreadSettingsSnapshot,
     /// Request returned by this contributor for the candidate idle turn.
     pub request: &'a ThreadIdleRequest,
     /// Store scoped to the host session runtime.

@@ -158,13 +158,15 @@ impl GoalAccountingState {
         Some(turn_id)
     }
 
-    pub(crate) fn mark_idle_goal_active(&self, goal_id: impl Into<String>) {
+    pub(crate) fn mark_idle_goal_active(&self, goal_id: impl Into<String>) -> bool {
         let mut inner = self.inner();
         let goal_id = goal_id.into();
+        let was_active = inner.wall_clock.active_goal_id.as_deref() == Some(goal_id.as_str());
         if inner.budget_limit_reported_goal_id.as_deref() != Some(goal_id.as_str()) {
             inner.budget_limit_reported_goal_id = None;
         }
         inner.wall_clock.mark_active_goal(goal_id);
+        !was_active
     }
 
     pub(crate) fn clear_current_turn_goal(&self) -> Option<String> {

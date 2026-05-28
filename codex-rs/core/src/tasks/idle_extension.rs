@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use codex_extension_api::ResponseInjectionItem;
 use codex_extension_api::ThreadIdleRequest;
-use codex_protocol::protocol::ThreadSettingsSnapshot;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -102,11 +103,9 @@ pub(crate) async fn maybe_start_turn(session: Arc<Session>) {
 }
 
 async fn notify_thread_idle(session: &Session) {
-    let thread_settings = thread_settings_snapshot(session).await;
     for contributor in session.services.extensions.thread_lifecycle_contributors() {
         contributor
             .on_thread_idle(codex_extension_api::ThreadIdleInput {
-                thread_settings: &thread_settings,
                 session_store: &session.services.session_extension_data,
                 thread_store: &session.services.thread_extension_data,
             })
@@ -132,7 +131,7 @@ struct IdleTurnCandidate {
 }
 
 async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate> {
-    let thread_settings = thread_settings_snapshot(session).await;
+    let collaboration_mode = session.collaboration_mode().await;
     for (contributor_index, contributor) in session
         .services
         .extensions
@@ -140,9 +139,11 @@ async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate
         .iter()
         .enumerate()
     {
+        if !idle_turn_policy_allows_mode(contributor.idle_turn_policy(), &collaboration_mode) {
+            continue;
+        }
         let Some(request) = contributor
             .request_thread_idle_turn(codex_extension_api::ThreadIdleInput {
-                thread_settings: &thread_settings,
                 session_store: &session.services.session_extension_data,
                 thread_store: &session.services.thread_extension_data,
             })
@@ -168,6 +169,13 @@ fn is_non_empty_idle_input(item: &ResponseInjectionItem) -> bool {
     }
 }
 
+fn idle_turn_policy_allows_mode(
+    policy: codex_extension_api::IdleTurnPolicy,
+    collaboration_mode: &CollaborationMode,
+) -> bool {
+    !matches!(collaboration_mode.mode, ModeKind::Plan) || policy.allows_plan_mode()
+}
+
 async fn should_start_idle_turn(session: &Session, candidate: &IdleTurnCandidate) -> bool {
     let Some(contributor) = session
         .services
@@ -177,19 +185,17 @@ async fn should_start_idle_turn(session: &Session, candidate: &IdleTurnCandidate
     else {
         return false;
     };
-    let thread_settings = thread_settings_snapshot(session).await;
+    let collaboration_mode = session.collaboration_mode().await;
+    if !idle_turn_policy_allows_mode(contributor.idle_turn_policy(), &collaboration_mode) {
+        return false;
+    }
     contributor
         .should_start_thread_idle_turn(codex_extension_api::ThreadIdleTurnStartInput {
-            thread_settings: &thread_settings,
             request: &candidate.request,
             session_store: &session.services.session_extension_data,
             thread_store: &session.services.thread_extension_data,
         })
         .await
-}
-
-async fn thread_settings_snapshot(session: &Session) -> ThreadSettingsSnapshot {
-    ThreadSettingsSnapshot::from(session.thread_config_snapshot().await)
 }
 
 async fn reserve_idle_turn(session: &Session) -> bool {

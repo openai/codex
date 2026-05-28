@@ -30,6 +30,7 @@ pub use context::HiddenContextMarker;
 pub use contributors::ApprovalReviewContributor;
 pub use contributors::ConfigContributor;
 pub use contributors::ContextContributor;
+pub use contributors::IdleTurnPolicy;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;
 pub use contributors::ThreadIdleInput;
