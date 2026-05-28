@@ -1,5 +1,6 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
+mod effective_filesystem_permissions;
 pub mod landlock;
 mod manager;
 pub mod policy_transforms;
@@ -10,6 +11,11 @@ pub mod seatbelt;
 pub use bwrap::find_system_bwrap_in_path;
 #[cfg(target_os = "linux")]
 pub use bwrap::system_bwrap_warning;
+pub use effective_filesystem_permissions::EffectiveFilesystemPermissions;
+pub use effective_filesystem_permissions::FilesystemPermissionsContext;
+pub use effective_filesystem_permissions::FilesystemPermissionsError;
+pub use effective_filesystem_permissions::FilesystemPermissionsMode;
+pub use effective_filesystem_permissions::ValidatedDenyGlob;
 pub use manager::SandboxCommand;
 pub use manager::SandboxExecRequest;
 pub use manager::SandboxManager;
