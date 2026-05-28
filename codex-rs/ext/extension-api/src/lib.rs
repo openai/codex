@@ -6,7 +6,9 @@ mod state;
 
 pub use capabilities::AgentSpawnFuture;
 pub use capabilities::AgentSpawner;
+pub use capabilities::ExtensionEvent;
 pub use capabilities::ExtensionEventFuture;
+pub use capabilities::ExtensionEventMsg;
 pub use capabilities::ExtensionEventSink;
 pub use capabilities::NoopExtensionEventSink;
 pub use capabilities::NoopResponseItemInjector;

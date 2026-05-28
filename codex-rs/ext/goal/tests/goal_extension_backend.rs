@@ -4,6 +4,8 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionEvent;
+use codex_extension_api::ExtensionEventMsg;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
@@ -30,8 +32,6 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
@@ -1423,7 +1423,7 @@ async fn seed_thread_metadata(
 
 #[derive(Debug, Default)]
 struct RecordingEventSink {
-    events: Mutex<Vec<Event>>,
+    events: Mutex<Vec<ExtensionEvent>>,
 }
 
 impl RecordingEventSink {
@@ -1431,13 +1431,12 @@ impl RecordingEventSink {
         self.events()
             .iter()
             .filter_map(|event| match &event.msg {
-                EventMsg::ThreadGoalUpdated(updated) => Some(CapturedGoalEvent {
+                ExtensionEventMsg::ThreadGoalUpdated(updated) => Some(CapturedGoalEvent {
                     event_id: event.id.clone(),
                     turn_id: updated.turn_id.clone(),
                     status: updated.goal.status,
                     tokens_used: updated.goal.tokens_used,
                 }),
-                _ => None,
             })
             .collect()
     }
@@ -1446,13 +1445,13 @@ impl RecordingEventSink {
         self.events().clear();
     }
 
-    fn events(&self) -> std::sync::MutexGuard<'_, Vec<Event>> {
+    fn events(&self) -> std::sync::MutexGuard<'_, Vec<ExtensionEvent>> {
         self.events.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl ExtensionEventSink for RecordingEventSink {
-    fn emit<'a>(&'a self, event: Event) -> codex_extension_api::ExtensionEventFuture<'a> {
+    fn emit<'a>(&'a self, event: ExtensionEvent) -> codex_extension_api::ExtensionEventFuture<'a> {
         self.events().push(event);
         Box::pin(std::future::ready(()))
     }

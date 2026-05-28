@@ -9,7 +9,9 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
+use codex_extension_api::ExtensionEvent;
 use codex_extension_api::ExtensionEventFuture;
+use codex_extension_api::ExtensionEventMsg;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -17,8 +19,6 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db::StateDbHandle;
 
 use crate::outgoing_message::OutgoingMessageSender;
@@ -58,10 +58,10 @@ struct AppServerExtensionEventSink {
 }
 
 impl ExtensionEventSink for AppServerExtensionEventSink {
-    fn emit<'a>(&'a self, event: Event) -> ExtensionEventFuture<'a> {
+    fn emit<'a>(&'a self, event: ExtensionEvent) -> ExtensionEventFuture<'a> {
         Box::pin(async move {
             match event.msg {
-                EventMsg::ThreadGoalUpdated(thread_goal_event) => {
+                ExtensionEventMsg::ThreadGoalUpdated(thread_goal_event) => {
                     let notification =
                         ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
                             thread_id: thread_goal_event.thread_id.to_string(),
@@ -69,9 +69,6 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                             goal: thread_goal_event.goal.into(),
                         });
                     self.outgoing.send_server_notification(notification).await;
-                }
-                msg => {
-                    tracing::debug!(event_id = %event.id, ?msg, "dropping unsupported extension event");
                 }
             }
         })
@@ -180,10 +177,14 @@ mod tests {
         );
     }
 
-    fn thread_goal_update_event(thread_id: ThreadId, objective: &str, turn_id: &str) -> Event {
-        Event {
+    fn thread_goal_update_event(
+        thread_id: ThreadId,
+        objective: &str,
+        turn_id: &str,
+    ) -> ExtensionEvent {
+        ExtensionEvent {
             id: "call-1".to_string(),
-            msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+            msg: ExtensionEventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
                 thread_id,
                 turn_id: Some(turn_id.to_string()),
                 goal: ThreadGoal {

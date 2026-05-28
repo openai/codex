@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use codex_extension_api::ExtensionEvent;
+use codex_extension_api::ExtensionEventMsg;
 use codex_extension_api::ExtensionEventSink;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 
@@ -23,9 +23,9 @@ impl GoalEventEmitter {
         goal: ThreadGoal,
     ) {
         self.sink
-            .emit(Event {
+            .emit(ExtensionEvent {
                 id: event_id.into(),
-                msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                msg: ExtensionEventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
                     thread_id: goal.thread_id,
                     turn_id,
                     goal,
