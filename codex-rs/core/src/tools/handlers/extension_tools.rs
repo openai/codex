@@ -13,6 +13,7 @@ use codex_tools::TurnItemEmitter;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::stream_events_utils::finalize_image_generation_item;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -88,6 +89,38 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
             };
             let item = extension_turn_item(item);
             session.emit_turn_item_completed(turn.as_ref(), item).await;
+        })
+    }
+
+    fn image_generation_completed<'a>(
+        &'a self,
+        call_id: String,
+        prompt: String,
+        result: String,
+    ) -> TurnItemEmissionFuture<'a> {
+        Box::pin(async move {
+            let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
+                return;
+            };
+            let mut item = codex_protocol::items::ImageGenerationItem {
+                id: call_id,
+                status: "completed".to_string(),
+                revised_prompt: Some(prompt),
+                result,
+                saved_path: None,
+            };
+            finalize_image_generation_item(session.as_ref(), turn.as_ref(), &mut item).await;
+            let mut started_item = item.clone();
+            started_item.status = "in_progress".to_string();
+            started_item.revised_prompt = None;
+            started_item.result.clear();
+            started_item.saved_path = None;
+            session
+                .emit_turn_item_started(turn.as_ref(), &TurnItem::ImageGeneration(started_item))
+                .await;
+            session
+                .emit_turn_item_completed(turn.as_ref(), TurnItem::ImageGeneration(item))
+                .await;
         })
     }
 }
@@ -173,6 +206,42 @@ mod tests {
 
     struct CapturingExtensionExecutor {
         captured_call: Arc<Mutex<Option<codex_tools::ToolCall>>>,
+    }
+
+    struct ImageGenerationExtensionExecutor;
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for ImageGenerationExtensionExecutor {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            codex_tools::ToolName::namespaced("image_gen", "imagegen")
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: "imagegen".to_string(),
+                description: "Generates an image.".to_string(),
+                strict: false,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+                defer_loading: None,
+            })
+        }
+
+        async fn handle(
+            &self,
+            call: codex_tools::ToolCall,
+        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+            call.turn_item_emitter
+                .image_generation_completed(
+                    call.call_id,
+                    "A tiny blue square".to_string(),
+                    "cG5n".to_string(),
+                )
+                .await;
+            Ok(Box::new(codex_tools::JsonToolOutput::new(
+                json!({ "ok": true }),
+            )))
+        }
     }
 
     #[async_trait::async_trait]
@@ -351,5 +420,78 @@ mod tests {
         assert_eq!(end.call_id, expected.id);
         assert_eq!(end.query, expected.query);
         assert_eq!(end.action, expected.action);
+    }
+
+    #[tokio::test]
+    async fn image_generation_publication_is_finalized_by_core() {
+        let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
+        let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
+        let expected_path = crate::stream_events_utils::image_generation_artifact_path(
+            &turn.config.codex_home,
+            &session.conversation_id.to_string(),
+            "call-image",
+        );
+        let invocation = ToolInvocation {
+            session,
+            turn,
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-image".to_string(),
+            tool_name: codex_tools::ToolName::namespaced("image_gen", "imagegen"),
+            source: ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+
+        crate::tools::registry::ToolExecutor::handle(&handler, invocation)
+            .await
+            .expect("extension call should succeed");
+
+        let instructions = rx.recv().await.expect("image path instructions event");
+        assert!(matches!(instructions.msg, EventMsg::RawResponseItem(_)));
+        let started = rx.recv().await.expect("item started event");
+        let EventMsg::ItemStarted(started) = started.msg else {
+            panic!("expected item started event");
+        };
+        let TurnItem::ImageGeneration(started_item) = started.item else {
+            panic!("expected image generation item");
+        };
+        let begin = rx.recv().await.expect("legacy image start event");
+        assert!(matches!(begin.msg, EventMsg::ImageGenerationBegin(_)));
+        let completed = rx.recv().await.expect("item completed event");
+        let EventMsg::ItemCompleted(completed) = completed.msg else {
+            panic!("expected item completed event");
+        };
+        let TurnItem::ImageGeneration(completed_item) = completed.item else {
+            panic!("expected image generation item");
+        };
+        let end = rx.recv().await.expect("legacy image end event");
+        assert!(matches!(end.msg, EventMsg::ImageGenerationEnd(_)));
+
+        assert_eq!(
+            started_item,
+            codex_protocol::items::ImageGenerationItem {
+                id: "call-image".to_string(),
+                status: "in_progress".to_string(),
+                revised_prompt: None,
+                result: String::new(),
+                saved_path: None,
+            }
+        );
+        assert_eq!(
+            completed_item,
+            codex_protocol::items::ImageGenerationItem {
+                id: "call-image".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("A tiny blue square".to_string()),
+                result: "cG5n".to_string(),
+                saved_path: Some(expected_path.clone()),
+            }
+        );
+        assert_eq!(
+            std::fs::read(expected_path).expect("generated artifact should be saved"),
+            b"png"
+        );
     }
 }

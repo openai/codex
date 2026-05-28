@@ -48,6 +48,16 @@ pub trait TurnItemEmitter: Send + Sync {
 
     /// Emits the completion of one visible turn item.
     fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
+
+    /// Publishes image bytes for host finalization and visible completion.
+    fn image_generation_completed<'a>(
+        &'a self,
+        _call_id: String,
+        _prompt: String,
+        _result: String,
+    ) -> TurnItemEmissionFuture<'a> {
+        Box::pin(std::future::ready(()))
+    }
 }
 
 /// Turn-item emitter used when a caller does not expose visible item emission.
