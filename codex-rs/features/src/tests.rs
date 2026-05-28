@@ -137,6 +137,16 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn unified_exec_zsh_fork_is_under_development() {
+    assert_eq!(Feature::UnifiedExecZshFork.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::UnifiedExecZshFork.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("unified_exec_zsh_fork"),
+        Some(Feature::UnifiedExecZshFork)
+    );
+}
+
+#[test]
 fn remote_compaction_v2_is_under_development() {
     assert_eq!(Feature::RemoteCompactionV2.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::RemoteCompactionV2.default_enabled(), false);

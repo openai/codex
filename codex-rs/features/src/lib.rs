@@ -90,6 +90,8 @@ pub enum Feature {
     UnifiedExec,
     /// Route shell tool execution through the zsh exec bridge.
     ShellZshFork,
+    /// Route unified exec through the zsh exec bridge when both are enabled.
+    UnifiedExecZshFork,
     /// Reflow transcript scrollback when the terminal is resized.
     TerminalResizeReflow,
     /// Stream structured progress while apply_patch input is being generated.
@@ -736,6 +738,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ShellZshFork,
         key: "shell_zsh_fork",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UnifiedExecZshFork,
+        key: "unified_exec_zsh_fork",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

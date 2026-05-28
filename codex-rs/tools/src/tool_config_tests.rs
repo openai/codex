@@ -81,6 +81,12 @@ fn shell_type_is_derived_from_model_and_feature_gates() {
         ConfigShellToolType::ShellCommand
     );
 
+    features.enable(Feature::UnifiedExecZshFork);
+    assert_eq!(
+        shell_type_for_model_and_features(&model, &features),
+        expected_unified_exec
+    );
+
     features.disable(Feature::ShellTool);
     assert_eq!(
         shell_type_for_model_and_features(&model, &features),
@@ -110,6 +116,22 @@ fn shell_command_backend_requires_both_shell_tool_and_zsh_fork() {
 }
 
 #[test]
+fn unified_exec_zsh_fork_requires_all_feature_gates() {
+    let mut features = shell_features();
+    assert_eq!(unified_exec_zsh_fork_for_features(&features), false);
+
+    features.enable(Feature::UnifiedExec);
+    features.enable(Feature::ShellZshFork);
+    assert_eq!(unified_exec_zsh_fork_for_features(&features), false);
+
+    features.enable(Feature::UnifiedExecZshFork);
+    assert_eq!(unified_exec_zsh_fork_for_features(&features), true);
+
+    features.disable(Feature::ShellTool);
+    assert_eq!(unified_exec_zsh_fork_for_features(&features), false);
+}
+
+#[test]
 fn request_user_input_modes_follow_default_mode_feature() {
     let mut features = Features::with_defaults();
     features.disable(Feature::DefaultModeRequestUserInput);
@@ -131,7 +153,7 @@ fn unified_exec_shell_mode_uses_zsh_fork_only_when_all_inputs_match() {
     let shell = exe.clone();
 
     let mode = UnifiedExecShellMode::for_session(
-        ShellCommandBackendConfig::ZshFork,
+        /*use_zsh_fork*/ true,
         ToolUserShellType::Zsh,
         Some(&shell),
         Some(&exe),
@@ -144,7 +166,7 @@ fn unified_exec_shell_mode_uses_zsh_fork_only_when_all_inputs_match() {
 
     assert_eq!(
         UnifiedExecShellMode::for_session(
-            ShellCommandBackendConfig::Classic,
+            /*use_zsh_fork*/ false,
             ToolUserShellType::Zsh,
             Some(&shell),
             Some(&exe),
