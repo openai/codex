@@ -677,14 +677,14 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
-        let primary_cwd = primary_turn_environment.map(|turn_environment| {
+        let repo_env_path_ref = primary_turn_environment.map(|turn_environment| {
             environment_path_ref(
                 turn_environment.environment_id.clone(),
                 turn_environment.environment.get_filesystem(),
                 turn_environment.cwd.clone(),
             )
         });
-        let skill_root_path_ref = primary_cwd.clone();
+        let skill_root_path_ref = repo_env_path_ref.clone();
         let plugins_input = per_turn_config
             .plugins_config_input()
             .with_skill_path_ref(skill_root_path_ref.clone());
@@ -696,7 +696,7 @@ impl Session {
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(
             &per_turn_config,
-            primary_cwd,
+            repo_env_path_ref,
             skill_root_path_ref,
             effective_skill_roots,
         );

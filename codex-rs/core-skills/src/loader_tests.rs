@@ -1915,9 +1915,9 @@ async fn skill_roots_skip_local_roots_without_skill_root_path_ref() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cfg = make_config(&codex_home).await;
 
-    let primary_cwd = skill_root_path_ref(cfg.cwd.clone());
+    let repo_env_path_ref = skill_root_path_ref(cfg.cwd.clone());
     let scopes: Vec<SkillScope> = super::skill_roots(
-        Some(&primary_cwd),
+        Some(&repo_env_path_ref),
         /*skill_root_path_ref*/ None,
         &cfg.config_layer_stack,
         Vec::new(),
