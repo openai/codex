@@ -2059,17 +2059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-app-server-start-bench"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-app-server-protocol",
- "divan",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "codex-app-server-test-client"
 version = "0.0.0"
 dependencies = [
