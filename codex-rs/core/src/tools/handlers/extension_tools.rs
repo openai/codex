@@ -208,42 +208,6 @@ mod tests {
         captured_call: Arc<Mutex<Option<codex_tools::ToolCall>>>,
     }
 
-    struct ImageGenerationExtensionExecutor;
-
-    #[async_trait::async_trait]
-    impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for ImageGenerationExtensionExecutor {
-        fn tool_name(&self) -> codex_tools::ToolName {
-            codex_tools::ToolName::namespaced("image_gen", "imagegen")
-        }
-
-        fn spec(&self) -> codex_tools::ToolSpec {
-            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
-                name: "imagegen".to_string(),
-                description: "Generates an image.".to_string(),
-                strict: false,
-                parameters: codex_tools::JsonSchema::default(),
-                output_schema: None,
-                defer_loading: None,
-            })
-        }
-
-        async fn handle(
-            &self,
-            call: codex_tools::ToolCall,
-        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
-            call.turn_item_emitter
-                .image_generation_completed(
-                    call.call_id,
-                    "A tiny blue square".to_string(),
-                    "cG5n".to_string(),
-                )
-                .await;
-            Ok(Box::new(codex_tools::JsonToolOutput::new(
-                json!({ "ok": true }),
-            )))
-        }
-    }
-
     #[async_trait::async_trait]
     impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for CapturingExtensionExecutor {
         fn tool_name(&self) -> codex_tools::ToolName {
@@ -420,6 +384,42 @@ mod tests {
         assert_eq!(end.call_id, expected.id);
         assert_eq!(end.query, expected.query);
         assert_eq!(end.action, expected.action);
+    }
+
+    struct ImageGenerationExtensionExecutor;
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ToolExecutor<codex_tools::ToolCall> for ImageGenerationExtensionExecutor {
+        fn tool_name(&self) -> codex_tools::ToolName {
+            codex_tools::ToolName::namespaced("image_gen", "imagegen")
+        }
+
+        fn spec(&self) -> codex_tools::ToolSpec {
+            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: "imagegen".to_string(),
+                description: "Generates an image.".to_string(),
+                strict: false,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+                defer_loading: None,
+            })
+        }
+
+        async fn handle(
+            &self,
+            call: codex_tools::ToolCall,
+        ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
+            call.turn_item_emitter
+                .image_generation_completed(
+                    call.call_id,
+                    "A tiny blue square".to_string(),
+                    "cG5n".to_string(),
+                )
+                .await;
+            Ok(Box::new(codex_tools::JsonToolOutput::new(
+                json!({ "ok": true }),
+            )))
+        }
     }
 
     #[tokio::test]
