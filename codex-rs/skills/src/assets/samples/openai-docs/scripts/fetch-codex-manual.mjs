@@ -13,6 +13,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { inspect, promisify } from "node:util";
 
 const DEFAULT_MANUAL_URL = "https://developers.openai.com/codex/codex-manual.md";
@@ -355,14 +356,14 @@ const readCachedManual = async (cacheDir, expectedSha256) => {
 
 const writeCachedManual = async (cacheDir, manual) => {
   await mkdir(cacheDir, { recursive: true });
-  const tmpPath = path.join(cacheDir, `.${CACHE_FILE_NAME}.tmp`);
+  const tmpPath = tempFilePath(cacheDir, `.${CACHE_FILE_NAME}.tmp`);
   await writeFile(tmpPath, manual, "utf8");
   await rename(tmpPath, cacheFilePath(cacheDir));
 };
 
 const writeOutline = async (cacheDir, outlineText) => {
   await mkdir(cacheDir, { recursive: true });
-  const tmpPath = path.join(cacheDir, `.${OUTLINE_FILE_NAME}.tmp`);
+  const tmpPath = tempFilePath(cacheDir, `.${OUTLINE_FILE_NAME}.tmp`);
   await writeFile(tmpPath, outlineText, "utf8");
   await rename(tmpPath, outlineFilePath(cacheDir));
 };
@@ -540,16 +541,27 @@ const formatErrorDetails = (error) => {
   })}`;
 };
 
-main().catch((error) => {
-  console.error(`Error: ${error.message}`);
-  const hint = envProxyHint();
-  if (hint) {
-    console.error(hint);
+const isCliEntrypoint = () => {
+  const entrypoint = process.argv[1];
+  if (!entrypoint) {
+    return false;
   }
-  console.error("");
-  console.error("Details:");
-  console.error(formatErrorDetails(error));
-  process.exitCode = 1;
-});
+
+  return pathToFileURL(entrypoint).href === import.meta.url;
+};
+
+if (isCliEntrypoint()) {
+  main().catch((error) => {
+    console.error(`Error: ${error.message}`);
+    const hint = envProxyHint();
+    if (hint) {
+      console.error(hint);
+    }
+    console.error("");
+    console.error("Details:");
+    console.error(formatErrorDetails(error));
+    process.exitCode = 1;
+  });
+}
 
 export { DEFAULT_MANUAL_URL, fetchCodexManual };

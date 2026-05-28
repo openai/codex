@@ -59,7 +59,7 @@ node <skill-dir>/scripts/fetch-codex-manual.mjs --cache-dir <cache-dir>
 
 On Windows, use a cache dir rooted in `%TEMP%` or `%TMP%`; in PowerShell, `$env:TEMP\\openai-docs-cache` is the usual choice.
 
-Treat helper availability as established by explicit read-only/no-shell policy or an actual command result. A guessed sandbox or helper failure is not enough to switch to Docs MCP or web lookup.
+Treat helper availability as established by explicit read-only/no-shell policy or an actual command result. A guessed sandbox or guessed helper failure is not enough to switch to Docs MCP or web lookup; after an actual helper command failure, continue to the narrowest official next source below.
 
 The helper verifies freshness, writes `codex-manual.md`, and emits `codex-manual.outline.md`. The outline maps source pages and headings to line ranges; use it to choose the relevant manual section, then read or search targeted manual sections for Codex product facts. Use the skill directory to locate and run the helper; after the helper succeeds, use the returned manual and outline paths as the search scope for Codex product facts and term coverage checks.
 
