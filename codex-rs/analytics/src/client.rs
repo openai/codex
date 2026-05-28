@@ -166,12 +166,12 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_app_server_started(&self, startup_duration_ms: u64, remote_control_enabled: bool) {
+    pub fn track_app_server_started(&self, duration_ms: u64, remote_control_enabled: bool) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::AppServerStarted(AppServerStartedInput {
                 runtime: current_runtime_metadata(),
                 remote_control_enabled,
-                startup_duration_ms,
+                duration_ms,
                 completed_at: now_unix_seconds(),
             }),
         ));

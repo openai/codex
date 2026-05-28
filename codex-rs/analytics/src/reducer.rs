@@ -3,10 +3,10 @@ use crate::accepted_lines::accepted_line_fingerprint_event_requests;
 use crate::accepted_lines::accepted_line_fingerprints_from_unified_diff;
 use crate::accepted_lines::accepted_line_repo_hash_for_cwd;
 use crate::events::AppServerRpcTransport;
+use crate::events::AppServerStartedEventParams;
+use crate::events::AppServerStartedEventRequest;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
-use crate::events::CodexAppServerStartedEventParams;
-use crate::events::CodexAppServerStartedEventRequest;
 use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCollabAgentToolCallEventParams;
 use crate::events::CodexCollabAgentToolCallEventRequest;
@@ -45,9 +45,9 @@ use crate::events::ReviewTrigger;
 use crate::events::Reviewer;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
+use crate::events::ThreadInitializationTimingParams;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
-use crate::events::ThreadStartTimingEventParams;
 use crate::events::ToolItemFailureKind;
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
@@ -537,12 +537,12 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         out.push(TrackEventRequest::AppServerStarted(
-            CodexAppServerStartedEventRequest {
-                event_type: "codex_app_server_started",
-                event_params: CodexAppServerStartedEventParams {
+            AppServerStartedEventRequest {
+                event_type: "app_server_started",
+                event_params: AppServerStartedEventParams {
                     runtime: input.runtime,
                     remote_control_enabled: input.remote_control_enabled,
-                    startup_duration_ms: input.startup_duration_ms,
+                    duration_ms: input.duration_ms,
                     completed_at: input.completed_at,
                 },
             },
@@ -1318,14 +1318,14 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
-                    thread_start_timing: match thread_start_timing {
-                        Some(timing) => ThreadStartTimingEventParams {
-                            thread_start_duration_ms: Some(timing.duration_ms),
-                            thread_start_prepare_duration_ms: Some(timing.prepare_duration_ms),
-                            thread_start_spawn_duration_ms: Some(timing.spawn_duration_ms),
-                            thread_start_finalize_duration_ms: Some(timing.finalize_duration_ms),
+                    initialization_timing: match thread_start_timing {
+                        Some(timing) => ThreadInitializationTimingParams {
+                            duration_ms: Some(timing.duration_ms),
+                            prepare_duration_ms: Some(timing.prepare_duration_ms),
+                            spawn_duration_ms: Some(timing.spawn_duration_ms),
+                            finalize_duration_ms: Some(timing.finalize_duration_ms),
                         },
-                        None => ThreadStartTimingEventParams::default(),
+                        None => ThreadInitializationTimingParams::default(),
                     },
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },

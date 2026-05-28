@@ -1069,12 +1069,12 @@ pub async fn run_main_with_transport_options(
             info!("processor task exited (channel closed)");
         }
     });
-    let startup_duration_ms = app_server_started_at
+    let duration_ms = app_server_started_at
         .elapsed()
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX);
-    analytics_events_client.track_app_server_started(startup_duration_ms, remote_control_enabled);
+    analytics_events_client.track_app_server_started(duration_ms, remote_control_enabled);
 
     drop(transport_event_tx);
 

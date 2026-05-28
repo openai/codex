@@ -448,10 +448,10 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
         "user",
     );
     let thread_start_timings = [
-        "thread_start_duration_ms",
-        "thread_start_prepare_duration_ms",
-        "thread_start_spawn_duration_ms",
-        "thread_start_finalize_duration_ms",
+        "duration_ms",
+        "prepare_duration_ms",
+        "spawn_duration_ms",
+        "finalize_duration_ms",
     ]
     .map(|field| event["event_params"][field].as_u64().is_some());
     assert_eq!(thread_start_timings, [true, true, true, true]);

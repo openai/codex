@@ -278,7 +278,7 @@ pub struct CodexCompactionEvent {
 pub(crate) struct AppServerStartedInput {
     pub runtime: CodexRuntimeMetadata,
     pub remote_control_enabled: bool,
-    pub startup_duration_ms: u64,
+    pub duration_ms: u64,
     pub completed_at: u64,
 }
 
