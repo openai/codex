@@ -522,19 +522,13 @@ mod tests {
             callable_name: tool_name.to_string(),
             callable_namespace: callable_namespace.to_string(),
             namespace_description: None,
-            tool: rmcp::model::Tool {
-                name: tool_name.to_string().into(),
-                title: None,
-                description: None,
-                input_schema: Arc::new(rmcp::model::object(serde_json::json!({
+            tool: rmcp::model::Tool::new_with_raw(
+                tool_name.to_string(),
+                None,
+                Arc::new(rmcp::model::object(serde_json::json!({
                     "type": "object",
                 }))),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            },
+            ),
             connector_id: None,
             connector_name: None,
             plugin_display_names: Vec::new(),

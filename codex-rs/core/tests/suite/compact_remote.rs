@@ -368,6 +368,36 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_request.header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
+    let compact_metadata: Value = serde_json::from_str(
+        &compact_request
+            .header("x-codex-turn-metadata")
+            .expect("remote compact request should include turn metadata"),
+    )
+    .expect("remote compact turn metadata should be valid json");
+    assert!(
+        compact_metadata["turn_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "remote compact turn metadata should include its turn id"
+    );
+    assert_eq!(
+        compact_metadata["request_kind"].as_str(),
+        Some("compaction")
+    );
+    assert_eq!(
+        compact_metadata["window_id"].as_str(),
+        compact_request.header("x-codex-window-id").as_deref()
+    );
+    assert_eq!(
+        compact_metadata["compaction"],
+        json!({
+            "trigger": "manual",
+            "reason": "user_requested",
+            "implementation": "responses_compact",
+            "phase": "standalone_turn",
+            "strategy": "memento",
+        })
+    );
     let compact_body = compact_request.body_json();
     assert_eq!(
         compact_body.get("model").and_then(|v| v.as_str()),
@@ -375,6 +405,16 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     );
     let response_requests = responses_mock.requests();
     let first_response_request = response_requests.first().expect("initial request missing");
+    let first_response_metadata: Value = serde_json::from_str(
+        &first_response_request
+            .header("x-codex-turn-metadata")
+            .expect("initial request should include turn metadata"),
+    )
+    .expect("initial turn metadata should be valid json");
+    assert_ne!(
+        first_response_metadata["turn_id"], compact_metadata["turn_id"],
+        "manual compaction should use its own turn id"
+    );
     assert_eq!(
         compact_body["tools"],
         first_response_request.body_json()["tools"],
@@ -407,6 +447,33 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
 
     let response_requests = responses_mock.requests();
     let follow_up_request = response_requests.last().expect("follow-up request missing");
+    let follow_up_metadata: Value = serde_json::from_str(
+        &follow_up_request
+            .header("x-codex-turn-metadata")
+            .expect("follow-up request should include turn metadata"),
+    )
+    .expect("follow-up turn metadata should be valid json");
+    assert_eq!(
+        follow_up_metadata["request_kind"].as_str(),
+        Some("turn"),
+        "regular requests after compaction should remain turn requests"
+    );
+    assert!(
+        follow_up_metadata.get("compaction").is_none(),
+        "regular requests after compaction should not be marked as compact requests"
+    );
+    assert_ne!(
+        follow_up_metadata["turn_id"], compact_metadata["turn_id"],
+        "the following user turn should not reuse a manual compact turn id"
+    );
+    assert_eq!(
+        follow_up_metadata["window_id"].as_str(),
+        follow_up_request.header("x-codex-window-id").as_deref()
+    );
+    assert_ne!(
+        follow_up_metadata["window_id"], compact_metadata["window_id"],
+        "the following user turn should use the new compacted context window"
+    );
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(
         follow_up_body.contains("\"type\":\"compaction\""),
@@ -797,6 +864,30 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
         "expected compact request to advertise the remote_compaction_v2 beta feature"
     );
     assert_eq!(compact_request.path(), "/v1/responses");
+    let compact_metadata: Value = serde_json::from_str(
+        &compact_request
+            .header("x-codex-turn-metadata")
+            .expect("v2 compact request should include turn metadata"),
+    )
+    .expect("v2 compact turn metadata should be valid json");
+    assert_eq!(
+        compact_metadata["request_kind"].as_str(),
+        Some("compaction")
+    );
+    assert_eq!(
+        compact_metadata["window_id"].as_str(),
+        compact_request.header("x-codex-window-id").as_deref()
+    );
+    assert_eq!(
+        compact_metadata["compaction"],
+        json!({
+            "trigger": "manual",
+            "reason": "user_requested",
+            "implementation": "responses_compaction_v2",
+            "phase": "standalone_turn",
+            "strategy": "memento",
+        })
+    );
     let compact_body = compact_request.body_json().to_string();
     assert!(
         compact_body.contains("\"type\":\"compaction_trigger\""),
@@ -1139,7 +1230,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     let session_id = harness.test().session_configured.session_id.to_string();
     let thread_id = harness.test().session_configured.thread_id.to_string();
 
-    mount_sse_once(
+    let initial_request = mount_sse_once(
         harness.server(),
         sse(vec![
             responses::ev_shell_command_call("m1", "echo 'hi'"),
@@ -1195,7 +1286,63 @@ async fn remote_compact_runs_automatically() -> Result<()> {
         compact_mock.single_request().header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
+    let compact_metadata: Value = serde_json::from_str(
+        &compact_mock
+            .single_request()
+            .header("x-codex-turn-metadata")
+            .expect("auto remote compact request should include turn metadata"),
+    )
+    .expect("auto remote compact turn metadata should be valid json");
+    assert_eq!(
+        compact_metadata["request_kind"].as_str(),
+        Some("compaction")
+    );
+    assert_eq!(
+        compact_metadata["compaction"],
+        json!({
+            "trigger": "auto",
+            "reason": "context_limit",
+            "implementation": "responses_compact",
+            "phase": "mid_turn",
+            "strategy": "memento",
+        })
+    );
+    let initial_metadata: Value = serde_json::from_str(
+        &initial_request
+            .single_request()
+            .header("x-codex-turn-metadata")
+            .expect("initial request should include turn metadata"),
+    )
+    .expect("initial turn metadata should be valid json");
+    assert_eq!(
+        initial_metadata["turn_id"], compact_metadata["turn_id"],
+        "automatic mid-turn compaction should keep the current turn id"
+    );
+    assert_eq!(
+        initial_metadata["window_id"], compact_metadata["window_id"],
+        "automatic mid-turn compaction summarizes the current context window"
+    );
     let follow_up_request = responses_mock.single_request();
+    let follow_up_metadata: Value = serde_json::from_str(
+        &follow_up_request
+            .header("x-codex-turn-metadata")
+            .expect("post-compaction continuation should include turn metadata"),
+    )
+    .expect("post-compaction turn metadata should be valid json");
+    assert_eq!(
+        follow_up_metadata["request_kind"].as_str(),
+        Some("turn"),
+        "post-compaction continuation should be a regular request"
+    );
+    assert!(follow_up_metadata.get("compaction").is_none());
+    assert_eq!(
+        follow_up_metadata["turn_id"], compact_metadata["turn_id"],
+        "automatic mid-turn continuation should keep the current turn id"
+    );
+    assert_ne!(
+        follow_up_metadata["window_id"], compact_metadata["window_id"],
+        "post-compaction continuation should use the next context window"
+    );
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"));
 
