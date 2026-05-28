@@ -178,7 +178,6 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
         }
         let images = content
             .iter()
-            .rev()
             .filter_map(|item| match item {
                 ContentItem::InputImage { image_url, .. } => Some(ImageUrl {
                     image_url: image_url.clone(),
@@ -255,7 +254,7 @@ fn truncate_images(
     generated_images.drain(..drop_generated);
     excess -= drop_generated;
     let drop_user = excess.min(user_images.len());
-    user_images.truncate(user_images.len() - drop_user);
+    user_images.drain(..drop_user);
     excess -= drop_user;
     generated_images.drain(..excess);
 

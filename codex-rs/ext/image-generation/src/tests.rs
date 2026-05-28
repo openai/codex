@@ -131,8 +131,8 @@ fn edit_matches_context_selector_for_generated_images_after_latest_user_anchor()
         expected_edit_request(
             "change the lighting",
             &[
-                "data:image/png;base64,u2",
                 "data:image/png;base64,u1",
+                "data:image/png;base64,u2",
                 "data:image/png;base64,g5",
                 "data:image/png;base64,g6",
                 "data:image/png;base64,g7",
@@ -164,10 +164,10 @@ fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
         expected_edit_request(
             "edit the last generated image",
             &[
-                "data:image/png;base64,e",
-                "data:image/png;base64,d",
-                "data:image/png;base64,c",
                 "data:image/png;base64,b",
+                "data:image/png;base64,c",
+                "data:image/png;base64,d",
+                "data:image/png;base64,e",
                 "data:image/png;base64,generated",
             ]
         )
