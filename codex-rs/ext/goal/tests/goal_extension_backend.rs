@@ -8,6 +8,7 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopResponseItemInjector;
+use codex_extension_api::ResponseInjectionItem;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadIdleRequest;
 use codex_extension_api::ThreadIdleTurnStartInput;
@@ -507,12 +508,15 @@ async fn thread_idle_hook_requests_hidden_goal_continuation() -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("active goal should request idle continuation"))?;
 
     assert!(request.validation_key.is_some());
+    let ResponseInjectionItem::HiddenContext(context) = &request.item else {
+        panic!("expected hidden context item");
+    };
     assert!(
-        request
-            .prompt
+        context
+            .body()
             .contains("Continue working toward the active thread goal.")
     );
-    assert!(request.prompt.contains("Completion audit:"));
+    assert!(context.body().contains("Completion audit:"));
     assert!(
         harness
             .should_start_idle_turn(ModeKind::Default, &request)

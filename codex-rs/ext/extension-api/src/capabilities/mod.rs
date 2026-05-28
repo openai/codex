@@ -8,5 +8,6 @@ pub use events::ExtensionEventFuture;
 pub use events::ExtensionEventSink;
 pub use events::NoopExtensionEventSink;
 pub use response_items::NoopResponseItemInjector;
+pub use response_items::ResponseInjectionItem;
 pub use response_items::ResponseItemInjectionFuture;
 pub use response_items::ResponseItemInjector;

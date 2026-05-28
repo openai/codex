@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use codex_extension_api::ResponseInjectionItem;
 use codex_extension_api::ThreadIdleRequest;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 
@@ -149,7 +150,7 @@ async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate
         else {
             continue;
         };
-        if !request.prompt.trim().is_empty() {
+        if is_non_empty_idle_input(&request.item) {
             return Some(IdleTurnCandidate {
                 contributor_index,
                 request,
@@ -158,6 +159,13 @@ async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate
     }
 
     None
+}
+
+fn is_non_empty_idle_input(item: &ResponseInjectionItem) -> bool {
+    match item {
+        ResponseInjectionItem::HiddenContext(context) => !context.body().trim().is_empty(),
+        ResponseInjectionItem::Raw(_) => true,
+    }
 }
 
 async fn should_start_idle_turn(session: &Session, candidate: &IdleTurnCandidate) -> bool {
@@ -204,16 +212,25 @@ async fn clear_reserved_idle_turn(session: &Session) {
 }
 
 fn idle_extension_input(request: ThreadIdleRequest) -> TurnInput {
-    let prompt = codex_utils_string::truncate_middle_with_token_budget(
-        &request.prompt,
-        MAX_IDLE_EXTENSION_PROMPT_TOKENS,
-    )
-    .0;
-    TurnInput::ResponseInputItem(request.context_marker.response_input_item(prompt))
+    match request.item {
+        ResponseInjectionItem::HiddenContext(context) => {
+            let (marker, body) = context.into_parts();
+            let prompt = codex_utils_string::truncate_middle_with_token_budget(
+                &body,
+                MAX_IDLE_EXTENSION_PROMPT_TOKENS,
+            )
+            .0;
+            TurnInput::ResponseInputItem(
+                codex_extension_api::HiddenContext::new(marker, prompt).into_response_input_item(),
+            )
+        }
+        ResponseInjectionItem::Raw(item) => TurnInput::ResponseInputItem(item),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use codex_extension_api::HiddenContext;
     use codex_extension_api::HiddenContextMarker;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseInputItem;
@@ -228,10 +245,10 @@ mod tests {
         );
         let original_len = prompt.len();
 
-        let request = ThreadIdleRequest::new(
+        let request = ThreadIdleRequest::new(HiddenContext::new(
             HiddenContextMarker::new("<goal_context>", "</goal_context>"),
             prompt,
-        );
+        ));
         let TurnInput::ResponseInputItem(ResponseInputItem::Message { content, .. }) =
             idle_extension_input(request)
         else {

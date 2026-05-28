@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::ExtensionData;
-use crate::HiddenContextMarker;
+use crate::ResponseInjectionItem;
 use crate::ResponseItemInjector;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 
@@ -40,19 +40,16 @@ pub struct ThreadIdleInput<'a> {
 
 /// Extension request to start a new idle turn.
 pub struct ThreadIdleRequest {
-    /// Hidden prompt body that the host wraps as extension-owned context.
-    pub prompt: String,
-    /// Marker pair used to wrap the prompt as hidden extension-owned context.
-    pub context_marker: HiddenContextMarker,
+    /// Extension-owned input that the host injects as model-visible input.
+    pub item: ResponseInjectionItem,
     /// Opaque extension-owned key used to reject stale requests before start.
     pub validation_key: Option<String>,
 }
 
 impl ThreadIdleRequest {
-    pub fn new(context_marker: HiddenContextMarker, prompt: impl Into<String>) -> Self {
+    pub fn new(item: impl Into<ResponseInjectionItem>) -> Self {
         Self {
-            prompt: prompt.into(),
-            context_marker,
+            item: item.into(),
             validation_key: None,
         }
     }

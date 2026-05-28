@@ -45,14 +45,22 @@ struct SessionResponseItemInjector {
 impl codex_extension_api::ResponseItemInjector for SessionResponseItemInjector {
     fn inject_response_items<'a>(
         &'a self,
-        items: Vec<ResponseInputItem>,
+        items: Vec<codex_extension_api::ResponseInjectionItem>,
     ) -> codex_extension_api::ResponseItemInjectionFuture<'a> {
         let session = self.session.clone();
         Box::pin(async move {
             let Some(session) = session.upgrade() else {
                 return Err(items);
             };
-            session.inject_response_items(items).await
+            let response_items = items
+                .clone()
+                .into_iter()
+                .map(codex_extension_api::ResponseInjectionItem::into_response_input_item)
+                .collect();
+            session
+                .inject_response_items(response_items)
+                .await
+                .map_err(|_| items)
         })
     }
 }

@@ -1,6 +1,6 @@
+use codex_extension_api::HiddenContext;
 use codex_extension_api::HiddenContextMarker;
 use codex_extension_api::ThreadIdleRequest;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
 use codex_utils_template::Template;
 use std::sync::LazyLock;
@@ -47,20 +47,20 @@ fn render_embedded_template<const N: usize>(
     }
 }
 
-pub(crate) fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
-    goal_context_input_item(budget_limit_prompt(goal))
+pub(crate) fn budget_limit_steering_context(goal: &ThreadGoal) -> HiddenContext {
+    goal_context(budget_limit_prompt(goal))
 }
 
 pub(crate) fn continuation_steering_request(goal: &ThreadGoal) -> ThreadIdleRequest {
-    ThreadIdleRequest::new(GOAL_CONTEXT_MARKER, continuation_prompt(goal))
+    ThreadIdleRequest::new(goal_context(continuation_prompt(goal)))
 }
 
-pub(crate) fn objective_updated_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
-    goal_context_input_item(objective_updated_prompt(goal))
+pub(crate) fn objective_updated_steering_context(goal: &ThreadGoal) -> HiddenContext {
+    goal_context(objective_updated_prompt(goal))
 }
 
-fn goal_context_input_item(prompt: String) -> ResponseInputItem {
-    GOAL_CONTEXT_MARKER.response_input_item(prompt)
+fn goal_context(prompt: String) -> HiddenContext {
+    HiddenContext::new(GOAL_CONTEXT_MARKER, prompt)
 }
 
 fn continuation_prompt(goal: &ThreadGoal) -> String {

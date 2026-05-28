@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use codex_extension_api::HiddenContext;
 use codex_extension_api::ResponseItemInjector;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 
@@ -14,7 +14,7 @@ use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
 use crate::steering::continuation_steering_request;
-use crate::steering::objective_updated_steering_item;
+use crate::steering::objective_updated_steering_context;
 use crate::tool::protocol_goal_from_state;
 
 #[derive(Clone)]
@@ -147,8 +147,9 @@ impl GoalRuntimeHandle {
                         .mark_idle_goal_active(goal.goal_id.clone());
                 }
                 if should_steer_active_turn {
-                    let item = objective_updated_steering_item(&protocol_goal_from_state(goal));
-                    self.inject_active_turn_steering(item).await;
+                    let context =
+                        objective_updated_steering_context(&protocol_goal_from_state(goal));
+                    self.inject_active_turn_steering(context).await;
                 }
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
@@ -323,11 +324,11 @@ impl GoalRuntimeHandle {
         Ok(goal.goal_id == expected_goal_id)
     }
 
-    pub(crate) async fn inject_active_turn_steering(&self, item: ResponseInputItem) {
+    pub(crate) async fn inject_active_turn_steering(&self, context: HiddenContext) {
         if self
             .inner
             .response_item_injector
-            .inject_response_items(vec![item])
+            .inject_response_items(vec![context.into()])
             .await
             .is_err()
         {

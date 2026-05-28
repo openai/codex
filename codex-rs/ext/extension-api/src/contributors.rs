@@ -78,12 +78,13 @@ pub type ThreadIdleTurnStartFuture<'a> = std::pin::Pin<Box<dyn Future<Output = b
 
 /// Contributor that can request a host-owned turn while a thread is idle.
 ///
-/// Implementations should return a concise hidden prompt body. The host owns
-/// the response-item shape and may ask the contributor to confirm the request
-/// again immediately before the turn starts.
+/// Implementations should normally return hidden context. Raw items are
+/// available for extensions that intentionally need unwrapped input. The host
+/// owns hidden-context wrapping and may ask the contributor to confirm the
+/// request again immediately before the turn starts.
 pub trait ThreadIdleTurnContributor: Send + Sync {
-    /// Returns one hidden prompt body to start an idle turn, if the extension
-    /// still has work that should run without user input.
+    /// Returns input to start an idle turn, if the extension still has work
+    /// that should run without user input.
     fn request_thread_idle_turn<'a>(
         &'a self,
         _input: ThreadIdleInput<'a>,
