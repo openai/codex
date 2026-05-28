@@ -81,19 +81,19 @@ impl SkillsWatcher {
             return WatchRegistration::default();
         }
 
-        let skill_root_path_ref = EnvironmentPathRef::new(
+        let root_path_ref = EnvironmentPathRef::new(
             environment_selection.environment_id.clone(),
             environment.get_filesystem(),
             config.cwd.clone(),
         );
         let plugins_input = config
             .plugins_config_input()
-            .with_skill_path_ref(Some(skill_root_path_ref.clone()));
+            .with_skill_path_ref(Some(root_path_ref.clone()));
         let plugins_manager = thread_manager.plugins_manager();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let skills_input = SkillsLoadInput::new(
-            Some(skill_root_path_ref.clone()),
-            Some(skill_root_path_ref),
+            Some(root_path_ref.clone()),
+            Some(root_path_ref),
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),
             config.bundled_skills_enabled(),

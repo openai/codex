@@ -1918,7 +1918,7 @@ async fn skill_roots_skip_local_roots_without_local_env_path_ref() {
     let local_env_path_ref = env_path_ref(cfg.cwd.clone());
     let scopes: Vec<SkillScope> = super::skill_roots(
         Some(&local_env_path_ref),
-        /*skill_root_path_ref*/ None,
+        /*root_path_ref*/ None,
         &cfg.config_layer_stack,
         Vec::new(),
     )

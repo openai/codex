@@ -453,7 +453,7 @@ async fn warm_plugins_and_skills_for_session_init(
         &environments,
     )
     .ok();
-    let env_path_ref = resolved_environments
+    let cwd = resolved_environments
         .as_ref()
         .and_then(crate::environment_selection::ResolvedTurnEnvironments::primary)
         .map(|environment| {
@@ -463,16 +463,16 @@ async fn warm_plugins_and_skills_for_session_init(
                 environment.cwd.clone(),
             )
         });
-    let skill_root_path_ref = env_path_ref.clone();
+    let root_path_ref = cwd.clone();
     let plugins_input = config
         .plugins_config_input()
-        .with_skill_path_ref(skill_root_path_ref.clone());
+        .with_skill_path_ref(root_path_ref.clone());
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let skills_input = skills_load_input_from_config(
         config.as_ref(),
-        env_path_ref,
-        skill_root_path_ref,
+        cwd,
+        root_path_ref,
         effective_skill_roots,
     );
     skills_manager.skills_for_config(&skills_input).await.errors

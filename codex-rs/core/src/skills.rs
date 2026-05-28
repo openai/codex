@@ -38,13 +38,13 @@ pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
-    env_path_ref: Option<EnvironmentPathRef>,
-    skill_root_path_ref: Option<EnvironmentPathRef>,
+    cwd: Option<EnvironmentPathRef>,
+    root_path_ref: Option<EnvironmentPathRef>,
     effective_skill_roots: Vec<PluginSkillRoot>,
 ) -> SkillsLoadInput {
     SkillsLoadInput::new(
-        env_path_ref,
-        skill_root_path_ref,
+        cwd,
+        root_path_ref,
         effective_skill_roots,
         config.config_layer_stack.clone(),
         config.bundled_skills_enabled(),

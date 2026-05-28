@@ -677,17 +677,17 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
-        let env_path_ref = primary_turn_environment.map(|turn_environment| {
+        let cwd = primary_turn_environment.map(|turn_environment| {
             environment_path_ref(
                 turn_environment.environment_id.clone(),
                 turn_environment.environment.get_filesystem(),
                 turn_environment.cwd.clone(),
             )
         });
-        let skill_root_path_ref = env_path_ref.clone();
+        let root_path_ref = cwd.clone();
         let plugins_input = per_turn_config
             .plugins_config_input()
-            .with_skill_path_ref(skill_root_path_ref.clone());
+            .with_skill_path_ref(root_path_ref.clone());
         let plugin_outcome = self
             .services
             .plugins_manager
@@ -696,8 +696,8 @@ impl Session {
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let skills_input = skills_load_input_from_config(
             &per_turn_config,
-            env_path_ref,
-            skill_root_path_ref,
+            cwd,
+            root_path_ref,
             effective_skill_roots,
         );
         let skills_outcome = Arc::new(

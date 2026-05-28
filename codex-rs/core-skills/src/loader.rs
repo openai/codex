@@ -230,16 +230,16 @@ where
 }
 
 pub(crate) async fn skill_roots(
-    env_path_ref: Option<&EnvironmentPathRef>,
-    skill_root_path_ref: Option<&EnvironmentPathRef>,
+    cwd: Option<&EnvironmentPathRef>,
+    root_path_ref: Option<&EnvironmentPathRef>,
     config_layer_stack: &ConfigLayerStack,
     plugin_skill_roots: Vec<PluginSkillRoot>,
 ) -> Vec<SkillRoot> {
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     skill_roots_with_home_dir(
-        env_path_ref,
-        skill_root_path_ref,
+        cwd,
+        root_path_ref,
         config_layer_stack,
         home_dir.as_ref(),
         plugin_skill_roots,
@@ -248,8 +248,8 @@ pub(crate) async fn skill_roots(
 }
 
 async fn skill_roots_with_home_dir(
-    env_path_ref: Option<&EnvironmentPathRef>,
-    skill_root_path_ref: Option<&EnvironmentPathRef>,
+    cwd: Option<&EnvironmentPathRef>,
+    root_path_ref: Option<&EnvironmentPathRef>,
     config_layer_stack: &ConfigLayerStack,
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
@@ -257,18 +257,18 @@ async fn skill_roots_with_home_dir(
     let mut roots = skill_roots_from_layer_stack_inner(
         config_layer_stack,
         home_dir,
-        env_path_ref,
-        skill_root_path_ref,
+        cwd,
+        root_path_ref,
     );
-    if let Some(skill_root_path_ref) = skill_root_path_ref {
+    if let Some(root_path_ref) = root_path_ref {
         roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
-            path: skill_root_path_ref.with_path(root.path),
+            path: root_path_ref.with_path(root.path),
             scope: SkillScope::User,
             plugin_id: Some(root.plugin_id),
-            plugin_root: Some(skill_root_path_ref.with_path(root.plugin_root)),
+            plugin_root: Some(root_path_ref.with_path(root.plugin_root)),
         }));
     }
-    roots.extend(repo_agents_skill_roots(env_path_ref, config_layer_stack).await);
+    roots.extend(repo_agents_skill_roots(cwd, config_layer_stack).await);
     dedupe_skill_roots_by_path(&mut roots);
     roots
 }
@@ -276,8 +276,8 @@ async fn skill_roots_with_home_dir(
 fn skill_roots_from_layer_stack_inner(
     config_layer_stack: &ConfigLayerStack,
     home_dir: Option<&AbsolutePathBuf>,
-    env_path_ref: Option<&EnvironmentPathRef>,
-    skill_root_path_ref: Option<&EnvironmentPathRef>,
+    cwd: Option<&EnvironmentPathRef>,
+    root_path_ref: Option<&EnvironmentPathRef>,
 ) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
@@ -291,9 +291,9 @@ fn skill_roots_from_layer_stack_inner(
 
         match &layer.name {
             ConfigLayerSource::Project { .. } => {
-                if let Some(env_path_ref) = env_path_ref {
+                if let Some(cwd) = cwd {
                     roots.push(SkillRoot {
-                        path: env_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
+                        path: cwd.with_path(config_folder.join(SKILLS_DIR_NAME)),
                         scope: SkillScope::Repo,
                         plugin_id: None,
                         plugin_root: None,
@@ -301,13 +301,13 @@ fn skill_roots_from_layer_stack_inner(
                 }
             }
             ConfigLayerSource::User { .. } => {
-                let Some(skill_root_path_ref) = skill_root_path_ref else {
+                let Some(root_path_ref) = root_path_ref else {
                     continue;
                 };
                 // Deprecated user skills location (`$CODEX_HOME/skills`), kept for backward
                 // compatibility.
                 roots.push(SkillRoot {
-                    path: skill_root_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
+                    path: root_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
                     scope: SkillScope::User,
                     plugin_id: None,
                     plugin_root: None,
@@ -316,7 +316,7 @@ fn skill_roots_from_layer_stack_inner(
                 // `$HOME/.agents/skills` (user-installed skills).
                 if let Some(home_dir) = home_dir {
                     roots.push(SkillRoot {
-                        path: skill_root_path_ref
+                        path: root_path_ref
                             .with_path(home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)),
                         scope: SkillScope::User,
                         plugin_id: None,
@@ -327,20 +327,20 @@ fn skill_roots_from_layer_stack_inner(
                 // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
                 // special case (not a config layer).
                 roots.push(SkillRoot {
-                    path: skill_root_path_ref.with_path(system_cache_root_dir(&config_folder)),
+                    path: root_path_ref.with_path(system_cache_root_dir(&config_folder)),
                     scope: SkillScope::System,
                     plugin_id: None,
                     plugin_root: None,
                 });
             }
             ConfigLayerSource::System { .. } => {
-                let Some(skill_root_path_ref) = skill_root_path_ref else {
+                let Some(root_path_ref) = root_path_ref else {
                     continue;
                 };
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
                 // `/etc/codex/skills` as admin-scoped skills.
                 roots.push(SkillRoot {
-                    path: skill_root_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
+                    path: root_path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
                     scope: SkillScope::Admin,
                     plugin_id: None,
                     plugin_root: None,
@@ -357,18 +357,18 @@ fn skill_roots_from_layer_stack_inner(
 }
 
 async fn repo_agents_skill_roots(
-    env_path_ref: Option<&EnvironmentPathRef>,
+    cwd: Option<&EnvironmentPathRef>,
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
-    let Some(env_path_ref) = env_path_ref else {
+    let Some(cwd) = cwd else {
         return Vec::new();
     };
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
-    let project_root = find_project_root(env_path_ref, &project_root_markers).await;
-    let dirs = dirs_between_project_root_and_cwd(env_path_ref.path(), project_root.path());
+    let project_root = find_project_root(cwd, &project_root_markers).await;
+    let dirs = dirs_between_project_root_and_cwd(cwd.path(), project_root.path());
     let mut roots = Vec::new();
     for dir in dirs {
-        let agents_skills = env_path_ref.with_path(dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME));
+        let agents_skills = cwd.with_path(dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME));
         match agents_skills.metadata().await {
             Ok(metadata) if metadata.is_directory => roots.push(SkillRoot {
                 path: agents_skills,
