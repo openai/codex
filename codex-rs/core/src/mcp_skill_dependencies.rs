@@ -37,49 +37,54 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
     cancellation_token: &CancellationToken,
     mentioned_skills: &[SkillMetadata],
     elicitation_reviewer: Option<ElicitationReviewerHandle>,
-) {
+) -> HashSet<String> {
+    if mentioned_skills.is_empty() {
+        return HashSet::new();
+    }
+
     let originator_value = originator().value;
-    if !is_first_party_originator(originator_value.as_str()) {
-        // Only support first-party clients for now.
-        return;
-    }
-
     let config = turn_context.config.clone();
-    if mentioned_skills.is_empty()
-        || !config
-            .features
-            .enabled(codex_features::Feature::SkillMcpDependencyInstall)
-    {
-        return;
-    }
-
     let installed = sess
         .services
         .mcp_manager
         .configured_servers(config.as_ref())
         .await;
+    let mut dependency_servers =
+        collect_configured_mcp_dependency_server_names(mentioned_skills, &installed);
+    if !is_first_party_originator(originator_value.as_str())
+        || !config
+            .features
+            .enabled(codex_features::Feature::SkillMcpDependencyInstall)
+    {
+        // Existing skill dependencies remain explicit even if auto-install is unavailable.
+        return dependency_servers;
+    }
+
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
-        return;
+        return dependency_servers;
     }
 
     let unprompted_missing = filter_prompted_mcp_dependencies(sess, &missing).await;
     if unprompted_missing.is_empty() {
-        return;
+        return dependency_servers;
     }
 
     if should_install_mcp_dependencies(sess, turn_context, &unprompted_missing, cancellation_token)
         .await
     {
-        maybe_install_mcp_dependencies(
-            sess,
-            turn_context,
-            config.as_ref(),
-            mentioned_skills,
-            elicitation_reviewer,
-        )
-        .await;
+        dependency_servers.extend(
+            maybe_install_mcp_dependencies(
+                sess,
+                turn_context,
+                config.as_ref(),
+                mentioned_skills,
+                elicitation_reviewer,
+            )
+            .await,
+        );
     }
+    dependency_servers
 }
 
 pub(crate) async fn maybe_install_mcp_dependencies(
@@ -88,27 +93,27 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     config: &crate::config::Config,
     mentioned_skills: &[SkillMetadata],
     elicitation_reviewer: Option<ElicitationReviewerHandle>,
-) {
+) -> HashSet<String> {
     if mentioned_skills.is_empty()
         || !config
             .features
             .enabled(codex_features::Feature::SkillMcpDependencyInstall)
     {
-        return;
+        return HashSet::new();
     }
 
     let codex_home = config.codex_home.clone();
     let installed = sess.services.mcp_manager.configured_servers(config).await;
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
-        return;
+        return HashSet::new();
     }
 
     let mut servers = match load_global_mcp_servers(&codex_home).await {
         Ok(servers) => servers,
         Err(err) => {
             warn!("failed to load MCP servers while installing skill dependencies: {err}");
-            return;
+            return HashSet::new();
         }
     };
 
@@ -124,7 +129,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     }
 
     if !updated {
-        return;
+        return HashSet::new();
     }
 
     if let Err(err) = ConfigEditsBuilder::new(&codex_home)
@@ -133,9 +138,13 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         .await
     {
         warn!("failed to persist MCP dependencies for mentioned skills: {err}");
-        return;
+        return HashSet::new();
     }
 
+    let added_server_names = added
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<HashSet<_>>();
     for (name, server_config) in added {
         let oauth_config = match oauth_login_support(&server_config.transport).await {
             McpOAuthLoginSupport::Supported(config) => config,
@@ -207,6 +216,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         elicitation_reviewer,
     )
     .await;
+    added_server_names
 }
 
 async fn should_install_mcp_dependencies(
@@ -409,6 +419,25 @@ fn mcp_dependency_to_server_config(
     }
 
     Err(format!("unsupported transport {transport}"))
+}
+
+fn collect_configured_mcp_dependency_server_names(
+    mentioned_skills: &[SkillMetadata],
+    installed: &HashMap<String, McpServerConfig>,
+) -> HashSet<String> {
+    let dependency_keys = mentioned_skills
+        .iter()
+        .filter_map(|skill| skill.dependencies.as_ref())
+        .flat_map(|dependencies| dependencies.tools.iter())
+        .filter(|tool| tool.r#type.eq_ignore_ascii_case("mcp"))
+        .filter_map(|tool| canonical_mcp_dependency_key(tool).ok())
+        .collect::<HashSet<_>>();
+
+    installed
+        .iter()
+        .filter(|(name, config)| dependency_keys.contains(&canonical_mcp_server_key(name, config)))
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 fn collect_missing_mcp_dependencies(
