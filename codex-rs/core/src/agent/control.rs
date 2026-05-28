@@ -811,7 +811,9 @@ impl AgentControl {
                         )
                         .await
                 {
-                    warn!("failed to persist stale thread-spawn edge status for {agent_id}: {err}");
+                    return Err(CodexErr::Fatal(format!(
+                        "failed to persist stale thread-spawn edge status for {agent_id}: {err}"
+                    )));
                 }
             }
             Err(CodexErr::ThreadNotFound(_)) => {}
