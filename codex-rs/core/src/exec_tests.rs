@@ -364,6 +364,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
         },
         &permission_profile,
         &cwd,
+        std::slice::from_ref(&cwd),
         &None,
         /*use_legacy_landlock*/ false,
         /*stdout_stream*/ None,
@@ -1009,6 +1010,41 @@ fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() 
     );
 }
 
+#[test]
+fn build_exec_request_preserves_windows_workspace_roots() -> Result<()> {
+    let temp_dir = tempfile::TempDir::new()?;
+    let cwd = temp_dir.path().abs();
+    let additional_root = temp_dir.path().join("additional").abs();
+    let workspace_roots = vec![cwd.clone(), additional_root];
+
+    let exec_request = build_exec_request(
+        ExecParams {
+            command: vec!["echo".to_string(), "ok".to_string()],
+            cwd: cwd.clone(),
+            expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: ExecCapturePolicy::ShellTool,
+            env: HashMap::new(),
+            network: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            justification: None,
+            arg0: None,
+        },
+        &PermissionProfile::Disabled,
+        &cwd,
+        workspace_roots.as_slice(),
+        &None,
+        /*use_legacy_landlock*/ false,
+    )?;
+
+    assert_eq!(
+        exec_request.windows_sandbox_workspace_roots,
+        workspace_roots
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn sandbox_detection_flags_sigsys_exit_code() {
@@ -1114,6 +1150,7 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
             params,
             &PermissionProfile::Disabled,
             &cwd,
+            std::slice::from_ref(&cwd),
             &None,
             /*use_legacy_landlock*/ false,
             /*stdout_stream*/ None,
@@ -1193,6 +1230,7 @@ while :; do sleep 1; done"#
             params,
             &PermissionProfile::Disabled,
             &cwd,
+            std::slice::from_ref(&cwd),
             &None,
             /*use_legacy_landlock*/ false,
             /*stdout_stream*/ None,
