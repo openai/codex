@@ -12,7 +12,9 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
@@ -189,7 +191,7 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(request.codex_home);
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -555,26 +557,9 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-
-        // Standalone installs keep Windows helper binaries under
-        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
-        // that sibling folder before falling back to PATH.
-        let resource_candidate = dir
-            .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
-        if resource_candidate.exists() {
-            return resource_candidate;
-        }
-    }
-    PathBuf::from("codex-windows-sandbox-setup.exe")
+fn find_setup_exe(codex_home: &Path) -> PathBuf {
+    let sandbox_log_dir = sandbox_dir(codex_home);
+    resolve_helper_for_launch(HelperExecutable::Setup, codex_home, Some(&sandbox_log_dir))
 }
 
 fn report_helper_failure(
@@ -607,7 +592,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(codex_home);
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
