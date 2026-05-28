@@ -39,6 +39,7 @@ pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
+const ERROR_ELEVATION_REQUIRED: i32 = 740;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
@@ -190,7 +191,9 @@ fn run_setup_refresh_inner(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
-    // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
+    // Prefer a direct spawn for refresh so the common path does not trigger UAC.
+    // Some Windows installs still mark the helper as elevation-required, so we
+    // fall back to the normal helper launcher only for ERROR_ELEVATION_REQUIRED.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
     let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
@@ -203,16 +206,28 @@ fn run_setup_refresh_inner(
         ),
         Some(&sandbox_dir(request.codex_home)),
     );
-    let status = cmd
-        .status()
-        .map_err(|e| {
+    let status = match cmd.status() {
+        Ok(status) => status,
+        Err(err) if err.raw_os_error() == Some(ERROR_ELEVATION_REQUIRED) => {
             log_note(
-                &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
+                &format!(
+                    "setup refresh: spawn of {} required elevation; retrying via helper launcher",
+                    exe.display()
+                ),
                 Some(&sandbox_dir(request.codex_home)),
             );
-            e
-        })
-        .context("spawn setup refresh")?;
+            run_setup_exe(&payload, /*needs_elevation*/ true, request.codex_home)
+                .context("spawn setup refresh with elevation fallback")?;
+            return Ok(());
+        }
+        Err(err) => {
+            log_note(
+                &format!("setup refresh: failed to spawn {}: {err}", exe.display()),
+                Some(&sandbox_dir(request.codex_home)),
+            );
+            return Err(err).context("spawn setup refresh");
+        }
+    };
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
