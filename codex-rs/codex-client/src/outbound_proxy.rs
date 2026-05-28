@@ -150,7 +150,7 @@ fn configure_proxy_for_route(
         || !SystemProxyEnvOverride::from_env().system_discovery_enabled()
     {
         RouteDiagnostic::direct(target, RouteSource::Disabled, custom_ca_configured).emit_opt_in();
-        return Ok(builder);
+        return Ok(builder.no_proxy());
     }
 
     if !system_proxy_supported() {
@@ -233,6 +233,7 @@ fn configure_concrete_proxy(
             return Err(BuildProxiedHttpClientError::InvalidProxyConfig { target });
         }
     };
+    let proxy = proxy.no_proxy(reqwest::NoProxy::from_env());
     RouteDiagnostic::proxy(target, source, proxy_url, custom_ca_configured).emit_opt_in();
     Ok(builder.proxy(proxy))
 }

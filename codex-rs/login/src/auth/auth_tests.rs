@@ -367,6 +367,7 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         updated_auth_dot_json,
         AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
+        /*outbound_proxy_config*/ None,
     )
     .await
     .expect("updated auth should parse");
