@@ -18,12 +18,12 @@ Use this skill directly for docs-only questions, citations, model/API guidance, 
 
 ### Source Priority
 
+- For Codex self-knowledge, use the Codex source route below; it owns when to use the manual helper, Docs MCP, or bounded uncertainty.
 - For non-Codex OpenAI docs questions, use `mcp__openaiDeveloperDocs__search_openai_docs` to find the most relevant doc pages.
 - For non-Codex OpenAI docs questions, fetch the relevant page with `mcp__openaiDeveloperDocs__fetch_openai_doc` before answering. If search is noisy, run a narrower Docs MCP search; when any plausible official OpenAI docs URL is known or found, try fetching that URL through Docs MCP before relying on web-search content.
 - For API reference, schema, parameter, or required-field questions, use `mcp__openaiDeveloperDocs__get_openapi_spec` when available to verify the API shape alongside the relevant guide or reference page.
 - Use `mcp__openaiDeveloperDocs__list_openai_docs` only when you need to browse or discover non-Codex pages without a clear query.
 - For model-selection, "latest model", or default-model questions, fetch `https://developers.openai.com/api/docs/guides/latest-model.md` first. If that is unavailable, load `references/latest-model.md`.
-- For Codex self-knowledge, use the Codex source route below; it owns when to use the manual helper, Docs MCP, or bounded uncertainty.
 - For model upgrades or prompt upgrades, run `node scripts/resolve-latest-model-info.js` only when the target is latest/current/default or otherwise unspecified; otherwise preserve the explicitly requested target.
 - Preserve explicit target requests: if the user names a target model like "migrate to GPT-5.4", keep that requested target even if `latest-model.md` names a newer model. Mention newer guidance only as optional.
 - If current remote guidance is needed, fetch both the returned migration and prompting guide URLs directly. If direct fetch fails, use MCP/search fallback; if that also fails, use bundled fallback references and disclose the fallback.
@@ -50,12 +50,14 @@ For broad Codex behavior, setup, customization, skills, plugins, MCP, hooks, `AG
 
 1. Reuse a same-thread manual and outline path when it is still fresh.
 2. Otherwise run the skill-local helper first in normal writable sessions. Skip it without trying only when the session is explicitly read-only, shell execution is unavailable, or visible policy shows no allowed temp cache.
-3. Choose the cache dir in this order: `$TMPDIR/openai-docs-cache` when `$TMPDIR` is visible and allowed, `/private/tmp/openai-docs-cache` when `/private/tmp` is visible and allowed, then `/tmp/openai-docs-cache` when `/tmp` is visible and allowed. Workspace-only write access is not enough for this temp cache.
-4. Always include the proxy env var and explicit cache dir. Resolve `<skill-dir>` to this skill's actual directory; in copied local eval workdirs this is usually `.codex/skills/openai-docs`:
+3. Choose the cache dir in this order: `$TMPDIR/openai-docs-cache` when `$TMPDIR` is visible and allowed, `%TEMP%\openai-docs-cache` when `%TEMP%` is visible and allowed, `%TMP%\openai-docs-cache` when `%TMP%` is visible and allowed, `/private/tmp/openai-docs-cache` when `/private/tmp` is visible and allowed, then `/tmp/openai-docs-cache` when `/tmp` is visible and allowed. Workspace-only write access is not enough for this temp cache.
+4. Run the helper with an explicit cache dir. The helper falls back to `curl` when native `fetch` is unavailable or when proxy env vars are present, so no shell-specific proxy prefix is required. Resolve `<skill-dir>` to this skill's actual directory; in copied local eval workdirs this is usually `.codex/skills/openai-docs`:
 
 ```bash
-NODE_USE_ENV_PROXY=1 node <skill-dir>/scripts/fetch-codex-manual.mjs --cache-dir <cache-dir>
+node <skill-dir>/scripts/fetch-codex-manual.mjs --cache-dir <cache-dir>
 ```
+
+On Windows, use a cache dir rooted in `%TEMP%` or `%TMP%`; in PowerShell, `$env:TEMP\\openai-docs-cache` is the usual choice.
 
 Treat helper availability as established by explicit read-only/no-shell policy or an actual command result. A guessed sandbox or helper failure is not enough to switch to Docs MCP or web lookup.
 
