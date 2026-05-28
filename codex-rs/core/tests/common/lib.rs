@@ -248,6 +248,48 @@ where
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
 }
 
+/// Waits for a configured MCP server to finish startup and requires it to be ready.
+pub async fn wait_for_mcp_server(codex: &CodexThread, server_name: &str) -> anyhow::Result<()> {
+    use codex_protocol::protocol::EventMsg;
+    use tokio::time::Duration;
+
+    let startup_event = wait_for_event_with_timeout(
+        codex,
+        |ev| match ev {
+            EventMsg::McpStartupComplete(summary) => {
+                summary.ready.iter().any(|server| server == server_name)
+                    || summary
+                        .failed
+                        .iter()
+                        .any(|failure| failure.server == server_name)
+                    || summary.cancelled.iter().any(|server| server == server_name)
+            }
+            _ => false,
+        },
+        Duration::from_secs(70),
+    )
+    .await;
+    let EventMsg::McpStartupComplete(summary) = startup_event else {
+        unreachable!("event guard guarantees McpStartupComplete");
+    };
+    if let Some(failure) = summary
+        .failed
+        .iter()
+        .find(|failure| failure.server == server_name)
+    {
+        let error = &failure.error;
+        anyhow::bail!("MCP server {server_name} failed to start: {error}");
+    }
+    if summary.cancelled.iter().any(|server| server == server_name) {
+        anyhow::bail!("MCP server {server_name} startup was cancelled");
+    }
+    ensure!(
+        summary.ready.iter().any(|server| server == server_name),
+        "expected MCP server {server_name} to be ready; startup summary: {summary:?}"
+    );
+    Ok(())
+}
+
 pub async fn submit_thread_settings(
     codex: &CodexThread,
     thread_settings: codex_protocol::protocol::ThreadSettingsOverrides,
