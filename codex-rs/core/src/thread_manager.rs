@@ -17,6 +17,7 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use crate::thread_initialization_timing::ThreadInitializationTiming;
 use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::ThreadInitializationMode;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
@@ -1220,6 +1221,12 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
+        let initialization_mode = match &initial_history {
+            InitialHistory::New => ThreadInitializationMode::New,
+            InitialHistory::Cleared => ThreadInitializationMode::Cleared,
+            InitialHistory::Forked(_) => ThreadInitializationMode::Forked,
+            InitialHistory::Resumed(_) => ThreadInitializationMode::Resumed,
+        };
         let mut initialization_timing = ThreadInitializationTiming::start();
         if let InitialHistory::Resumed(resumed) = &initial_history {
             let mut threads = self.threads.write().await;
@@ -1236,7 +1243,8 @@ impl ThreadManagerState {
                     initialization_timing.mark_prepare_completed();
                     if let Some(analytics_events_client) = self.analytics_events_client.as_ref() {
                         analytics_events_client.track_thread_initialization_timing(
-                            initialization_timing.into_fact(resumed.conversation_id.to_string()),
+                            initialization_timing
+                                .finish(resumed.conversation_id.to_string(), initialization_mode),
                         );
                     }
                     return Ok(NewThread {
@@ -1290,10 +1298,9 @@ impl ThreadManagerState {
         let new_thread = self
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;
-        initialization_timing.mark_finalize_completed();
         if let Some(analytics_events_client) = self.analytics_events_client.as_ref() {
             analytics_events_client.track_thread_initialization_timing(
-                initialization_timing.into_fact(new_thread.thread_id.to_string()),
+                initialization_timing.finish(new_thread.thread_id.to_string(), initialization_mode),
             );
         }
         if is_resumed_thread {

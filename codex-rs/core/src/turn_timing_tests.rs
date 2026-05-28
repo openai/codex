@@ -104,7 +104,6 @@ async fn turn_timing_state_records_turn_started_epoch_millis() {
 async fn turn_timing_state_tracks_request_start_and_duration_breakdown() {
     let state = TurnTimingState::default();
     state.mark_turn_started().await;
-    state.mark_model_request_started().await;
     state.mark_sampling_started().await;
     sleep(Duration::from_millis(10)).await;
     state.mark_sampling_completed().await;

@@ -43,6 +43,7 @@ use wiremock::matchers::path;
 
 use super::analytics::ANALYTICS_TEST_TIMEOUT;
 use super::analytics::assert_basic_thread_initialized_event;
+use super::analytics::assert_thread_initialization_timing_event;
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
 
@@ -414,6 +415,13 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
         "forked",
         "user",
     );
+    let timing_event = wait_for_analytics_event(
+        &server,
+        ANALYTICS_TEST_TIMEOUT,
+        "thread_initialization_timing",
+    )
+    .await?;
+    assert_thread_initialization_timing_event(&timing_event, &thread.id, "forked");
     Ok(())
 }
 

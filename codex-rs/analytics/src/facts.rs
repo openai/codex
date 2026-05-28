@@ -88,6 +88,7 @@ pub struct TurnResolvedConfigFact {
 #[serde(rename_all = "snake_case")]
 pub enum ThreadInitializationMode {
     New,
+    Cleared,
     Forked,
     Resumed,
 }
@@ -99,7 +100,7 @@ pub struct TurnTokenUsageFact {
     pub token_usage: TokenUsage,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct TurnTimingFact {
     pub turn_id: String,
     pub thread_id: String,
@@ -284,14 +285,17 @@ pub struct CodexCompactionEvent {
     pub duration_ms: Option<u64>,
 }
 
+#[derive(Serialize)]
 pub(crate) struct AppServerStartedInput {
     pub runtime: CodexRuntimeMetadata,
     pub remote_control_enabled: bool,
     pub duration_ms: u64,
 }
 
+#[derive(Serialize)]
 pub struct ThreadInitializationTimingFact {
     pub thread_id: String,
+    pub initialization_mode: ThreadInitializationMode,
     pub duration_ms: u64,
     pub prepare_duration_ms: u64,
     pub spawn_duration_ms: u64,

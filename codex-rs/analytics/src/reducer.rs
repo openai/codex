@@ -3,7 +3,6 @@ use crate::accepted_lines::accepted_line_fingerprint_event_requests;
 use crate::accepted_lines::accepted_line_fingerprints_from_unified_diff;
 use crate::accepted_lines::accepted_line_repo_hash_for_cwd;
 use crate::events::AppServerRpcTransport;
-use crate::events::AppServerStartedEventParams;
 use crate::events::AppServerStartedEventRequest;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
@@ -45,13 +44,12 @@ use crate::events::ReviewTrigger;
 use crate::events::Reviewer;
 use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
-use crate::events::ThreadInitializationTimingParams;
+use crate::events::ThreadInitializationTimingEventRequest;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::ToolItemFailureKind;
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
-use crate::events::TurnTimingEventParams;
 use crate::events::TurnTimingEventRequest;
 use crate::events::WebSearchActionKind;
 use crate::events::codex_app_metadata;
@@ -155,7 +153,6 @@ struct ConnectionState {
 struct ThreadAnalyticsState {
     connection_id: Option<u64>,
     metadata: Option<ThreadMetadataState>,
-    initialization_timing: Option<ThreadInitializationTimingParams>,
 }
 
 #[derive(Clone, Copy)]
@@ -465,7 +462,7 @@ impl AnalyticsReducer {
                     self.ingest_subagent_thread_started(input, out);
                 }
                 CustomAnalyticsFact::ThreadInitializationTiming(input) => {
-                    self.ingest_thread_initialization_timing(input);
+                    Self::ingest_thread_initialization_timing(input, out);
                 }
                 CustomAnalyticsFact::Compaction(input) => {
                     self.ingest_compaction(*input, out);
@@ -537,11 +534,7 @@ impl AnalyticsReducer {
         out.push(TrackEventRequest::AppServerStarted(
             AppServerStartedEventRequest {
                 event_type: "app_server_started",
-                event_params: AppServerStartedEventParams {
-                    runtime: input.runtime,
-                    remote_control_enabled: input.remote_control_enabled,
-                    duration_ms: input.duration_ms,
-                },
+                event_params: input,
             },
         ));
     }
@@ -572,23 +565,21 @@ impl AnalyticsReducer {
         if thread_state.connection_id.is_none() {
             thread_state.connection_id = parent_connection_id;
         }
-        let initialization_timing = thread_state.initialization_timing.unwrap_or_default();
         out.push(TrackEventRequest::ThreadInitialized(
-            subagent_thread_started_event_request(input, initialization_timing),
+            subagent_thread_started_event_request(input),
         ));
     }
 
-    fn ingest_thread_initialization_timing(&mut self, input: ThreadInitializationTimingFact) {
-        let initialization_timing = ThreadInitializationTimingParams {
-            duration_ms: Some(input.duration_ms),
-            prepare_duration_ms: Some(input.prepare_duration_ms),
-            spawn_duration_ms: Some(input.spawn_duration_ms),
-            finalize_duration_ms: Some(input.finalize_duration_ms),
-        };
-        self.threads
-            .entry(input.thread_id)
-            .or_default()
-            .initialization_timing = Some(initialization_timing);
+    fn ingest_thread_initialization_timing(
+        input: ThreadInitializationTimingFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(TrackEventRequest::ThreadInitializationTiming(
+            ThreadInitializationTimingEventRequest {
+                event_type: "thread_initialization_timing",
+                event_params: input,
+            },
+        ));
     }
 
     fn ingest_guardian_review(
@@ -697,14 +688,7 @@ impl AnalyticsReducer {
     fn ingest_turn_timing(input: TurnTimingFact, out: &mut Vec<TrackEventRequest>) {
         out.push(TrackEventRequest::TurnTiming(TurnTimingEventRequest {
             event_type: "turn_timing",
-            event_params: TurnTimingEventParams {
-                thread_id: input.thread_id,
-                turn_id: input.turn_id,
-                request_start_delay_ms: input.request_start_delay_ms,
-                sampling_duration_ms: input.sampling_duration_ms,
-                blocking_tool_critical_path_duration_ms: input
-                    .blocking_tool_critical_path_duration_ms,
-            },
+            event_params: input,
         }));
     }
 
@@ -1310,9 +1294,13 @@ impl AnalyticsReducer {
             thread.thread_source.map(Into::into),
             initialization_mode,
         );
-        let thread_state = self.threads.entry(thread_id.clone()).or_default();
-        thread_state.connection_id = Some(connection_id);
-        thread_state.metadata = Some(thread_metadata.clone());
+        self.threads.insert(
+            thread_id.clone(),
+            ThreadAnalyticsState {
+                connection_id: Some(connection_id),
+                metadata: Some(thread_metadata.clone()),
+            },
+        );
         out.push(TrackEventRequest::ThreadInitialized(
             ThreadInitializedEvent {
                 event_type: "codex_thread_initialized",
@@ -1327,7 +1315,6 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
-                    initialization_timing: thread_state.initialization_timing.unwrap_or_default(),
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },

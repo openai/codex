@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
+use crate::facts::AppServerStartedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
@@ -14,11 +15,13 @@ use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::ThreadInitializationTimingFact;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
 use crate::facts::TurnSubmissionType;
+use crate::facts::TurnTimingFact;
 use crate::now_unix_millis;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CommandExecutionSource;
@@ -58,6 +61,7 @@ pub(crate) enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
     AppServerStarted(AppServerStartedEventRequest),
     ThreadInitialized(ThreadInitializedEvent),
+    ThreadInitializationTiming(ThreadInitializationTimingEventRequest),
     GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
@@ -147,24 +151,9 @@ pub(crate) struct CodexRuntimeMetadata {
 }
 
 #[derive(Serialize)]
-pub(crate) struct AppServerStartedEventParams {
-    pub(crate) runtime: CodexRuntimeMetadata,
-    pub(crate) remote_control_enabled: bool,
-    pub(crate) duration_ms: u64,
-}
-
-#[derive(Serialize)]
 pub(crate) struct AppServerStartedEventRequest {
     pub(crate) event_type: &'static str,
-    pub(crate) event_params: AppServerStartedEventParams,
-}
-
-#[derive(Clone, Copy, Default, Serialize)]
-pub(crate) struct ThreadInitializationTimingParams {
-    pub(crate) duration_ms: Option<u64>,
-    pub(crate) prepare_duration_ms: Option<u64>,
-    pub(crate) spawn_duration_ms: Option<u64>,
-    pub(crate) finalize_duration_ms: Option<u64>,
+    pub(crate) event_params: AppServerStartedInput,
 }
 
 #[derive(Serialize)]
@@ -179,8 +168,6 @@ pub(crate) struct ThreadInitializedEventParams {
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
-    #[serde(flatten)]
-    pub(crate) initialization_timing: ThreadInitializationTimingParams,
     pub(crate) created_at: u64,
 }
 
@@ -188,6 +175,12 @@ pub(crate) struct ThreadInitializedEventParams {
 pub(crate) struct ThreadInitializedEvent {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: ThreadInitializedEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ThreadInitializationTimingEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: ThreadInitializationTimingFact,
 }
 
 #[derive(Serialize)]
@@ -848,18 +841,9 @@ pub(crate) struct CodexTurnEventRequest {
 }
 
 #[derive(Serialize)]
-pub(crate) struct TurnTimingEventParams {
-    pub(crate) thread_id: String,
-    pub(crate) turn_id: String,
-    pub(crate) request_start_delay_ms: Option<u64>,
-    pub(crate) sampling_duration_ms: u64,
-    pub(crate) blocking_tool_critical_path_duration_ms: u64,
-}
-
-#[derive(Serialize)]
 pub(crate) struct TurnTimingEventRequest {
     pub(crate) event_type: &'static str,
-    pub(crate) event_params: TurnTimingEventParams,
+    pub(crate) event_params: TurnTimingFact,
 }
 
 #[derive(Serialize)]
@@ -1070,7 +1054,6 @@ pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {
 
 pub(crate) fn subagent_thread_started_event_request(
     input: SubAgentThreadStartedInput,
-    initialization_timing: ThreadInitializationTimingParams,
 ) -> ThreadInitializedEvent {
     let event_params = ThreadInitializedEventParams {
         thread_id: input.thread_id,
@@ -1091,7 +1074,6 @@ pub(crate) fn subagent_thread_started_event_request(
         parent_thread_id: input
             .parent_thread_id
             .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
-        initialization_timing,
         created_at: input.created_at,
     };
     ThreadInitializedEvent {

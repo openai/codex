@@ -117,15 +117,11 @@ impl TurnTimingState {
         state.record_turn_ttfm()
     }
 
-    pub(crate) async fn mark_model_request_started(&self) {
+    pub(crate) async fn mark_sampling_started(&self) {
         let mut state = self.state.lock().await;
         if state.first_request_started_at.is_none() {
             state.first_request_started_at = Some(Instant::now());
         }
-    }
-
-    pub(crate) async fn mark_sampling_started(&self) {
-        let mut state = self.state.lock().await;
         if state.sampling_started_at.is_none() {
             state.sampling_started_at = Some(Instant::now());
         }

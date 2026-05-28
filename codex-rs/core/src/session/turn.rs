@@ -1706,12 +1706,8 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
-    turn_context
-        .turn_timing_state
-        .mark_model_request_started()
-        .await;
     turn_context.turn_timing_state.mark_sampling_started().await;
-    let stream_result = client_session
+    let mut stream = client_session
         .stream(
             prompt,
             &turn_context.model_info,
@@ -1724,24 +1720,7 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await;
-    let mut stream = match stream_result {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(err)) => {
-            turn_context
-                .turn_timing_state
-                .mark_sampling_completed()
-                .await;
-            return Err(err);
-        }
-        Err(codex_async_utils::CancelErr::Cancelled) => {
-            turn_context
-                .turn_timing_state
-                .mark_sampling_completed()
-                .await;
-            return Err(CodexErr::TurnAborted);
-        }
-    };
+        .await??;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
@@ -2164,13 +2143,11 @@ async fn try_run_sampling_request(
         .turn_timing_state
         .mark_blocking_tool_critical_path_started()
         .await;
-    let drain_in_flight_result =
-        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await;
+    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
     turn_context
         .turn_timing_state
         .mark_blocking_tool_critical_path_completed()
         .await;
-    drain_in_flight_result?;
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token
