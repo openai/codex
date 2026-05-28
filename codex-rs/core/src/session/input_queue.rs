@@ -25,8 +25,6 @@ pub(crate) struct TurnInputQueue {
 pub(crate) struct InputQueue {
     mailbox_tx: watch::Sender<()>,
     mailbox_pending_mails: Mutex<VecDeque<InterAgentCommunication>>,
-
-    idle_pending_input: Mutex<Vec<ResponseItem>>,
 }
 
 impl InputQueue {
@@ -35,7 +33,6 @@ impl InputQueue {
         Self {
             mailbox_tx,
             mailbox_pending_mails: Mutex::new(VecDeque::new()),
-            idle_pending_input: Mutex::new(Vec::new()),
         }
     }
 
@@ -77,23 +74,6 @@ impl InputQueue {
             .drain(..)
             .map(|mail| ResponseItem::from(mail.to_response_input_item()))
             .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseItem>) {
-        if items.is_empty() {
-            return;
-        }
-
-        self.idle_pending_input.lock().await.extend(items);
-    }
-
-    pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseItem> {
-        std::mem::take(&mut *self.idle_pending_input.lock().await)
-    }
-
-    pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
-        !self.idle_pending_input.lock().await.is_empty()
     }
 
     pub(crate) async fn turn_state_for_sub_id(

@@ -1016,17 +1016,6 @@ impl ThreadManagerState {
         thread.submit(op).await
     }
 
-    #[cfg(test)]
-    /// Append a prebuilt message to a thread by ID outside the normal user-input path.
-    pub(crate) async fn append_message(
-        &self,
-        thread_id: ThreadId,
-        message: ResponseItem,
-    ) -> CodexResult<String> {
-        let thread = self.get_thread(thread_id).await?;
-        thread.append_message(message).await
-    }
-
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
         self.threads.write().await.remove(thread_id)

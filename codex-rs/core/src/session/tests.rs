@@ -8299,64 +8299,6 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
-async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let queued_item = ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "queued before wake".to_string(),
-        }],
-        phase: None,
-    };
-
-    sess.input_queue
-        .queue_response_items_for_next_turn(vec![queued_item.clone()])
-        .await;
-
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-
-    assert_eq!(
-        sess.input_queue.get_pending_input(&sess.active_turn).await,
-        vec![TurnInput::ResponseItem(queued_item)]
-    );
-}
-
-#[tokio::test]
-async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
-    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
-    let queued_item = ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "queued before interrupt".to_string(),
-        }],
-        phase: None,
-    };
-
-    sess.input_queue
-        .queue_response_items_for_next_turn(vec![queued_item])
-        .await;
-
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-
-    assert!(sess.active_turn.lock().await.is_none());
-    assert!(
-        sess.input_queue
-            .has_queued_response_items_for_next_turn()
-            .await
-    );
-}
-
-#[tokio::test]
 async fn abort_empty_active_turn_preserves_pending_input() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let pending_item = ResponseItem::Message {
