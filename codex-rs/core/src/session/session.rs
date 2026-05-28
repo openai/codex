@@ -966,6 +966,8 @@ impl Session {
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
+                    session_source: &session_configuration.session_source,
+                    persistent_thread_state_available: state_db_ctx.is_some(),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
                 }).await;

@@ -889,10 +889,13 @@ async fn installed_tools(
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = ExtensionData::new(thread_id.to_string());
+    let session_source = SessionSource::Cli;
     for contributor in registry.thread_lifecycle_contributors() {
         contributor
             .on_thread_start(ThreadStartInput {
                 config: &(),
+                session_source: &session_source,
+                persistent_thread_state_available: true,
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -930,10 +933,13 @@ impl GoalExtensionHarness {
         let registry = builder.build();
         let session_store = ExtensionData::new("session-1");
         let thread_store = ExtensionData::new(thread_id.to_string());
+        let session_source = SessionSource::Cli;
         for contributor in registry.thread_lifecycle_contributors() {
             contributor
                 .on_thread_start(ThreadStartInput {
                     config: &(),
+                    session_source: &session_source,
+                    persistent_thread_state_available: true,
                     session_store: &session_store,
                     thread_store: &thread_store,
                 })
