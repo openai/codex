@@ -12,6 +12,8 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -88,10 +90,11 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let thread_id = thread.id.clone();
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread_id.clone(),
             client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Search the web".to_string(),
@@ -178,17 +181,39 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
             action: Some(WebSearchAction::Other),
         }
     );
-    assert_eq!(
-        completed.item,
-        ThreadItem::WebSearch {
-            id: call_id.to_string(),
-            query: "standalone web search".to_string(),
-            action: Some(WebSearchAction::Search {
-                query: Some("standalone web search".to_string()),
-                queries: None,
-            }),
-        }
-    );
+    let expected_completed_item = ThreadItem::WebSearch {
+        id: call_id.to_string(),
+        query: "standalone web search".to_string(),
+        action: Some(WebSearchAction::Search {
+            query: Some("standalone web search".to_string()),
+            queries: None,
+        }),
+    };
+    assert_eq!(completed.item, expected_completed_item);
+
+    drop(mcp);
+    let mut reloaded_mcp =
+        McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, reloaded_mcp.initialize()).await??;
+    let read_req = reloaded_mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id,
+            include_turns: true,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        reloaded_mcp.read_stream_until_response_message(RequestId::Integer(read_req)),
+    )
+    .await??;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
+    let persisted_web_searches: Vec<&ThreadItem> = thread
+        .turns
+        .iter()
+        .flat_map(|turn| &turn.items)
+        .filter(|item| matches!(item, ThreadItem::WebSearch { .. }))
+        .collect();
+    assert_eq!(persisted_web_searches, vec![&expected_completed_item]);
 
     Ok(())
 }

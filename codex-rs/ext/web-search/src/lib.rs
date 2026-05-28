@@ -1,4 +1,3 @@
-mod events;
 mod extension;
 mod history;
 mod output;

@@ -3,7 +3,6 @@ use std::sync::Weak;
 
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
-use codex_app_server_protocol::item_event_to_server_notification;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
@@ -58,26 +57,6 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                             turn_id: thread_goal_event.turn_id,
                             goal: thread_goal_event.goal.into(),
                         },
-                    ));
-            }
-            EventMsg::ItemStarted(item_started_event) => {
-                let thread_id = item_started_event.thread_id.to_string();
-                let turn_id = item_started_event.turn_id.clone();
-                self.outgoing
-                    .try_send_server_notification(item_event_to_server_notification(
-                        EventMsg::ItemStarted(item_started_event),
-                        &thread_id,
-                        &turn_id,
-                    ));
-            }
-            EventMsg::ItemCompleted(item_completed_event) => {
-                let thread_id = item_completed_event.thread_id.to_string();
-                let turn_id = item_completed_event.turn_id.clone();
-                self.outgoing
-                    .try_send_server_notification(item_event_to_server_notification(
-                        EventMsg::ItemCompleted(item_completed_event),
-                        &thread_id,
-                        &turn_id,
                     ));
             }
             msg => {

@@ -4,6 +4,8 @@ use codex_api::SearchCommands;
 use codex_api::SearchQuery;
 use codex_api::SearchRequest;
 use codex_api::SearchSettings;
+use codex_core::web_search_action_detail;
+use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ResponsesApiTool;
 use codex_extension_api::ToolCall;
@@ -14,7 +16,7 @@ use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema_without_compaction;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
-use codex_protocol::ThreadId;
+use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::WebSearchAction;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -23,7 +25,6 @@ use codex_tools::default_namespace_description;
 use http::HeaderMap;
 use url::Url;
 
-use crate::events::WebSearchEventEmitter;
 use crate::history::recent_input;
 use crate::output::EncryptedSearchOutput;
 use crate::schema::commands_schema;
@@ -34,10 +35,8 @@ const WEB_RUN_DESCRIPTION: &str = include_str!("../web_run_description.md");
 
 pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
-    pub(crate) thread_id: Option<ThreadId>,
     pub(crate) provider: SharedModelProvider,
     pub(crate) settings: SearchSettings,
-    pub(crate) event_emitter: WebSearchEventEmitter,
 }
 
 #[async_trait::async_trait]
@@ -100,18 +99,16 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
                 u64::try_from(call.truncation_policy.token_budget()).unwrap_or(u64::MAX),
             ),
         };
-        if let Some(thread_id) = self.thread_id {
-            self.event_emitter
-                .start(thread_id, &call.turn_id, &call.call_id);
-        }
+        call.turn_item_emitter
+            .emit_started(web_search_item(&call.call_id, WebSearchAction::Other))
+            .await;
         let response = client
             .search(&request, HeaderMap::new())
             .await
             .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
-        if let Some(thread_id) = self.thread_id {
-            self.event_emitter
-                .complete(thread_id, &call.turn_id, &call.call_id, command_action);
-        }
+        call.turn_item_emitter
+            .emit_completed(web_search_item(&call.call_id, command_action))
+            .await;
 
         Ok(Box::new(EncryptedSearchOutput::new(
             response.encrypted_output,
@@ -176,6 +173,14 @@ fn query_action(queries: &[SearchQuery]) -> Option<WebSearchAction> {
 
 fn literal_url(ref_id: &str) -> Option<String> {
     Url::parse(ref_id).is_ok().then(|| ref_id.to_string())
+}
+
+fn web_search_item(call_id: &str, action: WebSearchAction) -> ExtensionTurnItem {
+    ExtensionTurnItem::WebSearch(WebSearchItem {
+        id: call_id.to_string(),
+        query: web_search_action_detail(&action),
+        action,
+    })
 }
 
 #[cfg(test)]

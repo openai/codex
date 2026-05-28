@@ -17,17 +17,14 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchMode;
 
-use crate::events::WebSearchEventEmitter;
 use crate::tool::WebSearchTool;
 
 #[derive(Clone)]
 struct WebSearchExtension {
     auth_manager: Arc<AuthManager>,
-    event_emitter: WebSearchEventEmitter,
 }
 
 #[derive(Clone)]
@@ -120,22 +117,17 @@ impl ToolContributor for WebSearchExtension {
 
         vec![Arc::new(WebSearchTool {
             session_id: session_store.level_id().to_string(),
-            thread_id: ThreadId::try_from(thread_store.level_id()).ok(),
             provider: create_model_provider(
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
             ),
             settings: config.settings.clone(),
-            event_emitter: self.event_emitter.clone(),
         })]
     }
 }
 
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>, auth_manager: Arc<AuthManager>) {
-    let extension = Arc::new(WebSearchExtension {
-        auth_manager,
-        event_emitter: WebSearchEventEmitter::new(registry.event_sink()),
-    });
+    let extension = Arc::new(WebSearchExtension { auth_manager });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.tool_contributor(extension);
