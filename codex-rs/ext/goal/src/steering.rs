@@ -1,14 +1,20 @@
 use codex_core::context::ContextualUserFragment;
-use codex_core::context::GoalContext;
+use codex_core::context::InternalContextSource;
+use codex_core::context::InternalModelContextFragment;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ThreadGoal;
 
 pub(crate) fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
-    GoalContext::new(budget_limit_prompt(goal)).into_response_input_item()
+    goal_context_input_item(budget_limit_prompt(goal))
 }
 
 pub(crate) fn objective_updated_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
-    GoalContext::new(objective_updated_prompt(goal)).into_response_input_item()
+    goal_context_input_item(objective_updated_prompt(goal))
+}
+
+fn goal_context_input_item(prompt: String) -> ResponseInputItem {
+    InternalModelContextFragment::new(InternalContextSource::from_static("goal"), prompt)
+        .into_response_input_item()
 }
 
 fn budget_limit_prompt(goal: &ThreadGoal) -> String {
