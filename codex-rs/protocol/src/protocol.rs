@@ -2546,17 +2546,6 @@ pub enum SubAgentSource {
     Other(String),
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum SubAgentSourceKind {
-    Review,
-    Compact,
-    ThreadSpawn,
-    MemoryConsolidation,
-    Other,
-}
-
 impl fmt::Display for SessionSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2647,7 +2636,7 @@ impl SessionSource {
                 .is_some_and(|product| product.matches_product_restriction(products))
     }
 
-    pub fn subagent_kind(&self) -> Option<SubAgentSourceKind> {
+    pub fn subagent_kind(&self) -> Option<&'static str> {
         self.subagent_source().map(SubAgentSource::kind)
     }
 
@@ -2689,13 +2678,13 @@ impl fmt::Display for SubAgentSource {
 }
 
 impl SubAgentSource {
-    pub fn kind(&self) -> SubAgentSourceKind {
+    pub fn kind(&self) -> &'static str {
         match self {
-            SubAgentSource::Review => SubAgentSourceKind::Review,
-            SubAgentSource::Compact => SubAgentSourceKind::Compact,
-            SubAgentSource::ThreadSpawn { .. } => SubAgentSourceKind::ThreadSpawn,
-            SubAgentSource::MemoryConsolidation => SubAgentSourceKind::MemoryConsolidation,
-            SubAgentSource::Other(_) => SubAgentSourceKind::Other,
+            SubAgentSource::Review => "review",
+            SubAgentSource::Compact => "compact",
+            SubAgentSource::ThreadSpawn { .. } => "thread_spawn",
+            SubAgentSource::MemoryConsolidation => "memory_consolidation",
+            SubAgentSource::Other(_) => "other",
         }
     }
 

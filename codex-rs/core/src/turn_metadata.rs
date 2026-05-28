@@ -26,7 +26,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSourceKind;
 use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -136,7 +135,7 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent_thread_id: Option<ThreadId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    subagent_type: Option<SubAgentSourceKind>,
+    subagent_kind: Option<&'static str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_source: Option<ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,7 +153,7 @@ impl TurnMetadataBag {
         thread_id: Option<String>,
         forked_from_thread_id: Option<ThreadId>,
         parent_thread_id: Option<ThreadId>,
-        subagent_type: Option<SubAgentSourceKind>,
+        subagent_kind: Option<&'static str>,
         thread_source: Option<ThreadSource>,
         turn_id: Option<String>,
         sandbox: Option<String>,
@@ -165,7 +164,7 @@ impl TurnMetadataBag {
             thread_id,
             forked_from_thread_id,
             parent_thread_id,
-            subagent_type,
+            subagent_kind,
             thread_source,
             turn_id,
             workspaces: BTreeMap::new(),
@@ -218,7 +217,7 @@ fn merge_turn_metadata(
                     | TURN_STARTED_AT_UNIX_MS_KEY
                     | "forked_from_thread_id"
                     | "parent_thread_id"
-                    | "subagent_type"
+                    | "subagent_kind"
                     | REQUEST_KIND_KEY
                     | COMPACTION_KEY
                     | WINDOW_ID_KEY
@@ -251,7 +250,7 @@ pub async fn build_turn_metadata_header(
         /*thread_id*/ None,
         /*forked_from_thread_id*/ None,
         /*parent_thread_id*/ None,
-        /*subagent_type*/ None,
+        /*subagent_kind*/ None,
         /*thread_source*/ None,
         /*turn_id*/ None,
         sandbox.map(ToString::to_string),

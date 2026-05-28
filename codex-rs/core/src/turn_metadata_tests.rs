@@ -150,7 +150,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     assert_eq!(thread_source, Some("user"));
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
-    assert!(json.get("subagent_type").is_none());
+    assert!(json.get("subagent_kind").is_none());
     assert!(json.get("session_source").is_none());
 }
 
@@ -208,7 +208,7 @@ fn turn_metadata_state_includes_root_fork_lineage() {
         Some("11111111-1111-4111-8111-111111111111")
     );
     assert!(json.get("parent_thread_id").is_none());
-    assert!(json.get("subagent_type").is_none());
+    assert!(json.get("subagent_kind").is_none());
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
         json["parent_thread_id"].as_str(),
         Some("22222222-2222-4222-8222-222222222222")
     );
-    assert_eq!(json["subagent_type"].as_str(), Some("thread_spawn"));
+    assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
         json["parent_thread_id"].as_str(),
         Some("33333333-3333-4333-8333-333333333333")
     );
-    assert_eq!(json["subagent_type"].as_str(), Some("thread_spawn"));
+    assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
 }
 
 #[test]
@@ -450,7 +450,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
             "parent_thread_id".to_string(),
             "client-supplied".to_string(),
         ),
-        ("subagent_type".to_string(), "client-supplied".to_string()),
+        ("subagent_kind".to_string(), "client-supplied".to_string()),
     ]));
 
     let header = state.current_header_value().expect("header");
@@ -459,7 +459,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     assert!(json.get("turn_started_at_unix_ms").is_none());
     assert!(json.get("forked_from_thread_id").is_none());
     assert!(json.get("parent_thread_id").is_none());
-    assert!(json.get("subagent_type").is_none());
+    assert!(json.get("subagent_kind").is_none());
 }
 
 #[test]
@@ -508,7 +508,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             "parent_thread_id".to_string(),
             "client-supplied".to_string(),
         ),
-        ("subagent_type".to_string(), "client-supplied".to_string()),
+        ("subagent_kind".to_string(), "client-supplied".to_string()),
         ("turn_id".to_string(), "client-supplied".to_string()),
         (WINDOW_ID_KEY.to_string(), "client-supplied".to_string()),
         ("thread_source".to_string(), "client-supplied".to_string()),
@@ -539,7 +539,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         json["parent_thread_id"].as_str(),
         Some("55555555-5555-4555-8555-555555555555")
     );
-    assert_eq!(json["subagent_type"].as_str(), Some("thread_spawn"));
+    assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
     assert_eq!(json["thread_source"].as_str(), Some("user"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
     assert!(json.get("request_kind").is_none());
@@ -678,5 +678,5 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
         json["parent_thread_id"].as_str(),
         Some("66666666-6666-4666-8666-666666666666")
     );
-    assert_eq!(json["subagent_type"].as_str(), Some("thread_spawn"));
+    assert_eq!(json["subagent_kind"].as_str(), Some("thread_spawn"));
 }
