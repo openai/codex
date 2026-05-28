@@ -1034,6 +1034,7 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
         "custom_server",
         "call-custom",
         /*metadata*/ None,
+        &[],
     )
     .expect("custom servers should receive turn metadata");
     let turn_metadata = meta
@@ -1076,6 +1077,7 @@ async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
         "custom_server",
         "call-custom",
         /*metadata*/ None,
+        &[],
     )
     .expect("custom servers should receive turn metadata");
     let turn_metadata = meta
@@ -1105,7 +1107,13 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
     metadata.plugin_id = Some("sample@test".to_string());
 
     assert_eq!(
-        build_mcp_tool_call_request_meta(&turn_context, "sample", "call-plugin", Some(&metadata),),
+        build_mcp_tool_call_request_meta(
+            &turn_context,
+            "sample",
+            "call-plugin",
+            Some(&metadata),
+            &[],
+        ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_PLUGIN_ID_META_KEY: "sample@test",
@@ -1182,6 +1190,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             CODEX_APPS_MCP_SERVER_NAME,
             "call_abc123xyz789",
             Some(&metadata),
+            &[],
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
@@ -1190,6 +1199,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
                 "resource_uri": "connector://calendar/tools/calendar_create_event",
                 "contains_mcp_source": true,
                 "connector_id": "calendar",
+                "used_connector_ids": [],
             },
         }))
     );
@@ -1209,13 +1219,43 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
             CODEX_APPS_MCP_SERVER_NAME,
             "call_abc123xyz789",
             /*metadata*/ None,
+            &[],
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_CODEX_APPS_META_KEY: {
                 "call_id": "call_abc123xyz789",
+                "used_connector_ids": [],
             },
         }))
+    );
+}
+
+#[tokio::test]
+async fn codex_apps_tool_call_request_meta_includes_used_connector_ids() {
+    let (_, turn_context) = make_session_and_context().await;
+    let used_connector_ids = vec![
+        "connector_calendar".to_string(),
+        "connector_drive".to_string(),
+    ];
+
+    let meta = build_mcp_tool_call_request_meta(
+        &turn_context,
+        CODEX_APPS_MCP_SERVER_NAME,
+        "call_abc123xyz789",
+        /*metadata*/ None,
+        &used_connector_ids,
+    )
+    .expect("codex apps tool call metadata");
+
+    assert_eq!(
+        meta.get(MCP_TOOL_CODEX_APPS_META_KEY)
+            .and_then(serde_json::Value::as_object)
+            .and_then(|meta| meta.get(MCP_TOOL_USED_CONNECTOR_IDS_META_KEY)),
+        Some(&serde_json::json!([
+            "connector_calendar",
+            "connector_drive"
+        ]))
     );
 }
 

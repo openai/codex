@@ -295,11 +295,20 @@ async fn apply_metadata_update(
                 metadata.git_branch = branch;
                 metadata.git_origin_url = origin_url;
             }
+            if let Some(used_connector_ids) = patch.used_connector_ids {
+                metadata.used_connector_ids = used_connector_ids;
+            }
             state_db
                 .upsert_thread(&metadata)
                 .await
                 .map_err(|err| ThreadStoreError::Internal {
                     message: format!("failed to update thread metadata for {thread_id}: {err}"),
+                })?;
+            state_db
+                .set_thread_used_connector_ids(thread_id, &metadata.used_connector_ids)
+                .await
+                .map_err(|err| ThreadStoreError::Internal {
+                    message: format!("failed to update used connector ids for {thread_id}: {err}"),
                 })?;
             if let Some(memory_mode) = patch.memory_mode {
                 state_db

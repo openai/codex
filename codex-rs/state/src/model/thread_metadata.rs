@@ -107,6 +107,8 @@ pub struct ThreadMetadata {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+    /// Connector IDs used by this thread, in first-use order.
+    pub used_connector_ids: Vec<String>,
 }
 
 /// Builder data required to construct [`ThreadMetadata`] without parsing filenames.
@@ -221,6 +223,7 @@ impl ThreadMetadataBuilder {
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
             git_origin_url: self.git_origin_url.clone(),
+            used_connector_ids: Vec::new(),
         }
     }
 }
@@ -311,6 +314,9 @@ impl ThreadMetadata {
         if self.git_origin_url != other.git_origin_url {
             diffs.push("git_origin_url");
         }
+        if self.used_connector_ids != other.used_connector_ids {
+            diffs.push("used_connector_ids");
+        }
         diffs
     }
 }
@@ -345,6 +351,7 @@ pub(crate) struct ThreadRow {
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
+    used_connector_ids: String,
 }
 
 impl ThreadRow {
@@ -374,6 +381,7 @@ impl ThreadRow {
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
             git_origin_url: row.try_get("git_origin_url")?,
+            used_connector_ids: row.try_get("used_connector_ids")?,
         })
     }
 }
@@ -407,11 +415,14 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
+            used_connector_ids,
         } = row;
         let thread_source = thread_source
             .map(|thread_source| thread_source.parse())
             .transpose()
             .map_err(anyhow::Error::msg)?;
+        let used_connector_ids = serde_json::from_str::<Vec<String>>(&used_connector_ids)
+            .map_err(|err| anyhow::anyhow!("invalid used_connector_ids JSON: {err}"))?;
         Ok(Self {
             id: ThreadId::try_from(id)?,
             rollout_path: PathBuf::from(rollout_path),
@@ -438,6 +449,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
+            used_connector_ids,
         })
     }
 }
@@ -524,6 +536,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            used_connector_ids: "[]".to_string(),
         }
     }
 
@@ -554,6 +567,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            used_connector_ids: Vec::new(),
         }
     }
 

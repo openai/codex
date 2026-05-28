@@ -339,8 +339,14 @@ async fn handle_approved_mcp_tool_call(
     };
     let result = async {
         let rewritten_arguments = rewrite?;
-        let request_meta =
-            build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
+        let used_connector_ids = sess.get_used_connector_ids().await;
+        let request_meta = build_mcp_tool_call_request_meta(
+            turn_context,
+            &server,
+            call_id,
+            metadata,
+            &used_connector_ids,
+        );
         let result = execute_mcp_tool_call(
             sess,
             turn_context,
@@ -931,6 +937,9 @@ async fn maybe_track_codex_app_used(
     let (connector_id, app_name) = metadata
         .map(|metadata| (metadata.connector_id, metadata.app_name))
         .unwrap_or((None, None));
+    if let Some(connector_id) = connector_id.as_deref() {
+        sess.record_used_connector_id(connector_id).await;
+    }
     let invocation_type = if let Some(connector_id) = connector_id.as_deref() {
         let mentioned_connector_ids = sess.get_connector_selection().await;
         if mentioned_connector_ids.contains(connector_id) {
@@ -983,6 +992,7 @@ const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const MCP_TOOL_USED_CONNECTOR_IDS_META_KEY: &str = "used_connector_ids";
 
 async fn custom_mcp_tool_approval_mode(
     sess: &Session,
@@ -1038,6 +1048,7 @@ fn build_mcp_tool_call_request_meta(
     server: &str,
     call_id: &str,
     metadata: Option<&McpToolApprovalMetadata>,
+    used_connector_ids: &[String],
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
 
@@ -1061,6 +1072,16 @@ fn build_mcp_tool_call_request_meta(
         codex_apps_meta.insert(
             "call_id".to_string(),
             serde_json::Value::String(call_id.to_string()),
+        );
+        codex_apps_meta.insert(
+            MCP_TOOL_USED_CONNECTOR_IDS_META_KEY.to_string(),
+            serde_json::Value::Array(
+                used_connector_ids
+                    .iter()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
         );
         request_meta.insert(
             MCP_TOOL_CODEX_APPS_META_KEY.to_string(),

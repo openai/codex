@@ -875,7 +875,20 @@ impl Session {
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
-            let state = SessionState::new(session_configuration.clone());
+            let initial_used_connector_ids = if let Some(state_db) = state_db_ctx.as_ref() {
+                match state_db.get_thread(thread_id).await {
+                    Ok(Some(metadata)) => metadata.used_connector_ids,
+                    Ok(None) => Vec::new(),
+                    Err(err) => {
+                        warn!("failed to load used connector metadata for {thread_id}: {err}");
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            let mut state = SessionState::new(session_configuration.clone());
+            state.set_used_connector_ids(initial_used_connector_ids);
             let managed_network_requirements_configured = config
                 .config_layer_stack
                 .requirements_toml()

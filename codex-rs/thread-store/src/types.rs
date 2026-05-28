@@ -529,6 +529,8 @@ pub struct ThreadMetadataPatch {
     pub git_info: Option<GitInfoPatch>,
     /// Thread memory behavior.
     pub memory_mode: Option<MemoryMode>,
+    /// Connector IDs used by this thread, in first-use order.
+    pub used_connector_ids: Option<Vec<String>>,
 }
 
 impl ThreadMetadataPatch {
@@ -606,6 +608,9 @@ impl ThreadMetadataPatch {
         if next.memory_mode.is_some() {
             self.memory_mode = next.memory_mode;
         }
+        if next.used_connector_ids.is_some() {
+            self.used_connector_ids = next.used_connector_ids;
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -631,6 +636,7 @@ impl ThreadMetadataPatch {
             && self.first_user_message.is_none()
             && self.git_info.is_none()
             && self.memory_mode.is_none()
+            && self.used_connector_ids.is_none()
     }
 }
 
