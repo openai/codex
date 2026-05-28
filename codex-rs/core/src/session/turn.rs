@@ -234,7 +234,10 @@ pub(crate) async fn run_turn(
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
 
-        let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+        let window_id = sess.services.model_client.current_window_id();
+        let turn_metadata_header = turn_context
+            .turn_metadata_state
+            .current_header_value_for_model_request(&window_id);
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -407,14 +410,16 @@ async fn run_hooks_and_record_inputs(
     input: &[TurnInput],
 ) -> bool {
     let mut blocked_input = false;
-    let mut accepted_input = false;
+    let mut accepted_user_input = false;
     for input_item in input {
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            accepted_input = true;
+            if matches!(input_item, TurnInput::UserInput(items) if !items.is_empty()) {
+                accepted_user_input = true;
+            }
             record_pending_input(
                 sess,
                 turn_context,
@@ -424,7 +429,7 @@ async fn run_hooks_and_record_inputs(
             .await;
         }
     }
-    blocked_input && !accepted_input
+    blocked_input && !accepted_user_input
 }
 
 #[expect(
@@ -1004,12 +1009,25 @@ async fn run_sampling_request(
     clippy::await_holding_invalid_type,
     reason = "tool router construction reads through the session-owned manager guard"
 )]
+#[instrument(level = "trace",
+    skip_all,
+    fields(
+        turn_id = %turn_context.sub_id,
+        model = %turn_context.model_info.slug,
+        apps_enabled = turn_context.apps_enabled()
+    )
+)]
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
-    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+    let mcp_connection_manager = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .instrument(trace_span!("read_mcp_connection_manager"))
+        .await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
         .list_all_tools()

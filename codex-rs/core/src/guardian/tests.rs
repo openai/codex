@@ -2106,7 +2106,13 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         assert_eq!(third_decision, ReviewDecision::Approved);
         let requests = server.requests().await;
         assert_eq!(requests.len(), 3);
+        let second_request_body = serde_json::from_slice::<serde_json::Value>(&requests[1])?;
         let third_request_body = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
+        assert_eq!(
+            second_request_body["prompt_cache_key"],
+            third_request_body["prompt_cache_key"],
+            "forked guardian review should reuse the trunk guardian prompt cache key"
+        );
         let third_request_body_text = third_request_body.to_string();
         assert!(
             third_request_body_text.contains("first guardian rationale"),
@@ -2213,6 +2219,25 @@ async fn guardian_review_session_config_clears_parent_developer_instructions() {
         guardian_config.base_instructions,
         Some(guardian_policy_prompt())
     );
+}
+
+#[tokio::test]
+async fn guardian_review_session_config_clears_legacy_notify() {
+    let mut parent_config = test_config().await;
+    parent_config.notify = Some(vec![
+        "/path/to/notify".to_string(),
+        "turn-ended".to_string(),
+    ]);
+
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
+
+    assert_eq!(guardian_config.notify, None);
 }
 
 #[tokio::test]

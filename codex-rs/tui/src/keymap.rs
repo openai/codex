@@ -46,6 +46,7 @@ pub(crate) struct RuntimeKeymap {
     pub(crate) editor: EditorKeymap,
     pub(crate) vim_normal: VimNormalKeymap,
     pub(crate) vim_operator: VimOperatorKeymap,
+    pub(crate) vim_text_object: VimTextObjectKeymap,
     pub(crate) pager: PagerKeymap,
     pub(crate) list: ListKeymap,
     pub(crate) approval: ApprovalKeymap,
@@ -77,6 +78,8 @@ pub(crate) struct AppKeymap {
 /// handler code, not here.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatKeymap {
+    /// Interrupt the active turn.
+    pub(crate) interrupt_turn: Vec<KeyBinding>,
     /// Decrease the active reasoning effort.
     pub(crate) decrease_reasoning_effort: Vec<KeyBinding>,
     /// Increase the active reasoning effort.
@@ -156,10 +159,12 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_line_end: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
+    pub(crate) change_to_line_end: Vec<KeyBinding>,
     pub(crate) yank_line: Vec<KeyBinding>,
     pub(crate) paste_after: Vec<KeyBinding>,
     pub(crate) start_delete_operator: Vec<KeyBinding>,
     pub(crate) start_yank_operator: Vec<KeyBinding>,
+    pub(crate) start_change_operator: Vec<KeyBinding>,
     pub(crate) cancel_operator: Vec<KeyBinding>,
 }
 
@@ -182,6 +187,22 @@ pub(crate) struct VimOperatorKeymap {
     pub(crate) motion_word_end: Vec<KeyBinding>,
     pub(crate) motion_line_start: Vec<KeyBinding>,
     pub(crate) motion_line_end: Vec<KeyBinding>,
+    pub(crate) select_inner_text_object: Vec<KeyBinding>,
+    pub(crate) select_around_text_object: Vec<KeyBinding>,
+    pub(crate) cancel: Vec<KeyBinding>,
+}
+
+/// Vim text-object keybindings active after an operator plus inner/around prefix.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct VimTextObjectKeymap {
+    pub(crate) word: Vec<KeyBinding>,
+    pub(crate) big_word: Vec<KeyBinding>,
+    pub(crate) parentheses: Vec<KeyBinding>,
+    pub(crate) brackets: Vec<KeyBinding>,
+    pub(crate) braces: Vec<KeyBinding>,
+    pub(crate) double_quote: Vec<KeyBinding>,
+    pub(crate) single_quote: Vec<KeyBinding>,
+    pub(crate) backtick: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
 }
 
@@ -401,6 +422,11 @@ impl RuntimeKeymap {
         };
 
         let chat = ChatKeymap {
+            interrupt_turn: resolve_bindings(
+                keymap.chat.interrupt_turn.as_ref(),
+                &defaults.chat.interrupt_turn,
+                "tui.keymap.chat.interrupt_turn",
+            )?,
             decrease_reasoning_effort: resolve_bindings(
                 keymap.chat.decrease_reasoning_effort.as_ref(),
                 &defaults.chat.decrease_reasoning_effort,
@@ -451,7 +477,7 @@ impl RuntimeKeymap {
             yank: resolve_local!(keymap, defaults, editor, yank),
         };
 
-        let vim_normal = VimNormalKeymap {
+        let mut vim_normal = VimNormalKeymap {
             enter_insert: resolve_local!(keymap, defaults, vim_normal, enter_insert),
             append_after_cursor: resolve_local!(keymap, defaults, vim_normal, append_after_cursor),
             append_line_end: resolve_local!(keymap, defaults, vim_normal, append_line_end),
@@ -469,6 +495,7 @@ impl RuntimeKeymap {
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
+            change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
             yank_line: resolve_local!(keymap, defaults, vim_normal, yank_line),
             paste_after: resolve_local!(keymap, defaults, vim_normal, paste_after),
             start_delete_operator: resolve_local!(
@@ -478,10 +505,113 @@ impl RuntimeKeymap {
                 start_delete_operator
             ),
             start_yank_operator: resolve_local!(keymap, defaults, vim_normal, start_yank_operator),
+            start_change_operator: resolve_local!(
+                keymap,
+                defaults,
+                vim_normal,
+                start_change_operator
+            ),
             cancel_operator: resolve_local!(keymap, defaults, vim_normal, cancel_operator),
         };
 
-        let vim_operator = VimOperatorKeymap {
+        let configured_vim_normal_bindings_to_preserve = configured_bindings_to_preserve([
+            (
+                keymap.vim_normal.enter_insert.as_ref(),
+                vim_normal.enter_insert.as_slice(),
+            ),
+            (
+                keymap.vim_normal.append_after_cursor.as_ref(),
+                vim_normal.append_after_cursor.as_slice(),
+            ),
+            (
+                keymap.vim_normal.append_line_end.as_ref(),
+                vim_normal.append_line_end.as_slice(),
+            ),
+            (
+                keymap.vim_normal.insert_line_start.as_ref(),
+                vim_normal.insert_line_start.as_slice(),
+            ),
+            (
+                keymap.vim_normal.open_line_below.as_ref(),
+                vim_normal.open_line_below.as_slice(),
+            ),
+            (
+                keymap.vim_normal.open_line_above.as_ref(),
+                vim_normal.open_line_above.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_left.as_ref(),
+                vim_normal.move_left.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_right.as_ref(),
+                vim_normal.move_right.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_up.as_ref(),
+                vim_normal.move_up.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_down.as_ref(),
+                vim_normal.move_down.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_word_forward.as_ref(),
+                vim_normal.move_word_forward.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_word_backward.as_ref(),
+                vim_normal.move_word_backward.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_word_end.as_ref(),
+                vim_normal.move_word_end.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_line_start.as_ref(),
+                vim_normal.move_line_start.as_slice(),
+            ),
+            (
+                keymap.vim_normal.move_line_end.as_ref(),
+                vim_normal.move_line_end.as_slice(),
+            ),
+            (
+                keymap.vim_normal.delete_char.as_ref(),
+                vim_normal.delete_char.as_slice(),
+            ),
+            (
+                keymap.vim_normal.delete_to_line_end.as_ref(),
+                vim_normal.delete_to_line_end.as_slice(),
+            ),
+            (
+                keymap.vim_normal.yank_line.as_ref(),
+                vim_normal.yank_line.as_slice(),
+            ),
+            (
+                keymap.vim_normal.paste_after.as_ref(),
+                vim_normal.paste_after.as_slice(),
+            ),
+            (
+                keymap.vim_normal.start_delete_operator.as_ref(),
+                vim_normal.start_delete_operator.as_slice(),
+            ),
+            (
+                keymap.vim_normal.start_yank_operator.as_ref(),
+                vim_normal.start_yank_operator.as_slice(),
+            ),
+            (
+                keymap.vim_normal.cancel_operator.as_ref(),
+                vim_normal.cancel_operator.as_slice(),
+            ),
+        ]);
+
+        if keymap.vim_normal.start_change_operator.is_none() {
+            vim_normal
+                .start_change_operator
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+
+        let mut vim_operator = VimOperatorKeymap {
             delete_line: resolve_local!(keymap, defaults, vim_operator, delete_line),
             yank_line: resolve_local!(keymap, defaults, vim_operator, yank_line),
             motion_left: resolve_local!(keymap, defaults, vim_operator, motion_left),
@@ -503,7 +633,93 @@ impl RuntimeKeymap {
             motion_word_end: resolve_local!(keymap, defaults, vim_operator, motion_word_end),
             motion_line_start: resolve_local!(keymap, defaults, vim_operator, motion_line_start),
             motion_line_end: resolve_local!(keymap, defaults, vim_operator, motion_line_end),
+            select_inner_text_object: resolve_local!(
+                keymap,
+                defaults,
+                vim_operator,
+                select_inner_text_object
+            ),
+            select_around_text_object: resolve_local!(
+                keymap,
+                defaults,
+                vim_operator,
+                select_around_text_object
+            ),
             cancel: resolve_local!(keymap, defaults, vim_operator, cancel),
+        };
+
+        let configured_vim_operator_bindings_to_preserve = configured_bindings_to_preserve([
+            (
+                keymap.vim_operator.delete_line.as_ref(),
+                vim_operator.delete_line.as_slice(),
+            ),
+            (
+                keymap.vim_operator.yank_line.as_ref(),
+                vim_operator.yank_line.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_left.as_ref(),
+                vim_operator.motion_left.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_right.as_ref(),
+                vim_operator.motion_right.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_up.as_ref(),
+                vim_operator.motion_up.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_down.as_ref(),
+                vim_operator.motion_down.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_word_forward.as_ref(),
+                vim_operator.motion_word_forward.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_word_backward.as_ref(),
+                vim_operator.motion_word_backward.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_word_end.as_ref(),
+                vim_operator.motion_word_end.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_line_start.as_ref(),
+                vim_operator.motion_line_start.as_slice(),
+            ),
+            (
+                keymap.vim_operator.motion_line_end.as_ref(),
+                vim_operator.motion_line_end.as_slice(),
+            ),
+            (
+                keymap.vim_operator.cancel.as_ref(),
+                vim_operator.cancel.as_slice(),
+            ),
+        ]);
+
+        if keymap.vim_operator.select_inner_text_object.is_none() {
+            vim_operator
+                .select_inner_text_object
+                .retain(|binding| !configured_vim_operator_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_operator.select_around_text_object.is_none() {
+            vim_operator
+                .select_around_text_object
+                .retain(|binding| !configured_vim_operator_bindings_to_preserve.contains(binding));
+        }
+
+        let vim_text_object = VimTextObjectKeymap {
+            word: resolve_local!(keymap, defaults, vim_text_object, word),
+            big_word: resolve_local!(keymap, defaults, vim_text_object, big_word),
+            parentheses: resolve_local!(keymap, defaults, vim_text_object, parentheses),
+            brackets: resolve_local!(keymap, defaults, vim_text_object, brackets),
+            braces: resolve_local!(keymap, defaults, vim_text_object, braces),
+            double_quote: resolve_local!(keymap, defaults, vim_text_object, double_quote),
+            single_quote: resolve_local!(keymap, defaults, vim_text_object, single_quote),
+            backtick: resolve_local!(keymap, defaults, vim_text_object, backtick),
+            cancel: resolve_local!(keymap, defaults, vim_text_object, cancel),
         };
 
         let pager = PagerKeymap {
@@ -534,8 +750,7 @@ impl RuntimeKeymap {
         let list_move_down = resolve_local!(keymap, defaults, list, move_down);
         let list_accept = resolve_local!(keymap, defaults, list, accept);
         let list_cancel = resolve_local!(keymap, defaults, list, cancel);
-        let mut configured_bindings_to_preserve = Vec::new();
-        for (configured, resolved) in [
+        let configured_bindings_to_preserve = configured_bindings_to_preserve([
             (
                 keymap.global.open_transcript.as_ref(),
                 app.open_transcript.as_slice(),
@@ -591,51 +806,42 @@ impl RuntimeKeymap {
                 approval.decline.as_slice(),
             ),
             (keymap.approval.cancel.as_ref(), approval.cancel.as_slice()),
-        ] {
-            if configured.is_none() {
-                continue;
-            }
-            for binding in resolved {
-                if !configured_bindings_to_preserve.contains(binding) {
-                    configured_bindings_to_preserve.push(*binding);
-                }
-            }
-        }
+        ]);
 
         let list = ListKeymap {
             move_up: list_move_up,
             move_down: list_move_down,
-            move_left: resolve_new_list_bindings(
+            move_left: resolve_new_default_bindings(
                 keymap.list.move_left.as_ref(),
                 &defaults.list.move_left,
                 &configured_bindings_to_preserve,
                 "tui.keymap.list.move_left",
             )?,
-            move_right: resolve_new_list_bindings(
+            move_right: resolve_new_default_bindings(
                 keymap.list.move_right.as_ref(),
                 &defaults.list.move_right,
                 &configured_bindings_to_preserve,
                 "tui.keymap.list.move_right",
             )?,
-            page_up: resolve_new_list_bindings(
+            page_up: resolve_new_default_bindings(
                 keymap.list.page_up.as_ref(),
                 &defaults.list.page_up,
                 &configured_bindings_to_preserve,
                 "tui.keymap.list.page_up",
             )?,
-            page_down: resolve_new_list_bindings(
+            page_down: resolve_new_default_bindings(
                 keymap.list.page_down.as_ref(),
                 &defaults.list.page_down,
                 &configured_bindings_to_preserve,
                 "tui.keymap.list.page_down",
             )?,
-            jump_top: resolve_new_list_bindings(
+            jump_top: resolve_new_default_bindings(
                 keymap.list.jump_top.as_ref(),
                 &defaults.list.jump_top,
                 &configured_bindings_to_preserve,
                 "tui.keymap.list.jump_top",
             )?,
-            jump_bottom: resolve_new_list_bindings(
+            jump_bottom: resolve_new_default_bindings(
                 keymap.list.jump_bottom.as_ref(),
                 &defaults.list.jump_bottom,
                 &configured_bindings_to_preserve,
@@ -652,6 +858,7 @@ impl RuntimeKeymap {
             editor,
             vim_normal,
             vim_operator,
+            vim_text_object,
             pager,
             list,
             approval,
@@ -678,6 +885,7 @@ impl RuntimeKeymap {
                 toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
             },
             chat: ChatKeymap {
+                interrupt_turn: default_bindings![plain(KeyCode::Esc)],
                 decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
                 increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
                 edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
@@ -786,10 +994,15 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('d')),
                     plain(KeyCode::Char('D'))
                 ],
+                change_to_line_end: default_bindings![
+                    shift(KeyCode::Char('c')),
+                    plain(KeyCode::Char('C'))
+                ],
                 yank_line: default_bindings![shift(KeyCode::Char('y')), plain(KeyCode::Char('Y'))],
                 paste_after: default_bindings![plain(KeyCode::Char('p'))],
                 start_delete_operator: default_bindings![plain(KeyCode::Char('d'))],
                 start_yank_operator: default_bindings![plain(KeyCode::Char('y'))],
+                start_change_operator: default_bindings![plain(KeyCode::Char('c'))],
                 cancel_operator: default_bindings![plain(KeyCode::Esc)],
             },
             vim_operator: VimOperatorKeymap {
@@ -807,6 +1020,35 @@ impl RuntimeKeymap {
                     plain(KeyCode::Char('$')),
                     shift(KeyCode::Char('$'))
                 ],
+                select_inner_text_object: default_bindings![plain(KeyCode::Char('i'))],
+                select_around_text_object: default_bindings![plain(KeyCode::Char('a'))],
+                cancel: default_bindings![plain(KeyCode::Esc)],
+            },
+            vim_text_object: VimTextObjectKeymap {
+                word: default_bindings![plain(KeyCode::Char('w'))],
+                big_word: default_bindings![shift(KeyCode::Char('w')), plain(KeyCode::Char('W'))],
+                parentheses: default_bindings![
+                    plain(KeyCode::Char('(')),
+                    shift(KeyCode::Char('(')),
+                    plain(KeyCode::Char(')')),
+                    shift(KeyCode::Char(')')),
+                    plain(KeyCode::Char('b'))
+                ],
+                brackets: default_bindings![plain(KeyCode::Char('[')), plain(KeyCode::Char(']'))],
+                braces: default_bindings![
+                    plain(KeyCode::Char('{')),
+                    shift(KeyCode::Char('{')),
+                    plain(KeyCode::Char('}')),
+                    shift(KeyCode::Char('}')),
+                    shift(KeyCode::Char('b')),
+                    plain(KeyCode::Char('B'))
+                ],
+                double_quote: default_bindings![
+                    plain(KeyCode::Char('"')),
+                    shift(KeyCode::Char('"'))
+                ],
+                single_quote: default_bindings![plain(KeyCode::Char('\''))],
+                backtick: default_bindings![plain(KeyCode::Char('`'))],
                 cancel: default_bindings![plain(KeyCode::Esc)],
             },
             pager: PagerKeymap {
@@ -893,6 +1135,7 @@ impl RuntimeKeymap {
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -935,6 +1178,7 @@ impl RuntimeKeymap {
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -963,6 +1207,11 @@ impl RuntimeKeymap {
                 ),
             ],
             MAIN_RESERVED_BINDINGS,
+            [(
+                "chat.interrupt_turn",
+                "fixed.backtrack",
+                key_hint::plain(KeyCode::Esc),
+            )],
         )?;
 
         validate_no_shadow_with_allowed_overlaps(
@@ -1015,6 +1264,18 @@ impl RuntimeKeymap {
             )],
         )?;
 
+        // The request-user-input overlay consumes turn interruption before
+        // configurable question navigation reaches its list handler.
+        validate_no_shadow_with_allowed_overlaps(
+            "request_user_input",
+            [("chat.interrupt_turn", self.chat.interrupt_turn.as_slice())],
+            [
+                ("list.move_left", self.list.move_left.as_slice()),
+                ("list.move_right", self.list.move_right.as_slice()),
+            ],
+            [],
+        )?;
+
         // While the composer is focused, these main-surface handlers always
         // consume matching keys before the event reaches the textarea editor.
         validate_no_shadow_with_allowed_overlaps(
@@ -1027,6 +1288,7 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -1176,6 +1438,10 @@ impl RuntimeKeymap {
                     "delete_to_line_end",
                     self.vim_normal.delete_to_line_end.as_slice(),
                 ),
+                (
+                    "change_to_line_end",
+                    self.vim_normal.change_to_line_end.as_slice(),
+                ),
                 ("yank_line", self.vim_normal.yank_line.as_slice()),
                 ("paste_after", self.vim_normal.paste_after.as_slice()),
                 (
@@ -1185,6 +1451,10 @@ impl RuntimeKeymap {
                 (
                     "start_yank_operator",
                     self.vim_normal.start_yank_operator.as_slice(),
+                ),
+                (
+                    "start_change_operator",
+                    self.vim_normal.start_change_operator.as_slice(),
                 ),
                 (
                     "cancel_operator",
@@ -1222,7 +1492,30 @@ impl RuntimeKeymap {
                     "motion_line_end",
                     self.vim_operator.motion_line_end.as_slice(),
                 ),
+                (
+                    "select_inner_text_object",
+                    self.vim_operator.select_inner_text_object.as_slice(),
+                ),
+                (
+                    "select_around_text_object",
+                    self.vim_operator.select_around_text_object.as_slice(),
+                ),
                 ("cancel", self.vim_operator.cancel.as_slice()),
+            ],
+        )?;
+
+        validate_unique(
+            "vim_text_object",
+            [
+                ("word", self.vim_text_object.word.as_slice()),
+                ("big_word", self.vim_text_object.big_word.as_slice()),
+                ("parentheses", self.vim_text_object.parentheses.as_slice()),
+                ("brackets", self.vim_text_object.brackets.as_slice()),
+                ("braces", self.vim_text_object.braces.as_slice()),
+                ("double_quote", self.vim_text_object.double_quote.as_slice()),
+                ("single_quote", self.vim_text_object.single_quote.as_slice()),
+                ("backtick", self.vim_text_object.backtick.as_slice()),
+                ("cancel", self.vim_text_object.cancel.as_slice()),
             ],
         )?;
 
@@ -1257,6 +1550,7 @@ impl RuntimeKeymap {
                 ("close_transcript", self.pager.close_transcript.as_slice()),
             ],
             TRANSCRIPT_BACKTRACK_RESERVED_BINDINGS,
+            [],
         )?;
 
         validate_unique(
@@ -1410,10 +1704,11 @@ See the Codex keymap documentation for supported actions and examples."
     Ok(())
 }
 
-fn validate_no_reserved<const N: usize>(
+fn validate_no_reserved<const N: usize, const A: usize>(
     context: &str,
     pairs: [(&'static str, &[KeyBinding]); N],
     reserved: &[(&'static str, KeyBinding)],
+    allowed_overlaps: [(&'static str, &'static str, KeyBinding); A],
 ) -> Result<(), String> {
     for (action, bindings) in pairs {
         for binding in bindings {
@@ -1422,6 +1717,15 @@ fn validate_no_reserved<const N: usize>(
                 .iter()
                 .find(|(_, reserved_binding)| reserved_binding.parts() == key)
             {
+                if allowed_overlaps.iter().any(
+                    |(allowed_action, allowed_reserved_action, allowed_binding)| {
+                        *allowed_action == action
+                            && *allowed_reserved_action == *reserved_action
+                            && allowed_binding.parts() == key
+                    },
+                ) {
+                    continue;
+                }
                 return Err(format!(
                     "Ambiguous `tui.keymap.{context}` bindings: `{action}` uses a key reserved by `{reserved_action}`. \
 Set a different key in `~/.codex/config.toml` and retry. \
@@ -1514,7 +1818,24 @@ fn resolve_bindings(
     parse_bindings(spec, path)
 }
 
-fn resolve_new_list_bindings(
+fn configured_bindings_to_preserve<const N: usize>(
+    pairs: [(Option<&KeybindingsSpec>, &[KeyBinding]); N],
+) -> Vec<KeyBinding> {
+    let mut configured_bindings = Vec::new();
+    for (configured, resolved) in pairs {
+        if configured.is_none() {
+            continue;
+        }
+        for binding in resolved {
+            if !configured_bindings.contains(binding) {
+                configured_bindings.push(*binding);
+            }
+        }
+    }
+    configured_bindings
+}
+
+fn resolve_new_default_bindings(
     configured: Option<&KeybindingsSpec>,
     fallback: &[KeyBinding],
     configured_bindings_to_preserve: &[KeyBinding],
@@ -1795,6 +2116,10 @@ mod tests {
         );
         assert_eq!(runtime.app.toggle_fast_mode, Vec::new());
         assert_eq!(
+            runtime.chat.interrupt_turn,
+            vec![key_hint::plain(KeyCode::Esc)]
+        );
+        assert_eq!(
             runtime.chat.decrease_reasoning_effort,
             vec![key_hint::alt(KeyCode::Char(','))]
         );
@@ -1961,6 +2286,58 @@ mod tests {
         keymap.list.jump_top = Some(one("home"));
 
         expect_conflict(&keymap, "list.jump_top", "approval.approve");
+    }
+
+    #[test]
+    fn configured_legacy_vim_normal_bindings_prune_new_change_operator_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("c"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.move_left,
+            vec![key_hint::plain(KeyCode::Char('c'))]
+        );
+        assert_eq!(runtime.vim_normal.start_change_operator, Vec::new());
+    }
+
+    #[test]
+    fn explicit_new_vim_normal_binding_still_conflicts_with_legacy_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("c"));
+        keymap.vim_normal.start_change_operator = Some(one("c"));
+
+        expect_conflict(&keymap, "move_left", "start_change_operator");
+    }
+
+    #[test]
+    fn configured_legacy_vim_operator_bindings_prune_new_text_object_defaults() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_operator.motion_left = Some(one("i"));
+        keymap.vim_operator.motion_right = Some(one("a"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_operator.motion_left,
+            vec![key_hint::plain(KeyCode::Char('i'))]
+        );
+        assert_eq!(
+            runtime.vim_operator.motion_right,
+            vec![key_hint::plain(KeyCode::Char('a'))]
+        );
+        assert_eq!(runtime.vim_operator.select_inner_text_object, Vec::new());
+        assert_eq!(runtime.vim_operator.select_around_text_object, Vec::new());
+    }
+
+    #[test]
+    fn explicit_new_vim_operator_binding_still_conflicts_with_legacy_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_operator.motion_left = Some(one("i"));
+        keymap.vim_operator.select_inner_text_object = Some(one("i"));
+
+        expect_conflict(&keymap, "motion_left", "select_inner_text_object");
     }
 
     #[test]
@@ -2162,6 +2539,44 @@ mod tests {
         keymap.composer.submit = Some(one("ctrl-v"));
 
         expect_conflict(&keymap, "composer.submit", "fixed.paste_image");
+    }
+
+    #[test]
+    fn interrupt_turn_allows_backtrack_escape_and_can_be_remapped_or_unbound() {
+        let mut keymap = TuiKeymap::default();
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("default keymap should parse");
+        assert_eq!(
+            runtime.chat.interrupt_turn,
+            vec![key_hint::plain(KeyCode::Esc)]
+        );
+
+        keymap.chat.interrupt_turn = Some(one("f12"));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("remapped keymap should parse");
+        assert_eq!(
+            runtime.chat.interrupt_turn,
+            vec![key_hint::plain(KeyCode::F(12))]
+        );
+
+        keymap.chat.interrupt_turn = Some(KeybindingsSpec::Many(vec![]));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("unbound keymap should parse");
+        assert!(runtime.chat.interrupt_turn.is_empty());
+    }
+
+    #[test]
+    fn interrupt_turn_rejects_other_fixed_shortcuts() {
+        let mut keymap = TuiKeymap::default();
+        keymap.chat.interrupt_turn = Some(one("ctrl-v"));
+
+        expect_conflict(&keymap, "chat.interrupt_turn", "fixed.paste_image");
+    }
+
+    #[test]
+    fn interrupt_turn_rejects_request_user_input_question_navigation_bindings() {
+        let mut keymap = TuiKeymap::default();
+        keymap.chat.interrupt_turn = Some(one("f12"));
+        keymap.list.move_right = Some(one("f12"));
+
+        expect_conflict(&keymap, "chat.interrupt_turn", "list.move_right");
     }
 
     #[test]

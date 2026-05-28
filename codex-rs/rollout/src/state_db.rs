@@ -8,7 +8,6 @@ use crate::sqlite_metrics;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 pub use codex_state::LogEntry;
@@ -454,37 +453,6 @@ pub async fn find_rollout_path_by_id(
         })
 }
 
-/// Get dynamic tools for a thread id using SQLite.
-pub async fn get_dynamic_tools(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    stage: &str,
-) -> Option<Vec<DynamicToolSpec>> {
-    let ctx = context?;
-    match ctx.get_dynamic_tools(thread_id).await {
-        Ok(tools) => tools,
-        Err(err) => {
-            warn!("state db get_dynamic_tools failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
-/// Persist dynamic tools for a thread id using SQLite, if none exist yet.
-pub async fn persist_dynamic_tools(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    tools: Option<&[DynamicToolSpec]>,
-    stage: &str,
-) {
-    let Some(ctx) = context else {
-        return;
-    };
-    if let Err(err) = ctx.persist_dynamic_tools(thread_id, tools).await {
-        warn!("state db persist_dynamic_tools failed during {stage}: {err}");
-    }
-}
-
 pub async fn mark_thread_memory_mode_polluted(
     context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
@@ -568,21 +536,6 @@ pub async fn reconcile_rollout(
     {
         warn!(
             "state db reconcile_rollout memory_mode update failed {}: {err}",
-            rollout_path.display()
-        );
-        return;
-    }
-    if let Ok(meta_line) = crate::list::read_session_meta_line(rollout_path).await {
-        persist_dynamic_tools(
-            Some(ctx),
-            meta_line.meta.id,
-            meta_line.meta.dynamic_tools.as_deref(),
-            "reconcile_rollout",
-        )
-        .await;
-    } else {
-        warn!(
-            "state db reconcile_rollout missing session meta {}",
             rollout_path.display()
         );
     }

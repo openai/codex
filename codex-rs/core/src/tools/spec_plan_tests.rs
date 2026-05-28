@@ -302,21 +302,15 @@ fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
         callable_name: name.to_string(),
         callable_namespace: namespace.to_string(),
         namespace_description: Some(format!("Tools from {server}.")),
-        tool: rmcp::model::Tool {
-            name: name.to_string().into(),
-            title: None,
-            description: Some(format!("{name} test tool").into()),
-            input_schema: Arc::new(rmcp::model::object(json!({
+        tool: rmcp::model::Tool::new(
+            name.to_string(),
+            format!("{name} test tool"),
+            Arc::new(rmcp::model::object(json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false,
             }))),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        ),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -526,7 +520,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "read_mcp_resource",
     ]);
 
-    let missing_namespace_capability = probe_with(
+    let bedrock_namespace_capability = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = true;
             use_bedrock_provider(turn);
@@ -537,7 +531,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         },
     )
     .await;
-    missing_namespace_capability.assert_visible_lacks(&["tool_search"]);
+    bedrock_namespace_capability.assert_visible_contains(&["tool_search"]);
 
     let enabled = probe_with(
         |turn| {
@@ -890,7 +884,7 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support() {
+async fn multi_agent_v2_namespace_is_supported_by_bedrock_provider() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
         update_config(turn, |config| {
@@ -900,15 +894,15 @@ async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support(
     })
     .await;
 
-    plan.assert_visible_contains(&["spawn_agent", "send_message", "list_agents"]);
-    plan.assert_visible_lacks(&["agents"]);
-    assert!(
-        plan.registered_names
-            .contains(&ToolName::plain("spawn_agent").to_string())
-    );
+    plan.assert_visible_contains(&["agents"]);
+    plan.assert_visible_lacks(&["spawn_agent", "send_message", "list_agents"]);
     assert!(
         !plan
             .registered_names
+            .contains(&ToolName::plain("spawn_agent").to_string())
+    );
+    assert!(
+        plan.registered_names
             .contains(&ToolName::namespaced("agents", "spawn_agent").to_string())
     );
 }

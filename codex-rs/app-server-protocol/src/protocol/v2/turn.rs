@@ -41,6 +41,23 @@ pub struct TurnEnvironmentParams {
     pub cwd: AbsolutePathBuf,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum AdditionalContextKind {
+    Untrusted,
+    Application,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AdditionalContextEntry {
+    pub value: String,
+    pub kind: AdditionalContextKind,
+}
+
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
 )]
@@ -53,6 +70,10 @@ pub struct TurnStartParams {
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// Optional client-provided context fragments keyed by an opaque source identifier.
+    #[experimental("turn/start.additionalContext")]
+    #[ts(optional = nullable)]
+    pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
     /// Optional turn-scoped environments.
     ///
     /// Omitted uses the thread sticky environments. Empty disables
@@ -141,6 +162,10 @@ pub struct TurnSteerParams {
     #[experimental("turn/steer.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// Optional client-provided context fragments keyed by an opaque source identifier.
+    #[experimental("turn/steer.additionalContext")]
+    #[ts(optional = nullable)]
+    pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
     /// Required active turn id precondition. The request fails when it does not
     /// match the currently active turn.
     pub expected_turn_id: String,

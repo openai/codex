@@ -1699,6 +1699,7 @@ fn mcp_server_elicitation_response_round_trips_rmcp_result() {
         content: Some(json!({
             "confirmed": true,
         })),
+        meta: None,
     };
 
     let v2_response = McpServerElicitationRequestResponse::from(rmcp_result.clone());
@@ -3428,6 +3429,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         thread_id: "thread_123".to_string(),
         input: vec![],
         responsesapi_client_metadata: None,
+        additional_context: None,
         environments: None,
         cwd: None,
         runtime_workspace_roots: None,

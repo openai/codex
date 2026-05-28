@@ -57,7 +57,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
-            namespace_tools: false,
+            namespace_tools: true,
             image_generation: false,
             web_search: false,
         }
@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_disable_unsupported_launch_features() {
+    fn capabilities_disable_unsupported_hosted_tools() {
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
         );
@@ -139,7 +139,7 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
-                namespace_tools: false,
+                namespace_tools: true,
                 image_generation: false,
                 web_search: false,
             }
