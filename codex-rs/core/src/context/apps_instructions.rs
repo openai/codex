@@ -1,3 +1,4 @@
+#[cfg(test)]
 use codex_app_server_protocol::AppInfo;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_CLOSE_TAG;
@@ -8,6 +9,7 @@ use super::ContextualUserFragment;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AppsInstructions;
 
+#[cfg(test)]
 impl AppsInstructions {
     pub(crate) fn from_connectors(connectors: &[AppInfo]) -> Option<Self> {
         connectors
