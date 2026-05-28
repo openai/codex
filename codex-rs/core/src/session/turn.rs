@@ -509,32 +509,13 @@ async fn build_skills_and_plugins(
     {
         explicitly_requested_mcp_servers.insert(CODEX_APPS_MCP_SERVER_NAME.to_string());
     }
-    if !explicitly_requested_mcp_servers.is_empty() {
-        let mut explicitly_requested_mcp_servers = explicitly_requested_mcp_servers
-            .into_iter()
-            .collect::<Vec<_>>();
-        explicitly_requested_mcp_servers.sort();
-        let readiness = {
-            let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-            mcp_connection_manager.wait_for_servers_ready(&explicitly_requested_mcp_servers)
-        };
-        let failures = match readiness.or_cancel(cancellation_token).await {
-            Ok(failures) => failures,
-            Err(_) => return None,
-        };
-        for failure in failures {
-            sess.send_event(
-                turn_context,
-                EventMsg::Warning(WarningEvent {
-                    message: format!(
-                        "MCP dependency `{}` requested for this turn is unavailable: {}",
-                        failure.server, failure.error
-                    ),
-                }),
-            )
-            .await;
-        }
-    }
+    wait_for_explicit_mcp_servers(
+        sess,
+        turn_context,
+        cancellation_token,
+        explicitly_requested_mcp_servers,
+    )
+    .await?;
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
@@ -579,7 +560,7 @@ async fn build_skills_and_plugins(
         &skills_outcome.disabled_paths,
         &connector_slug_counts,
     );
-    maybe_prompt_and_install_mcp_dependencies(
+    let skill_dependency_servers = maybe_prompt_and_install_mcp_dependencies(
         sess,
         turn_context,
         cancellation_token,
@@ -587,6 +568,13 @@ async fn build_skills_and_plugins(
         Some(sess.mcp_elicitation_reviewer()),
     )
     .await;
+    wait_for_explicit_mcp_servers(
+        sess,
+        turn_context,
+        cancellation_token,
+        skill_dependency_servers,
+    )
+    .await?;
 
     let SkillInjections {
         items: skill_injections,
@@ -699,6 +687,37 @@ async fn build_extension_turn_input_items(
     }
 
     Some(items)
+}
+
+async fn wait_for_explicit_mcp_servers(
+    sess: &Session,
+    turn_context: &TurnContext,
+    cancellation_token: &CancellationToken,
+    servers: HashSet<String>,
+) -> Option<()> {
+    if servers.is_empty() {
+        return Some(());
+    }
+    let mut servers = servers.into_iter().collect::<Vec<_>>();
+    servers.sort();
+    let readiness = {
+        let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+        mcp_connection_manager.wait_for_servers_ready(&servers)
+    };
+    let failures = readiness.or_cancel(cancellation_token).await.ok()?;
+    for failure in failures {
+        sess.send_event(
+            turn_context,
+            EventMsg::Warning(WarningEvent {
+                message: format!(
+                    "MCP dependency `{}` requested for this turn is unavailable: {}",
+                    failure.server, failure.error
+                ),
+            }),
+        )
+        .await;
+    }
+    Some(())
 }
 
 async fn track_turn_resolved_config_analytics(
