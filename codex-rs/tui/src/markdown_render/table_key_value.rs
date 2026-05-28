@@ -173,15 +173,7 @@ fn render_aligned_field(
         } else {
             spans.push(Span::raw(" ".repeat(value_indent)));
         }
-        spans.extend(value_line.line.spans);
-        let mut line = HyperlinkLine::new(Line::from(spans));
-        line.hyperlinks
-            .extend(value_line.hyperlinks.into_iter().map(|mut hyperlink| {
-                hyperlink.columns =
-                    hyperlink.columns.start + value_indent..hyperlink.columns.end + value_indent;
-                hyperlink
-            }));
-        out.push(line);
+        push_prefixed_value_line(out, spans, value_line);
     }
 }
 
@@ -211,17 +203,32 @@ fn render_stacked_field(
         .map(|width| width.saturating_sub(STACKED_VALUE_INDENT).max(1))
         .unwrap_or_else(|| cell_width(value).max(1));
     for value_line in wrap_cell(value, value_width) {
-        let mut spans = vec![Span::raw(" ".repeat(STACKED_VALUE_INDENT))];
-        spans.extend(value_line.line.spans);
-        let mut line = HyperlinkLine::new(Line::from(spans));
-        line.hyperlinks
-            .extend(value_line.hyperlinks.into_iter().map(|mut hyperlink| {
-                hyperlink.columns = hyperlink.columns.start + STACKED_VALUE_INDENT
-                    ..hyperlink.columns.end + STACKED_VALUE_INDENT;
-                hyperlink
-            }));
-        out.push(line);
+        push_prefixed_value_line(
+            out,
+            vec![Span::raw(" ".repeat(STACKED_VALUE_INDENT))],
+            value_line,
+        );
     }
+}
+
+fn push_prefixed_value_line(
+    out: &mut Vec<HyperlinkLine>,
+    mut prefix: Vec<Span<'static>>,
+    mut value_line: HyperlinkLine,
+) {
+    let shift = prefix
+        .iter()
+        .map(|span| span.content.width())
+        .sum::<usize>();
+    prefix.append(&mut value_line.line.spans);
+    let mut output_line = HyperlinkLine::new(Line::from(prefix));
+    output_line
+        .hyperlinks
+        .extend(value_line.hyperlinks.into_iter().map(|mut link| {
+            link.columns = link.columns.start + shift..link.columns.end + shift;
+            link
+        }));
+    out.push(output_line);
 }
 
 fn wrap_cell(cell: &TableCell, width: usize) -> Vec<HyperlinkLine> {

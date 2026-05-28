@@ -99,7 +99,7 @@ Available presets:
 - `Sandbox.workspace_write`: the normal default for projects with a recorded trust decision; read files and write inside the workspace and configured writable roots.
 - `Sandbox.full_access`: run without filesystem access restrictions.
 
-When `sandbox=` is omitted, app-server uses its configured default. A turn
+When `sandbox=` is omitted, Codex uses its configured default. A turn
 override also becomes the sandbox for subsequent turns on that thread.
 
 ## 5) Continue the same thread (multi-turn)
@@ -150,9 +150,9 @@ with Codex() as codex:
     print(result.final_response)
 ```
 
-## 8) Public app-server types
+## 8) Public Codex protocol types
 
-The convenience wrappers live at the package root. Public app-server value and
+The convenience wrappers live at the package root. Public Codex protocol value and
 event types live under:
 
 ```python
