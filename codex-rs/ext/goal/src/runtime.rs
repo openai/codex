@@ -88,7 +88,6 @@ impl GoalRuntimeHandle {
         if let Some(turn_id) = self.inner.accounting_state.current_turn_id() {
             self.account_active_goal_progress(
                 turn_id.as_str(),
-                &format!("{turn_id}:external-goal-mutation"),
                 codex_state::GoalAccountingMode::ActiveOnly,
                 BudgetLimitedGoalDisposition::ClearActive,
             )
@@ -97,7 +96,6 @@ impl GoalRuntimeHandle {
         }
 
         self.account_idle_goal_progress(
-            &format!("{}:external-goal-mutation", self.inner.thread_id),
             codex_state::GoalAccountingMode::ActiveOnly,
             BudgetLimitedGoalDisposition::ClearActive,
         )
@@ -187,10 +185,8 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
-        let progress_event_id = format!("{turn_id}:usage-limit-progress");
         self.account_active_goal_progress(
             turn_id,
-            progress_event_id.as_str(),
             codex_state::GoalAccountingMode::ActiveOnly,
             BudgetLimitedGoalDisposition::ClearActive,
         )
@@ -216,11 +212,7 @@ impl GoalRuntimeHandle {
         let goal = protocol_goal_from_state(goal);
         self.inner
             .event_emitter
-            .thread_goal_updated(
-                format!("{turn_id}:usage-limit"),
-                Some(turn_id.to_string()),
-                goal,
-            )
+            .thread_goal_updated(Some(turn_id.to_string()), goal)
             .await;
         Ok(())
     }
@@ -308,7 +300,6 @@ impl GoalRuntimeHandle {
     pub(crate) async fn account_active_goal_progress(
         &self,
         turn_id: &str,
-        event_id: &str,
         mode: codex_state::GoalAccountingMode,
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
     ) -> Result<Option<AccountedGoalProgress>, String> {
@@ -348,11 +339,7 @@ impl GoalRuntimeHandle {
                 let goal = protocol_goal_from_state(goal);
                 self.inner
                     .event_emitter
-                    .thread_goal_updated(
-                        event_id.to_string(),
-                        Some(turn_id.to_string()),
-                        goal.clone(),
-                    )
+                    .thread_goal_updated(Some(turn_id.to_string()), goal.clone())
                     .await;
                 Some(AccountedGoalProgress { goal, goal_id })
             }
@@ -362,7 +349,6 @@ impl GoalRuntimeHandle {
 
     async fn account_idle_goal_progress(
         &self,
-        event_id: &str,
         mode: codex_state::GoalAccountingMode,
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
     ) -> Result<Option<AccountedGoalProgress>, String> {
@@ -401,7 +387,7 @@ impl GoalRuntimeHandle {
                 let goal = protocol_goal_from_state(goal);
                 self.inner
                     .event_emitter
-                    .thread_goal_updated(event_id.to_string(), /*turn_id*/ None, goal.clone())
+                    .thread_goal_updated(/*turn_id*/ None, goal.clone())
                     .await;
                 Some(AccountedGoalProgress { goal, goal_id })
             }

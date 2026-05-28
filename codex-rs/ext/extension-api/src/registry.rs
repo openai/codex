@@ -127,7 +127,6 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     /// Finishes construction and returns the immutable registry.
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
-            event_sink: self.event_sink,
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
             thread_idle_turn_contributors: self.thread_idle_turn_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
@@ -144,7 +143,6 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
 
 /// Immutable typed registry produced after extensions are installed.
 pub struct ExtensionRegistry<C: Sync> {
-    event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     thread_idle_turn_contributors: Vec<Arc<dyn ThreadIdleTurnContributor>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
@@ -158,11 +156,6 @@ pub struct ExtensionRegistry<C: Sync> {
 }
 
 impl<C: Sync> ExtensionRegistry<C> {
-    /// Returns the host event sink retained by this registry.
-    pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
-        Arc::clone(&self.event_sink)
-    }
-
     /// Returns the registered thread-lifecycle contributors.
     pub fn thread_lifecycle_contributors(&self) -> &[Arc<dyn ThreadLifecycleContributor<C>>] {
         &self.thread_lifecycle_contributors

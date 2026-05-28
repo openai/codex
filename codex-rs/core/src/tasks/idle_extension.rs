@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use codex_extension_api::ResponseInjectionItem;
 use codex_extension_api::ThreadIdleRequest;
+use codex_extension_api::ThreadIdleTurnContributor;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 
@@ -124,19 +125,13 @@ async fn has_pending_work(session: &Session) -> bool {
 }
 
 struct IdleTurnCandidate {
-    contributor_index: usize,
+    contributor: Arc<dyn ThreadIdleTurnContributor>,
     request: ThreadIdleRequest,
 }
 
 async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate> {
     let collaboration_mode = session.collaboration_mode().await;
-    for (contributor_index, contributor) in session
-        .services
-        .extensions
-        .thread_idle_turn_contributors()
-        .iter()
-        .enumerate()
-    {
+    for contributor in session.services.extensions.thread_idle_turn_contributors() {
         if !idle_turn_policy_allows_mode(contributor.idle_turn_policy(), &collaboration_mode) {
             continue;
         }
@@ -151,7 +146,7 @@ async fn next_idle_turn_candidate(session: &Session) -> Option<IdleTurnCandidate
         };
         if is_non_empty_idle_input(&request.item) {
             return Some(IdleTurnCandidate {
-                contributor_index,
+                contributor: Arc::clone(contributor),
                 request,
             });
         }
@@ -175,19 +170,15 @@ fn idle_turn_policy_allows_mode(
 }
 
 async fn should_start_idle_turn(session: &Session, candidate: &IdleTurnCandidate) -> bool {
-    let Some(contributor) = session
-        .services
-        .extensions
-        .thread_idle_turn_contributors()
-        .get(candidate.contributor_index)
-    else {
-        return false;
-    };
     let collaboration_mode = session.collaboration_mode().await;
-    if !idle_turn_policy_allows_mode(contributor.idle_turn_policy(), &collaboration_mode) {
+    if !idle_turn_policy_allows_mode(
+        candidate.contributor.idle_turn_policy(),
+        &collaboration_mode,
+    ) {
         return false;
     }
-    contributor
+    candidate
+        .contributor
         .should_start_thread_idle_turn(codex_extension_api::ThreadIdleTurnStartInput {
             request: &candidate.request,
             session_store: &session.services.session_extension_data,

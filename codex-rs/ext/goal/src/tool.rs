@@ -201,7 +201,8 @@ impl GoalToolExecutor {
             .mark_current_turn_goal_active(goal.goal_id.clone());
         self.metrics.record_created();
         let goal = protocol_goal_from_state(goal);
-        self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone())
+        self.event_emitter
+            .thread_goal_updated(turn_id, goal.clone())
             .await;
         goal_response(Some(goal), CompletionBudgetReport::Omit)
     }
@@ -230,7 +231,6 @@ impl GoalToolExecutor {
                 | ThreadGoalStatus::UsageLimited
                 | ThreadGoalStatus::BudgetLimited => unreachable!("status validated above"),
             },
-            invocation.call_id.as_str(),
             BudgetLimitedGoalDisposition::ClearActive,
         )
         .await?;
@@ -262,7 +262,8 @@ impl GoalToolExecutor {
             .record_terminal_if_status_changed(previous_status, &goal);
         let goal = protocol_goal_from_state(goal);
         let turn_id = self.accounting_state.clear_current_turn_goal();
-        self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone())
+        self.event_emitter
+            .thread_goal_updated(turn_id, goal.clone())
             .await;
         goal_response(
             Some(goal),
@@ -274,21 +275,9 @@ impl GoalToolExecutor {
         )
     }
 
-    async fn emit_goal_updated_from_tool_call(
-        &self,
-        invocation: &ToolCall,
-        turn_id: Option<String>,
-        goal: ThreadGoal,
-    ) {
-        self.event_emitter
-            .thread_goal_updated(invocation.call_id.clone(), turn_id, goal)
-            .await;
-    }
-
     async fn account_active_goal_progress(
         &self,
         mode: codex_state::GoalAccountingMode,
-        event_id: &str,
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
     ) -> Result<Option<ThreadGoal>, FunctionCallError> {
         let Some(turn_id) = self.accounting_state.current_turn_id() else {
@@ -331,7 +320,7 @@ impl GoalToolExecutor {
                 );
                 let goal = protocol_goal_from_state(goal);
                 self.event_emitter
-                    .thread_goal_updated(event_id.to_string(), Some(turn_id), goal.clone())
+                    .thread_goal_updated(Some(turn_id), goal.clone())
                     .await;
                 Some(goal)
             }

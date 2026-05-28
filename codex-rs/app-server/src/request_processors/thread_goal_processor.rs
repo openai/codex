@@ -143,67 +143,42 @@ impl ThreadGoalRequestProcessor {
             .get_thread_goal(thread_id)
             .await
             .map_err(|err| invalid_request(err.to_string()))?;
-        let (goal, previous_goal) = match (objective, existing_goal) {
-            (Some(objective), Some(existing_goal)) => {
-                let goal = state_db
-                    .thread_goals()
-                    .update_thread_goal(
-                        thread_id,
-                        codex_state::GoalUpdate {
-                            objective: Some(objective.to_string()),
-                            status,
-                            token_budget: params.token_budget,
-                            expected_goal_id: Some(existing_goal.goal_id.clone()),
-                        },
-                    )
-                    .await
-                    .map_err(|err| invalid_request(err.to_string()))?
-                    .ok_or_else(|| {
-                        invalid_request(format!(
-                            "cannot update goal for thread {thread_id}: no goal exists"
-                        ))
-                    })?;
-                (goal, Some(existing_goal))
-            }
-            (Some(objective), None) => {
-                let goal = state_db
-                    .thread_goals()
-                    .replace_thread_goal(
-                        thread_id,
-                        objective,
-                        status.unwrap_or(codex_state::ThreadGoalStatus::Active),
-                        params.token_budget.flatten(),
-                    )
-                    .await
-                    .map_err(|err| invalid_request(err.to_string()))?;
-                (goal, None)
-            }
-            (None, Some(existing_goal)) => {
-                let goal = state_db
-                    .thread_goals()
-                    .update_thread_goal(
-                        thread_id,
-                        codex_state::GoalUpdate {
-                            objective: None,
-                            status,
-                            token_budget: params.token_budget,
-                            expected_goal_id: Some(existing_goal.goal_id.clone()),
-                        },
-                    )
-                    .await
-                    .map_err(|err| invalid_request(err.to_string()))?
-                    .ok_or_else(|| {
-                        invalid_request(format!(
-                            "cannot update goal for thread {thread_id}: no goal exists"
-                        ))
-                    })?;
-                (goal, Some(existing_goal))
-            }
-            (None, None) => {
-                return Err(invalid_request(format!(
-                    "cannot update goal for thread {thread_id}: no goal exists"
-                )));
-            }
+        let no_goal_error = || {
+            invalid_request(format!(
+                "cannot update goal for thread {thread_id}: no goal exists"
+            ))
+        };
+        let (goal, previous_goal) = if let Some(existing_goal) = existing_goal {
+            let goal = state_db
+                .thread_goals()
+                .update_thread_goal(
+                    thread_id,
+                    codex_state::GoalUpdate {
+                        objective: objective.map(str::to_string),
+                        status,
+                        token_budget: params.token_budget,
+                        expected_goal_id: Some(existing_goal.goal_id.clone()),
+                    },
+                )
+                .await
+                .map_err(|err| invalid_request(err.to_string()))?
+                .ok_or_else(no_goal_error)?;
+            (goal, Some(existing_goal))
+        } else {
+            let Some(objective) = objective else {
+                return Err(no_goal_error());
+            };
+            let goal = state_db
+                .thread_goals()
+                .replace_thread_goal(
+                    thread_id,
+                    objective,
+                    status.unwrap_or(codex_state::ThreadGoalStatus::Active),
+                    params.token_budget.flatten(),
+                )
+                .await
+                .map_err(|err| invalid_request(err.to_string()))?;
+            (goal, None)
         };
         if should_set_thread_preview
             && let Err(err) = state_db

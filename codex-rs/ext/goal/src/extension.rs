@@ -216,7 +216,6 @@ where
         if let Err(err) = runtime
             .account_active_goal_progress(
                 turn_id,
-                &format!("{turn_id}:turn-stop"),
                 codex_state::GoalAccountingMode::ActiveOnly,
                 BudgetLimitedGoalDisposition::ClearActive,
             )
@@ -242,7 +241,6 @@ where
         if let Err(err) = runtime
             .account_active_goal_progress(
                 turn_id,
-                &format!("{turn_id}:turn-abort"),
                 codex_state::GoalAccountingMode::ActiveOnly,
                 BudgetLimitedGoalDisposition::ClearActive,
             )
@@ -327,7 +325,6 @@ where
             let progress = match runtime
                 .account_active_goal_progress(
                     turn_id,
-                    input.call_id,
                     codex_state::GoalAccountingMode::ActiveOnly,
                     BudgetLimitedGoalDisposition::KeepActive,
                 )

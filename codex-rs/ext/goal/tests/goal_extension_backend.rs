@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEvent;
-use codex_extension_api::ExtensionEventMsg;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
@@ -263,7 +262,6 @@ async fn tool_finish_accounts_active_goal_progress_and_emits_event() -> anyhow::
 
     assert_eq!(
         vec![CapturedGoalEvent {
-            event_id: "call-shell".to_string(),
             turn_id: Some("turn-1".to_string()),
             status: ThreadGoalStatus::Active,
             tokens_used: 23,
@@ -331,13 +329,11 @@ async fn budget_limited_goal_keeps_accruing_until_turn_stop() -> anyhow::Result<
     assert_eq!(
         vec![
             CapturedGoalEvent {
-                event_id: "call-shell".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::BudgetLimited,
                 tokens_used: 25,
             },
             CapturedGoalEvent {
-                event_id: "turn-1:turn-stop".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::BudgetLimited,
                 tokens_used: 35,
@@ -449,13 +445,11 @@ async fn usage_limit_turn_error_accounts_and_marks_goal_terminal() -> anyhow::Re
     assert_eq!(
         vec![
             CapturedGoalEvent {
-                event_id: "turn-1:usage-limit-progress".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::Active,
                 tokens_used: 23,
             },
             CapturedGoalEvent {
-                event_id: "turn-1:usage-limit".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::UsageLimited,
                 tokens_used: 23,
@@ -634,13 +628,11 @@ async fn usage_limit_budget_limited_goal_accounts_remaining_progress() -> anyhow
     assert_eq!(
         vec![
             CapturedGoalEvent {
-                event_id: "turn-1:usage-limit-progress".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::BudgetLimited,
                 tokens_used: 35,
             },
             CapturedGoalEvent {
-                event_id: "turn-1:usage-limit".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::UsageLimited,
                 tokens_used: 35,
@@ -790,13 +782,11 @@ async fn update_goal_can_block_and_accounts_final_progress() -> anyhow::Result<(
     assert_eq!(
         vec![
             CapturedGoalEvent {
-                event_id: "call-update-goal".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::Active,
                 tokens_used: 23,
             },
             CapturedGoalEvent {
-                event_id: "call-update-goal".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::Blocked,
                 tokens_used: 23,
@@ -876,13 +866,11 @@ async fn update_goal_can_complete_and_reports_final_budget() -> anyhow::Result<(
     assert_eq!(
         vec![
             CapturedGoalEvent {
-                event_id: "call-update-goal".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::Active,
                 tokens_used: 23,
             },
             CapturedGoalEvent {
-                event_id: "call-update-goal".to_string(),
                 turn_id: Some("turn-1".to_string()),
                 status: ThreadGoalStatus::Complete,
                 tokens_used: 23,
@@ -935,7 +923,6 @@ async fn external_goal_mutation_start_accounts_active_goal_progress() -> anyhow:
     assert_eq!(23, goal.tokens_used);
     assert_eq!(
         vec![CapturedGoalEvent {
-            event_id: "turn-1:external-goal-mutation".to_string(),
             turn_id: Some("turn-1".to_string()),
             status: ThreadGoalStatus::Active,
             tokens_used: 23,
@@ -1093,7 +1080,6 @@ async fn idle_continuation_request_rehydrates_active_goal_idle_accounting() -> a
     );
     assert_eq!(
         vec![CapturedGoalEvent {
-            event_id: format!("{thread_id}:external-goal-mutation"),
             turn_id: None,
             status: ThreadGoalStatus::Active,
             tokens_used: 0,
@@ -1430,13 +1416,13 @@ impl RecordingEventSink {
     fn goal_events(&self) -> Vec<CapturedGoalEvent> {
         self.events()
             .iter()
-            .filter_map(|event| match &event.msg {
-                ExtensionEventMsg::ThreadGoalUpdated(updated) => Some(CapturedGoalEvent {
-                    event_id: event.id.clone(),
+            .map(|event| {
+                let ExtensionEvent::ThreadGoalUpdated(updated) = event;
+                CapturedGoalEvent {
                     turn_id: updated.turn_id.clone(),
                     status: updated.goal.status,
                     tokens_used: updated.goal.tokens_used,
-                }),
+                }
             })
             .collect()
     }
@@ -1459,7 +1445,6 @@ impl ExtensionEventSink for RecordingEventSink {
 
 #[derive(Debug, PartialEq, Eq)]
 struct CapturedGoalEvent {
-    event_id: String,
     turn_id: Option<String>,
     status: ThreadGoalStatus,
     tokens_used: i64,

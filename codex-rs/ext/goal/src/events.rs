@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionEvent;
-use codex_extension_api::ExtensionEventMsg;
 use codex_extension_api::ExtensionEventSink;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
@@ -16,21 +15,13 @@ impl GoalEventEmitter {
         Self { sink }
     }
 
-    pub(crate) async fn thread_goal_updated(
-        &self,
-        event_id: impl Into<String>,
-        turn_id: Option<String>,
-        goal: ThreadGoal,
-    ) {
+    pub(crate) async fn thread_goal_updated(&self, turn_id: Option<String>, goal: ThreadGoal) {
         self.sink
-            .emit(ExtensionEvent {
-                id: event_id.into(),
-                msg: ExtensionEventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
-                    thread_id: goal.thread_id,
-                    turn_id,
-                    goal,
-                }),
-            })
+            .emit(ExtensionEvent::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                thread_id: goal.thread_id,
+                turn_id,
+                goal,
+            }))
             .await;
     }
 }

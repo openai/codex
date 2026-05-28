@@ -11,7 +11,6 @@ use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
 use codex_extension_api::ExtensionEvent;
 use codex_extension_api::ExtensionEventFuture;
-use codex_extension_api::ExtensionEventMsg;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -60,8 +59,8 @@ struct AppServerExtensionEventSink {
 impl ExtensionEventSink for AppServerExtensionEventSink {
     fn emit<'a>(&'a self, event: ExtensionEvent) -> ExtensionEventFuture<'a> {
         Box::pin(async move {
-            match event.msg {
-                ExtensionEventMsg::ThreadGoalUpdated(thread_goal_event) => {
+            match event {
+                ExtensionEvent::ThreadGoalUpdated(thread_goal_event) => {
                     let notification =
                         ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
                             thread_id: thread_goal_event.thread_id.to_string(),
@@ -182,23 +181,20 @@ mod tests {
         objective: &str,
         turn_id: &str,
     ) -> ExtensionEvent {
-        ExtensionEvent {
-            id: "call-1".to_string(),
-            msg: ExtensionEventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+        ExtensionEvent::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+            thread_id,
+            turn_id: Some(turn_id.to_string()),
+            goal: ThreadGoal {
                 thread_id,
-                turn_id: Some(turn_id.to_string()),
-                goal: ThreadGoal {
-                    thread_id,
-                    objective: objective.to_string(),
-                    status: ThreadGoalStatus::Active,
-                    token_budget: Some(123),
-                    tokens_used: 45,
-                    time_used_seconds: 6,
-                    created_at: 7,
-                    updated_at: 8,
-                },
-            }),
-        }
+                objective: objective.to_string(),
+                status: ThreadGoalStatus::Active,
+                token_budget: Some(123),
+                tokens_used: 45,
+                time_used_seconds: 6,
+                created_at: 7,
+                updated_at: 8,
+            },
+        })
     }
 
     fn app_server_goal_update(
