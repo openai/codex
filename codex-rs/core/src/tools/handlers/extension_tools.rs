@@ -3,6 +3,7 @@ use std::sync::Weak;
 
 use codex_protocol::items::TurnItem;
 use codex_tools::ConversationHistory;
+use codex_tools::ExtensionTurnItem;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -63,21 +64,29 @@ struct CoreTurnItemEmitter {
     turn: Weak<TurnContext>,
 }
 
+fn extension_turn_item(item: ExtensionTurnItem) -> TurnItem {
+    match item {
+        ExtensionTurnItem::WebSearch(item) => TurnItem::WebSearch(item),
+    }
+}
+
 impl TurnItemEmitter for CoreTurnItemEmitter {
-    fn emit_started<'a>(&'a self, item: TurnItem) -> TurnItemEmissionFuture<'a> {
+    fn emit_started<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a> {
         Box::pin(async move {
             let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
                 return;
             };
+            let item = extension_turn_item(item);
             session.emit_turn_item_started(turn.as_ref(), &item).await;
         })
     }
 
-    fn emit_completed<'a>(&'a self, item: TurnItem) -> TurnItemEmissionFuture<'a> {
+    fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a> {
         Box::pin(async move {
             let (Some(session), Some(turn)) = (self.session.upgrade(), self.turn.upgrade()) else {
                 return;
             };
+            let item = extension_turn_item(item);
             session.emit_turn_item_completed(turn.as_ref(), item).await;
         })
     }
@@ -110,6 +119,7 @@ mod tests {
     use codex_protocol::models::ResponseItem;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::protocol::EventMsg;
+    use codex_tools::ExtensionTurnItem;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::Mutex;
@@ -186,7 +196,7 @@ mod tests {
             &self,
             call: codex_tools::ToolCall,
         ) -> Result<Box<dyn codex_tools::ToolOutput>, codex_tools::FunctionCallError> {
-            let item = TurnItem::WebSearch(WebSearchItem {
+            let item = ExtensionTurnItem::WebSearch(WebSearchItem {
                 id: call.call_id.clone(),
                 query: "rust trait object".to_string(),
                 action: WebSearchAction::Search {

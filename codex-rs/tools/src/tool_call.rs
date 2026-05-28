@@ -1,7 +1,7 @@
 use crate::FunctionCallError;
 use crate::ToolName;
 use crate::ToolPayload;
-use codex_protocol::items::TurnItem;
+use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::ResponseItem;
 use codex_utils_output_truncation::TruncationPolicy;
 use std::future::Future;
@@ -29,16 +29,25 @@ impl ConversationHistory {
 /// Future returned when an extension tool emits a visible turn-item lifecycle event.
 pub type TurnItemEmissionFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
-/// Host-provided capability for extension tools to emit existing visible turn items.
+/// Visible turn items that an extension fully owns and may emit as-is.
+///
+/// Add only item kinds that require no additional host finalization before
+/// persistence or client delivery. Richer items need a host-owned publish path.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExtensionTurnItem {
+    WebSearch(WebSearchItem),
+}
+
+/// Host-provided capability for extension tools to emit finalized visible turn items.
 ///
 /// Implementations route lifecycle events through the host's normal item event
 /// pipeline, including any persistence and client delivery owned by the host.
 pub trait TurnItemEmitter: Send + Sync {
     /// Emits the beginning of one visible turn item.
-    fn emit_started<'a>(&'a self, item: TurnItem) -> TurnItemEmissionFuture<'a>;
+    fn emit_started<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
 
     /// Emits the completion of one visible turn item.
-    fn emit_completed<'a>(&'a self, item: TurnItem) -> TurnItemEmissionFuture<'a>;
+    fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
 }
 
 /// Turn-item emitter used when a caller does not expose visible item emission.
@@ -46,11 +55,11 @@ pub trait TurnItemEmitter: Send + Sync {
 pub struct NoopTurnItemEmitter;
 
 impl TurnItemEmitter for NoopTurnItemEmitter {
-    fn emit_started<'a>(&'a self, _item: TurnItem) -> TurnItemEmissionFuture<'a> {
+    fn emit_started<'a>(&'a self, _item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a> {
         Box::pin(std::future::ready(()))
     }
 
-    fn emit_completed<'a>(&'a self, _item: TurnItem) -> TurnItemEmissionFuture<'a> {
+    fn emit_completed<'a>(&'a self, _item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a> {
         Box::pin(std::future::ready(()))
     }
 }

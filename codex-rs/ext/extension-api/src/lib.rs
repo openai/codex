@@ -11,6 +11,7 @@ pub use capabilities::NoopResponseItemInjector;
 pub use capabilities::ResponseItemInjectionFuture;
 pub use capabilities::ResponseItemInjector;
 pub use codex_tools::ConversationHistory;
+pub use codex_tools::ExtensionTurnItem;
 pub use codex_tools::FunctionCallError;
 pub use codex_tools::JsonToolOutput;
 pub use codex_tools::NoopTurnItemEmitter;
