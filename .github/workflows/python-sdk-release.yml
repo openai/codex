@@ -13,7 +13,7 @@ jobs:
   build-python-sdk:
     if: github.repository == 'openai/codex'
     name: build-python-sdk
-    runs-on: macos-15-xlarge
+    runs-on: ubuntu-latest
     permissions:
       contents: read
 
@@ -27,9 +27,6 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
-
-      - name: Install packaging tools
-        run: python -m pip install build twine uv==0.11.3
 
       - name: Validate tag and build Python SDK package
         shell: bash
@@ -50,19 +47,33 @@ jobs:
             exit 1
           fi
 
-          cd sdk/python
-          uv sync --extra dev --frozen
-          uv run --extra dev --frozen python scripts/update_sdk_artifacts.py \
-            stage-sdk "${RUNNER_TEMP}/openai-codex" \
-            --sdk-version "${sdk_version}"
-
-          python -m build \
-            --wheel \
-            --sdist \
-            --outdir "${GITHUB_WORKSPACE}/dist/python-sdk" \
-            "${RUNNER_TEMP}/openai-codex"
-
-          python -m twine check --strict "${GITHUB_WORKSPACE}/dist/python-sdk/"*
+          # The pinned runtime currently publishes a musllinux Linux wheel.
+          # Build in Alpine so release type generation installs that wheel.
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp/codex-python-sdk-home \
+            -e UV_LINK_MODE=copy \
+            -e SDK_VERSION="${sdk_version}" \
+            -e SDK_STAGE_DIR="${RUNNER_TEMP}/openai-codex" \
+            -e SDK_DIST_DIR="${GITHUB_WORKSPACE}/dist/python-sdk" \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+            -w "${GITHUB_WORKSPACE}/sdk/python" \
+            python:3.12-alpine \
+            sh -euxc '
+              python -m venv /tmp/release-tools
+              /tmp/release-tools/bin/python -m pip install build twine uv==0.11.3
+              /tmp/release-tools/bin/uv sync --extra dev --frozen
+              /tmp/release-tools/bin/uv run --extra dev --frozen python scripts/update_sdk_artifacts.py \
+                stage-sdk "${SDK_STAGE_DIR}" \
+                --sdk-version "${SDK_VERSION}"
+              /tmp/release-tools/bin/python -m build \
+                --wheel \
+                --sdist \
+                --outdir "${SDK_DIST_DIR}" \
+                "${SDK_STAGE_DIR}"
+              /tmp/release-tools/bin/python -m twine check --strict "${SDK_DIST_DIR}/"*
+            '
 
       - name: Upload Python SDK package
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

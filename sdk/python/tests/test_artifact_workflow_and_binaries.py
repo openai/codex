@@ -259,7 +259,7 @@ def test_source_sdk_package_pins_published_runtime() -> None:
 
 
 def test_source_sdk_package_declares_beta_documentation_and_release_files() -> None:
-    """Public package metadata should carry the beta docs and package license."""
+    """Public package metadata should link beta docs and ship package metadata."""
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     readme = (ROOT / "README.md").read_text()
 
@@ -279,9 +279,6 @@ def test_source_sdk_package_declares_beta_documentation_and_release_files() -> N
         "sdist_include": [
             "src/openai_codex/**",
             "README.md",
-            "docs/**",
-            "examples/**",
-            "_runtime_setup.py",
             "pyproject.toml",
         ],
         "readme_is_beta": True,

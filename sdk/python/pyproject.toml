@@ -51,9 +51,6 @@ include = [
 include = [
   "src/openai_codex/**",
   "README.md",
-  "docs/**",
-  "examples/**",
-  "_runtime_setup.py",
   "pyproject.toml",
 ]
 
