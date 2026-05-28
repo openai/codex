@@ -1650,8 +1650,8 @@ async fn startup_header_handoff_visible_states_snapshot() {
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
         startup_tooltip_override: Some("This is a test announcement".to_string()),
-        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(/*v*/ false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(/*v*/ false)),
         session_telemetry: test_session_telemetry(&cfg, resolved_model.as_str()),
     };
     let mut chat = ChatWidget::new_with_app_event(init);

@@ -198,6 +198,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_notifications: TuiNotificationSettings::default(),
         animations: true,
         show_tooltips: true,
+        tui_show_mcp_startup_status: false,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,

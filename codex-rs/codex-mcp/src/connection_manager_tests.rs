@@ -1005,7 +1005,7 @@ async fn list_ready_or_cached_tools_skips_pending_client_without_cached_tool_inf
     );
 
     let tools = tokio::time::timeout(
-        Duration::from_millis(10),
+        Duration::from_millis(/*millis*/ 10),
         manager.list_ready_or_cached_tools(),
     )
     .await
