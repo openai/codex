@@ -4,6 +4,7 @@ set positional-arguments
 rust_min_stack := "8388608" # 8 MiB
 e2e_benchmark_packages := "codex-app-server-start-bench"
 e2e_codex_bin := if os() == "windows" { "./target/release/codex.exe" } else { "./target/release/codex" }
+e2e_smoke_codex_bin := if os() == "windows" { "./target/debug/codex.exe" } else { "./target/debug/codex" }
 
 # Display help
 help:
@@ -73,7 +74,8 @@ bench-smoke:
 
 # Run end-to-end performance benchmark targets once.
 bench-e2e-smoke:
-    just bench-e2e --test
+    cargo build -p codex-cli --bin codex
+    for package in {{ e2e_benchmark_packages }}; do CODEX_BIN="{{ e2e_smoke_codex_bin }}" cargo run -p "$package" -- --test; done
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
