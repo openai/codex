@@ -685,12 +685,21 @@ pub struct AuthConfig {
 }
 
 pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
+    enforce_login_restrictions_with_network_config(config, /*network_config*/ None).await
+}
+
+/// Enforces configured login restrictions using resolved outbound network settings.
+pub async fn enforce_login_restrictions_with_network_config(
+    config: &AuthConfig,
+    network_config: Option<&NetworkConfigToml>,
+) -> std::io::Result<()> {
+    let outbound_proxy_config = network_config.map(outbound_proxy_config_from_network_config);
     let Some(auth) = load_auth(
         &config.codex_home,
         /*enable_codex_api_key_env*/ true,
         config.auth_credentials_store_mode,
         config.chatgpt_base_url.as_deref(),
-        /*outbound_proxy_config*/ None,
+        outbound_proxy_config.as_ref(),
     )
     .await?
     else {

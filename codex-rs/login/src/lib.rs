@@ -38,6 +38,7 @@ pub use auth::RefreshTokenError;
 pub use auth::UnauthorizedRecovery;
 pub use auth::default_client;
 pub use auth::enforce_login_restrictions;
+pub use auth::enforce_login_restrictions_with_network_config;
 pub use auth::load_auth_dot_json;
 pub use auth::login_with_access_token;
 pub use auth::login_with_access_token_with_proxy_config;

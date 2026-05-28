@@ -192,7 +192,7 @@ fn configure_proxy_for_route(
     match resolve_system_proxy(request_url, &origin, include_auto_detect) {
         SystemProxyDecision::Direct { source } => {
             RouteDiagnostic::direct(target, source, custom_ca_configured).emit_opt_in();
-            Ok(builder)
+            Ok(builder.no_proxy())
         }
         SystemProxyDecision::Proxy { source, url } => {
             configure_concrete_proxy(builder, target, source, &url, custom_ca_configured)
