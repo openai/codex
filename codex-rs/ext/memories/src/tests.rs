@@ -23,6 +23,16 @@ use crate::extension::MemoriesExtensionConfig;
 use crate::local::LocalMemoriesBackend;
 
 #[test]
+fn memory_tool_namespace_matches_responses_api_identifier() {
+    assert!(!crate::MEMORY_TOOLS_NAMESPACE.is_empty());
+    assert!(
+        crate::MEMORY_TOOLS_NAMESPACE
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    );
+}
+
+#[test]
 fn tools_are_not_contributed_without_thread_config() {
     let extension = MemoriesExtension::default();
 
