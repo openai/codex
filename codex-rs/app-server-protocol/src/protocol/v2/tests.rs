@@ -718,6 +718,41 @@ fn fs_get_metadata_response_round_trips_minimal_fields() {
 }
 
 #[test]
+fn fs_get_metadata_response_serializes_unavailable_size_as_null() {
+    let response = FsGetMetadataResponse {
+        is_directory: false,
+        is_file: true,
+        is_symlink: false,
+        size_bytes: None,
+        created_at_ms: 123,
+        modified_at_ms: 456,
+    };
+
+    let value = serde_json::to_value(&response).expect("serialize fs/getMetadata response");
+    assert_eq!(
+        value,
+        json!({
+            "isDirectory": false,
+            "isFile": true,
+            "isSymlink": false,
+            "sizeBytes": null,
+            "createdAtMs": 123,
+            "modifiedAtMs": 456,
+        })
+    );
+
+    let decoded = serde_json::from_value::<FsGetMetadataResponse>(json!({
+        "isDirectory": false,
+        "isFile": true,
+        "isSymlink": false,
+        "createdAtMs": 123,
+        "modifiedAtMs": 456,
+    }))
+    .expect("deserialize fs/getMetadata response without sizeBytes");
+    assert_eq!(decoded, response);
+}
+
+#[test]
 fn fs_read_file_response_round_trips_base64_data() {
     let response = FsReadFileResponse {
         data_base64: "aGVsbG8=".to_string(),
@@ -756,6 +791,31 @@ fn fs_read_file_params_round_trip() {
 
     let decoded =
         serde_json::from_value::<FsReadFileParams>(value).expect("deserialize fs/readFile params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn fs_read_file_params_serializes_unbounded_read_with_null_range() {
+    let params = FsReadFileParams {
+        path: absolute_path("tmp/example.txt"),
+        offset: None,
+        length: None,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
+    assert_eq!(
+        value,
+        json!({
+            "path": absolute_path_string("tmp/example.txt"),
+            "offset": null,
+            "length": null,
+        })
+    );
+
+    let decoded = serde_json::from_value::<FsReadFileParams>(json!({
+        "path": absolute_path_string("tmp/example.txt"),
+    }))
+    .expect("deserialize fs/readFile params without range");
     assert_eq!(decoded, params);
 }
 

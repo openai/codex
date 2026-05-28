@@ -178,10 +178,10 @@ Example with notification opt-out:
 - `process/kill` — experimental; terminate a running `process/spawn` session by `processHandle`; returns `{}`.
 - `process/outputDelta` — experimental; notification emitted for base64-encoded stdout/stderr chunks from a streaming `process/spawn` session.
 - `process/exited` — experimental; notification emitted when a `process/spawn` session exits.
-- `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
+- `fs/readFile` — read an absolute file path and return `{ dataBase64 }`; provide both `offset` and `length` for a bounded byte range.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
-- `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `isSymlink`, `createdAtMs`, and `modifiedAtMs`.
+- `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `isSymlink`, `sizeBytes`, `createdAtMs`, and `modifiedAtMs`.
 - `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
 - `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
 - `fs/copy` — copy between absolute paths; directory copies require `recursive: true`.
@@ -1116,6 +1116,7 @@ All filesystem paths in this section must be absolute.
     "isDirectory": false,
     "isFile": true,
     "isSymlink": false,
+    "sizeBytes": 5,
     "createdAtMs": 1730910000000,
     "modifiedAtMs": 1730910000000
 } }
@@ -1125,12 +1126,20 @@ All filesystem paths in this section must be absolute.
 { "id": 43, "result": {
     "dataBase64": "aGVsbG8="
 } }
+{ "method": "fs/readFile", "id": 44, "params": {
+    "path": "/tmp/example/nested/note.txt",
+    "offset": 1,
+    "length": 3
+} }
+{ "id": 44, "result": {
+    "dataBase64": "ZWxs"
+} }
 ```
 
-- `fs/getMetadata` returns whether the path resolves to a directory or regular file, whether the path itself is a symlink, plus `createdAtMs` and `modifiedAtMs` in Unix milliseconds. If a timestamp is unavailable on the current platform, that field is `0`.
+- `fs/getMetadata` returns whether the path resolves to a directory or regular file, whether the path itself is a symlink, `sizeBytes` when the current platform can report it, plus `createdAtMs` and `modifiedAtMs` in Unix milliseconds. If a size is unavailable, `sizeBytes` is `null`; if a timestamp is unavailable, that timestamp field is `0`.
 - `fs/createDirectory` defaults `recursive` to `true` when omitted.
 - `fs/remove` defaults both `recursive` and `force` to `true` when omitted.
-- `fs/readFile` always returns base64 bytes via `dataBase64`, and `fs/writeFile` always expects base64 bytes in `dataBase64`.
+- `fs/readFile` always returns base64 bytes via `dataBase64`. Omit both `offset` and `length` to read the whole file, or provide both to read at most `length` bytes starting at `offset`; providing only one is invalid. `fs/writeFile` always expects base64 bytes in `dataBase64`.
 - `fs/copy` handles both file copies and directory-tree copies; it requires `recursive: true` when `sourcePath` is a directory. Recursive copies traverse regular files, directories, and symlinks; other entry types are skipped.
 
 ### Example: Filesystem watch
@@ -1138,11 +1147,11 @@ All filesystem paths in this section must be absolute.
 `fs/watch` accepts absolute file or directory paths. Watching a file emits `fs/changed` for that file path, including updates delivered via replace or rename operations.
 
 ```json
-{ "method": "fs/watch", "id": 44, "params": {
+{ "method": "fs/watch", "id": 45, "params": {
     "watchId": "0195ec6b-1d6f-7c2e-8c7a-56f2c4a8b9d1",
     "path": "/Users/me/project/.git/HEAD"
 } }
-{ "id": 44, "result": {
+{ "id": 45, "result": {
     "path": "/Users/me/project/.git/HEAD"
 } }
 { "method": "fs/changed", "params": {
