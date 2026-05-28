@@ -5577,6 +5577,7 @@ async fn user_turn_updates_approvals_reviewer() {
                 ..Default::default()
             },
         },
+        /*client_user_message_id*/ None,
     )
     .await;
 
