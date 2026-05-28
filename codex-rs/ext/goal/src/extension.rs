@@ -3,7 +3,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadIdleTurnContributor;
@@ -35,6 +34,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
+use crate::events::GoalEventSink;
 use crate::metrics::GoalMetrics;
 use crate::runtime::GoalRuntimeHandle;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
@@ -58,7 +58,7 @@ impl<C> std::fmt::Debug for GoalExtension<C> {
 impl<C> GoalExtension<C> {
     pub(crate) fn new_with_host_capabilities(
         state_dbs: Arc<codex_state::StateRuntime>,
-        event_sink: Arc<dyn ExtensionEventSink>,
+        event_sink: Arc<dyn GoalEventSink>,
         metrics_client: Option<MetricsClient>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
@@ -371,7 +371,7 @@ where
         &self,
         input: ToolContributionInput<'_>,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
-        if !input.persistent_thread
+        if !input.persistent_thread_state_available
             || matches!(
                 input.session_source,
                 SessionSource::SubAgent(SubAgentSource::Review)
@@ -427,6 +427,7 @@ where
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
+    event_sink: Arc<dyn GoalEventSink>,
     metrics_client: Option<MetricsClient>,
     goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
 ) where
@@ -434,7 +435,7 @@ pub fn install_with_backend<C>(
 {
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
-        registry.event_sink(),
+        event_sink,
         metrics_client,
         goals_enabled,
     ));

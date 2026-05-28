@@ -8,7 +8,7 @@ use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::invalid_request;
-use crate::extensions::app_server_extension_event_sink;
+use crate::extensions::app_server_goal_event_sink;
 use crate::extensions::guardian_agent_spawner;
 use crate::extensions::thread_extensions;
 use crate::fs_watch::FsWatchManager;
@@ -313,7 +313,7 @@ impl MessageProcessor {
                 environment_manager,
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
-                    app_server_extension_event_sink(outgoing.clone()),
+                    app_server_goal_event_sink(outgoing.clone()),
                     auth_manager.clone(),
                     state_db.clone(),
                 ),

@@ -4,8 +4,6 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use codex_extension_api::ExtensionData;
-use codex_extension_api::ExtensionEvent;
-use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopResponseItemInjector;
@@ -24,7 +22,10 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_goal_extension::GoalEventFuture;
+use codex_goal_extension::GoalEventSink;
 use codex_goal_extension::GoalRuntimeHandle;
+use codex_goal_extension::NoopGoalEventSink;
 use codex_goal_extension::install_with_backend;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -34,6 +35,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
+use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TruncationPolicy;
@@ -142,7 +144,7 @@ async fn goal_tools_hidden_for_review_turns() -> anyhow::Result<()> {
 
     let tools = harness.tools_for_turn(
         SessionSource::SubAgent(SubAgentSource::Review),
-        /*persistent_thread*/ true,
+        /*persistent_thread_state_available*/ true,
     );
 
     assert!(tools.is_empty());
@@ -150,13 +152,16 @@ async fn goal_tools_hidden_for_review_turns() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn goal_tools_hidden_without_persistent_thread() -> anyhow::Result<()> {
+async fn goal_tools_hidden_without_persistent_thread_state() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
     let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
 
-    let tools = harness.tools_for_turn(SessionSource::Cli, /*persistent_thread*/ false);
+    let tools = harness.tools_for_turn(
+        SessionSource::Cli,
+        /*persistent_thread_state_available*/ false,
+    );
 
     assert!(tools.is_empty());
     Ok(())
@@ -1131,6 +1136,7 @@ async fn installed_tools(
     install_with_backend(
         &mut builder,
         runtime,
+        Arc::new(NoopGoalEventSink),
         /*metrics_client*/ None,
         |_| true,
     );
@@ -1153,11 +1159,13 @@ async fn installed_tools(
         .iter()
         .flat_map(|contributor| {
             let session_source = SessionSource::Cli;
+            let turn_store = ExtensionData::new("turn-1");
             contributor.tools_for_turn(ToolContributionInput {
                 session_store: &session_store,
                 thread_store: &thread_store,
+                turn_store: &turn_store,
                 session_source: &session_source,
-                persistent_thread: true,
+                persistent_thread_state_available: true,
             })
         })
         .collect()
@@ -1176,10 +1184,11 @@ impl GoalExtensionHarness {
         thread_id: ThreadId,
     ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
-        let mut builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
+        let mut builder = ExtensionRegistryBuilder::<()>::new();
         install_with_backend(
             &mut builder,
             runtime,
+            sink.clone(),
             /*metrics_client*/ None,
             |_| true,
         );
@@ -1205,14 +1214,18 @@ impl GoalExtensionHarness {
     }
 
     fn tools(&self) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
-        self.tools_for_turn(SessionSource::Cli, /*persistent_thread*/ true)
+        self.tools_for_turn(
+            SessionSource::Cli,
+            /*persistent_thread_state_available*/ true,
+        )
     }
 
     fn tools_for_turn(
         &self,
         session_source: SessionSource,
-        persistent_thread: bool,
+        persistent_thread_state_available: bool,
     ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
+        let turn_store = ExtensionData::new("turn-1");
         self.registry
             .tool_contributors()
             .iter()
@@ -1220,8 +1233,9 @@ impl GoalExtensionHarness {
                 contributor.tools_for_turn(ToolContributionInput {
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
+                    turn_store: &turn_store,
                     session_source: &session_source,
-                    persistent_thread,
+                    persistent_thread_state_available,
                 })
             })
             .collect()
@@ -1409,20 +1423,17 @@ async fn seed_thread_metadata(
 
 #[derive(Debug, Default)]
 struct RecordingEventSink {
-    events: Mutex<Vec<ExtensionEvent>>,
+    events: Mutex<Vec<ThreadGoalUpdatedEvent>>,
 }
 
 impl RecordingEventSink {
     fn goal_events(&self) -> Vec<CapturedGoalEvent> {
         self.events()
             .iter()
-            .map(|event| {
-                let ExtensionEvent::ThreadGoalUpdated(updated) = event;
-                CapturedGoalEvent {
-                    turn_id: updated.turn_id.clone(),
-                    status: updated.goal.status,
-                    tokens_used: updated.goal.tokens_used,
-                }
+            .map(|updated| CapturedGoalEvent {
+                turn_id: updated.turn_id.clone(),
+                status: updated.goal.status,
+                tokens_used: updated.goal.tokens_used,
             })
             .collect()
     }
@@ -1431,13 +1442,13 @@ impl RecordingEventSink {
         self.events().clear();
     }
 
-    fn events(&self) -> std::sync::MutexGuard<'_, Vec<ExtensionEvent>> {
+    fn events(&self) -> std::sync::MutexGuard<'_, Vec<ThreadGoalUpdatedEvent>> {
         self.events.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-impl ExtensionEventSink for RecordingEventSink {
-    fn emit<'a>(&'a self, event: ExtensionEvent) -> codex_extension_api::ExtensionEventFuture<'a> {
+impl GoalEventSink for RecordingEventSink {
+    fn thread_goal_updated<'a>(&'a self, event: ThreadGoalUpdatedEvent) -> GoalEventFuture<'a> {
         self.events().push(event);
         Box::pin(std::future::ready(()))
     }

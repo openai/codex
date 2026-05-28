@@ -13,6 +13,9 @@ mod spec;
 mod steering;
 mod tool;
 
+pub use events::GoalEventFuture;
+pub use events::GoalEventSink;
+pub use events::NoopGoalEventSink;
 pub use extension::GoalExtension;
 pub use extension::install_with_backend;
 pub use runtime::GoalRuntimeHandle;

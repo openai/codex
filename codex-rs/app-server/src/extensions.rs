@@ -9,34 +9,35 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
-use codex_extension_api::ExtensionEvent;
-use codex_extension_api::ExtensionEventFuture;
-use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
+use codex_goal_extension::GoalEventFuture;
+use codex_goal_extension::GoalEventSink;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_rollout::state_db::StateDbHandle;
 
 use crate::outgoing_message::OutgoingMessageSender;
 
 pub(crate) fn thread_extensions<S>(
     guardian_agent_spawner: S,
-    event_sink: Arc<dyn ExtensionEventSink>,
+    goal_event_sink: Arc<dyn GoalEventSink>,
     auth_manager: Arc<AuthManager>,
     state_db: Option<StateDbHandle>,
 ) -> Arc<ExtensionRegistry<Config>>
 where
     S: AgentSpawner<StartThreadOptions, Spawned = NewThread, Error = CodexErr> + 'static,
 {
-    let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
+    let mut builder = ExtensionRegistryBuilder::<Config>::new();
     codex_guardian::install(&mut builder, guardian_agent_spawner);
     if let Some(state_db) = state_db {
         codex_goal_extension::install_with_backend(
             &mut builder,
             state_db,
+            goal_event_sink,
             codex_otel::global(),
             |config: &Config| config.features.enabled(Feature::Goals),
         );
@@ -46,30 +47,26 @@ where
     Arc::new(builder.build())
 }
 
-pub(crate) fn app_server_extension_event_sink(
+pub(crate) fn app_server_goal_event_sink(
     outgoing: Arc<OutgoingMessageSender>,
-) -> Arc<dyn ExtensionEventSink> {
-    Arc::new(AppServerExtensionEventSink { outgoing })
+) -> Arc<dyn GoalEventSink> {
+    Arc::new(AppServerGoalEventSink { outgoing })
 }
 
-struct AppServerExtensionEventSink {
+struct AppServerGoalEventSink {
     outgoing: Arc<OutgoingMessageSender>,
 }
 
-impl ExtensionEventSink for AppServerExtensionEventSink {
-    fn emit<'a>(&'a self, event: ExtensionEvent) -> ExtensionEventFuture<'a> {
+impl GoalEventSink for AppServerGoalEventSink {
+    fn thread_goal_updated<'a>(&'a self, event: ThreadGoalUpdatedEvent) -> GoalEventFuture<'a> {
         Box::pin(async move {
-            match event {
-                ExtensionEvent::ThreadGoalUpdated(thread_goal_event) => {
-                    let notification =
-                        ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
-                            thread_id: thread_goal_event.thread_id.to_string(),
-                            turn_id: thread_goal_event.turn_id,
-                            goal: thread_goal_event.goal.into(),
-                        });
-                    self.outgoing.send_server_notification(notification).await;
-                }
-            }
+            let notification =
+                ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
+                    thread_id: event.thread_id.to_string(),
+                    turn_id: event.turn_id,
+                    goal: event.goal.into(),
+                });
+            self.outgoing.send_server_notification(notification).await;
         })
     }
 }
@@ -102,7 +99,6 @@ mod tests {
     use codex_app_server_protocol::ThreadGoalStatus as AppServerThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
-    use codex_protocol::protocol::ThreadGoalUpdatedEvent;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
     use tokio::time::timeout;
@@ -112,7 +108,7 @@ mod tests {
     use crate::outgoing_message::OutgoingMessage;
 
     #[tokio::test]
-    async fn app_server_event_sink_waits_for_outgoing_capacity() {
+    async fn app_server_goal_event_sink_waits_for_outgoing_capacity() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(1);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             outgoing_tx.clone(),
@@ -130,10 +126,10 @@ mod tests {
                 ),
             })
             .expect("prefill should fit in one-slot channel");
-        let sink = app_server_extension_event_sink(outgoing);
+        let sink = app_server_goal_event_sink(outgoing);
 
         let emit = tokio::spawn(async move {
-            sink.emit(thread_goal_update_event(
+            sink.thread_goal_updated(thread_goal_update_event(
                 thread_id,
                 "wait for capacity",
                 "turn-1",
@@ -152,18 +148,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn app_server_event_sink_preserves_goal_update_order() {
+    async fn app_server_goal_event_sink_preserves_goal_update_order() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(2);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             AnalyticsEventsClient::disabled(),
         ));
         let thread_id = ThreadId::default();
-        let sink = app_server_extension_event_sink(outgoing);
+        let sink = app_server_goal_event_sink(outgoing);
 
-        sink.emit(thread_goal_update_event(thread_id, "first", "turn-1"))
+        sink.thread_goal_updated(thread_goal_update_event(thread_id, "first", "turn-1"))
             .await;
-        sink.emit(thread_goal_update_event(thread_id, "second", "turn-2"))
+        sink.thread_goal_updated(thread_goal_update_event(thread_id, "second", "turn-2"))
             .await;
 
         assert_eq!(
@@ -180,8 +176,8 @@ mod tests {
         thread_id: ThreadId,
         objective: &str,
         turn_id: &str,
-    ) -> ExtensionEvent {
-        ExtensionEvent::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+    ) -> ThreadGoalUpdatedEvent {
+        ThreadGoalUpdatedEvent {
             thread_id,
             turn_id: Some(turn_id.to_string()),
             goal: ThreadGoal {
@@ -194,7 +190,7 @@ mod tests {
                 created_at: 7,
                 updated_at: 8,
             },
-        })
+        }
     }
 
     fn app_server_goal_update(

@@ -194,10 +194,12 @@ pub struct ToolContributionInput<'a> {
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.
     pub thread_store: &'a ExtensionData,
+    /// Store scoped to the current turn runtime.
+    pub turn_store: &'a ExtensionData,
     /// Source for the current turn's session.
     pub session_source: &'a SessionSource,
-    /// Whether the current thread has persistent state available.
-    pub persistent_thread: bool,
+    /// Whether persistent state is available for the current thread.
+    pub persistent_thread_state_available: bool,
 }
 
 /// Contributor for host-owned tool lifecycle gates.

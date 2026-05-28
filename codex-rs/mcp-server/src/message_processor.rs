@@ -70,6 +70,7 @@ impl MessageProcessor {
             codex_goal_extension::install_with_backend(
                 &mut extensions,
                 state_db,
+                Arc::new(codex_goal_extension::NoopGoalEventSink),
                 codex_otel::global(),
                 |config: &Config| config.features.enabled(Feature::Goals),
             );
