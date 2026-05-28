@@ -2848,6 +2848,7 @@ dependencies = [
  "async-trait",
  "codex-protocol",
  "codex-tools",
+ "inventory",
 ]
 
 [[package]]
@@ -2976,6 +2977,7 @@ dependencies = [
  "codex-state",
  "codex-tools",
  "codex-utils-template",
+ "inventory",
  "pretty_assertions",
  "serde",
  "serde_json",

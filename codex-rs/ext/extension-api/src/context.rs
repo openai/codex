@@ -18,6 +18,40 @@ impl HiddenContextMarker {
             end_marker,
         }
     }
+
+    /// Returns true when text is wrapped in this marker pair.
+    pub fn matches_text(self, text: &str) -> bool {
+        if self.start_marker.is_empty() || self.end_marker.is_empty() {
+            return false;
+        }
+
+        let trimmed = text.trim_start();
+        let starts_with_marker = trimmed
+            .get(..self.start_marker.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(self.start_marker));
+        let trimmed = trimmed.trim_end();
+        let ends_with_marker = trimmed
+            .get(trimmed.len().saturating_sub(self.end_marker.len())..)
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(self.end_marker));
+        starts_with_marker && ends_with_marker
+    }
+}
+
+/// Compile-time registration for extension-owned hidden context markers.
+///
+/// Extensions use this to reserve their hidden context wire tags without adding
+/// feature-specific tags to core parsing code.
+pub struct HiddenContextMarkerRegistration {
+    pub marker: HiddenContextMarker,
+}
+
+inventory::collect!(HiddenContextMarkerRegistration);
+
+/// Returns all hidden context markers registered by linked extensions.
+pub fn registered_hidden_context_markers() -> impl Iterator<Item = HiddenContextMarker> {
+    inventory::iter::<HiddenContextMarkerRegistration>
+        .into_iter()
+        .map(|registration| registration.marker)
 }
 
 /// Extension-owned hidden context body with the marker pair used to wrap it.

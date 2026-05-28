@@ -1,5 +1,6 @@
 use codex_extension_api::HiddenContext;
 use codex_extension_api::HiddenContextMarker;
+use codex_extension_api::HiddenContextMarkerRegistration;
 use codex_extension_api::ThreadIdleRequest;
 use codex_protocol::protocol::ThreadGoal;
 use codex_utils_template::Template;
@@ -7,6 +8,12 @@ use std::sync::LazyLock;
 
 const GOAL_CONTEXT_MARKER: HiddenContextMarker =
     HiddenContextMarker::new("<goal_context>", "</goal_context>");
+
+inventory::submit! {
+    HiddenContextMarkerRegistration {
+        marker: GOAL_CONTEXT_MARKER,
+    }
+}
 
 static CONTINUATION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(

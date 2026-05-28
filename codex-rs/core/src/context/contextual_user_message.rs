@@ -6,7 +6,6 @@ use super::AdditionalContextUserFragment;
 use super::EnvironmentContext;
 use super::FragmentRegistration;
 use super::FragmentRegistrationProxy;
-use super::GoalContext;
 use super::LegacyApplyPatchExecCommandWarning;
 use super::LegacyModelMismatchWarning;
 use super::LegacyUnifiedExecProcessLimitWarning;
@@ -21,8 +20,6 @@ static USER_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<UserInstruction
 static ENVIRONMENT_CONTEXT_REGISTRATION: FragmentRegistrationProxy<EnvironmentContext> =
     FragmentRegistrationProxy::new();
 static ADDITIONAL_CONTEXT_REGISTRATION: FragmentRegistrationProxy<AdditionalContextUserFragment> =
-    FragmentRegistrationProxy::new();
-static GOAL_CONTEXT_REGISTRATION: FragmentRegistrationProxy<GoalContext> =
     FragmentRegistrationProxy::new();
 static SKILL_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<SkillInstructions> =
     FragmentRegistrationProxy::new();
@@ -46,7 +43,6 @@ static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
     &USER_INSTRUCTIONS_REGISTRATION,
     &ENVIRONMENT_CONTEXT_REGISTRATION,
     &ADDITIONAL_CONTEXT_REGISTRATION,
-    &GOAL_CONTEXT_REGISTRATION,
     &SKILL_INSTRUCTIONS_REGISTRATION,
     &USER_SHELL_COMMAND_REGISTRATION,
     &TURN_ABORTED_REGISTRATION,
@@ -62,11 +58,17 @@ fn is_standard_contextual_user_text(text: &str) -> bool {
         .any(|fragment| fragment.matches_text(text))
 }
 
+fn is_registered_extension_context_text(text: &str) -> bool {
+    codex_extension_api::registered_hidden_context_markers().any(|marker| marker.matches_text(text))
+}
+
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
     let ContentItem::InputText { text } = content_item else {
         return false;
     };
-    parse_hook_prompt_fragment(text).is_some() || is_standard_contextual_user_text(text)
+    parse_hook_prompt_fragment(text).is_some()
+        || is_standard_contextual_user_text(text)
+        || is_registered_extension_context_text(text)
 }
 
 pub(crate) fn parse_visible_hook_prompt_message(
@@ -83,7 +85,7 @@ pub(crate) fn parse_visible_hook_prompt_message(
             fragments.push(fragment);
             continue;
         }
-        if is_standard_contextual_user_text(text) {
+        if is_standard_contextual_user_text(text) || is_registered_extension_context_text(text) {
             continue;
         }
         return None;

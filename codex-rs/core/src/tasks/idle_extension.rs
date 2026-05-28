@@ -252,7 +252,7 @@ mod tests {
         let original_len = prompt.len();
 
         let request = ThreadIdleRequest::new(HiddenContext::new(
-            HiddenContextMarker::new("<goal_context>", "</goal_context>"),
+            HiddenContextMarker::new("<test_context>", "</test_context>"),
             prompt,
         ));
         let TurnInput::ResponseInputItem(ResponseInputItem::Message { content, .. }) =
@@ -264,7 +264,7 @@ mod tests {
             panic!("expected one text content item");
         };
 
-        assert!(text.starts_with("<goal_context>"));
+        assert!(text.starts_with("<test_context>"));
         assert!(text.contains("start"));
         assert!(text.contains("end"));
         assert!(text.len() < original_len);

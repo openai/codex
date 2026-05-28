@@ -42,6 +42,15 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 
+#[test]
+fn goal_context_marker_is_registered_as_hidden_context() {
+    assert!(
+        codex_extension_api::registered_hidden_context_markers().any(|marker| {
+            marker.matches_text("<goal_context>\nhidden goal prompt\n</goal_context>")
+        })
+    );
+}
+
 #[tokio::test]
 async fn installed_goal_tools_create_goal_and_fill_empty_preview() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;

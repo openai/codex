@@ -14,9 +14,10 @@ fn detects_environment_context_fragment() {
 }
 
 #[test]
-fn detects_legacy_goal_context_fragment() {
-    assert!(is_contextual_user_fragment(&ContentItem::InputText {
-        text: "<goal_context>\nlegacy hidden goal prompt\n</goal_context>".to_string(),
+fn does_not_hard_code_extension_context_fragments() {
+    assert!(!is_contextual_user_fragment(&ContentItem::InputText {
+        text: "<example_extension_context>\nextension-owned hidden prompt\n</example_extension_context>"
+            .to_string(),
     }));
 }
 

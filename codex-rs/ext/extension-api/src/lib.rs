@@ -27,6 +27,8 @@ pub use codex_tools::parse_tool_input_schema;
 pub use codex_tools::parse_tool_input_schema_without_compaction;
 pub use context::HiddenContext;
 pub use context::HiddenContextMarker;
+pub use context::HiddenContextMarkerRegistration;
+pub use context::registered_hidden_context_markers;
 pub use contributors::ApprovalReviewContributor;
 pub use contributors::ConfigContributor;
 pub use contributors::ContextContributor;

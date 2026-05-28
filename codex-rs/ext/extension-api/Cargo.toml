@@ -17,3 +17,4 @@ workspace = true
 async-trait = { workspace = true }
 codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
+inventory = { workspace = true }
