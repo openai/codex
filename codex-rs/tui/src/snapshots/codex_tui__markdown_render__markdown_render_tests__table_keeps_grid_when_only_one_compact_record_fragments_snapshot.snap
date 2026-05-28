@@ -1,0 +1,12 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: "plain_lines(&text).join(\"\\n\")"
+---
+ Key                Date          State
+━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━  ━━━━━━━
+ short              2025-01-01    Ready
+─────────────────  ────────────  ───────
+ verylongidentif    2025-02-02    Ready
+ ier
+─────────────────  ────────────  ───────
+ final              2025-03-03    Done

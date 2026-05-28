@@ -1,0 +1,91 @@
+name: python-sdk-release
+
+on:
+  push:
+    tags:
+      - "python-v*"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  build-python-sdk:
+    if: github.repository == 'openai/codex'
+    name: build-python-sdk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install packaging tools
+        run: python -m pip install build uv==0.11.3
+
+      - name: Validate tag and build Python SDK package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sdk_version="${GITHUB_REF_NAME#python-v}"
+          if [[ ! "${sdk_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+b[0-9]+$ ]]; then
+            echo "Python SDK release tags must identify a beta release, for example python-v0.1.0b1."
+            exit 1
+          fi
+
+          configured_version="$(
+            python -c 'import tomllib; print(tomllib.load(open("sdk/python/pyproject.toml", "rb"))["project"]["version"])'
+          )"
+          if [[ "${configured_version}" != "${sdk_version}" ]]; then
+            echo "Tag version ${sdk_version} does not match sdk/python/pyproject.toml version ${configured_version}."
+            exit 1
+          fi
+
+          cd sdk/python
+          uv sync --extra dev --frozen
+          uv run --extra dev --frozen python scripts/update_sdk_artifacts.py \
+            stage-sdk "${RUNNER_TEMP}/openai-codex" \
+            --sdk-version "${sdk_version}"
+
+          python -m build \
+            --wheel \
+            --sdist \
+            --outdir "${GITHUB_WORKSPACE}/dist/python-sdk" \
+            "${RUNNER_TEMP}/openai-codex"
+
+      - name: Upload Python SDK package
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-sdk-package
+          path: dist/python-sdk/*
+          if-no-files-found: error
+
+  publish-python-sdk:
+    name: publish-python-sdk
+    needs: build-python-sdk
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # Required for PyPI trusted publishing.
+
+    steps:
+      - name: Download Python SDK package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-sdk-package
+          path: dist/python-sdk
+
+      - name: Publish Python SDK to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: dist/python-sdk

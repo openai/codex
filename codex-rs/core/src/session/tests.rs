@@ -10131,6 +10131,76 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         ExecApprovalRequirement::Skip { .. }
     ));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shell_tool_cancellation_waits_for_runtime_cleanup() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let cwd = config.cwd.clone();
+        config
+            .permissions
+            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
+            .expect("test setup should allow sandbox policy");
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let temp_dir = tempfile::TempDir::new()?;
+    let ready_marker = temp_dir.path().join("ready");
+    let cleanup_marker = temp_dir.path().join("cleanup");
+    // Interrupt after the shell starts, then verify dispatch waits for its TERM cleanup trap.
+    let command = format!(
+        r#"trap 'printf cleaned > "{}"; exit 0' TERM
+printf ready > "{}"
+while :; do sleep 1; done"#,
+        cleanup_marker.display(),
+        ready_marker.display(),
+    );
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell_command".to_string(),
+        namespace: None,
+        arguments: serde_json::json!({
+            "command": command,
+            "timeout_ms": 60_000,
+        })
+        .to_string(),
+        call_id: "shell-cleanup-call".to_string(),
+    };
+    let call = ToolRouter::build_tool_call(item)?
+        .expect("shell command response item should build a tool call");
+    let cancellation_token = CancellationToken::new();
+    let cancellation_tx = cancellation_token.clone();
+    let handle = tokio::spawn(
+        test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context))
+            .handle_tool_call(call, cancellation_token),
+    );
+
+    let mut ready = false;
+    for _ in 0..50 {
+        if ready_marker.exists() {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    if !ready {
+        cancellation_tx.cancel();
+        let _ = timeout(Duration::from_secs(5), handle).await;
+        anyhow::bail!("shell command should reach the ready marker");
+    }
+
+    cancellation_tx.cancel();
+    timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("cancelled shell tool should finish promptly")
+        .expect("shell tool task should join")
+        .expect("cancelled shell tool should return a response item");
+    assert_eq!(std::fs::read_to_string(cleanup_marker)?, "cleaned");
+    Ok(())
+}
+
 #[tokio::test]
 async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
     use crate::sandboxing::SandboxPermissions;

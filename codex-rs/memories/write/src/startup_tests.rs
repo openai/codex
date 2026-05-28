@@ -237,11 +237,13 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
 }
 
 #[tokio::test]
-async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Result<()> {
+async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_metadata()
+-> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let test = build_test_codex(&server, home).await?;
     assert_eq!(test.config.service_tier, None);
+    reset_git_repository(&test.config.cwd).await?;
 
     core_test_support::submit_thread_settings(
         &test.codex,
@@ -278,6 +280,35 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
         request_context.service_tier,
         Some(ServiceTier::Fast.request_value().to_string())
     );
+
+    let stage_one = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-phase1"),
+            ev_assistant_message("msg-phase1", "phase1 complete"),
+            ev_completed("resp-phase1"),
+        ]),
+    )
+    .await;
+    context
+        .stream_stage_one_prompt(
+            &test.config,
+            &codex_core::Prompt::default(),
+            &request_context,
+        )
+        .await?;
+    let request = wait_for_single_request(&stage_one).await;
+    let metadata_header = request
+        .header("x-codex-turn-metadata")
+        .expect("detached memory request should include workspace metadata");
+    let metadata: serde_json::Value =
+        serde_json::from_str(&metadata_header).expect("turn metadata json");
+    assert_eq!(metadata["request_kind"].as_str(), Some("memory"));
+    assert!(metadata.get("session_id").is_none());
+    assert!(metadata.get("thread_id").is_none());
+    assert!(metadata.get("turn_id").is_none());
+    assert!(metadata.get("window_id").is_none());
+    assert!(metadata.get("workspaces").is_some());
 
     shutdown_test_codex(&test).await?;
     Ok(())

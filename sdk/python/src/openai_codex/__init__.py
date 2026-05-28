@@ -15,16 +15,17 @@ from .api import (
     LocalImageInput,
     MentionInput,
     RunInput,
+    Sandbox,
     SkillInput,
     TextInput,
     Thread,
     TurnHandle,
     TurnResult,
 )
-from .client import AppServerConfig
+from .client import CodexConfig
 from .errors import (
-    AppServerError,
-    AppServerRpcError,
+    CodexError,
+    CodexRpcError,
     InternalRpcError,
     InvalidParamsError,
     InvalidRequestError,
@@ -40,10 +41,11 @@ from .retry import retry_on_overload
 
 __all__ = [
     "__version__",
-    "AppServerConfig",
+    "CodexConfig",
     "Codex",
     "AsyncCodex",
     "ApprovalMode",
+    "Sandbox",
     "ChatgptLoginHandle",
     "DeviceCodeLoginHandle",
     "AsyncChatgptLoginHandle",
@@ -62,10 +64,10 @@ __all__ = [
     "SkillInput",
     "MentionInput",
     "retry_on_overload",
-    "AppServerError",
+    "CodexError",
     "TransportClosedError",
     "JsonRpcError",
-    "AppServerRpcError",
+    "CodexRpcError",
     "ParseError",
     "InvalidRequestError",
     "MethodNotFoundError",

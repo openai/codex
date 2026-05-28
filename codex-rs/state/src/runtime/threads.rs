@@ -74,40 +74,6 @@ WHERE id = ? AND preview = ''
         Ok(result.rows_affected() > 0)
     }
 
-    /// Get dynamic tools for a thread, if present.
-    pub async fn get_dynamic_tools(
-        &self,
-        thread_id: ThreadId,
-    ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
-        let rows = sqlx::query(
-            r#"
-SELECT namespace, name, description, input_schema, defer_loading
-FROM thread_dynamic_tools
-WHERE thread_id = ?
-ORDER BY position ASC
-            "#,
-        )
-        .bind(thread_id.to_string())
-        .fetch_all(self.pool.as_ref())
-        .await?;
-        if rows.is_empty() {
-            return Ok(None);
-        }
-        let mut tools = Vec::with_capacity(rows.len());
-        for row in rows {
-            let input_schema: String = row.try_get("input_schema")?;
-            let input_schema = serde_json::from_str::<Value>(input_schema.as_str())?;
-            tools.push(DynamicToolSpec {
-                namespace: row.try_get("namespace")?,
-                name: row.try_get("name")?,
-                description: row.try_get("description")?,
-                input_schema,
-                defer_loading: row.try_get("defer_loading")?,
-            });
-        }
-        Ok(Some(tools))
-    }
-
     /// Persist or replace the directional parent-child edge for a spawned thread.
     pub async fn upsert_thread_spawn_edge(
         &self,
@@ -821,54 +787,6 @@ ON CONFLICT(id) DO UPDATE SET
         Ok(())
     }
 
-    /// Persist dynamic tools for a thread if none have been stored yet.
-    ///
-    /// Dynamic tools are defined at thread start and should not change afterward.
-    /// This only writes the first time we see tools for a given thread.
-    pub async fn persist_dynamic_tools(
-        &self,
-        thread_id: ThreadId,
-        tools: Option<&[DynamicToolSpec]>,
-    ) -> anyhow::Result<()> {
-        let Some(tools) = tools else {
-            return Ok(());
-        };
-        if tools.is_empty() {
-            return Ok(());
-        }
-        let thread_id = thread_id.to_string();
-        let mut tx = self.pool.begin().await?;
-        for (idx, tool) in tools.iter().enumerate() {
-            let position = i64::try_from(idx).unwrap_or(i64::MAX);
-            let input_schema = serde_json::to_string(&tool.input_schema)?;
-            sqlx::query(
-                r#"
-INSERT INTO thread_dynamic_tools (
-    thread_id,
-    position,
-    namespace,
-    name,
-    description,
-    input_schema,
-    defer_loading
-) VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(thread_id, position) DO NOTHING
-                "#,
-            )
-            .bind(thread_id.as_str())
-            .bind(position)
-            .bind(tool.namespace.as_deref())
-            .bind(tool.name.as_str())
-            .bind(tool.description.as_str())
-            .bind(input_schema)
-            .bind(tool.defer_loading)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-
     /// Apply rollout items incrementally using the underlying database.
     pub async fn apply_rollout_items(
         &self,
@@ -898,8 +816,6 @@ ON CONFLICT(thread_id, position) DO NOTHING
         if let Some(updated_at) = updated_at {
             metadata.updated_at = updated_at;
         }
-        // Keep the thread upsert before dynamic tools to satisfy the foreign key constraint:
-        // thread_dynamic_tools.thread_id -> threads.id.
         let upsert_result = if existing_metadata.is_none() {
             self.upsert_thread_with_creation_memory_mode(&metadata, new_thread_memory_mode)
                 .await
@@ -910,14 +826,6 @@ ON CONFLICT(thread_id, position) DO NOTHING
         if let Some(memory_mode) = extract_memory_mode(items)
             && let Err(err) = self
                 .set_thread_memory_mode(builder.id, memory_mode.as_str())
-                .await
-        {
-            return Err(err);
-        }
-        let dynamic_tools = extract_dynamic_tools(items);
-        if let Some(dynamic_tools) = dynamic_tools
-            && let Err(err) = self
-                .persist_dynamic_tools(builder.id, dynamic_tools.as_deref())
                 .await
         {
             return Err(err);
@@ -1037,16 +945,6 @@ SELECT
     threads.git_origin_url
 "#,
     );
-}
-
-pub(super) fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<DynamicToolSpec>>> {
-    items.iter().find_map(|item| match item {
-        RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.dynamic_tools.clone()),
-        RolloutItem::ResponseItem(_)
-        | RolloutItem::Compacted(_)
-        | RolloutItem::TurnContext(_)
-        | RolloutItem::EventMsg(_) => None,
-    })
 }
 
 pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {

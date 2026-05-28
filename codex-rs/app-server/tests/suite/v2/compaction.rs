@@ -190,6 +190,58 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
 
     let response_requests = responses_log.requests();
     assert_eq!(response_requests.len(), 3);
+    let turn_metadata = response_requests
+        .iter()
+        .map(|request| {
+            request
+                .header("x-codex-turn-metadata")
+                .as_deref()
+                .map(parse_json_header)
+                .unwrap_or_else(|| panic!("turn request should include turn metadata"))
+        })
+        .collect::<Vec<_>>();
+    for (request, metadata) in response_requests.iter().zip(&turn_metadata) {
+        assert_eq!(metadata["request_kind"].as_str(), Some("turn"));
+        assert!(
+            metadata["turn_id"]
+                .as_str()
+                .is_some_and(|turn_id| !turn_id.is_empty()),
+            "turn request should carry a non-empty turn id"
+        );
+        assert_eq!(
+            metadata["window_id"].as_str(),
+            request.header("x-codex-window-id").as_deref()
+        );
+        assert!(metadata.get("compaction").is_none());
+    }
+
+    let compact_metadata = compact_requests[0]
+        .header("x-codex-turn-metadata")
+        .as_deref()
+        .map(parse_json_header)
+        .unwrap_or_else(|| panic!("compact request should include turn metadata"));
+    assert_eq!(
+        compact_metadata["request_kind"].as_str(),
+        Some("compaction")
+    );
+    assert_eq!(
+        compact_metadata["compaction"],
+        serde_json::json!({
+            "trigger": "auto",
+            "reason": "context_limit",
+            "implementation": "responses_compact",
+            "phase": "pre_turn",
+            "strategy": "memento",
+        })
+    );
+    assert_eq!(
+        compact_metadata["turn_id"], turn_metadata[2]["turn_id"],
+        "pre-turn compaction should carry the current turn id"
+    );
+    assert_eq!(
+        compact_metadata["window_id"].as_str(),
+        compact_requests[0].header("x-codex-window-id").as_deref()
+    );
 
     Ok(())
 }
@@ -406,4 +458,8 @@ async fn wait_for_context_compaction_completed(
             return Ok(completed);
         }
     }
+}
+
+fn parse_json_header(value: &str) -> serde_json::Value {
+    serde_json::from_str(value).unwrap_or_else(|err| panic!("turn metadata should be json: {err}"))
 }

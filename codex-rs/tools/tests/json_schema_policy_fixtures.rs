@@ -201,17 +201,11 @@ fn convert_fixture_tool(
         .as_object()
         .unwrap_or_else(|| panic!("{name} input_schema should be an object"))
         .clone();
-    let tool = rmcp::model::Tool {
-        name: name.to_string().into(),
-        title: None,
-        description: Some(fixture_tool.description.clone().into()),
-        input_schema: Arc::new(input_schema),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
+    let tool = rmcp::model::Tool::new(
+        name.to_string(),
+        fixture_tool.description.clone(),
+        Arc::new(input_schema),
+    );
 
     mcp_tool_to_responses_api_tool(&ToolName::namespaced(&fixture.source, name), &tool)
         .unwrap_or_else(|err| panic!("convert {name} from {}: {err}", fixture.source))
