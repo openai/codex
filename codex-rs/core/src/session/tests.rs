@@ -106,6 +106,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::CreditsSnapshot;
@@ -2032,6 +2033,85 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
     let actual = records
         .lock()
         .expect("turn start records lock")
+        .drain(..)
+        .collect::<Vec<_>>();
+    assert_eq!(vec![expected], actual);
+}
+
+#[tokio::test]
+async fn turn_error_lifecycle_exposes_error_and_stores() {
+    struct SessionTurnErrorMarker;
+    struct ThreadTurnErrorMarker;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RecordedTurnError {
+        session_level_id: String,
+        thread_level_id: String,
+        turn_level_id: String,
+        turn_id: String,
+        error: CodexErrorInfo,
+        saw_session_store: bool,
+        saw_thread_store: bool,
+    }
+
+    struct TurnErrorRecorder {
+        records: Arc<std::sync::Mutex<Vec<RecordedTurnError>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::TurnLifecycleContributor for TurnErrorRecorder {
+        async fn on_turn_error(&self, input: codex_extension_api::TurnErrorInput<'_>) {
+            self.records
+                .lock()
+                .expect("turn error records lock")
+                .push(RecordedTurnError {
+                    session_level_id: input.session_store.level_id().to_string(),
+                    thread_level_id: input.thread_store.level_id().to_string(),
+                    turn_level_id: input.turn_store.level_id().to_string(),
+                    turn_id: input.turn_id.to_string(),
+                    error: input.error,
+                    saw_session_store: input
+                        .session_store
+                        .get::<SessionTurnErrorMarker>()
+                        .is_some(),
+                    saw_thread_store: input.thread_store.get::<ThreadTurnErrorMarker>().is_some(),
+                });
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.turn_lifecycle_contributor(Arc::new(TurnErrorRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .services
+        .session_extension_data
+        .insert(SessionTurnErrorMarker);
+    session
+        .services
+        .thread_extension_data
+        .insert(ThreadTurnErrorMarker);
+
+    let expected = RecordedTurnError {
+        session_level_id: session.session_id().to_string(),
+        thread_level_id: session.conversation_id.to_string(),
+        turn_level_id: turn_context.sub_id.clone(),
+        turn_id: turn_context.sub_id.clone(),
+        error: CodexErrorInfo::UsageLimitExceeded,
+        saw_session_store: true,
+        saw_thread_store: true,
+    };
+
+    session
+        .emit_turn_error_lifecycle(&turn_context, CodexErrorInfo::UsageLimitExceeded)
+        .await;
+
+    let actual = records
+        .lock()
+        .expect("turn error records lock")
         .drain(..)
         .collect::<Vec<_>>();
     assert_eq!(vec![expected], actual);
