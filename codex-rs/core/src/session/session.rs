@@ -726,6 +726,15 @@ impl Session {
                     }),
                 });
             }
+            for notice in config.config_layer_stack.requirements_toml().deprecation_notices() {
+                post_session_configured_events.push(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+                        summary: notice.summary,
+                        details: notice.details,
+                    }),
+                });
+            }
             for message in &config.startup_warnings {
                 post_session_configured_events.push(Event {
                     id: "".to_owned(),
