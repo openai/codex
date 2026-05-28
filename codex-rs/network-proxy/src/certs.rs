@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::Read as _;
 use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
@@ -101,6 +102,7 @@ const MANAGED_MITM_CA_DIR: &str = "proxy";
 const MANAGED_MITM_CA_CERT: &str = "ca.pem";
 const MANAGED_MITM_CA_KEY: &str = "ca.key";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
+const MAX_EXTERNAL_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 
 // Best-effort compatibility set for common child toolchains that accept a CA bundle path.
 // This is intentionally curated rather than pretending to cover every TLS client.
@@ -120,6 +122,7 @@ pub(crate) const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
 /// Immutable managed MITM CA bundle paths keyed by child TLS env variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedMitmCaTrustBundles {
+    pub(crate) managed_ca_cert_path: PathBuf,
     pub(crate) default_path: PathBuf,
     pub(crate) env_paths: HashMap<String, PathBuf>,
     pub(crate) inherited_env_values: HashMap<String, String>,
@@ -133,31 +136,143 @@ impl ManagedMitmCaTrustBundles {
             .unwrap_or(self.default_path.as_path())
     }
 
-    pub(crate) fn bundle_paths(&self) -> Vec<PathBuf> {
-        let mut paths = vec![self.default_path.clone()];
-        paths.extend(self.env_paths.values().cloned());
+    pub(crate) fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        for key in CUSTOM_CA_ENV_KEYS {
+            let value = env.get(key).map(String::as_str);
+            let Some(path) = self.managed_path_for_env_value(key, value) else {
+                continue;
+            };
+            env.insert(key.to_string(), path.to_string_lossy().into_owned());
+        }
+    }
+
+    pub(crate) fn prepare_child_env<F>(
+        &self,
+        env: &mut HashMap<String, String>,
+        cwd: &Path,
+        can_read_path: F,
+    ) -> Vec<PathBuf>
+    where
+        F: Fn(&Path) -> bool,
+    {
+        self.apply_to_env(env);
+        for key in CUSTOM_CA_ENV_KEYS {
+            let Some(value) = env.get(key).filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            if self
+                .managed_path_for_env_value(key, Some(value.as_str()))
+                .is_some()
+            {
+                continue;
+            }
+
+            let custom_ca_path = resolve_ca_bundle_path(value, cwd);
+            if !can_read_path(&custom_ca_path) {
+                continue;
+            }
+            let custom_ca_path = match custom_ca_path.canonicalize() {
+                Ok(custom_ca_path) => custom_ca_path,
+                Err(err) => {
+                    warn!(
+                        path = %custom_ca_path.display(),
+                        "failed to resolve command-scoped CA bundle; preserving original override: {err}"
+                    );
+                    continue;
+                }
+            };
+            if !can_read_path(&custom_ca_path) {
+                continue;
+            }
+
+            let trust_bundle = match build_managed_ca_trust_bundle_for_required_path(
+                self.managed_ca_cert_path.as_path(),
+                &custom_ca_path,
+            ) {
+                Ok(trust_bundle) => trust_bundle,
+                Err(err) => {
+                    warn!(
+                        path = %custom_ca_path.display(),
+                        "failed to append command-scoped CA bundle; preserving original override: {err}"
+                    );
+                    continue;
+                }
+            };
+            let trust_bundle_path = match persist_managed_ca_trust_bundle(
+                self.managed_ca_cert_path.as_path(),
+                &trust_bundle,
+            ) {
+                Ok(trust_bundle_path) => trust_bundle_path,
+                Err(err) => {
+                    warn!(
+                        path = %custom_ca_path.display(),
+                        "failed to persist command-scoped CA bundle; preserving original override: {err}"
+                    );
+                    continue;
+                }
+            };
+            env.insert(
+                key.to_string(),
+                trust_bundle_path.to_string_lossy().into_owned(),
+            );
+        }
+
+        self.bundle_paths_for_env(env)
+    }
+
+    fn bundle_paths_for_env(&self, env: &HashMap<String, String>) -> Vec<PathBuf> {
+        let mut paths = CUSTOM_CA_ENV_KEYS
+            .iter()
+            .filter_map(|key| {
+                env.get(*key)
+                    .and_then(|value| self.managed_path_for_env_value(key, Some(value)))
+            })
+            .collect::<Vec<_>>();
         paths.sort();
         paths.dedup();
         paths
     }
 
-    pub(crate) fn validate_child_env(&self, env: &HashMap<String, String>) -> Result<()> {
-        for key in CUSTOM_CA_ENV_KEYS {
-            let Some(value) = env.get(key).filter(|value| !value.is_empty()) else {
-                continue;
-            };
-            let expected_value = self.path_for_env_key(key).to_string_lossy();
-            if value == expected_value.as_ref() || self.inherited_env_values.get(key) == Some(value)
-            {
-                continue;
+    fn managed_path_for_env_value(&self, key: &str, value: Option<&str>) -> Option<PathBuf> {
+        let Some(value) = value.filter(|value| !value.is_empty()) else {
+            return Some(self.path_for_env_key(key).to_path_buf());
+        };
+        if self.inherited_env_values.get(key).map(String::as_str) == Some(value) {
+            if !Path::new(value).is_absolute() {
+                return None;
             }
-
-            return Err(anyhow!(
-                "managed MITM does not support command-scoped {key} overrides; configure CA trust before starting Codex"
-            ));
+            return Some(self.path_for_env_key(key).to_path_buf());
         }
+        let path = PathBuf::from(value);
+        self.is_current_generated_trust_bundle_path(&path)
+            .then_some(path)
+    }
 
-        Ok(())
+    fn is_generated_trust_bundle_path(&self, path: &Path) -> bool {
+        self.default_path.parent().is_some_and(|proxy_dir| {
+            let Some(file_name) = path.file_name().and_then(|file_name| file_name.to_str()) else {
+                return false;
+            };
+            path.parent() == Some(proxy_dir)
+                && file_name.starts_with(MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX)
+                && file_name.ends_with(".pem")
+        })
+    }
+
+    fn is_current_generated_trust_bundle_path(&self, path: &Path) -> bool {
+        if !self.is_generated_trust_bundle_path(path) {
+            return false;
+        }
+        match generated_trust_bundle_contains_managed_ca(path, &self.managed_ca_cert_path) {
+            Ok(is_current) => is_current,
+            Err(err) => {
+                warn!(
+                    path = %path.display(),
+                    "failed to validate generated CA bundle; rebuilding it: {err}"
+                );
+                false
+            }
+        }
     }
 }
 
@@ -184,11 +299,11 @@ fn managed_ca_trust_bundles_for_cert_path(
     env: &HashMap<String, String>,
     cwd: &Path,
 ) -> Result<ManagedMitmCaTrustBundles> {
-    let default_path = inherited_generated_trust_bundle_path(
+    let default_path = current_generated_trust_bundle_path(
         env.get("SSL_CERT_FILE").map(String::as_str),
         cert_path,
         cwd,
-    )
+    )?
     .map_or_else(
         || {
             let trust_bundle = build_default_managed_ca_trust_bundle(cert_path)?;
@@ -204,8 +319,10 @@ fn managed_ca_trust_bundles_for_cert_path(
         };
         inherited_env_values.insert(key.to_string(), value.clone());
         let path = resolve_ca_bundle_path(value, cwd);
-        let trust_bundle_path = if is_generated_trust_bundle_path(&path, cert_path) {
-            path
+        let trust_bundle_path = if let Some(trust_bundle_path) =
+            current_generated_trust_bundle_path(Some(value.as_str()), cert_path, cwd)?
+        {
+            trust_bundle_path
         } else {
             let trust_bundle = build_managed_ca_trust_bundle_for_path(cert_path, &path)?;
             persist_managed_ca_trust_bundle(cert_path, &trust_bundle)?
@@ -214,6 +331,7 @@ fn managed_ca_trust_bundles_for_cert_path(
     }
 
     Ok(ManagedMitmCaTrustBundles {
+        managed_ca_cert_path: cert_path.to_path_buf(),
         default_path,
         env_paths,
         inherited_env_values,
@@ -243,7 +361,8 @@ fn build_managed_ca_trust_bundle_for_path(
 ) -> Result<String> {
     let mut trust_bundle = String::new();
     if custom_ca_path != managed_ca_cert_path
-        && let Err(err) = append_pem_file(&mut trust_bundle, custom_ca_path)
+        && let Err(err) =
+            append_bounded_pem_file(&mut trust_bundle, custom_ca_path, "inherited CA bundle")
     {
         warn!(
             path = %custom_ca_path.display(),
@@ -254,14 +373,38 @@ fn build_managed_ca_trust_bundle_for_path(
     Ok(trust_bundle)
 }
 
-fn inherited_generated_trust_bundle_path(
+fn build_managed_ca_trust_bundle_for_required_path(
+    managed_ca_cert_path: &Path,
+    custom_ca_path: &Path,
+) -> Result<String> {
+    let mut trust_bundle = String::new();
+    if custom_ca_path != managed_ca_cert_path {
+        append_bounded_pem_file(
+            &mut trust_bundle,
+            custom_ca_path,
+            "command-scoped CA bundle",
+        )?;
+    }
+    append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
+    Ok(trust_bundle)
+}
+
+fn current_generated_trust_bundle_path(
     value: Option<&str>,
     managed_ca_cert_path: &Path,
     cwd: &Path,
-) -> Option<PathBuf> {
-    value
-        .map(|value| resolve_ca_bundle_path(value, cwd))
-        .filter(|path| is_generated_trust_bundle_path(path, managed_ca_cert_path))
+) -> Result<Option<PathBuf>> {
+    let Some(path) = value.map(|value| resolve_ca_bundle_path(value, cwd)) else {
+        return Ok(None);
+    };
+    if !is_generated_trust_bundle_path(&path, managed_ca_cert_path) {
+        return Ok(None);
+    }
+    if !generated_trust_bundle_contains_managed_ca(&path, managed_ca_cert_path)? {
+        return Ok(None);
+    }
+
+    Ok(Some(path))
 }
 
 fn is_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Path) -> bool {
@@ -274,6 +417,30 @@ fn is_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Path) -> b
     path.parent() == Some(proxy_dir)
         && file_name.starts_with(MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX)
         && file_name.ends_with(".pem")
+}
+
+fn generated_trust_bundle_contains_managed_ca(
+    trust_bundle_path: &Path,
+    managed_ca_cert_path: &Path,
+) -> Result<bool> {
+    let managed_ca = fs::read_to_string(managed_ca_cert_path).with_context(|| {
+        format!(
+            "failed to read CA bundle {}",
+            managed_ca_cert_path.display()
+        )
+    })?;
+    let trust_bundle = match read_bounded_pem_file(trust_bundle_path, "managed CA trust bundle") {
+        Ok(trust_bundle) => trust_bundle,
+        Err(err) => {
+            warn!(
+                path = %trust_bundle_path.display(),
+                "failed to validate inherited generated CA bundle; rebuilding it: {err}"
+            );
+            return Ok(false);
+        }
+    };
+
+    Ok(trust_bundle.contains(&managed_ca))
 }
 
 fn persist_managed_ca_trust_bundle(
@@ -313,16 +480,57 @@ fn resolve_ca_bundle_path(path: &str, cwd: &Path) -> PathBuf {
 }
 
 fn append_pem_file(bundle: &mut String, path: &Path) -> Result<()> {
-    if !bundle.ends_with('\n') {
-        bundle.push('\n');
-    }
     let pem = fs::read_to_string(path)
         .with_context(|| format!("failed to read CA bundle {}", path.display()))?;
-    bundle.push_str(&pem);
+    append_pem_contents(bundle, &pem);
+    Ok(())
+}
+
+fn append_bounded_pem_file(bundle: &mut String, path: &Path, kind: &str) -> Result<()> {
+    let pem = read_bounded_pem_file(path, kind)?;
+    append_pem_contents(bundle, &pem);
+    Ok(())
+}
+
+fn read_bounded_pem_file(path: &Path, kind: &str) -> Result<String> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("failed to inspect {kind} {}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(anyhow!("{kind} must be a regular file: {}", path.display()));
+    }
+    if metadata.len() > MAX_EXTERNAL_CA_BUNDLE_BYTES {
+        return Err(anyhow!(
+            "{kind} exceeds {} bytes: {}",
+            MAX_EXTERNAL_CA_BUNDLE_BYTES,
+            path.display()
+        ));
+    }
+
+    let mut pem = String::new();
+    File::open(path)
+        .with_context(|| format!("failed to open {kind} {}", path.display()))?
+        .take(MAX_EXTERNAL_CA_BUNDLE_BYTES + 1)
+        .read_to_string(&mut pem)
+        .with_context(|| format!("failed to read {kind} {}", path.display()))?;
+    if pem.len() as u64 > MAX_EXTERNAL_CA_BUNDLE_BYTES {
+        return Err(anyhow!(
+            "{kind} exceeds {} bytes: {}",
+            MAX_EXTERNAL_CA_BUNDLE_BYTES,
+            path.display()
+        ));
+    }
+
+    Ok(pem)
+}
+
+fn append_pem_contents(bundle: &mut String, pem: &str) {
     if !bundle.ends_with('\n') {
         bundle.push('\n');
     }
-    Ok(())
+    bundle.push_str(pem);
+    if !bundle.ends_with('\n') {
+        bundle.push('\n');
+    }
 }
 
 fn push_certificate_pem(bundle: &mut String, der: &[u8]) {
@@ -572,39 +780,45 @@ mod tests {
     }
 
     #[test]
-    fn build_managed_ca_trust_bundle_skips_existing_managed_bundle() {
+    fn managed_ca_trust_bundles_rebuild_stale_generated_default_bundle() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
-        let trust_bundle_path = dir.path().join("ca-bundle-123.pem");
+        let stale_trust_bundle_path = dir.path().join("ca-bundle-stale.pem");
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
-        fs::write(&trust_bundle_path, "stale managed bundle\n").unwrap();
-        let trust_bundle_path_env = trust_bundle_path.display().to_string();
-        assert_eq!(
-            inherited_generated_trust_bundle_path(
-                Some(&trust_bundle_path_env),
-                &managed_ca_cert_path,
-                dir.path(),
-            ),
-            Some(trust_bundle_path),
-        );
+        fs::write(&stale_trust_bundle_path, "stale managed bundle\n").unwrap();
+        let env = HashMap::from([(
+            "SSL_CERT_FILE".to_string(),
+            stale_trust_bundle_path.display().to_string(),
+        )]);
+
+        let bundles =
+            managed_ca_trust_bundles_for_cert_path(&managed_ca_cert_path, &env, dir.path())
+                .unwrap();
+        let default_bundle = fs::read_to_string(&bundles.default_path).unwrap();
+
+        assert_ne!(bundles.default_path, stale_trust_bundle_path);
+        assert!(default_bundle.contains("managed ca"));
     }
 
     #[test]
-    fn build_managed_ca_trust_bundle_appends_inherited_bundle() {
+    fn build_managed_ca_trust_bundle_skips_oversized_inherited_bundle() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
         let inherited_bundle_path = dir.path().join("inherited.pem");
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
-        fs::write(&inherited_bundle_path, "inherited ca\n").unwrap();
+        fs::write(
+            &inherited_bundle_path,
+            vec![b'a'; MAX_EXTERNAL_CA_BUNDLE_BYTES as usize + 1],
+        )
+        .unwrap();
 
         let trust_bundle =
             build_managed_ca_trust_bundle_for_path(&managed_ca_cert_path, &inherited_bundle_path)
                 .unwrap();
 
-        assert!(trust_bundle.contains("inherited ca"));
         assert!(trust_bundle.contains("managed ca"));
+        assert!(!trust_bundle.contains("aaaa"));
     }
-
     #[test]
     fn managed_ca_trust_bundles_keep_distinct_client_roots_separate() {
         let dir = tempdir().unwrap();
@@ -662,31 +876,44 @@ mod tests {
     }
 
     #[test]
-    fn build_managed_ca_trust_bundle_resolves_relative_inherited_bundle_against_cwd() {
+    fn managed_ca_trust_bundles_prepare_inherited_relative_override_against_child_cwd() {
         let dir = tempdir().unwrap();
+        let startup_cwd = dir.path().join("startup");
+        let child_cwd = dir.path().join("child");
         let managed_ca_cert_path = dir.path().join("ca.pem");
-        let inherited_bundle_path = dir.path().join("certs/inherited.pem");
+        let inherited_bundle_path = child_cwd.join("certs/inherited.pem");
+        fs::create_dir_all(&startup_cwd).unwrap();
         fs::create_dir_all(inherited_bundle_path.parent().unwrap()).unwrap();
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
         fs::write(&inherited_bundle_path, "inherited ca\n").unwrap();
+        let inherited_bundle_path = "certs/inherited.pem".to_string();
+        let env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE".to_string(),
+            inherited_bundle_path.clone(),
+        )]);
+        let bundles =
+            managed_ca_trust_bundles_for_cert_path(&managed_ca_cert_path, &env, &startup_cwd)
+                .unwrap();
+        let mut child_env =
+            HashMap::from([("REQUESTS_CA_BUNDLE".to_string(), inherited_bundle_path)]);
 
-        let trust_bundle = build_managed_ca_trust_bundle_for_path(
-            &managed_ca_cert_path,
-            &resolve_ca_bundle_path("certs/inherited.pem", dir.path()),
-        )
-        .unwrap();
+        bundles.prepare_child_env(&mut child_env, &child_cwd, |_| true);
+        let requests_bundle =
+            fs::read_to_string(child_env.get("REQUESTS_CA_BUNDLE").unwrap()).unwrap();
 
-        assert!(trust_bundle.contains("inherited ca"));
-        assert!(trust_bundle.contains("managed ca"));
+        assert!(requests_bundle.contains("inherited ca"));
+        assert!(requests_bundle.contains("managed ca"));
     }
 
     #[test]
-    fn managed_ca_trust_bundles_reject_command_scoped_override() {
+    fn managed_ca_trust_bundles_prepare_readable_command_scoped_override() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
         let inherited_bundle_path = dir.path().join("inherited.pem");
         fs::write(&inherited_bundle_path, "inherited ca\n").unwrap();
+        let command_bundle_path = dir.path().join("command.pem");
+        fs::write(&command_bundle_path, "command ca\n").unwrap();
         let env = HashMap::from([(
             "REQUESTS_CA_BUNDLE".to_string(),
             inherited_bundle_path.display().to_string(),
@@ -694,19 +921,143 @@ mod tests {
         let bundles =
             managed_ca_trust_bundles_for_cert_path(&managed_ca_cert_path, &env, dir.path())
                 .unwrap();
+        let mut child_env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE".to_string(),
+            command_bundle_path.display().to_string(),
+        )]);
 
-        let err = bundles
-            .validate_child_env(&HashMap::from([(
-                "REQUESTS_CA_BUNDLE".to_string(),
-                dir.path().join("command.pem").display().to_string(),
-            )]))
-            .unwrap_err();
+        let bundle_paths = bundles.prepare_child_env(&mut child_env, dir.path(), |_| true);
+        let requests_bundle_path = child_env.get("REQUESTS_CA_BUNDLE").unwrap();
+        let requests_bundle = fs::read_to_string(requests_bundle_path).unwrap();
 
-        assert!(
-            err.to_string()
-                .contains("does not support command-scoped REQUESTS_CA_BUNDLE overrides"),
-            "unexpected error: {err:#}"
+        assert!(requests_bundle.contains("command ca"));
+        assert!(requests_bundle.contains("managed ca"));
+        assert!(!requests_bundle.contains("inherited ca"));
+        assert!(bundle_paths.contains(&PathBuf::from(requests_bundle_path)));
+    }
+
+    #[test]
+    fn managed_ca_trust_bundles_preserve_unreadable_command_scoped_override() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        let command_bundle_path = dir.path().join("command.pem");
+        fs::write(&command_bundle_path, "command ca\n").unwrap();
+        let bundles = managed_ca_trust_bundles_for_cert_path(
+            &managed_ca_cert_path,
+            &HashMap::new(),
+            dir.path(),
+        )
+        .unwrap();
+        let command_bundle_path = command_bundle_path.display().to_string();
+        let mut child_env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE".to_string(),
+            command_bundle_path.clone(),
+        )]);
+
+        let bundle_paths = bundles.prepare_child_env(&mut child_env, dir.path(), |_| false);
+
+        assert_eq!(
+            child_env.get("REQUESTS_CA_BUNDLE"),
+            Some(&command_bundle_path)
         );
+        assert!(!bundle_paths.contains(&PathBuf::from(command_bundle_path)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_ca_trust_bundles_preserve_symlinked_command_scoped_override_to_unreadable_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        let command_bundle_path = dir.path().join("command.pem");
+        fs::write(&command_bundle_path, "command ca\n").unwrap();
+        let symlinked_bundle_path = dir.path().join("symlinked.pem");
+        symlink(&command_bundle_path, &symlinked_bundle_path).unwrap();
+        let canonical_command_bundle_path = command_bundle_path.canonicalize().unwrap();
+        let bundles = managed_ca_trust_bundles_for_cert_path(
+            &managed_ca_cert_path,
+            &HashMap::new(),
+            dir.path(),
+        )
+        .unwrap();
+        let symlinked_bundle_path = symlinked_bundle_path.display().to_string();
+        let mut child_env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE".to_string(),
+            symlinked_bundle_path.clone(),
+        )]);
+
+        let bundle_paths = bundles.prepare_child_env(&mut child_env, dir.path(), |path| {
+            path != canonical_command_bundle_path
+        });
+
+        assert_eq!(
+            child_env.get("REQUESTS_CA_BUNDLE"),
+            Some(&symlinked_bundle_path)
+        );
+        assert!(!bundle_paths.contains(&PathBuf::from(symlinked_bundle_path)));
+    }
+
+    #[test]
+    fn managed_ca_trust_bundles_preserve_oversized_command_scoped_override() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        let command_bundle_path = dir.path().join("command.pem");
+        fs::write(
+            &command_bundle_path,
+            vec![b'a'; MAX_EXTERNAL_CA_BUNDLE_BYTES as usize + 1],
+        )
+        .unwrap();
+        let bundles = managed_ca_trust_bundles_for_cert_path(
+            &managed_ca_cert_path,
+            &HashMap::new(),
+            dir.path(),
+        )
+        .unwrap();
+        let command_bundle_path = command_bundle_path.display().to_string();
+        let mut child_env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE".to_string(),
+            command_bundle_path.clone(),
+        )]);
+
+        let bundle_paths = bundles.prepare_child_env(&mut child_env, dir.path(), |_| true);
+
+        assert_eq!(
+            child_env.get("REQUESTS_CA_BUNDLE"),
+            Some(&command_bundle_path)
+        );
+        assert!(!bundle_paths.contains(&PathBuf::from(command_bundle_path)));
+    }
+
+    #[test]
+    fn managed_ca_trust_bundles_preserve_non_file_command_scoped_override() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        let command_bundle_path = dir.path().join("command-dir");
+        fs::create_dir(&command_bundle_path).unwrap();
+        let bundles = managed_ca_trust_bundles_for_cert_path(
+            &managed_ca_cert_path,
+            &HashMap::new(),
+            dir.path(),
+        )
+        .unwrap();
+        let command_bundle_path = command_bundle_path.display().to_string();
+        let mut child_env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE".to_string(),
+            command_bundle_path.clone(),
+        )]);
+
+        let bundle_paths = bundles.prepare_child_env(&mut child_env, dir.path(), |_| true);
+
+        assert_eq!(
+            child_env.get("REQUESTS_CA_BUNDLE"),
+            Some(&command_bundle_path)
+        );
+        assert!(!bundle_paths.contains(&PathBuf::from(command_bundle_path)));
     }
 
     #[cfg(unix)]

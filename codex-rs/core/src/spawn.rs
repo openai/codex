@@ -70,9 +70,7 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
     cmd.args(args);
     cmd.current_dir(cwd);
     if let Some(network) = network {
-        network
-            .apply_to_env(&mut env)
-            .map_err(std::io::Error::other)?;
+        network.apply_to_env(&mut env);
     }
     cmd.env_clear();
     cmd.envs(env);

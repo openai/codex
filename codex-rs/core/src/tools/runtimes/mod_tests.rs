@@ -89,7 +89,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     let dir = tempdir().expect("create temp dir");
     let cwd = dir.path().abs();
     let mut env = HashMap::from([("CUSTOM_ENV".to_string(), "kept".to_string())]);
-    proxy.apply_to_env(&mut env).expect("apply proxy env");
+    proxy.apply_to_env(&mut env);
 
     let command = vec!["/bin/echo".to_string(), "ok".to_string()];
     let command = build_sandbox_command(
@@ -509,6 +509,44 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
          http://127.0.0.1:4321\n\
          ssh -o ProxyCommand=stale"
     );
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_mitm_ca_env_from_process_env() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport SSL_CERT_FILE='/tmp/stale-ca.pem'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s' \"$SSL_CERT_FILE\"".to_string(),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env(PROXY_ACTIVE_ENV_KEY, "1")
+        .env("SSL_CERT_FILE", "/tmp/fresh-ca.pem")
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "/tmp/fresh-ca.pem");
 }
 
 #[cfg(target_os = "macos")]

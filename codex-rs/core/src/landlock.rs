@@ -33,26 +33,11 @@ pub async fn spawn_command_under_linux_sandbox<P>(
 where
     P: AsRef<Path>,
 {
-    let mut permission_profile = permission_profile.clone();
-    if let Some(network) = network {
-        network
-            .validate_child_env(&env)
-            .map_err(std::io::Error::other)?;
-        let managed_mitm_ca_trust_bundle_paths = network
-            .managed_mitm_ca_trust_bundle_paths()
-            .into_iter()
-            .map(AbsolutePathBuf::from_absolute_path)
-            .collect::<std::io::Result<Vec<_>>>()?;
-        permission_profile = permission_profile.with_required_readable_roots(
-            sandbox_policy_cwd.as_path(),
-            &managed_mitm_ca_trust_bundle_paths,
-        )?;
-    }
     let network_sandbox_policy = permission_profile.network_sandbox_policy();
     let args = create_linux_sandbox_command_args_for_permission_profile(
         command,
         command_cwd.as_path(),
-        &permission_profile,
+        permission_profile,
         sandbox_policy_cwd,
         use_legacy_landlock,
         allow_network_for_proxy(/*enforce_managed_network*/ false),

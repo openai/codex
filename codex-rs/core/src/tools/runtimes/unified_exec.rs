@@ -259,9 +259,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
         let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
         if let Some(network) = managed_network {
-            network
-                .apply_to_env(&mut env)
-                .map_err(|err| ToolError::Rejected(err.to_string()))?;
+            network.apply_to_env(&mut env);
         }
         let environment_is_remote = req.environment.is_remote();
         let command = if environment_is_remote {

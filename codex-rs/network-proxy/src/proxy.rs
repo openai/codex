@@ -376,6 +376,7 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
 pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const PROXY_ACTIVE_ENV_KEY: &str = "CODEX_NETWORK_PROXY_ACTIVE";
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
+pub const MITM_CA_ENV_KEYS: &[&str] = &crate::certs::CUSTOM_CA_ENV_KEYS;
 const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
 const NODE_USE_ENV_PROXY_ENV_KEY: &str = "NODE_USE_ENV_PROXY";
 #[cfg(any(target_os = "macos", test))]
@@ -570,15 +571,7 @@ fn apply_proxy_env_overrides(
     }
 
     if let Some(mitm_ca_trust_bundles) = mitm_ca_trust_bundles {
-        for key in crate::certs::CUSTOM_CA_ENV_KEYS {
-            env.insert(
-                key.to_string(),
-                mitm_ca_trust_bundles
-                    .path_for_env_key(key)
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-        }
+        mitm_ca_trust_bundles.apply_to_env(env);
     }
 }
 
@@ -619,25 +612,29 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
-    /// Returns the managed CA bundles child sandboxes should expose to TLS clients.
-    pub fn managed_mitm_ca_trust_bundle_paths(&self) -> Vec<PathBuf> {
-        self.runtime_settings()
-            .mitm_ca_trust_bundles
-            .map_or_else(Vec::new, |bundles| bundles.bundle_paths())
-    }
-
-    pub fn validate_child_env(&self, env: &HashMap<String, String>) -> Result<()> {
-        if let Some(mitm_ca_trust_bundles) = self.runtime_settings().mitm_ca_trust_bundles {
-            mitm_ca_trust_bundles.validate_child_env(env)?;
-        }
-        Ok(())
-    }
-
-    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) -> Result<()> {
+    /// Rewrites readable child-selected CA bundles into immutable managed MITM bundles.
+    pub fn prepare_child_env<F>(
+        &self,
+        env: &mut HashMap<String, String>,
+        cwd: &std::path::Path,
+        can_read_path: F,
+    ) -> Vec<PathBuf>
+    where
+        F: Fn(&std::path::Path) -> bool,
+    {
         let runtime_settings = self.runtime_settings();
-        self.validate_child_env(env)?;
+        if let Some(mitm_ca_trust_bundles) = runtime_settings.mitm_ca_trust_bundles.as_ref() {
+            mitm_ca_trust_bundles.prepare_child_env(env, cwd, can_read_path)
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        let runtime_settings = self.runtime_settings();
         // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
-        // managed MITM CA vars either preserve startup trust or were rejected above.
+        // managed MITM CA vars preserve unknown command-scoped overrides until the sandbox
+        // layer can safely fold readable paths into immutable managed bundles.
         apply_proxy_env_overrides(
             env,
             self.http_addr,
@@ -646,7 +643,6 @@ impl NetworkProxy {
             runtime_settings.allow_local_binding,
             runtime_settings.mitm_ca_trust_bundles.as_ref(),
         );
-        Ok(())
     }
 
     pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
@@ -1103,6 +1099,7 @@ mod tests {
         let mut env = HashMap::new();
         let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
         let mitm_ca_trust_bundles = crate::certs::ManagedMitmCaTrustBundles {
+            managed_ca_cert_path: Path::new("/tmp/codex-proxy/ca.pem").to_path_buf(),
             default_path: mitm_ca_trust_bundle_path.to_path_buf(),
             env_paths: HashMap::new(),
             inherited_env_values: HashMap::new(),
