@@ -20,7 +20,7 @@ use std::time::Duration;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
-use crate::landlock::apply_permission_profile_to_current_thread;
+use crate::landlock::apply_effective_permissions_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
@@ -29,7 +29,10 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
+use codex_sandboxing::EffectiveFilesystemPermissions;
+use codex_sandboxing::FilesystemPermissionsContext;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 static BWRAP_CHILD_PID: AtomicI32 = AtomicI32::new(0);
 static PENDING_FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
@@ -166,6 +169,15 @@ pub fn run_main() -> ! {
         file_system_sandbox_policy,
         network_sandbox_policy,
     } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
+    let policy_evaluation_cwd = AbsolutePathBuf::from_absolute_path(&sandbox_policy_cwd)
+        .unwrap_or_else(|err| panic!("sandbox policy cwd should be absolute: {err}"));
+    let effective_filesystem_permissions = EffectiveFilesystemPermissions::from_profile(
+        &permission_profile,
+        FilesystemPermissionsContext {
+            policy_evaluation_cwd: &policy_evaluation_cwd,
+        },
+    )
+    .unwrap_or_else(|err| panic!("failed to derive effective filesystem permissions: {err}"));
     ensure_legacy_landlock_mode_supports_policy(
         use_legacy_landlock,
         &file_system_sandbox_policy,
@@ -185,9 +197,9 @@ pub fn run_main() -> ! {
             }
         }
         let proxy_routing_active = allow_network_for_proxy;
-        if let Err(e) = apply_permission_profile_to_current_thread(
-            &permission_profile,
-            &sandbox_policy_cwd,
+        if let Err(e) = apply_effective_permissions_to_current_thread(
+            &effective_filesystem_permissions,
+            network_sandbox_policy,
             /*apply_landlock_fs*/ false,
             allow_network_for_proxy,
             proxy_routing_active,
@@ -197,10 +209,10 @@ pub fn run_main() -> ! {
         exec_or_panic(command);
     }
 
-    if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
-        if let Err(e) = apply_permission_profile_to_current_thread(
-            &permission_profile,
-            &sandbox_policy_cwd,
+    if effective_filesystem_permissions.has_full_disk_write_access() && !allow_network_for_proxy {
+        if let Err(e) = apply_effective_permissions_to_current_thread(
+            &effective_filesystem_permissions,
+            network_sandbox_policy,
             /*apply_landlock_fs*/ false,
             allow_network_for_proxy,
             /*proxy_routed_network*/ false,
@@ -233,7 +245,7 @@ pub fn run_main() -> ! {
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
-            &file_system_sandbox_policy,
+            &effective_filesystem_permissions,
             network_sandbox_policy,
             inner,
             !no_proc,
@@ -242,9 +254,9 @@ pub fn run_main() -> ! {
     }
 
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
-    if let Err(e) = apply_permission_profile_to_current_thread(
-        &permission_profile,
-        &sandbox_policy_cwd,
+    if let Err(e) = apply_effective_permissions_to_current_thread(
+        &effective_filesystem_permissions,
+        network_sandbox_policy,
         /*apply_landlock_fs*/ true,
         allow_network_for_proxy,
         /*proxy_routed_network*/ false,
@@ -317,7 +329,7 @@ fn ensure_legacy_landlock_mode_supports_policy(
 fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
     mount_proc: bool,
@@ -331,7 +343,7 @@ fn run_bwrap_with_proc_fallback(
         && !preflight_proc_mount_support(
             sandbox_policy_cwd,
             command_cwd,
-            file_system_sandbox_policy,
+            effective_filesystem_permissions,
             network_mode,
         )
         .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
@@ -348,7 +360,7 @@ fn run_bwrap_with_proc_fallback(
     };
     let mut bwrap_args = build_bwrap_argv(
         inner,
-        file_system_sandbox_policy,
+        effective_filesystem_permissions,
         sandbox_policy_cwd,
         command_cwd,
         options,
@@ -373,14 +385,14 @@ fn bwrap_network_mode(
 
 fn build_bwrap_argv(
     inner: Vec<String>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     sandbox_policy_cwd: &Path,
     command_cwd: &Path,
     options: BwrapOptions,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
     let bwrap_args = create_bwrap_command_args(
         inner,
-        file_system_sandbox_policy,
+        effective_filesystem_permissions,
         sandbox_policy_cwd,
         command_cwd,
         options,
@@ -444,13 +456,13 @@ fn current_process_argv0() -> String {
 fn preflight_proc_mount_support(
     sandbox_policy_cwd: &Path,
     command_cwd: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     network_mode: BwrapNetworkMode,
 ) -> CodexResult<bool> {
     let preflight_argv = build_preflight_bwrap_argv(
         sandbox_policy_cwd,
         command_cwd,
-        file_system_sandbox_policy,
+        effective_filesystem_permissions,
         network_mode,
     )?;
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
@@ -460,13 +472,13 @@ fn preflight_proc_mount_support(
 fn build_preflight_bwrap_argv(
     sandbox_policy_cwd: &Path,
     command_cwd: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     network_mode: BwrapNetworkMode,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
     let preflight_command = vec![resolve_true_command()];
     build_bwrap_argv(
         preflight_command,
-        file_system_sandbox_policy,
+        effective_filesystem_permissions,
         sandbox_policy_cwd,
         command_cwd,
         BwrapOptions {

@@ -23,6 +23,64 @@ fn read_only_file_system_policy() -> FileSystemSandboxPolicy {
     read_only_permission_profile().file_system_sandbox_policy()
 }
 
+fn effective_permissions_for_policy(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> codex_sandboxing::EffectiveFilesystemPermissions {
+    let cwd = AbsolutePathBuf::from_absolute_path(cwd)
+        .unwrap_or_else(|err| panic!("test policy cwd should be absolute: {err}"));
+    let file_system_sandbox_policy = file_system_sandbox_policy
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    codex_sandboxing::EffectiveFilesystemPermissions::from_profile(
+        &permission_profile,
+        codex_sandboxing::FilesystemPermissionsContext {
+            policy_evaluation_cwd: &cwd,
+        },
+    )
+    .unwrap_or_else(|err| {
+        panic!("test filesystem policy should yield effective permissions: {err}")
+    })
+}
+
+fn build_bwrap_argv_for_policy(
+    inner: Vec<String>,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+    command_cwd: &Path,
+    options: BwrapOptions,
+) -> codex_protocol::error::Result<crate::bwrap::BwrapArgs> {
+    let effective_filesystem_permissions =
+        effective_permissions_for_policy(file_system_sandbox_policy, sandbox_policy_cwd);
+    build_bwrap_argv(
+        inner,
+        &effective_filesystem_permissions,
+        sandbox_policy_cwd,
+        command_cwd,
+        options,
+    )
+}
+
+fn build_preflight_bwrap_argv_for_policy(
+    sandbox_policy_cwd: &Path,
+    command_cwd: &Path,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_mode: BwrapNetworkMode,
+) -> codex_protocol::error::Result<crate::bwrap::BwrapArgs> {
+    let effective_filesystem_permissions =
+        effective_permissions_for_policy(file_system_sandbox_policy, sandbox_policy_cwd);
+    build_preflight_bwrap_argv(
+        sandbox_policy_cwd,
+        command_cwd,
+        &effective_filesystem_permissions,
+        network_mode,
+    )
+}
+
 #[test]
 fn detects_proc_mount_invalid_argument_failure() {
     let stderr = "bwrap: Can't mount proc on /newroot/proc: Invalid argument";
@@ -50,7 +108,7 @@ fn ignores_non_proc_mount_errors() {
 #[test]
 fn inserts_bwrap_argv0_before_command_separator() {
     let file_system_sandbox_policy = read_only_file_system_policy();
-    let mut argv = build_bwrap_argv(
+    let mut argv = build_bwrap_argv_for_policy(
         vec!["/bin/true".to_string()],
         &file_system_sandbox_policy,
         Path::new("/"),
@@ -94,7 +152,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
 #[test]
 fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
     let file_system_sandbox_policy = read_only_file_system_policy();
-    let mut argv = build_bwrap_argv(
+    let mut argv = build_bwrap_argv_for_policy(
         vec!["/bin/true".to_string()],
         &file_system_sandbox_policy,
         Path::new("/"),
@@ -163,7 +221,7 @@ fn rewrites_bwrap_helper_command_not_nested_user_command_when_current_exe_appear
 #[test]
 fn inserts_unshare_net_when_network_isolation_requested() {
     let file_system_sandbox_policy = read_only_file_system_policy();
-    let argv = build_bwrap_argv(
+    let argv = build_bwrap_argv_for_policy(
         vec!["/bin/true".to_string()],
         &file_system_sandbox_policy,
         Path::new("/"),
@@ -182,7 +240,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
 #[test]
 fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
     let file_system_sandbox_policy = read_only_file_system_policy();
-    let argv = build_bwrap_argv(
+    let argv = build_bwrap_argv_for_policy(
         vec!["/bin/true".to_string()],
         &file_system_sandbox_policy,
         Path::new("/"),
@@ -263,7 +321,7 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
         NetworkSandboxPolicy::Enabled,
         /*allow_network_for_proxy*/ true,
     );
-    let argv = build_preflight_bwrap_argv(
+    let argv = build_preflight_bwrap_argv_for_policy(
         Path::new("/"),
         Path::new("/"),
         &FileSystemSandboxPolicy::unrestricted(),

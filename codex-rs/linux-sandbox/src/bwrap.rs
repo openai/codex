@@ -27,11 +27,8 @@ use std::process::Command;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::permissions::is_protected_metadata_name;
-use codex_protocol::protocol::FileSystemAccessMode;
-use codex_protocol::protocol::FileSystemPath;
-use codex_protocol::protocol::FileSystemSandboxPolicy;
-use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::WritableRoot;
+use codex_sandboxing::EffectiveFilesystemPermissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobBuilder;
 use globset::GlobSet;
@@ -233,16 +230,16 @@ impl SyntheticMountTarget {
 /// namespace restrictions apply while preserving full filesystem access.
 pub(crate) fn create_bwrap_command_args(
     command: Vec<String>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     sandbox_policy_cwd: &Path,
     command_cwd: &Path,
     options: BwrapOptions,
 ) -> Result<BwrapArgs> {
-    let unreadable_globs =
-        file_system_sandbox_policy.get_unreadable_globs_with_cwd(sandbox_policy_cwd);
     // Full disk write normally skips bwrap, but unreadable glob patterns still
     // need concrete bwrap masks for the matches expanded below.
-    if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
+    if effective_filesystem_permissions.has_full_disk_write_access()
+        && effective_filesystem_permissions.unreadable_globs.is_empty()
+    {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
             Ok(BwrapArgs {
                 args: command,
@@ -257,7 +254,7 @@ pub(crate) fn create_bwrap_command_args(
 
     create_bwrap_flags(
         command,
-        file_system_sandbox_policy,
+        effective_filesystem_permissions,
         sandbox_policy_cwd,
         command_cwd,
         options,
@@ -296,7 +293,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
 /// Build the bubblewrap flags (everything after `argv[0]`).
 fn create_bwrap_flags(
     command: Vec<String>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     sandbox_policy_cwd: &Path,
     command_cwd: &Path,
     options: BwrapOptions,
@@ -306,12 +303,12 @@ fn create_bwrap_flags(
         preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
-    } = create_filesystem_args(
-        file_system_sandbox_policy,
+    } = create_effective_filesystem_args(
+        effective_filesystem_permissions,
         sandbox_policy_cwd,
         options
             .glob_scan_max_depth
-            .or(file_system_sandbox_policy.glob_scan_max_depth),
+            .or(effective_filesystem_permissions.glob_scan_max_depth),
     )?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
@@ -364,22 +361,27 @@ fn create_bwrap_flags(
 ///    those writable roots so protected subpaths win.
 /// 6. Nested unreadable carveouts under a writable root are masked after that
 ///    root is bound, and unrelated unreadable roots are masked afterward.
-fn create_filesystem_args(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+fn create_effective_filesystem_args(
+    effective_filesystem_permissions: &EffectiveFilesystemPermissions,
     cwd: &Path,
     glob_scan_max_depth: Option<usize>,
 ) -> Result<BwrapArgs> {
-    let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
+    let unreadable_globs = effective_filesystem_permissions
+        .unreadable_globs
+        .iter()
+        .map(|glob| glob.pattern().to_string())
+        .collect::<Vec<_>>();
     // Bubblewrap requires bind mount targets to exist. Skip missing writable
     // roots so mixed-platform configs can keep harmless paths for other
     // environments without breaking Linux command startup.
-    let mut writable_roots = file_system_sandbox_policy
-        .get_writable_roots_with_cwd(cwd)
-        .into_iter()
+    let mut writable_roots = effective_filesystem_permissions
+        .writable_roots
+        .iter()
+        .cloned()
         .filter(|writable_root| writable_root.root.as_path().exists())
         .collect::<Vec<_>>();
     if writable_roots.is_empty()
-        && file_system_sandbox_policy.has_full_disk_write_access()
+        && effective_filesystem_permissions.has_full_disk_write_access()
         && !unreadable_globs.is_empty()
     {
         writable_roots.push(WritableRoot {
@@ -388,42 +390,10 @@ fn create_filesystem_args(
             protected_metadata_names: Vec::new(),
         });
     }
-    let missing_auto_metadata_read_only_project_root_subpaths: HashSet<PathBuf> =
-        file_system_sandbox_policy
-            .entries
-            .iter()
-            .filter(|entry| entry.access == FileSystemAccessMode::Read)
-            .filter_map(|entry| {
-                let FileSystemPath::Special {
-                    value:
-                        FileSystemSpecialPath::ProjectRoots {
-                            subpath: Some(subpath),
-                        },
-                } = &entry.path
-                else {
-                    return None;
-                };
-                // Automatic repo-metadata read masks are skipped here so the
-                // metadata handling below can apply the root-scoped
-                // protection consistently for `.git`, `.agents`, and `.codex`.
-                // User-authored `read` rules for other subpaths and `none`
-                // rules should keep their normal bwrap behavior, which can mask
-                // the first missing component to prevent creation under writable
-                // roots.
-                let project_subpath = subpath.as_path();
-                if project_subpath != Path::new(".git")
-                    && project_subpath != Path::new(".agents")
-                    && project_subpath != Path::new(".codex")
-                {
-                    return None;
-                }
-                let resolved = AbsolutePathBuf::resolve_path_against_base(subpath, cwd);
-                (!resolved.as_path().exists()).then(|| resolved.into_path_buf())
-            })
-            .collect();
-    let mut unreadable_roots = file_system_sandbox_policy
-        .get_unreadable_roots_with_cwd(cwd)
-        .into_iter()
+    let mut unreadable_roots = effective_filesystem_permissions
+        .unreadable_roots
+        .iter()
+        .cloned()
         .map(AbsolutePathBuf::into_path_buf)
         .collect::<Vec<_>>();
     // Bubblewrap can only mask concrete paths. Expand unreadable glob patterns
@@ -437,7 +407,7 @@ fn create_filesystem_args(
     unreadable_roots.sort();
     unreadable_roots.dedup();
 
-    let args = if file_system_sandbox_policy.has_full_disk_read_access() {
+    let args = if effective_filesystem_permissions.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
         // In bubblewrap (`bubblewrap.c`, `SETUP_MOUNT_DEV`), `--dev /dev`
         // creates the standard minimal nodes: null, zero, full, random,
@@ -460,12 +430,13 @@ fn create_filesystem_args(
             "/dev".to_string(),
         ];
 
-        let mut readable_roots: BTreeSet<PathBuf> = file_system_sandbox_policy
-            .get_readable_roots_with_cwd(cwd)
-            .into_iter()
+        let mut readable_roots: BTreeSet<PathBuf> = effective_filesystem_permissions
+            .readable_roots
+            .iter()
+            .cloned()
             .map(PathBuf::from)
             .collect();
-        if file_system_sandbox_policy.include_platform_defaults() {
+        if effective_filesystem_permissions.include_platform_defaults {
             readable_roots.extend(
                 LINUX_PLATFORM_DEFAULT_READ_ROOTS
                     .iter()
@@ -573,7 +544,6 @@ fn create_filesystem_args(
             .iter()
             .map(|path| path.as_path().to_path_buf())
             .filter(|path| !unreadable_paths.contains(path))
-            .filter(|path| !missing_auto_metadata_read_only_project_root_subpaths.contains(path))
             .collect();
         let protected_metadata_names = writable_root.protected_metadata_names.clone();
         append_metadata_path_masks_for_writable_root(
@@ -1325,6 +1295,61 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+fn effective_test_filesystem_permissions(
+    file_system_sandbox_policy: &codex_protocol::protocol::FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> EffectiveFilesystemPermissions {
+    let cwd = AbsolutePathBuf::from_absolute_path(cwd)
+        .unwrap_or_else(|err| panic!("test policy cwd should be absolute: {err}"));
+    let file_system_sandbox_policy = file_system_sandbox_policy
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+    let permission_profile = codex_protocol::models::PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        codex_protocol::protocol::NetworkSandboxPolicy::Restricted,
+    );
+    codex_sandboxing::EffectiveFilesystemPermissions::from_profile(
+        &permission_profile,
+        codex_sandboxing::FilesystemPermissionsContext {
+            policy_evaluation_cwd: &cwd,
+        },
+    )
+    .unwrap_or_else(|err| {
+        panic!("test filesystem policy should yield effective permissions: {err}")
+    })
+}
+
+#[cfg(test)]
+fn create_filesystem_args(
+    file_system_sandbox_policy: &codex_protocol::protocol::FileSystemSandboxPolicy,
+    cwd: &Path,
+    glob_scan_max_depth: Option<usize>,
+) -> Result<BwrapArgs> {
+    let effective_filesystem_permissions =
+        effective_test_filesystem_permissions(file_system_sandbox_policy, cwd);
+    create_effective_filesystem_args(&effective_filesystem_permissions, cwd, glob_scan_max_depth)
+}
+
+#[cfg(test)]
+fn create_bwrap_command_args_for_policy(
+    command: Vec<String>,
+    file_system_sandbox_policy: &codex_protocol::protocol::FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+    command_cwd: &Path,
+    options: BwrapOptions,
+) -> Result<BwrapArgs> {
+    let effective_filesystem_permissions =
+        effective_test_filesystem_permissions(file_system_sandbox_policy, sandbox_policy_cwd);
+    create_bwrap_command_args(
+        command,
+        &effective_filesystem_permissions,
+        sandbox_policy_cwd,
+        command_cwd,
+        options,
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1360,7 +1385,7 @@ mod tests {
     #[test]
     fn full_disk_write_full_network_returns_unwrapped_command() {
         let command = vec!["/bin/true".to_string()];
-        let args = create_bwrap_command_args(
+        let args = create_bwrap_command_args_for_policy(
             command.clone(),
             &FileSystemSandboxPolicy::unrestricted(),
             Path::new("/"),
@@ -1379,7 +1404,7 @@ mod tests {
     #[test]
     fn full_disk_write_proxy_only_keeps_full_filesystem_but_unshares_network() {
         let command = vec!["/bin/true".to_string()];
-        let args = create_bwrap_command_args(
+        let args = create_bwrap_command_args_for_policy(
             command,
             &FileSystemSandboxPolicy::unrestricted(),
             Path::new("/"),
@@ -1431,7 +1456,7 @@ mod tests {
         ]);
         let command = vec!["/bin/true".to_string()];
 
-        let args = create_bwrap_command_args(
+        let args = create_bwrap_command_args_for_policy(
             command.clone(),
             &policy,
             temp_dir.path(),
@@ -1479,7 +1504,7 @@ mod tests {
             },
         ]);
 
-        let args = create_bwrap_command_args(
+        let args = create_bwrap_command_args_for_policy(
             vec!["/bin/true".to_string()],
             &policy,
             sandbox_policy_cwd.as_path(),
