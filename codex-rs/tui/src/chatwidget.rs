@@ -636,9 +636,9 @@ pub(crate) struct ChatWidget {
     show_welcome_banner: bool,
     // One-shot tooltip override for the primary startup session.
     startup_tooltip_override: Option<String>,
-    // When resuming an existing session (selected via resume picker), avoid an
-    // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
-    suppress_session_configured_redraw: bool,
+    // A replacement for the provisional session header has been queued for terminal history.
+    // Until it is committed, drawing would expose a transient composer-only frame.
+    session_header_commit_pending: bool,
     // During snapshot restore, defer startup prompt submission until replayed
     // history has been rendered so resumed/forked prompts keep chronological
     // order.
@@ -1497,10 +1497,24 @@ impl ChatWidget {
             false
         };
 
+        if merged_header {
+            self.session_header_commit_pending = true;
+        }
         self.flush_active_cell();
 
         if !merged_header && let Some(cell) = session_info_cell {
             self.add_boxed_history(cell);
+        }
+    }
+
+    pub(crate) fn is_session_header_commit_pending(&self) -> bool {
+        self.session_header_commit_pending
+    }
+
+    pub(crate) fn complete_session_header_commit_if_pending(&mut self, cell: &dyn HistoryCell) {
+        if self.session_header_commit_pending && cell.as_any().is::<history_cell::SessionInfoCell>()
+        {
+            self.session_header_commit_pending = false;
         }
     }
 

@@ -135,6 +135,78 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
     );
 }
 
+fn install_startup_placeholder_widget(app: &mut App) {
+    let config = app.config.clone();
+    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
+        config,
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        app_event_tx: app.app_event_tx.clone(),
+        workspace_command_runner: None,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        has_chatgpt_account: false,
+        model_catalog: app.model_catalog.clone(),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: false,
+        status_account_display: None,
+        runtime_model_provider_base_url: None,
+        initial_plan_type: None,
+        model: Some(model),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+        terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
+        session_telemetry: app.session_telemetry.clone(),
+    });
+}
+
+#[tokio::test]
+async fn startup_header_commit_defers_draw_until_session_info_is_committed() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    install_startup_placeholder_widget(&mut app);
+
+    app.chat_widget.handle_thread_session(test_thread_session(
+        ThreadId::new(),
+        test_path_buf("/tmp/project"),
+    ));
+
+    assert!(app.chat_widget.is_session_header_commit_pending());
+    assert!(app.should_defer_draw_for_session_header_commit(&crate::tui::TuiEvent::Draw));
+    assert!(app.should_defer_draw_for_session_header_commit(&crate::tui::TuiEvent::Resize));
+
+    let header = loop {
+        match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell))
+                if cell.as_any().is::<crate::history_cell::SessionInfoCell>() =>
+            {
+                break cell;
+            }
+            Ok(_) => continue,
+            other => panic!("expected queued configured header, got {other:?}"),
+        }
+    };
+    app.chat_widget
+        .complete_session_header_commit_if_pending(header.as_ref());
+
+    assert!(!app.chat_widget.is_session_header_commit_pending());
+    assert!(!app.should_defer_draw_for_session_header_commit(&crate::tui::TuiEvent::Draw));
+}
+
+#[tokio::test]
+async fn quiet_session_configuration_does_not_defer_draw_for_header_commit() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    install_startup_placeholder_widget(&mut app);
+
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(
+            ThreadId::new(),
+            test_path_buf("/tmp/project"),
+        ));
+
+    assert!(!app.chat_widget.is_session_header_commit_pending());
+    assert!(!app.should_defer_draw_for_session_header_commit(&crate::tui::TuiEvent::Draw));
+}
+
 #[tokio::test]
 async fn startup_thread_started_submits_queued_startup_input() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;

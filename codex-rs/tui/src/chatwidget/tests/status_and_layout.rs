@@ -1629,6 +1629,88 @@ async fn ui_snapshots_small_heights_task_running() {
 }
 
 #[tokio::test]
+async fn startup_header_handoff_visible_states_snapshot() {
+    let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+    let tx = AppEventSender::new(tx_raw);
+    let cfg = test_config().await;
+    let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
+    let init = ChatWidgetInit {
+        config: cfg.clone(),
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: tx,
+        workspace_command_runner: None,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        has_chatgpt_account: false,
+        model_catalog: test_model_catalog(&cfg),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: false,
+        status_account_display: None,
+        runtime_model_provider_base_url: None,
+        initial_plan_type: None,
+        model: Some(resolved_model.clone()),
+        startup_tooltip_override: Some("This is a test announcement".to_string()),
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        session_telemetry: test_session_telemetry(&cfg, resolved_model.as_str()),
+    };
+    let mut chat = ChatWidget::new_with_app_event(init);
+    chat.normal_placeholder_text = "Explain this codebase".to_string();
+    chat.bottom_pane
+        .set_placeholder_text(chat.normal_placeholder_text.clone());
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw placeholder header");
+    let placeholder = normalized_backend_snapshot(terminal.backend());
+
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "configured-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/tmp/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    });
+
+    assert!(chat.is_session_header_commit_pending());
+    let committed_header = loop {
+        match rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell))
+                if cell.as_any().is::<history_cell::SessionInfoCell>() =>
+            {
+                break lines_to_single_string(&cell.display_lines(width));
+            }
+            Ok(_) => continue,
+            other => panic!("expected queued configured header, got {other:?}"),
+        }
+    };
+
+    assert_chatwidget_snapshot!(
+        "startup_header_handoff_visible_states",
+        format!("provisional live frame:\n{placeholder}\n\ncommitted history:\n{committed_header}")
+    );
+}
+
+#[tokio::test]
 #[serial]
 async fn ambient_pet_stays_hidden_until_a_pet_is_selected() {
     use ratatui::layout::Rect;

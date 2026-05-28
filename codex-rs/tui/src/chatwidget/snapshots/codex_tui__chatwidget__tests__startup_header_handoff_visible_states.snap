@@ -1,0 +1,28 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "format!(\"provisional live frame:\\n{placeholder}\\n\\ncommitted history:\\n{committed_header}\")"
+---
+provisional live frame:
+"                                                                                "
+"╭───────────────────────────────────────╮                                       "
+"│ >_ OpenAI Codex (v0.0.0)              │                                       "
+"│                                       │                                       "
+"│ model:     loading   /model to change │                                       "
+"│ directory: /tmp/project               │                                       "
+"╰───────────────────────────────────────╯                                       "
+"                                                                                "
+"                                                                                "
+"› Explain this codebase                                                         "
+"                                                                                "
+"  gpt-5.5 default · /tmp/project                                                "
+
+
+committed history:
+╭────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)                       │
+│                                                │
+│ model:     configured-model   /model to change │
+│ directory: /tmp/project                        │
+╰────────────────────────────────────────────────╯
+
+  Tip: This is a test announcement

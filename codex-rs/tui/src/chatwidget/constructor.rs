@@ -187,7 +187,7 @@ impl ChatWidget {
             queued_message_edit_hint_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
-            suppress_session_configured_redraw: false,
+            session_header_commit_pending: false,
             suppress_initial_user_message_submit: false,
             pending_notification: None,
             quit_shortcut_expires_at: None,

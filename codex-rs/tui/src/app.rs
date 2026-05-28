@@ -1229,6 +1229,10 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if self.should_defer_draw_for_session_header_commit(&event) {
+            return Ok(AppRunControl::Continue);
+        }
+
         let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
         if terminal_resize_reflow_enabled && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
@@ -1303,6 +1307,11 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    fn should_defer_draw_for_session_header_commit(&self, event: &TuiEvent) -> bool {
+        self.chat_widget.is_session_header_commit_pending()
+            && matches!(event, TuiEvent::Draw | TuiEvent::Resize)
     }
 
     pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
