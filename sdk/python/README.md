@@ -3,9 +3,6 @@
 Build Python applications that start Codex threads, run turns, stream progress,
 and control workspace access.
 
-> [!NOTE]
-> `openai-codex` is in beta. Public APIs may change before `1.0`.
-
 ## Install
 
 Install the SDK:
