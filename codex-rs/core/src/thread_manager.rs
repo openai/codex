@@ -188,7 +188,6 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) initial_history: InitialHistory,
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
-    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
@@ -597,13 +596,14 @@ impl ThreadManager {
         let thread_source = options
             .thread_source
             .or_else(|| options.initial_history.get_resumed_thread_source());
+        let parent_multi_agent_version = options.initial_history.get_multi_agent_version();
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             session_source,
-            /*inherited_multi_agent_version*/ None,
+            parent_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             options.dynamic_tools,
@@ -643,7 +643,10 @@ impl ThreadManager {
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
-            InterruptedTurnHistoryMarker::from_config(&options.config),
+            InterruptedTurnHistoryMarker::from_config(
+                &options.config,
+                fork_source.codex.session.multi_agent_version,
+            ),
         );
         self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
             .await
@@ -898,7 +901,8 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
+        let interrupted_marker =
+            InterruptedTurnHistoryMarker::from_config(&config, history.get_multi_agent_version());
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -1032,7 +1036,7 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
-            /*inherited_multi_agent_version*/ None,
+            /*parent_multi_agent_version*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             /*persist_extended_history*/ false,
@@ -1050,7 +1054,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
+        parent_multi_agent_version: Option<MultiAgentVersion>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
@@ -1068,7 +1072,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
-            inherited_multi_agent_version,
+            parent_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1092,7 +1096,6 @@ impl ThreadManagerState {
             initial_history,
             agent_control,
             session_source,
-            inherited_multi_agent_version,
             inherited_shell_snapshot,
             inherited_exec_policy,
         } = options;
@@ -1105,7 +1108,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
-            inherited_multi_agent_version,
+            /*parent_multi_agent_version*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
@@ -1127,7 +1130,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         agent_control: AgentControl,
         session_source: SessionSource,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
+        parent_multi_agent_version: Option<MultiAgentVersion>,
         thread_source: Option<ThreadSource>,
         forked_from_thread_id: Option<ThreadId>,
         persist_extended_history: bool,
@@ -1144,7 +1147,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
-            inherited_multi_agent_version,
+            parent_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1176,13 +1179,14 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
+        let parent_multi_agent_version = initial_history.get_multi_agent_version();
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             auth_manager,
             agent_control,
             self.session_source.clone(),
-            /*inherited_multi_agent_version*/ None,
+            parent_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             dynamic_tools,
@@ -1205,7 +1209,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
+        parent_multi_agent_version: Option<MultiAgentVersion>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
@@ -1250,7 +1254,7 @@ impl ThreadManagerState {
         } = Codex::spawn(CodexSpawnArgs {
             config,
             installation_id: self.installation_id.clone(),
-            inherited_multi_agent_version,
+            parent_multi_agent_version,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),

@@ -20,8 +20,8 @@ use tokio::sync::Semaphore;
 pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     pub(crate) installation_id: String,
-    /// Parent turn's resolved selector for child sessions.
-    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+    /// Thread-scoped multi-agent runtime selector, resolved when the thread starts.
+    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) out_of_band_elicitation_paused: watch::Sender<bool>,
@@ -487,7 +487,7 @@ impl Session {
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         installation_id: String,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
+        multi_agent_version: Option<MultiAgentVersion>,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
         exec_policy: Arc<ExecPolicyManager>,
@@ -563,6 +563,7 @@ impl Session {
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
                                     model_provider: config.model_provider_id.clone(),
+                                    multi_agent_version,
                                     memory_mode: if config.memories.generate_memories {
                                         ThreadMemoryMode::Enabled
                                     } else {
@@ -585,6 +586,7 @@ impl Session {
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
                                     model_provider: config.model_provider_id.clone(),
+                                    multi_agent_version,
                                     memory_mode: if config.memories.generate_memories {
                                         ThreadMemoryMode::Enabled
                                     } else {
@@ -1059,7 +1061,7 @@ impl Session {
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
                 installation_id,
-                inherited_multi_agent_version,
+                multi_agent_version,
                 tx_event: tx_event.clone(),
                 agent_status,
                 out_of_band_elicitation_paused,

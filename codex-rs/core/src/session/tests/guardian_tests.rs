@@ -681,7 +681,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
-        inherited_multi_agent_version: None,
+        parent_multi_agent_version: None,
         auth_manager,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),

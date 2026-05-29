@@ -192,7 +192,6 @@ async fn try_resume_closed_agent(
             /*agent_role*/ None,
             /*task_name*/ None,
         )?,
-        turn.multi_agent_version,
     ))
     .await
     .map(|_| ())

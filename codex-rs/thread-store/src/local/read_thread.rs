@@ -281,6 +281,10 @@ async fn stored_thread_from_sqlite_metadata(
         .ok()
         .map(|meta_line| meta_line.meta);
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
+    let multi_agent_version = session_meta
+        .as_ref()
+        .map(|meta| meta.multi_agent_version)
+        .unwrap_or(metadata.multi_agent_version);
     let preview = metadata
         .preview
         .clone()
@@ -299,6 +303,7 @@ async fn stored_thread_from_sqlite_metadata(
         },
         model: metadata.model,
         reasoning_effort: metadata.reasoning_effort,
+        multi_agent_version,
         created_at: metadata.created_at,
         updated_at: metadata.updated_at,
         archived_at: metadata.archived_at,
@@ -365,6 +370,7 @@ fn stored_thread_from_meta_line(
             .unwrap_or_else(|| store.config.default_model_provider_id.clone()),
         model: None,
         reasoning_effort: None,
+        multi_agent_version: meta_line.meta.multi_agent_version,
         created_at,
         updated_at,
         archived_at: archived.then_some(updated_at),

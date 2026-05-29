@@ -511,14 +511,12 @@ impl AgentControl {
         config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
-        multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<ThreadId> {
         let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
         let resumed_thread_id = Box::pin(self.resume_single_agent_from_rollout(
             config.clone(),
             thread_id,
             session_source,
-            multi_agent_version,
         ))
         .await?;
         let state = self.upgrade()?;
@@ -571,7 +569,6 @@ impl AgentControl {
                         config.clone(),
                         child_thread_id,
                         child_session_source,
-                        multi_agent_version,
                     ))
                     .await
                     {
@@ -596,8 +593,16 @@ impl AgentControl {
         mut config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
-        multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<ThreadId> {
+        let state = self.upgrade()?;
+        let stored_thread = state
+            .read_stored_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: true,
+            })
+            .await?;
+        let multi_agent_version = stored_thread.multi_agent_version;
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
             && *depth >= config.agent_max_depth
             && multi_agent_version != Some(MultiAgentVersion::V2)
@@ -605,7 +610,6 @@ impl AgentControl {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
         }
-        let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
@@ -644,13 +648,6 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
-        let stored_thread = state
-            .read_stored_thread(ReadThreadParams {
-                thread_id,
-                include_archived: true,
-                include_history: true,
-            })
-            .await?;
         let history = stored_thread
             .history
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
@@ -666,7 +663,6 @@ impl AgentControl {
                 }),
                 agent_control: self.clone(),
                 session_source,
-                inherited_multi_agent_version: multi_agent_version,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
             })

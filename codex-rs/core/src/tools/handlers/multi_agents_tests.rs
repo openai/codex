@@ -32,6 +32,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
@@ -382,6 +383,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
         .expect("test config should allow feature update");
     let turn = TurnContext {
         config: Arc::new(config),
+        multi_agent_version: Some(MultiAgentVersion::V2),
         ..turn
     };
 
@@ -425,6 +427,7 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
@@ -892,6 +895,7 @@ async fn multi_agent_v2_full_history_fork_accepts_explicit_service_tier() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let manager = thread_manager();
     let root = manager
         .start_thread((*turn.config).clone())
@@ -959,6 +963,7 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
         .expect("test config should allow feature update");
     let turn = TurnContext {
         config: Arc::new(config),
+        multi_agent_version: Some(MultiAgentVersion::V2),
         ..turn
     };
 
@@ -1041,6 +1046,7 @@ async fn multi_agent_v2_spawn_requires_task_name() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let invocation = invocation(
         Arc::new(session),
@@ -1075,6 +1081,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_items_field() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let invocation = invocation(
         Arc::new(session),
@@ -1135,6 +1142,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -1232,6 +1240,7 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
@@ -1272,6 +1281,7 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
@@ -1312,6 +1322,7 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let err = SpawnAgentHandlerV2::default()
         .handle(invocation(
@@ -1352,6 +1363,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let child_path = AgentPath::try_from("/root/worker").expect("agent path");
     let child_thread_id = session
@@ -1428,6 +1440,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let child_path = AgentPath::try_from("/root/worker").expect("agent path");
     let child_thread_id = session
@@ -1506,6 +1519,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
     let mut config = (*turn.config).clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -1600,6 +1614,7 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
     let mut config = (*turn.config).clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
     turn.config = Arc::new(config.clone());
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let researcher_path = AgentPath::from_string("/root/researcher".to_string()).expect("path");
     let worker_path = AgentPath::from_string("/root/researcher/worker".to_string()).expect("path");
@@ -1687,6 +1702,7 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
     let mut config = (*turn.config).clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -1751,6 +1767,7 @@ async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
     let mut config = turn.config.as_ref().clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -1807,6 +1824,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
     let mut config = turn.config.as_ref().clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -1880,6 +1898,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     let mut config = turn.config.as_ref().clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -2015,6 +2034,7 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
     let mut config = turn.config.as_ref().clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -2068,6 +2088,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
     let mut config = turn.config.as_ref().clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -2148,6 +2169,7 @@ async fn multi_agent_v2_spawn_omits_agent_id_when_named() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let output = SpawnAgentHandlerV2::default()
         .handle(invocation(
@@ -2187,6 +2209,7 @@ async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let invocation = invocation(
         Arc::new(session),
@@ -2397,6 +2420,7 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let parent_path = AgentPath::try_from("/root/parent").expect("agent path");
     turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: root.thread_id,
@@ -2871,6 +2895,7 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -2956,6 +2981,7 @@ async fn multi_agent_v2_wait_agent_rejects_timeout_below_configured_min() {
     config.multi_agent_v2.max_wait_timeout_ms = 1_000;
     config.multi_agent_v2.default_wait_timeout_ms = 50;
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let Err(err) = WaitAgentHandlerV2::default()
         .handle(invocation(
@@ -2986,6 +3012,7 @@ async fn multi_agent_v2_wait_agent_accepts_explicit_timeout_at_configured_min() 
     config.multi_agent_v2.max_wait_timeout_ms = 1_000;
     config.multi_agent_v2.default_wait_timeout_ms = 50;
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let output = WaitAgentHandlerV2::default()
         .handle(invocation(
@@ -3021,6 +3048,7 @@ async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
     config.multi_agent_v2.max_wait_timeout_ms = 1_000;
     config.multi_agent_v2.default_wait_timeout_ms = 50;
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -3076,6 +3104,7 @@ async fn multi_agent_v2_wait_agent_allows_zero_configured_timeout() {
     config.multi_agent_v2.max_wait_timeout_ms = 0;
     config.multi_agent_v2.default_wait_timeout_ms = 0;
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -3116,6 +3145,7 @@ async fn multi_agent_v2_wait_agent_rejects_timeout_above_configured_max() {
     config.multi_agent_v2.max_wait_timeout_ms = 50;
     config.multi_agent_v2.default_wait_timeout_ms = 1;
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let Err(err) = WaitAgentHandlerV2::default()
         .handle(invocation(
@@ -3146,6 +3176,7 @@ async fn multi_agent_v2_wait_agent_accepts_explicit_timeout_at_configured_max() 
     config.multi_agent_v2.max_wait_timeout_ms = 1;
     config.multi_agent_v2.default_wait_timeout_ms = 1;
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let output = WaitAgentHandlerV2::default()
         .handle(invocation(
@@ -3354,6 +3385,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -3448,6 +3480,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -3529,6 +3562,7 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -3620,6 +3654,7 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -3709,6 +3744,7 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -3782,6 +3818,7 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
     turn.config = Arc::new(config.clone());
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -3888,6 +3925,7 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
         .enable(Feature::MultiAgentV2)
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
+    turn.multi_agent_version = Some(MultiAgentVersion::V2);
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);

@@ -54,6 +54,7 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
     metadata.agent_path = meta_line.meta.agent_path.clone();
+    metadata.multi_agent_version = meta_line.meta.multi_agent_version;
     if let Some(provider) = meta_line.meta.model_provider.as_deref() {
         metadata.model_provider = provider.to_string();
     }
@@ -330,6 +331,7 @@ mod tests {
                     agent_nickname: None,
                     agent_role: None,
                     model_provider: Some("openai".to_string()),
+                    multi_agent_version: None,
                     base_instructions: None,
                     dynamic_tools: None,
                     memory_mode: None,
@@ -452,6 +454,7 @@ mod tests {
                     agent_nickname: None,
                     agent_role: None,
                     model_provider: Some("openai".to_string()),
+                    multi_agent_version: None,
                     base_instructions: None,
                     dynamic_tools: None,
                     memory_mode: None,
@@ -481,6 +484,7 @@ mod tests {
             model_provider: "openai".to_string(),
             model: None,
             reasoning_effort: None,
+            multi_agent_version: None,
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             title: String::new(),

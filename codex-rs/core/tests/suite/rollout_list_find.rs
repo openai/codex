@@ -186,6 +186,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             /*forked_from_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
+            /*multi_agent_version*/ None,
             BaseInstructions::default(),
             Vec::new(),
         ),

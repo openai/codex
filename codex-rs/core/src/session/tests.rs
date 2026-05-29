@@ -3458,6 +3458,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
+                multi_agent_version: None,
                 memory_mode: if config.memories.generate_memories {
                     ThreadMemoryMode::Enabled
                 } else {
@@ -4494,7 +4495,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         session_configuration,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
-        /*inherited_multi_agent_version*/ None,
+        /*multi_agent_version*/ None,
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -4724,13 +4725,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
-        /*inherited_multi_agent_version*/ None,
+        /*multi_agent_version*/ None,
     );
 
     let session = Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
-        inherited_multi_agent_version: None,
+        multi_agent_version: None,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
@@ -4843,7 +4844,7 @@ async fn make_session_with_config_and_rx(
         session_configuration,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
-        /*inherited_multi_agent_version*/ None,
+        /*multi_agent_version*/ None,
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -4948,7 +4949,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         session_configuration,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
-        /*inherited_multi_agent_version*/ None,
+        /*multi_agent_version*/ None,
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -5958,6 +5959,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
+                multi_agent_version: None,
                 memory_mode: if config.memories.generate_memories {
                     ThreadMemoryMode::Enabled
                 } else {
@@ -6571,13 +6573,13 @@ where
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
-        /*inherited_multi_agent_version*/ None,
+        /*multi_agent_version*/ None,
     ));
 
     let session = Arc::new(Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
-        inherited_multi_agent_version: None,
+        multi_agent_version: None,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
@@ -7252,6 +7254,24 @@ async fn spawned_child_multi_agent_version_follows_parent_system() {
     assert_eq!(
         (resolved_from_v2_parent, resolved_from_v1_parent),
         (Some(MultiAgentVersion::V2), Some(MultiAgentVersion::V1),)
+    );
+}
+
+#[tokio::test]
+async fn model_switch_preserves_thread_multi_agent_version() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.multi_agent_version = Some(MultiAgentVersion::V1);
+
+    let switched_context = turn_context
+        .with_model(
+            turn_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+
+    assert_eq!(
+        switched_context.multi_agent_version,
+        Some(MultiAgentVersion::V1)
     );
 }
 

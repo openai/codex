@@ -212,6 +212,7 @@ async fn apply_metadata_update(
                     patch.source.clone().unwrap_or(SessionSource::Unknown),
                 );
                 builder.model_provider = patch.model_provider.clone();
+                builder.multi_agent_version = patch.multi_agent_version.flatten();
                 builder.thread_source = patch.thread_source.flatten();
                 builder.agent_nickname = patch.agent_nickname.clone().flatten();
                 builder.agent_role = patch.agent_role.clone().flatten();
@@ -244,6 +245,9 @@ async fn apply_metadata_update(
             }
             if let Some(reasoning_effort) = patch.reasoning_effort {
                 metadata.reasoning_effort = Some(reasoning_effort);
+            }
+            if let Some(multi_agent_version) = patch.multi_agent_version {
+                metadata.multi_agent_version = multi_agent_version;
             }
             if let Some(created_at) = patch.created_at {
                 metadata.created_at = created_at;
@@ -373,6 +377,7 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.model_provider.is_some()
         || patch.model.is_some()
         || patch.reasoning_effort.is_some()
+        || patch.multi_agent_version.is_some()
         || patch.created_at.is_some()
         || patch.source.is_some()
         || patch.thread_source.is_some()
@@ -1574,6 +1579,7 @@ mod tests {
         ThreadPersistenceMetadata {
             cwd: Some(std::env::current_dir().expect("cwd")),
             model_provider: "test-provider".to_string(),
+            multi_agent_version: None,
             memory_mode: ThreadMemoryMode::Enabled,
         }
     }

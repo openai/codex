@@ -337,6 +337,9 @@ fn stored_thread_from_state(
             .unwrap_or_else(|| "test".to_string()),
         model: metadata.and_then(|metadata| metadata.model.clone()),
         reasoning_effort: metadata.and_then(|metadata| metadata.reasoning_effort),
+        multi_agent_version: metadata
+            .and_then(|metadata| metadata.multi_agent_version)
+            .unwrap_or(created.metadata.multi_agent_version),
         created_at: metadata
             .and_then(|metadata| metadata.created_at)
             .unwrap_or_else(Utc::now),

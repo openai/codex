@@ -50,7 +50,6 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 
-use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::openai_models::MultiAgentVersion;
 pub(crate) use compact::CompactTask;
@@ -71,11 +70,14 @@ pub(crate) enum InterruptedTurnHistoryMarker {
 }
 
 impl InterruptedTurnHistoryMarker {
-    pub(crate) fn from_config(config: &Config) -> Self {
+    pub(crate) fn from_config(
+        config: &Config,
+        multi_agent_version: Option<MultiAgentVersion>,
+    ) -> Self {
         if !config.agent_interrupt_message_enabled {
             return Self::Disabled;
         }
-        if config.features.enabled(Feature::MultiAgentV2) {
+        if multi_agent_version == Some(MultiAgentVersion::V2) {
             Self::Developer
         } else {
             Self::ContextualUser

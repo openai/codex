@@ -43,6 +43,7 @@ use crate::models::ResponseItem;
 use crate::models::SandboxEnforcement;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
+use crate::openai_models::MultiAgentVersion;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
@@ -53,6 +54,7 @@ use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde_json::Value;
 use serde_with::serde_as;
@@ -2451,6 +2453,32 @@ impl InitialHistory {
             }
         }
     }
+
+    pub fn get_multi_agent_version(&self) -> Option<MultiAgentVersion> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            InitialHistory::Resumed(resumed) => resumed
+                .history
+                .iter()
+                .find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line)
+                        if meta_line.meta.id == resumed.conversation_id =>
+                    {
+                        Some(meta_line.meta.multi_agent_version)
+                    }
+                    _ => None,
+                })
+                .flatten(),
+            InitialHistory::Forked(items) => items
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.multi_agent_version),
+                    _ => None,
+                })
+                .flatten(),
+        }
+    }
 }
 
 fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
@@ -2687,6 +2715,13 @@ pub struct SessionMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_path: Option<String>,
     pub model_provider: Option<String>,
+    /// Thread-scoped multi-agent runtime selector.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_multi_agent_version",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
     /// from ModelsManager.
@@ -2695,6 +2730,18 @@ pub struct SessionMeta {
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mode: Option<String>,
+}
+
+fn deserialize_optional_multi_agent_version<'de, D>(
+    deserializer: D,
+) -> Result<Option<MultiAgentVersion>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(Value::String(value)).ok())
 }
 
 impl Default for SessionMeta {
@@ -2712,6 +2759,7 @@ impl Default for SessionMeta {
             agent_role: None,
             agent_path: None,
             model_provider: None,
+            multi_agent_version: None,
             base_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
@@ -5440,5 +5488,23 @@ mod tests {
                 .expect("new_or_append should return info");
 
         assert_eq!(info.model_context_window, Some(258_400));
+    }
+
+    #[test]
+    fn session_meta_treats_unknown_multi_agent_version_as_omitted() -> Result<()> {
+        let mut value = serde_json::to_value(SessionMeta::default())?;
+        value["multi_agent_version"] = json!("v3");
+
+        let meta: SessionMeta = serde_json::from_value(value)?;
+
+        assert_eq!(meta.multi_agent_version, None);
+        assert_eq!(
+            serde_json::to_value(meta)?
+                .as_object()
+                .expect("session meta should serialize as an object")
+                .get("multi_agent_version"),
+            None
+        );
+        Ok(())
     }
 }

@@ -226,6 +226,7 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
+use self::turn_context::resolve_multi_agent_version;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -393,7 +394,7 @@ pub struct CodexSpawnOk {
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) installation_id: String,
-    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) parent_multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -459,7 +460,7 @@ impl Codex {
         let CodexSpawnArgs {
             mut config,
             installation_id,
-            inherited_multi_agent_version,
+            parent_multi_agent_version,
             auth_manager,
             models_manager,
             environment_manager,
@@ -487,14 +488,6 @@ impl Codex {
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
-
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= config.agent_max_depth
-            && inherited_multi_agent_version != Some(MultiAgentVersion::V2)
-        {
-            let _ = config.features.disable(Feature::SpawnCsv);
-            let _ = config.features.disable(Feature::Collab);
-        }
 
         let primary_environment = environment_selections.primary_environment();
         let mut user_instruction_warnings = Vec::new();
@@ -546,6 +539,24 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        let multi_agent_version = match &conversation_history {
+            InitialHistory::Resumed(_) => conversation_history.get_multi_agent_version(),
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                resolve_multi_agent_version(
+                    &model_info,
+                    &config,
+                    &session_source,
+                    parent_multi_agent_version,
+                )
+            }
+        };
+        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
+            && depth >= config.agent_max_depth
+            && multi_agent_version != Some(MultiAgentVersion::V2)
+        {
+            let _ = config.features.disable(Feature::SpawnCsv);
+            let _ = config.features.disable(Feature::Collab);
+        }
         let base_instructions = config
             .base_instructions
             .clone()
@@ -613,7 +624,7 @@ impl Codex {
             session_configuration,
             config.clone(),
             installation_id,
-            inherited_multi_agent_version,
+            multi_agent_version,
             auth_manager.clone(),
             models_manager.clone(),
             exec_policy,

@@ -63,6 +63,7 @@ impl ThreadMetadataSync {
         };
         let update = ThreadMetadataPatch {
             model_provider: Some(params.metadata.model_provider.clone()),
+            multi_agent_version: Some(params.metadata.multi_agent_version),
             created_at: Some(created_at),
             updated_at: Some(created_at),
             source: Some(params.source.clone()),
@@ -205,6 +206,7 @@ impl ThreadMetadataSync {
                     update.agent_nickname = Some(meta_line.meta.agent_nickname.clone());
                     update.agent_role = Some(meta_line.meta.agent_role.clone());
                     update.agent_path = Some(meta_line.meta.agent_path.clone());
+                    update.multi_agent_version = Some(meta_line.meta.multi_agent_version);
                     if let Some(model_provider) = meta_line.meta.model_provider.clone()
                         && !model_provider.is_empty()
                     {
@@ -527,6 +529,7 @@ mod tests {
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
+                multi_agent_version: None,
                 memory_mode: ThreadMemoryMode::Enabled,
             },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,

@@ -32,6 +32,7 @@ pub(super) async fn create_thread(
             params.forked_from_id,
             params.source,
             params.thread_source,
+            params.metadata.multi_agent_version,
             params.base_instructions,
             params.dynamic_tools,
         ),

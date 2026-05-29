@@ -110,7 +110,7 @@ pub(crate) fn resolve_multi_agent_version(
     model_info: &ModelInfo,
     config: &Config,
     session_source: &SessionSource,
-    inherited_multi_agent_version: Option<MultiAgentVersion>,
+    parent_multi_agent_version: Option<MultiAgentVersion>,
 ) -> Option<MultiAgentVersion> {
     if is_guardian_reviewer_source(session_source)
         || matches!(
@@ -120,7 +120,7 @@ pub(crate) fn resolve_multi_agent_version(
     {
         return None;
     }
-    inherited_multi_agent_version.or_else(|| {
+    parent_multi_agent_version.or_else(|| {
         model_info.multi_agent_version.or_else(|| {
             if config.features.enabled(Feature::MultiAgentV2) {
                 Some(MultiAgentVersion::V2)
@@ -217,16 +217,7 @@ impl TurnContext {
                 ToolMode::Direct
             }
         });
-        let multi_agent_version = if self.session_source.is_non_root_agent() {
-            self.multi_agent_version
-        } else {
-            resolve_multi_agent_version(
-                &model_info,
-                &config,
-                &self.session_source,
-                /*inherited_multi_agent_version*/ None,
-            )
-        };
+        let multi_agent_version = self.multi_agent_version;
         let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
@@ -508,7 +499,7 @@ impl Session {
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
         goal_tools_supported: bool,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -542,12 +533,6 @@ impl Session {
                 ToolMode::Direct
             }
         });
-        let multi_agent_version = resolve_multi_agent_version(
-            &model_info,
-            &per_turn_config,
-            &session_source,
-            inherited_multi_agent_version,
-        );
         per_turn_config.service_tier = get_service_tier(
             per_turn_config.service_tier,
             per_turn_config.features.enabled(Feature::FastMode),
@@ -797,7 +782,7 @@ impl Session {
             sub_id,
             skills_outcome,
             goal_tools_supported,
-            self.inherited_multi_agent_version,
+            self.multi_agent_version,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
