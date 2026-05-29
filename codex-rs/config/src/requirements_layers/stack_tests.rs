@@ -365,7 +365,7 @@ fn network_maps_use_regular_toml_merge() {
 "internal.example.com" = "allow"
 
 [experimental_network.unix_sockets]
-"/tmp/shared.sock" = "none"
+"/tmp/shared.sock" = "deny"
 "/tmp/low.sock" = "allow"
 "/tmp/admin.sock" = "allow"
 "#,
@@ -382,7 +382,7 @@ fn network_maps_use_regular_toml_merge() {
 [experimental_network.unix_sockets]
 "/tmp/shared.sock" = "allow"
 "/tmp/high.sock" = "allow"
-"/tmp/admin.sock" = "none"
+"/tmp/admin.sock" = "deny"
 "#,
         ),
     ])
@@ -400,7 +400,7 @@ fn network_maps_use_regular_toml_merge() {
 "low.example.com" = "deny"
 
 [experimental_network.unix_sockets]
-"/tmp/admin.sock" = "none"
+"/tmp/admin.sock" = "deny"
 "/tmp/high.sock" = "allow"
 "/tmp/low.sock" = "allow"
 "/tmp/shared.sock" = "allow"
