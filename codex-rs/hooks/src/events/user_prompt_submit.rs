@@ -422,6 +422,7 @@ mod tests {
             event_name: HookEventName::UserPromptSubmit,
             matcher: None,
             command: "echo hook".to_string(),
+            environment_id: None,
             timeout_sec: 5,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),

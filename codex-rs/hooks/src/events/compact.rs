@@ -598,6 +598,7 @@ mod tests {
             event_name,
             matcher: None,
             command: "python3 compact_hook.py".to_string(),
+            environment_id: None,
             timeout_sec: 5,
             status_message: Some("running compact hook".to_string()),
             source_path: test_path_buf("/tmp/hooks.json").abs(),

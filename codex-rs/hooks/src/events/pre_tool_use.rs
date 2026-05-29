@@ -743,6 +743,7 @@ mod tests {
             event_name: HookEventName::PreToolUse,
             matcher: Some("^Bash$".to_string()),
             command: "echo hook".to_string(),
+            environment_id: None,
             timeout_sec: 5,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),

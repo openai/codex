@@ -17,6 +17,7 @@ use codex_config::MatcherGroup;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::TomlValue;
+use codex_exec_server::EnvironmentManager;
 use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
@@ -34,6 +35,14 @@ use crate::events::pre_tool_use::PreToolUseRequest;
 
 fn cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::current_dir().expect("current dir")
+}
+
+fn shell() -> CommandShell {
+    CommandShell {
+        program: String::new(),
+        args: Vec::new(),
+        environment_manager: std::sync::Arc::new(EnvironmentManager::default_for_tests()),
+    }
 }
 
 fn managed_hooks_for_current_platform(
@@ -63,6 +72,7 @@ fn pre_tool_use_hook_events(command: impl Into<String>) -> HookEventsToml {
             hooks: vec![HookHandlerConfig::Command {
                 command: command.into(),
                 command_windows: None,
+                environment_id: None,
                 timeout_sec: Some(10),
                 r#async: false,
                 status_message: Some("checking".to_string()),
@@ -170,6 +180,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                 hooks: vec![HookHandlerConfig::Command {
                     command: format!("python3 {}", script_path.display()),
                     command_windows: None,
+                    environment_id: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -200,10 +211,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -273,6 +281,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
                 hooks: vec![HookHandlerConfig::Command {
                     command: "exit 17".to_string(),
                     command_windows: Some("exit /B 19".to_string()),
+                    environment_id: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -303,10 +312,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     let outcome = engine
@@ -352,6 +358,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
                 hooks: vec![HookHandlerConfig::Command {
                     command: "python3 /tmp/managed.py".to_string(),
                     command_windows: None,
+                    environment_id: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -382,10 +389,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -420,6 +424,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
                 hooks: vec![HookHandlerConfig::Command {
                     command: "python3 /tmp/managed.py".to_string(),
                     command_windows: None,
+                    environment_id: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -464,10 +469,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -527,10 +529,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert_eq!(engine.handlers.len(), 1);
@@ -658,6 +657,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
                 hooks: vec![HookHandlerConfig::Command {
                     command: "echo hi".to_string(),
                     command_windows: None,
+                    environment_id: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -688,10 +688,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -744,10 +741,7 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -798,10 +792,7 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -868,10 +859,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert!(engine.handlers.is_empty());
@@ -907,10 +895,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
         Some(&config_layer_stack),
         plugin_hook_sources,
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert!(engine.handlers.is_empty());
@@ -979,10 +964,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert!(engine.warnings().is_empty());
@@ -1089,10 +1071,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
         Some(&config_layer_stack),
         Vec::new(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert!(engine.warnings().iter().any(|warning| {
@@ -1164,6 +1143,7 @@ print(json.dumps({
                 hooks: vec![HookHandlerConfig::Command {
                     command: format!("python3 {}", script_path.display()),
                     command_windows: None,
+                    environment_id: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: None,
@@ -1182,10 +1162,7 @@ print(json.dumps({
         Some(&config_layer_stack),
         plugin_hook_sources.clone(),
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
@@ -1278,6 +1255,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
                         "run ${PLUGIN_ROOT} ${CLAUDE_PLUGIN_ROOT} ${PLUGIN_DATA} ${CLAUDE_PLUGIN_DATA}"
                             .to_string(),
                     command_windows: None,
+                    environment_id: None,
                     timeout_sec: Some(5),
                     r#async: false,
                     status_message: None,
@@ -1296,10 +1274,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
         Some(&config_layer_stack),
         plugin_hook_sources,
         Vec::new(),
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert_eq!(
@@ -1340,11 +1315,75 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
         /*config_layer_stack*/ None,
         Vec::new(),
         vec!["failed plugin hook".to_string()],
-        CommandShell {
-            program: String::new(),
-            args: Vec::new(),
-        },
+        shell(),
     );
 
     assert_eq!(engine.warnings(), &["failed plugin hook".to_string()]);
+}
+
+#[test]
+fn structured_hooks_require_local_environment() {
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
+        /*config_layer_stack*/ None,
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+            environment_manager: std::sync::Arc::new(EnvironmentManager::without_environments()),
+        },
+    );
+
+    assert!(engine.handlers.is_empty());
+    assert_eq!(
+        engine.warnings(),
+        ["structured command hooks require a local execution environment"]
+    );
+}
+
+#[test]
+fn explicit_environment_id_is_listed_and_discovered() {
+    let config = serde_json::from_value(serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": "echo remote",
+                    "environmentId": "devbox",
+                }],
+            }],
+        },
+    }))
+    .expect("hooks config should deserialize");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: cwd().join("config.toml"),
+                profile: None,
+            },
+            config,
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ true,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        shell(),
+    );
+    let listed = crate::list_hooks(crate::HooksConfig {
+        feature_enabled: true,
+        bypass_hook_trust: true,
+        config_layer_stack: Some(config_layer_stack),
+        ..Default::default()
+    });
+
+    assert_eq!(engine.handlers[0].environment_id.as_deref(), Some("devbox"));
+    assert_eq!(listed.hooks[0].environment_id.as_deref(), Some("devbox"));
 }

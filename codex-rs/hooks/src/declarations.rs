@@ -66,6 +66,7 @@ mod tests {
                         HookHandlerConfig::Command {
                             command: "echo hi".to_string(),
                             command_windows: None,
+                            environment_id: None,
                             timeout_sec: None,
                             r#async: false,
                             status_message: None,

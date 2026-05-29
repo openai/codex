@@ -174,6 +174,7 @@ mod tests {
             event_name,
             matcher: matcher.map(str::to_owned),
             command: command.to_string(),
+            environment_id: None,
             timeout_sec: 5,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),

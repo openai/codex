@@ -1483,6 +1483,7 @@ impl Session {
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
             self.services.user_shell.as_ref(),
+            Arc::clone(&self.services.environment_manager),
         )
         .await;
 
@@ -3292,6 +3293,7 @@ async fn build_hooks_for_config(
     config: &Config,
     plugins_manager: &PluginsManager,
     user_shell: &crate::shell::Shell,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> Hooks {
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
@@ -3309,6 +3311,7 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
+        environment_manager,
     })
 }
 

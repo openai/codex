@@ -59,7 +59,11 @@ impl ExecProcess for MockExecProcess {
             }))
     }
 
-    async fn write(&self, _chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
+    async fn write(
+        &self,
+        _chunk: Option<Vec<u8>>,
+        _close_stdin: bool,
+    ) -> Result<WriteResponse, ExecServerError> {
         Ok(self.write_response.clone())
     }
 

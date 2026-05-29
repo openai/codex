@@ -431,6 +431,7 @@ fn append_matcher_groups(
                 HookHandlerConfig::Command {
                     command,
                     command_windows,
+                    environment_id,
                     timeout_sec,
                     r#async,
                     status_message,
@@ -458,6 +459,7 @@ fn append_matcher_groups(
                     let normalized_handler = HookHandlerConfig::Command {
                         command: command.clone(),
                         command_windows: None,
+                        environment_id: environment_id.clone(),
                         timeout_sec: Some(timeout_sec),
                         r#async,
                         status_message: status_message.clone(),
@@ -481,6 +483,7 @@ fn append_matcher_groups(
                         handler_type: HookHandlerType::Command,
                         matcher: matcher.map(ToOwned::to_owned),
                         command: Some(command.clone()),
+                        environment_id: environment_id.clone(),
                         timeout_sec,
                         status_message: status_message.clone(),
                         source_path: source.path.clone(),
@@ -503,6 +506,7 @@ fn append_matcher_groups(
                             event_name,
                             matcher: matcher.map(ToOwned::to_owned),
                             command,
+                            environment_id,
                             timeout_sec,
                             status_message,
                             source_path: source.path.clone(),
@@ -678,6 +682,7 @@ mod tests {
             hooks: vec![HookHandlerConfig::Command {
                 command: "echo hello".to_string(),
                 command_windows: None,
+                environment_id: None,
                 timeout_sec: None,
                 r#async: false,
                 status_message: None,
@@ -710,6 +715,7 @@ mod tests {
                 event_name: HookEventName::UserPromptSubmit,
                 matcher: None,
                 command: "echo hello".to_string(),
+                environment_id: None,
                 timeout_sec: 600,
                 status_message: None,
                 source_path: source_path.clone(),
@@ -745,6 +751,7 @@ mod tests {
                 event_name: HookEventName::PreToolUse,
                 matcher: Some("^Bash$".to_string()),
                 command: "echo hello".to_string(),
+                environment_id: None,
                 timeout_sec: 600,
                 status_message: None,
                 source_path: source_path.clone(),
@@ -891,6 +898,7 @@ mod tests {
                     hooks: vec![HookHandlerConfig::Command {
                         command: "echo hello".to_string(),
                         command_windows: None,
+                        environment_id: None,
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
@@ -921,6 +929,7 @@ mod tests {
                 hooks: vec![HookHandlerConfig::Command {
                     command: "echo unix".to_string(),
                     command_windows: Some("echo windows".to_string()),
+                    environment_id: None,
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,

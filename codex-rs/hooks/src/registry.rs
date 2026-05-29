@@ -1,5 +1,7 @@
 use codex_config::ConfigLayerStack;
+use codex_exec_server::EnvironmentManager;
 use codex_plugin::PluginHookSource;
+use std::sync::Arc;
 use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
@@ -26,7 +28,7 @@ use crate::types::HookEvent;
 use crate::types::HookPayload;
 use crate::types::HookResponse;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct HooksConfig {
     pub legacy_notify_argv: Option<Vec<String>>,
     pub feature_enabled: bool,
@@ -36,6 +38,23 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub environment_manager: Arc<EnvironmentManager>,
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self {
+            legacy_notify_argv: None,
+            feature_enabled: false,
+            bypass_hook_trust: false,
+            config_layer_stack: None,
+            plugin_hook_sources: Vec::new(),
+            plugin_hook_load_warnings: Vec::new(),
+            shell_program: None,
+            shell_args: Vec::new(),
+            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -73,6 +92,7 @@ impl Hooks {
             CommandShell {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
+                environment_manager: config.environment_manager,
             },
         );
         Self {
