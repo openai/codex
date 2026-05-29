@@ -443,7 +443,7 @@ mod tests {
 
     fn print_command(output: &str) -> String {
         if cfg!(windows) {
-            format!("echo|set /p={output}")
+            format!("<nul set /p={output} & exit /B 0")
         } else {
             format!("printf {output}")
         }
@@ -452,7 +452,7 @@ mod tests {
     fn echo_stdin_to_stdout_and_stderr_with_exit_code(exit_code: i32) -> String {
         if cfg!(windows) {
             format!(
-                "set /p input= & echo|set /p=%input% & echo|set /p=stderr 1>&2 & exit /B {exit_code}"
+                "set /p input= & <nul set /p=%input% & <nul set /p=stderr 1>&2 & exit /B {exit_code}"
             )
         } else {
             format!("cat; printf stderr >&2; exit {exit_code}")
