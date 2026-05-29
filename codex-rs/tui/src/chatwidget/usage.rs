@@ -501,7 +501,7 @@ fn usage_bar_empty_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
         ))
     } else {
         Style::default().fg(usage_best_color(
-            /*target*/ blend(/*fg*/ (255, 255, 255), bg, /*alpha*/ 0.3),
+            /*target*/ blend(/*fg*/ (255, 255, 255), bg, /*alpha*/ 0.22),
             Color::DarkGray,
         ))
     }
