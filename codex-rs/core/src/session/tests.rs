@@ -7215,6 +7215,38 @@ async fn build_initial_context_adds_multi_agent_v2_usage_hint_when_selector_is_v
 }
 
 #[tokio::test]
+async fn spawned_child_multi_agent_version_follows_parent_system() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let mut model_info = turn_context.model_info.clone();
+    model_info.multi_agent_version = Some(MultiAgentVersion::V1);
+    let v2_parent_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path should parse")),
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let resolved_from_v2_parent =
+        resolve_multi_agent_version(&model_info, turn_context.config.as_ref(), &v2_parent_source);
+
+    model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+    let v1_parent_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let resolved_from_v1_parent =
+        resolve_multi_agent_version(&model_info, turn_context.config.as_ref(), &v1_parent_source);
+
+    assert_eq!(
+        (resolved_from_v2_parent, resolved_from_v1_parent),
+        (Some(MultiAgentVersion::V2), Some(MultiAgentVersion::V1),)
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_omits_default_image_save_location_with_image_history() {
     let (session, turn_context) = make_session_and_context().await;
     session

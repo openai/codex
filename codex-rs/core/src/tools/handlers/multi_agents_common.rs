@@ -292,31 +292,6 @@ pub(crate) fn apply_spawn_agent_overrides(
     }
 }
 
-pub(crate) async fn resolve_multi_agent_version_for_config(
-    session: &Session,
-    config: &Config,
-) -> Result<Option<MultiAgentVersion>, FunctionCallError> {
-    let model = config.model.as_deref().ok_or_else(|| {
-        FunctionCallError::RespondToModel(
-            "spawn_agent could not resolve the child model runtime".to_string(),
-        )
-    })?;
-    let model_info = session
-        .services
-        .models_manager
-        .get_model_info(model, &config.to_models_manager_config())
-        .await;
-    Ok(model_info.multi_agent_version.or_else(|| {
-        if config.features.enabled(Feature::MultiAgentV2) {
-            Some(MultiAgentVersion::V2)
-        } else if config.features.enabled(Feature::Collab) {
-            Some(MultiAgentVersion::V1)
-        } else {
-            None
-        }
-    }))
-}
-
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     session: &Session,
     turn: &TurnContext,

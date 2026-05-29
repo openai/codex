@@ -1,5 +1,4 @@
 use super::*;
-use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
@@ -58,15 +57,11 @@ pub(super) async fn spawn_review_thread(
             ToolMode::Direct
         }
     });
-    let multi_agent_version = model_info.multi_agent_version.or_else(|| {
-        if per_turn_config.features.enabled(Feature::MultiAgentV2) {
-            Some(MultiAgentVersion::V2)
-        } else if per_turn_config.features.enabled(Feature::Collab) {
-            Some(MultiAgentVersion::V1)
-        } else {
-            None
-        }
-    });
+    let multi_agent_version = resolve_multi_agent_version(
+        &model_info,
+        &per_turn_config,
+        &parent_turn_context.session_source,
+    );
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(

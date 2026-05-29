@@ -666,8 +666,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
-                parent_multi_agent_version: Some(MultiAgentVersion::V2),
-                child_multi_agent_version: Some(MultiAgentVersion::V2),
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
             },
         )
@@ -1327,8 +1326,7 @@ async fn spawn_agent_uses_multi_agent_v2_selector_thread_limit() {
     config.agent_max_threads = Some(4);
     config.multi_agent_v2.max_concurrent_threads_per_session = 2;
     let options = SpawnAgentOptions {
-        parent_multi_agent_version: Some(MultiAgentVersion::V2),
-        child_multi_agent_version: Some(MultiAgentVersion::V2),
+        multi_agent_version: Some(MultiAgentVersion::V2),
         ..Default::default()
     };
 
@@ -2673,6 +2671,8 @@ async fn resume_closed_child_reopens_open_descendants() {
 async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdown() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let child_path = AgentPath::root().join("explorer").expect("child path");
+    let grandchild_path = child_path.join("worker").expect("grandchild path");
 
     let child_thread_id = harness
         .control
@@ -2682,7 +2682,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
-                agent_path: None,
+                agent_path: Some(child_path.clone()),
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
@@ -2697,7 +2697,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
                 depth: 2,
-                agent_path: None,
+                agent_path: Some(grandchild_path.clone()),
                 agent_nickname: None,
                 agent_role: Some("worker".to_string()),
             })),
@@ -2736,7 +2736,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
-            /*multi_agent_version*/ None,
+            /*multi_agent_version*/ Some(MultiAgentVersion::V2),
         )
         .await
         .expect("tree resume should succeed");
@@ -2752,6 +2752,29 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
     assert_ne!(
         harness.control.get_status(grandchild_thread_id).await,
         AgentStatus::NotFound
+    );
+    let child_source = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("resumed child thread should exist")
+        .config_snapshot()
+        .await
+        .session_source;
+    let grandchild_source = harness
+        .manager
+        .get_thread(grandchild_thread_id)
+        .await
+        .expect("resumed grandchild thread should exist")
+        .config_snapshot()
+        .await
+        .session_source;
+    assert_eq!(
+        (
+            child_source.get_agent_path(),
+            grandchild_source.get_agent_path()
+        ),
+        (Some(child_path), Some(grandchild_path))
     );
 
     let _ = harness

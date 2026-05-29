@@ -224,8 +224,7 @@ async fn run_agent_job_loop(
                         )))),
                         SpawnAgentOptions {
                             environments: Some(turn.environments.to_selections()),
-                            parent_multi_agent_version: options.multi_agent_version,
-                            child_multi_agent_version: options.multi_agent_version,
+                            multi_agent_version: options.multi_agent_version,
                             ..Default::default()
                         },
                     )

@@ -226,6 +226,7 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
+use self::turn_context::resolve_multi_agent_version;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -536,15 +537,8 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let multi_agent_version = model_info.multi_agent_version.or_else(|| {
-            if config.features.enabled(Feature::MultiAgentV2) {
-                Some(MultiAgentVersion::V2)
-            } else if config.features.enabled(Feature::Collab) {
-                Some(MultiAgentVersion::V1)
-            } else {
-                None
-            }
-        });
+        let multi_agent_version =
+            resolve_multi_agent_version(&model_info, &config, &session_source);
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
             && *depth >= config.agent_max_depth
             && multi_agent_version != Some(MultiAgentVersion::V2)
@@ -1654,16 +1648,12 @@ impl Session {
         }
     }
 
-    /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
+    /// Forwards terminal turn events from children spawned by a MultiAgentV2 parent.
     async fn maybe_notify_parent_of_terminal_turn(
         &self,
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if turn_context.multi_agent_version != Some(MultiAgentVersion::V2) {
-            return;
-        }
-
         if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
             return;
         }

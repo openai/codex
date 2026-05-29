@@ -6,8 +6,11 @@ use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
@@ -101,6 +104,32 @@ pub struct TurnContext {
     pub(crate) server_model_warning_emitted: AtomicBool,
     pub(crate) model_verification_emitted: AtomicBool,
 }
+
+pub(crate) fn resolve_multi_agent_version(
+    model_info: &ModelInfo,
+    config: &Config,
+    session_source: &SessionSource,
+) -> Option<MultiAgentVersion> {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            agent_path: Some(_),
+            ..
+        }) => Some(MultiAgentVersion::V2),
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            agent_path: None, ..
+        }) => Some(MultiAgentVersion::V1),
+        _ => model_info.multi_agent_version.or_else(|| {
+            if config.features.enabled(Feature::MultiAgentV2) {
+                Some(MultiAgentVersion::V2)
+            } else if config.features.enabled(Feature::Collab) {
+                Some(MultiAgentVersion::V1)
+            } else {
+                None
+            }
+        }),
+    }
+}
+
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
@@ -185,15 +214,8 @@ impl TurnContext {
                 ToolMode::Direct
             }
         });
-        let multi_agent_version = model_info.multi_agent_version.or_else(|| {
-            if config.features.enabled(Feature::MultiAgentV2) {
-                Some(MultiAgentVersion::V2)
-            } else if config.features.enabled(Feature::Collab) {
-                Some(MultiAgentVersion::V1)
-            } else {
-                None
-            }
-        });
+        let multi_agent_version =
+            resolve_multi_agent_version(&model_info, &config, &self.session_source);
         let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
@@ -508,15 +530,8 @@ impl Session {
                 ToolMode::Direct
             }
         });
-        let multi_agent_version = model_info.multi_agent_version.or_else(|| {
-            if per_turn_config.features.enabled(Feature::MultiAgentV2) {
-                Some(MultiAgentVersion::V2)
-            } else if per_turn_config.features.enabled(Feature::Collab) {
-                Some(MultiAgentVersion::V1)
-            } else {
-                None
-            }
-        });
+        let multi_agent_version =
+            resolve_multi_agent_version(&model_info, &per_turn_config, &session_source);
         per_turn_config.service_tier = get_service_tier(
             per_turn_config.service_tier,
             per_turn_config.features.enabled(Feature::FastMode),

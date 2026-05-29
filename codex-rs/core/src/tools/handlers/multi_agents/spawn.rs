@@ -109,9 +109,7 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-    let child_multi_agent_version =
-        resolve_multi_agent_version_for_config(&session, &config).await?;
-    apply_spawn_agent_overrides(&mut config, child_depth, child_multi_agent_version);
+    apply_spawn_agent_overrides(&mut config, child_depth, turn.multi_agent_version);
 
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
@@ -127,8 +125,7 @@ async fn handle_spawn_agent(
             fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
             environments: Some(turn.environments.to_selections()),
-            parent_multi_agent_version: turn.multi_agent_version,
-            child_multi_agent_version,
+            multi_agent_version: turn.multi_agent_version,
         },
     ))
     .await
