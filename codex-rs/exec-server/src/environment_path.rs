@@ -312,7 +312,7 @@ mod tests {
 
         let left = EnvironmentPathRef::new(same_file_system.clone(), path.clone());
         let same = EnvironmentPathRef::new(same_file_system, path.clone());
-        let different_path = EnvironmentPathRef::new(file_system.clone(), path.parent().unwrap());
+        let different_path = EnvironmentPathRef::new(file_system, path.parent().unwrap());
         let different_fs = EnvironmentPathRef::new(different_file_system, path);
 
         assert_eq!(left, same);
