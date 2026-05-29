@@ -12,8 +12,10 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::path_normalization::canonicalize_path;
@@ -207,7 +209,8 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let log_dir = sandbox_dir(request.codex_home);
+    let exe = find_setup_exe(request.codex_home, Some(&log_dir));
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -219,14 +222,14 @@ fn run_setup_refresh_inner(
             cwd.display(),
             b64.len()
         ),
-        Some(&sandbox_dir(request.codex_home)),
+        Some(&log_dir),
     );
     let status = cmd
         .status()
         .map_err(|e| {
             log_note(
                 &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-                Some(&sandbox_dir(request.codex_home)),
+                Some(&log_dir),
             );
             e
         })
@@ -234,7 +237,7 @@ fn run_setup_refresh_inner(
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
-            Some(&sandbox_dir(request.codex_home)),
+            Some(&log_dir),
         );
         return Err(anyhow!("setup refresh failed with status {status}"));
     }
@@ -630,13 +633,8 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
-    {
-        return setup_exe;
-    }
-    PathBuf::from(SETUP_EXE_FILENAME)
+fn find_setup_exe(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
+    resolve_helper_for_launch(HelperExecutable::Setup, codex_home, log_dir)
 }
 
 fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
@@ -673,7 +671,8 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let sandbox_log_dir = sandbox_dir(codex_home);
+    let exe = find_setup_exe(codex_home, Some(&sandbox_log_dir));
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
@@ -766,35 +765,141 @@ fn run_setup_exe(
     }
     if let Err(err) = clear_setup_error_report(codex_home) {
         log_note(
-            &format!("setup orchestrator: failed to clear setup_error.json after success: {err}"),
+            &format!(
+                "setup orchestrator: failed to clear setup_error.json after success: {err}"
+            ),
             Some(&sandbox_dir(codex_home)),
         );
     }
     Ok(())
 }
 
-pub fn run_elevated_setup(
-    request: SandboxSetupRequest<'_>,
-    overrides: SetupRootOverrides,
+fn run_setup_exe_no_uac(
+    payload: &ElevationPayload,
+    codex_home: &Path,
 ) -> Result<()> {
-    if !request.permissions.is_enforceable_by_windows_sandbox() {
-        anyhow::bail!("unsupported filesystem permissions for Windows sandbox setup");
-    }
-    // Ensure the shared sandbox directory exists before we send it to the elevated helper.
-    let sbx_dir = sandbox_dir(request.codex_home);
-    std::fs::create_dir_all(&sbx_dir).map_err(|err| {
+    let exe = find_setup_exe_for_current_exe(
+        &std::env::current_exe().context("resolve current executable for setup helper lookup")?,
+    )
+    .unwrap_or_else(|| PathBuf::from(SETUP_EXE_FILENAME));
+    let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
-            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
-            format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
+            SetupErrorCode::OrchestratorPayloadSerializeFailed,
+            format!("failed to serialize elevation payload: {err}"),
         )
     })?;
-    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
-    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
-    let network_identity =
-        SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
-    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
-    let payload = ElevationPayload {
+    let payload_b64 = BASE64_STANDARD.encode(payload_json.as_bytes());
+    let status = Command::new(&exe)
+        .arg(&payload_b64)
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorHelperLaunchFailed,
+                format!("failed to launch setup helper (non-elevated): {err}"),
+            )
+        })?;
+    if !status.success() {
+        return Err(report_helper_failure(
+            codex_home,
+            true,
+            status.code(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn ensure_setup(
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    proxy_enforced: bool,
+) -> Result<()> {
+    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+        permission_profile,
+        workspace_roots,
+    )
+    .map_err(|_| {
+        failure(
+            SetupErrorCode::OrchestratorUnsupportedPermissions,
+            "unsupported filesystem permissions for Windows sandbox setup".to_string(),
+        )
+    })?;
+    let request = SandboxSetupRequest {
+        permissions: &permissions,
+        command_cwd,
+        env_map,
+        codex_home,
+        proxy_enforced,
+    };
+    let marker = read_setup_marker(codex_home)?;
+    let network_identity = SandboxNetworkIdentity::from_permissions(&permissions, proxy_enforced);
+    let offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
+    if let Some(ref marker) = marker
+        && marker.version_matches()
+        && marker
+            .request_mismatch_reason(network_identity, &offline_proxy_settings)
+            .is_none()
+    {
+        return Ok(());
+    }
+
+    let needs_elevation = is_elevated().is_err() || !is_elevated()?;
+    let payload = build_setup_payload(&request, &SetupRootOverrides::default(), &offline_proxy_settings)?;
+    if needs_elevation {
+        run_setup_exe(&payload, true, codex_home)
+    } else {
+        run_setup_exe(&payload, false, codex_home)
+    }
+}
+
+pub fn ensure_setup_no_uac(
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    proxy_enforced: bool,
+) -> Result<()> {
+    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+        permission_profile,
+        workspace_roots,
+    )
+    .map_err(|_| {
+        failure(
+            SetupErrorCode::OrchestratorUnsupportedPermissions,
+            "unsupported filesystem permissions for Windows sandbox setup".to_string(),
+        )
+    })?;
+    let request = SandboxSetupRequest {
+        permissions: &permissions,
+        command_cwd,
+        env_map,
+        codex_home,
+        proxy_enforced,
+    };
+    let offline_proxy_settings = offline_proxy_settings_from_env(
+        env_map,
+        SandboxNetworkIdentity::from_permissions(&permissions, proxy_enforced),
+    );
+    let payload = build_setup_payload(&request, &SetupRootOverrides::default(), &offline_proxy_settings)?;
+    run_setup_exe_no_uac(&payload, codex_home)
+}
+
+fn build_setup_payload(
+    request: &SandboxSetupRequest<'_>,
+    overrides: &SetupRootOverrides,
+    offline_proxy_settings: &OfflineProxySettings,
+) -> Result<ElevationPayload> {
+    let (read_roots, write_roots) = build_payload_roots(request, overrides);
+    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths.clone());
+    let deny_write_paths = build_payload_deny_write_paths(request, overrides.deny_write_paths.clone());
+    Ok(ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
@@ -804,45 +909,29 @@ pub fn run_elevated_setup(
         write_roots,
         deny_read_paths,
         deny_write_paths,
-        proxy_ports: offline_proxy_settings.proxy_ports,
+        proxy_ports: offline_proxy_settings.proxy_ports.clone(),
         allow_local_binding: offline_proxy_settings.allow_local_binding,
+        otel: None,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
-        otel: codex_otel::global_statsig_metrics_settings(),
         refresh_only: false,
-    };
-    let needs_elevation = !is_elevated().map_err(|err| {
-        failure(
-            SetupErrorCode::OrchestratorElevationCheckFailed,
-            format!("failed to determine elevation state: {err}"),
-        )
-    })?;
-    run_setup_exe(&payload, needs_elevation, request.codex_home)
+    })
 }
 
 fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let write_roots = effective_write_roots_for_setup(
-        request.permissions,
-        request.command_cwd,
-        request.env_map,
-        request.codex_home,
-        overrides.write_roots.as_deref(),
-    );
-    let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
-        // An explicit override is the split policy's complete readable set. Keep only the
-        // helper/platform roots the elevated setup needs; do not re-add legacy cwd/full-read roots.
-        let mut read_roots = gather_helper_read_roots(request.codex_home);
+    let read_roots = if let Some(roots) = overrides.read_roots.as_ref() {
+        let mut effective = gather_helper_read_roots(request.codex_home);
         if overrides.read_roots_include_platform_defaults {
-            read_roots.extend(
+            effective.extend(
                 WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
                     .iter()
                     .map(PathBuf::from),
             );
         }
-        read_roots.extend(roots.iter().cloned());
-        canonical_existing(&read_roots)
+        effective.extend(roots.iter().cloned());
+        canonical_existing(&effective)
     } else {
         gather_read_roots(
             request.command_cwd,
@@ -851,160 +940,155 @@ fn build_payload_roots(
             request.codex_home,
         )
     };
-    read_roots = expand_user_profile_root(read_roots);
-    read_roots = filter_user_profile_root(read_roots);
-    read_roots = filter_user_profile_root_exclusions(read_roots);
-    read_roots = filter_ssh_config_dependency_roots(read_roots);
-    let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
-    read_roots.retain(|root| !write_root_set.contains(root));
+    let write_roots = effective_write_roots_for_setup(
+        request.permissions,
+        request.command_cwd,
+        request.env_map,
+        request.codex_home,
+        overrides.write_roots.as_deref(),
+    );
     (read_roots, write_roots)
+}
+
+fn build_payload_deny_read_paths(paths: Option<Vec<PathBuf>>) -> Vec<PathBuf> {
+    paths.unwrap_or_default()
 }
 
 fn build_payload_deny_write_paths(
     request: &SandboxSetupRequest<'_>,
-    explicit_deny_write_paths: Option<Vec<PathBuf>>,
+    paths: Option<Vec<PathBuf>>,
 ) -> Vec<PathBuf> {
-    let allow_deny_paths: AllowDenyPaths = compute_allow_paths_for_permissions(
+    let mut deny_write_paths = paths.unwrap_or_default();
+
+    let write_roots = effective_write_roots_for_setup(
         request.permissions,
         request.command_cwd,
         request.env_map,
+        request.codex_home,
+        None,
     );
-    let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
-        .unwrap_or_default()
-        .into_iter()
-        .map(|path| canonicalize_path(&path))
-        .collect();
-    deny_write_paths.extend(allow_deny_paths.deny);
-    deny_write_paths
-}
+    let protected_children = [".git", ".codex"];
+    for root in write_roots {
+        for child in protected_children {
+            let candidate = root.join(child);
+            if candidate.exists() {
+                deny_write_paths.push(candidate);
+            }
+        }
+    }
 
-fn build_payload_deny_read_paths(explicit_deny_read_paths: Option<Vec<PathBuf>>) -> Vec<PathBuf> {
-    // Keep the configured spelling here so the ACL layer can plan both the
-    // lexical path and any existing canonical target for reparse-point aliases.
-    explicit_deny_read_paths.unwrap_or_default()
+    let mut dedup: HashSet<PathBuf> = HashSet::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    for r in canonical_existing(&deny_write_paths) {
+        if dedup.insert(r.clone()) {
+            out.push(r);
+        }
+    }
+    out
 }
 
 fn expand_user_profile_root(roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    let Ok(user_profile) = std::env::var("USERPROFILE") else {
-        return roots;
-    };
-    expand_user_profile_root_for(roots, Path::new(&user_profile))
+    if let Ok(up) = std::env::var("USERPROFILE") {
+        return expand_user_profile_root_for(roots, Path::new(&up));
+    }
+    roots
 }
 
 fn expand_user_profile_root_for(roots: Vec<PathBuf>, user_profile: &Path) -> Vec<PathBuf> {
     let user_profile_key = canonical_path_key(user_profile);
-    let mut expanded = Vec::new();
+    let mut out = Vec::new();
     for root in roots {
         if canonical_path_key(&root) == user_profile_key {
-            expanded.extend(profile_read_roots(user_profile));
+            out.extend(profile_read_roots(user_profile));
         } else {
-            expanded.push(root);
+            out.push(root);
         }
     }
-
-    expanded.sort_by_key(|root| canonical_path_key(root));
-    expanded.dedup_by(|a, b| canonical_path_key(a.as_path()) == canonical_path_key(b.as_path()));
-    expanded
+    out
 }
 
-fn filter_user_profile_root(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    let Ok(user_profile) = std::env::var("USERPROFILE") else {
-        return roots;
-    };
-    let user_profile_key = canonical_path_key(Path::new(&user_profile));
-    roots.retain(|root| canonical_path_key(root) != user_profile_key);
+fn filter_user_profile_root(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    if let Ok(up) = std::env::var("USERPROFILE") {
+        let user_profile_key = canonical_path_key(Path::new(&up));
+        return roots
+            .into_iter()
+            .filter(|root| canonical_path_key(root) != user_profile_key)
+            .collect();
+    }
     roots
 }
 
-fn filter_user_profile_root_exclusions(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    let Ok(user_profile) = std::env::var("USERPROFILE") else {
-        return roots;
-    };
-    let user_profile = Path::new(&user_profile);
-    roots.retain(|root| !is_user_profile_root_exclusion(root, user_profile));
-    roots
-}
-
-fn is_user_profile_root_exclusion(root: &Path, user_profile: &Path) -> bool {
-    let root_key = canonical_path_key(root);
-    let profile_key = canonical_path_key(user_profile);
-    let profile_prefix = format!("{}/", profile_key.trim_end_matches('/'));
-    let Some(relative_key) = root_key.strip_prefix(&profile_prefix) else {
+fn is_user_profile_root_exclusion(path: &Path, user_profile: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(user_profile) else {
         return false;
     };
-    let Some(child_name) = relative_key
-        .split('/')
-        .next()
-        .filter(|name| !name.is_empty())
-    else {
+    let mut components = relative.components();
+    let Some(first) = components.next() else {
         return false;
     };
-
+    let first = first.as_os_str().to_string_lossy();
     USERPROFILE_ROOT_EXCLUSIONS
         .iter()
-        .any(|excluded| child_name.eq_ignore_ascii_case(excluded))
+        .any(|excluded| first.eq_ignore_ascii_case(excluded))
 }
 
-fn filter_ssh_config_dependency_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    let Ok(user_profile) = std::env::var("USERPROFILE") else {
-        return roots;
-    };
-    let user_profile = Path::new(&user_profile);
-    let dependency_paths = ssh_config_dependency_paths(user_profile);
-    roots.retain(|root| !is_ssh_config_dependency_root(root, user_profile, &dependency_paths));
+fn filter_user_profile_root_exclusions(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    if let Ok(up) = std::env::var("USERPROFILE") {
+        let user_profile = PathBuf::from(up);
+        return roots
+            .into_iter()
+            .filter(|root| !is_user_profile_root_exclusion(root, &user_profile))
+            .collect();
+    }
     roots
 }
 
 fn is_ssh_config_dependency_root(
-    root: &Path,
+    path: &Path,
     user_profile: &Path,
-    dependency_paths: &[PathBuf],
+    dependency_paths: &HashSet<PathBuf>,
 ) -> bool {
-    let Some(child_name) = user_profile_child_name(root, user_profile) else {
-        return false;
-    };
-
-    dependency_paths.iter().any(|path| {
-        user_profile_child_name(path, user_profile)
-            .is_some_and(|dependency_child| child_name.eq_ignore_ascii_case(&dependency_child))
+    dependency_paths.iter().any(|dependency| {
+        dependency == path
+            || dependency.starts_with(path)
+            || (path.starts_with(user_profile) && dependency.starts_with(path))
     })
 }
 
-fn user_profile_child_name(path: &Path, user_profile: &Path) -> Option<String> {
-    let root_key = canonical_path_key(path);
-    let profile_key = canonical_path_key(user_profile);
-    let profile_prefix = format!("{}/", profile_key.trim_end_matches('/'));
-    let relative_key = root_key.strip_prefix(&profile_prefix)?;
-    relative_key
-        .split('/')
-        .next()
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
+fn filter_ssh_config_dependency_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    if let Ok(up) = std::env::var("USERPROFILE") {
+        let user_profile = PathBuf::from(up);
+        let dependency_paths = ssh_config_dependency_paths(&user_profile);
+        return roots
+            .into_iter()
+            .filter(|root| !is_ssh_config_dependency_root(root, &user_profile, &dependency_paths))
+            .collect();
+    }
+    roots
 }
 
-fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
-    // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox,
-    // CODEX_HOME/.sandbox-bin, or CODEX_HOME/.sandbox-secrets. These locations contain sandbox
-    // control/state and helper binaries and must remain tamper-resistant.
+fn filter_sensitive_write_roots(roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
     let codex_home_key = canonical_path_key(codex_home);
-    let sbx_dir_key = canonical_path_key(&sandbox_dir(codex_home));
-    let sbx_dir_prefix = format!("{}/", sbx_dir_key.trim_end_matches('/'));
-    let sbx_bin_dir_key = canonical_path_key(&sandbox_bin_dir(codex_home));
-    let sbx_bin_dir_prefix = format!("{}/", sbx_bin_dir_key.trim_end_matches('/'));
-    let secrets_dir_key = canonical_path_key(&sandbox_secrets_dir(codex_home));
-    let secrets_dir_prefix = format!("{}/", secrets_dir_key.trim_end_matches('/'));
-
-    roots.retain(|root| {
+    let sbx_dir = sandbox_dir(codex_home);
+    let sbx_dir_key = canonical_path_key(&sbx_dir);
+    let sbx_bin_dir = sandbox_bin_dir(codex_home);
+    let sbx_bin_dir_key = canonical_path_key(&sbx_bin_dir);
+    let secrets_dir = sandbox_secrets_dir(codex_home);
+    let secrets_dir_key = canonical_path_key(&secrets_dir);
+    let sbx_dir_prefix = format!("{}\\", sbx_dir_key);
+    let sbx_bin_dir_prefix = format!("{}\\", sbx_bin_dir_key);
+    let secrets_dir_prefix = format!("{}\\", secrets_dir_key);
+    roots.into_iter().filter(|root| {
         let key = canonical_path_key(root);
         key != codex_home_key
+            && !key.starts_with(&(codex_home_key.clone() + "\\"))
             && key != sbx_dir_key
             && !key.starts_with(&sbx_dir_prefix)
             && key != sbx_bin_dir_key
             && !key.starts_with(&sbx_bin_dir_prefix)
             && key != secrets_dir_key
             && !key.starts_with(&secrets_dir_prefix)
-    });
-    roots
+    }).collect()
 }
 
 #[cfg(test)]
