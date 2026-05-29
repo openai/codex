@@ -15201,6 +15201,13 @@
             },
             "type": "array"
           },
+          "environmentId": {
+            "description": "Environment whose filesystem should be used for all requested cwd values.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "forceReload": {
             "description": "When true, bypass the skills cache and re-scan skills from disk.",
             "type": "boolean"

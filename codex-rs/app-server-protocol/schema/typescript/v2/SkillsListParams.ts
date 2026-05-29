@@ -8,6 +8,10 @@ export type SkillsListParams = {
  */
 cwds?: Array<string>,
 /**
+ * Environment whose filesystem should be used for all requested cwd values.
+ */
+environmentId?: string | null,
+/**
  * When true, bypass the skills cache and re-scan skills from disk.
  */
 forceReload?: boolean, };
