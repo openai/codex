@@ -1,0 +1,32 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 3316604..fcdd7c7 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -84,7 +84,7 @@ pub fn custom_dir() -> Option<path::PathBuf> {
+ /// across multiple crates without dependencies constraints
+ /// This also has the benefit of not re-downloading the binaries for each crate
+ pub fn prebuilt_dir() -> path::PathBuf {
+-    let target_dir = scratch::path(SCRATH_PATH);
++    let target_dir = scratch_dir();
+     path::Path::new(&target_dir).join(format!(
+         "livekit/{}-{}/{}",
+         webrtc_triple(),
+@@ -197,8 +197,12 @@ pub fn configure_jni_symbols() -> Result<()> {
+ }
+ 
+ pub fn download_webrtc() -> Result<()> {
+-    let dir = scratch::path(SCRATH_PATH);
++    let dir = scratch_dir();
+     // temporary fix to avoid github workflow issue
+     fs::create_dir_all(&dir).context("Failed to create scratch_path")?;
+@@ -223,6 +227,10 @@ pub fn download_webrtc() -> Result<()> {
+     Ok(())
+ }
+ 
++fn scratch_dir() -> PathBuf {
++    PathBuf::from(env::var("OUT_DIR").unwrap()).join(SCRATH_PATH)
++}
++
+ fn android_ndk_toolchain() -> Result<path::PathBuf> {
+     let ndk_home = env::var("ANDROID_NDK_HOME")
+         .or_else(|_| env::var("ANDROID_NDK_ROOT"))

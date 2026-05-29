@@ -21,6 +21,7 @@ exports_files([
     "v8_bazel_rules.patch",
     "v8_module_deps.patch",
     "v8_source_portability.patch",
+    "webrtc-sys-build_hermetic_scratch.patch",
     "webrtc-sys_hermetic_darwin_sysroot.patch",
     "windows-link.patch",
     "xz_windows_stack_args.patch",
