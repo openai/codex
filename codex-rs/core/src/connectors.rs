@@ -29,6 +29,7 @@ use codex_config::types::AppToolApproval;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -42,6 +43,7 @@ use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::with_codex_apps_mcp;
+use codex_plugin::AppConnectorId;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 
@@ -115,9 +117,14 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     accessible_connectors: &[AppInfo],
     loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
-    let connector_ids = tool_suggest_connector_ids(config).await;
+    let connector_ids = tool_suggest_connector_ids(config, auth).await;
     let directory_connectors = codex_connectors::merge::merge_plugin_connectors(
-        cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await,
+        resolve_template_directory_connectors(
+            config,
+            auth,
+            cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await,
+        )
+        .await,
         connector_ids.iter().cloned(),
     );
     let discoverable_connectors =
@@ -406,33 +413,106 @@ fn write_cached_accessible_connectors(
     });
 }
 
-async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
+async fn tool_suggest_connector_ids(config: &Config, auth: Option<&CodexAuth>) -> HashSet<String> {
     let plugins_input = config.plugins_config_input();
-    let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
+    let connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
         .plugins_for_config(&plugins_input)
         .await
         .capability_summaries()
         .iter()
         .flat_map(|plugin| plugin.app_connector_ids.iter())
-        .map(|connector_id| connector_id.0.clone())
-        .collect::<HashSet<_>>();
-    connector_ids.extend(
-        config
-            .tool_suggest
-            .discoverables
-            .iter()
-            .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Connector)
-            .map(|discoverable| discoverable.id.clone()),
-    );
+        .cloned()
+        .chain(
+            config
+                .tool_suggest
+                .discoverables
+                .iter()
+                .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Connector)
+                .map(|discoverable| AppConnectorId(discoverable.id.clone())),
+        )
+        .collect::<Vec<_>>();
+    let remote_plugin_service_config = RemotePluginServiceConfig {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+    };
+    let mut connector_ids = codex_core_plugins::remote::resolve_remote_plugin_app_ids(
+        &remote_plugin_service_config,
+        auth,
+        &connector_ids,
+    )
+    .await
+    .into_iter()
+    .map(|connector_id| connector_id.0)
+    .collect::<HashSet<_>>();
+
     let disabled_connector_ids = config
         .tool_suggest
         .disabled_tools
         .iter()
         .filter(|disabled_tool| disabled_tool.kind == ToolSuggestDiscoverableType::Connector)
-        .map(|disabled_tool| disabled_tool.id.as_str())
-        .collect::<HashSet<_>>();
-    connector_ids.retain(|connector_id| !disabled_connector_ids.contains(connector_id.as_str()));
+        .map(|disabled_tool| AppConnectorId(disabled_tool.id.clone()))
+        .collect::<Vec<_>>();
+    let mut disabled_connector_ids = codex_core_plugins::remote::resolve_remote_plugin_app_ids(
+        &remote_plugin_service_config,
+        auth,
+        &disabled_connector_ids,
+    )
+    .await
+    .into_iter()
+    .map(|connector_id| connector_id.0)
+    .collect::<HashSet<_>>();
+    disabled_connector_ids.extend(
+        config
+            .tool_suggest
+            .disabled_tools
+            .iter()
+            .filter(|disabled_tool| disabled_tool.kind == ToolSuggestDiscoverableType::Connector)
+            .map(|disabled_tool| disabled_tool.id.clone()),
+    );
+    connector_ids.retain(|connector_id| !disabled_connector_ids.contains(connector_id));
     connector_ids
+}
+
+async fn resolve_template_directory_connectors(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    connectors: Vec<AppInfo>,
+) -> Vec<AppInfo> {
+    let remote_plugin_service_config = RemotePluginServiceConfig {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+    };
+    let mut resolved_connectors = Vec::new();
+    let mut seen_connector_ids = HashSet::new();
+    for connector in connectors {
+        let resolved_connector_ids = codex_core_plugins::remote::resolve_remote_plugin_app_ids(
+            &remote_plugin_service_config,
+            auth,
+            &[AppConnectorId(connector.id.clone())],
+        )
+        .await;
+        if resolved_connector_ids.is_empty() {
+            continue;
+        }
+
+        for connector_id in resolved_connector_ids {
+            if !seen_connector_ids.insert(connector_id.clone()) {
+                continue;
+            }
+            if connector_id.0 == connector.id {
+                resolved_connectors.push(connector.clone());
+                continue;
+            }
+
+            let mut resolved_connector = connector.clone();
+            resolved_connector.id = connector_id.0;
+            resolved_connector.install_url =
+                Some(codex_connectors::metadata::connector_install_url(
+                    &resolved_connector.name,
+                    &resolved_connector.id,
+                ));
+            resolved_connectors.push(resolved_connector);
+        }
+    }
+    resolved_connectors
 }
 
 async fn cached_directory_connectors_for_tool_suggest_with_auth(

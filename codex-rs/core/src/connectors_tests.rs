@@ -29,6 +29,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 fn annotations(destructive_hint: Option<bool>, open_world_hint: Option<bool>) -> ToolAnnotations {
     ToolAnnotations::from_raw(
@@ -1180,7 +1186,7 @@ discoverables = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config).await,
+        tool_suggest_connector_ids(&config, None).await,
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
     );
 }
@@ -1209,8 +1215,156 @@ disabled_tools = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config).await,
+        tool_suggest_connector_ids(&config, None).await,
         HashSet::from(["connector_gmail".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_connector_ids_resolve_template_connectors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/backend-api/ps/connectors/by_template_id/templated_apps_Databricks",
+        ))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"connector_ids":["asdk_app_databricks_workspace"]}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "templated_apps_Databricks" }
+]
+"#,
+    )
+    .expect("write config");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    assert_eq!(
+        tool_suggest_connector_ids(&config, Some(&auth)).await,
+        HashSet::from(["asdk_app_databricks_workspace".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_resolves_template_connectors_before_returning_install_entries() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/backend-api/ps/connectors/by_template_id/templated_apps_Databricks",
+        ))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"connector_ids":["asdk_app_databricks_workspace"]}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+apps = true
+
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "templated_apps_Databricks" }
+]
+"#,
+    )
+    .expect("write config");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let discoverable_tools =
+        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[], &[])
+            .await
+            .expect("discoverable tools should load");
+
+    assert_eq!(
+        discoverable_tools,
+        vec![DiscoverableTool::from(plugin_connector_to_app_info(
+            "asdk_app_databricks_workspace".to_string(),
+        ))]
+    );
+}
+
+#[tokio::test]
+async fn template_directory_connector_metadata_is_carried_to_resolved_connector() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/backend-api/ps/connectors/by_template_id/templated_apps_Databricks",
+        ))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"connector_ids":["asdk_app_databricks_workspace"]}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let resolved = resolve_template_directory_connectors(
+        &config,
+        Some(&auth),
+        vec![AppInfo {
+            id: "templated_apps_Databricks".to_string(),
+            name: "Databricks".to_string(),
+            description: Some("Query Databricks".to_string()),
+            install_url: Some(connector_install_url(
+                "Databricks",
+                "templated_apps_Databricks",
+            )),
+            ..app("templated_apps_Databricks")
+        }],
+    )
+    .await;
+
+    assert_eq!(
+        resolved,
+        vec![AppInfo {
+            id: "asdk_app_databricks_workspace".to_string(),
+            name: "Databricks".to_string(),
+            description: Some("Query Databricks".to_string()),
+            install_url: Some(connector_install_url(
+                "Databricks",
+                "asdk_app_databricks_workspace",
+            )),
+            ..app("asdk_app_databricks_workspace")
+        }]
     );
 }
 
