@@ -5,12 +5,16 @@ use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -21,6 +25,7 @@ use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tokio::time::Duration;
@@ -29,6 +34,7 @@ use tokio::time::sleep;
 
 fn remote_model(slug: &str) -> ModelInfo {
     ModelInfo {
+        shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
         used_fallback_model_metadata: false,
         ..model_info_from_slug(slug)
@@ -111,7 +117,23 @@ async fn response_body_for_remote_model(
         },
     )
     .await?;
-    test.submit_turn("list tools").await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "list tools".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     Ok(response_mock.single_request().body_json())
 }
