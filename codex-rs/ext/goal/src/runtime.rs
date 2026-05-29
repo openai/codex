@@ -308,7 +308,9 @@ impl GoalRuntimeHandle {
             return Ok(());
         };
 
-        thread.inject_or_start_turn(vec![item]).await;
+        if thread.try_start_turn_if_idle(vec![item]).await.is_err() {
+            tracing::debug!("skipping goal continuation because the thread is no longer idle");
+        }
 
         let current_turn_is_goal_active = self
             .inner

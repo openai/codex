@@ -276,10 +276,12 @@ impl CodexThread {
         self.codex.session.inject_if_running(items).await
     }
 
-    /// Injects model-visible items into active work, or starts a regular turn
-    /// with them if the thread is idle.
-    pub async fn inject_or_start_turn(&self, items: Vec<ResponseItem>) {
-        self.codex.session.inject_or_start_turn(items).await
+    /// Starts a regular turn with model-visible items only if the thread is idle.
+    pub async fn try_start_turn_if_idle(
+        &self,
+        items: Vec<ResponseItem>,
+    ) -> Result<(), Vec<ResponseItem>> {
+        self.codex.session.try_start_turn_if_idle(items).await
     }
 
     pub async fn set_app_server_client_info(
