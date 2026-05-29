@@ -1,5 +1,6 @@
 use crate::SandboxType;
 use codex_network_proxy::BlockedRequest;
+use codex_network_proxy::NetworkMode;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use tracing::warn;
 
@@ -86,6 +87,7 @@ pub struct NetworkSandboxViolation {
     pub reason: String,
     pub client: Option<String>,
     pub method: Option<String>,
+    pub mode: Option<NetworkMode>,
     pub protocol: String,
     pub decision: Option<String>,
     pub source: Option<String>,
@@ -100,6 +102,7 @@ impl NetworkSandboxViolation {
             reason: blocked.reason.clone(),
             client: blocked.client.clone(),
             method: blocked.method.clone(),
+            mode: blocked.mode,
             protocol: blocked.protocol.clone(),
             decision: blocked.decision.clone(),
             source: blocked.source.clone(),
@@ -179,12 +182,13 @@ pub fn record_sandbox_violation(event: &SandboxViolationEvent) {
         }
         SandboxViolationEvent::Network(violation) => {
             warn!(
-                "recorded sandbox violation: resource=network protocol={} host={} port={:?} reason={} method={:?} client={:?} decision={:?} source={:?}",
+                "recorded sandbox violation: resource=network protocol={} host={} port={:?} reason={} method={:?} mode={:?} client={:?} decision={:?} source={:?}",
                 violation.protocol,
                 violation.host,
                 violation.port,
                 violation.reason,
                 violation.method,
+                violation.mode,
                 violation.client,
                 violation.decision,
                 violation.source
@@ -228,9 +232,13 @@ fn extract_denied_path_from_text(text: &str) -> Option<String> {
     ];
 
     for line in text.lines() {
-        let lower = line.to_lowercase();
         for marker in PATH_MARKERS {
-            let Some(marker_start) = lower.find(marker) else {
+            let Some(marker_start) = line.match_indices(':').find_map(|(marker_start, _)| {
+                line.get(marker_start..)
+                    .and_then(|suffix| suffix.get(..marker.len()))
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(marker))
+                    .then_some(marker_start)
+            }) else {
                 continue;
             };
             let candidate_prefix = &line[..marker_start];
