@@ -73,6 +73,7 @@ static BUDGET_LIMIT_PROMPT_TEMPLATE: LazyLock<Template> =
         },
     );
 
+#[cfg(test)]
 static OBJECTIVE_UPDATED_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     match Template::parse(include_str!("../templates/goals/objective_updated.md")) {
         Ok(template) => template,
@@ -92,44 +93,6 @@ enum BudgetLimitSteering {
 enum TerminalMetricEmission {
     Emit,
     Suppress,
-}
-
-/// Describes whether an external goal mutation created a new logical goal or
-/// updated an existing one.
-#[derive(Clone)]
-pub enum ExternalGoalPreviousStatus {
-    NewGoal,
-    Existing(ExternalGoalPreviousGoal),
-}
-
-#[derive(Clone)]
-pub struct ExternalGoalPreviousGoal {
-    goal_id: String,
-    status: codex_state::ThreadGoalStatus,
-    objective: String,
-}
-
-impl From<&codex_state::ThreadGoal> for ExternalGoalPreviousStatus {
-    fn from(goal: &codex_state::ThreadGoal) -> Self {
-        Self::Existing(ExternalGoalPreviousGoal::from(goal))
-    }
-}
-
-impl From<&codex_state::ThreadGoal> for ExternalGoalPreviousGoal {
-    fn from(goal: &codex_state::ThreadGoal) -> Self {
-        Self {
-            goal_id: goal.goal_id.clone(),
-            status: goal.status,
-            objective: goal.objective.clone(),
-        }
-    }
-}
-
-/// Runtime effects for an externally persisted goal mutation.
-#[derive(Clone)]
-pub struct ExternalGoalSet {
-    pub goal: codex_state::ThreadGoal,
-    pub previous_status: ExternalGoalPreviousStatus,
 }
 
 /// Runtime lifecycle events that can affect goal accounting, scheduling, or
@@ -160,11 +123,6 @@ pub(crate) enum GoalRuntimeEvent<'a> {
     UsageLimitReached {
         turn_context: &'a TurnContext,
     },
-    ExternalMutationStarting,
-    ExternalSet {
-        external_set: ExternalGoalSet,
-    },
-    ExternalClear,
     ThreadResumed,
 }
 
@@ -394,22 +352,6 @@ impl Session {
             GoalRuntimeEvent::UsageLimitReached { turn_context } => Box::pin(async move {
                 self.usage_limit_active_thread_goal_for_turn(turn_context)
                     .await?;
-                Ok(())
-            }),
-            GoalRuntimeEvent::ExternalMutationStarting => Box::pin(async move {
-                if let Err(err) = self.account_thread_goal_before_external_mutation().await {
-                    tracing::warn!(
-                        "failed to account thread goal progress before external mutation: {err}"
-                    );
-                }
-                Ok(())
-            }),
-            GoalRuntimeEvent::ExternalSet { external_set } => Box::pin(async move {
-                self.apply_external_thread_goal_status(external_set).await;
-                Ok(())
-            }),
-            GoalRuntimeEvent::ExternalClear => Box::pin(async move {
-                self.clear_stopped_thread_goal_runtime_state().await;
                 Ok(())
             }),
             GoalRuntimeEvent::ThreadResumed => Box::pin(async move {
@@ -650,65 +592,6 @@ impl Session {
         Ok(goal)
     }
 
-    async fn apply_external_thread_goal_status(self: &Arc<Self>, external_set: ExternalGoalSet) {
-        let ExternalGoalSet {
-            goal,
-            previous_status,
-        } = external_set;
-        let previous_goal = match previous_status {
-            ExternalGoalPreviousStatus::NewGoal => None,
-            ExternalGoalPreviousStatus::Existing(goal) => Some(goal),
-        };
-        let replaced_existing_goal = previous_goal
-            .as_ref()
-            .is_some_and(|previous_goal| previous_goal.goal_id != goal.goal_id);
-        if previous_goal.is_none() || replaced_existing_goal {
-            self.emit_goal_created_metric();
-        }
-        let objective_changed = previous_goal
-            .as_ref()
-            .is_some_and(|previous_goal| previous_goal.objective != goal.objective);
-        let previous_status = previous_goal
-            .as_ref()
-            .and_then(|previous_goal| (!replaced_existing_goal).then_some(previous_goal.status));
-        self.emit_goal_resumed_metric_if_status_changed(previous_status, goal.status);
-        self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);
-        let goal_for_steering = objective_changed.then(|| protocol_goal_from_state(goal.clone()));
-        let goal_id = goal.goal_id;
-        let status = goal.status;
-        match status {
-            codex_state::ThreadGoalStatus::Active => {
-                let turn_id = self
-                    .active_turn_context()
-                    .await
-                    .map(|turn_context| turn_context.sub_id.clone());
-                let current_token_usage = self.total_token_usage().await.unwrap_or_default();
-                self.mark_active_goal_accounting(goal_id, turn_id, current_token_usage)
-                    .await;
-                if let Some(goal) = goal_for_steering {
-                    let item = goal_context_input_item(objective_updated_prompt(&goal));
-                    if self.inject_if_running(vec![item]).await.is_err() {
-                        tracing::debug!(
-                            "skipping objective-updated goal steering because no turn is active"
-                        );
-                    }
-                }
-                self.maybe_continue_goal_if_idle_runtime().await;
-            }
-            codex_state::ThreadGoalStatus::BudgetLimited => {
-                if self.active_turn_context().await.is_none() {
-                    self.clear_stopped_thread_goal_runtime_state().await;
-                }
-            }
-            codex_state::ThreadGoalStatus::Paused
-            | codex_state::ThreadGoalStatus::Blocked
-            | codex_state::ThreadGoalStatus::UsageLimited
-            | codex_state::ThreadGoalStatus::Complete => {
-                self.clear_stopped_thread_goal_runtime_state().await;
-            }
-        }
-    }
-
     async fn clear_stopped_thread_goal_runtime_state(&self) {
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         let mut accounting = self.goal_runtime.accounting.lock().await;
@@ -830,14 +713,6 @@ impl Session {
                 .is_none_or(|expected_goal_id| goal.goal_id == expected_goal_id)
                 .then_some(goal.status)
         }))
-    }
-
-    async fn active_turn_context(&self) -> Option<Arc<TurnContext>> {
-        let active = self.active_turn.lock().await;
-        active
-            .as_ref()
-            .and_then(|active_turn| active_turn.task.as_ref())
-            .map(|task| Arc::clone(&task.turn_context))
     }
 
     async fn mark_thread_goal_turn_started(
@@ -1080,29 +955,6 @@ impl Session {
             }
             *self.goal_runtime.budget_limit_reported_goal_id.lock().await = Some(goal_id);
         }
-        Ok(())
-    }
-
-    async fn account_thread_goal_before_external_mutation(&self) -> anyhow::Result<()> {
-        if let Some(turn_context) = self.active_turn_context().await {
-            return self
-                .account_thread_goal_progress(
-                    turn_context.as_ref(),
-                    BudgetLimitSteering::Suppressed,
-                    TerminalMetricEmission::Emit,
-                )
-                .await;
-        }
-
-        let Some(state_db) = self.state_db_for_thread_goals().await? else {
-            return Ok(());
-        };
-        self.account_thread_goal_wall_clock_usage(
-            &state_db,
-            codex_state::GoalAccountingMode::ActiveOnly,
-            TerminalMetricEmission::Suppress,
-        )
-        .await?;
         Ok(())
     }
 
@@ -1563,6 +1415,7 @@ fn budget_limit_prompt(goal: &ThreadGoal) -> String {
     }
 }
 
+#[cfg(test)]
 fn objective_updated_prompt(goal: &ThreadGoal) -> String {
     let token_budget = goal
         .token_budget

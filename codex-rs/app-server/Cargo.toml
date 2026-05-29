@@ -44,6 +44,7 @@ codex-features = { workspace = true }
 codex-guardian = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-file-watcher = { workspace = true }
+codex-goal-extension = { workspace = true }
 codex-hooks = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }

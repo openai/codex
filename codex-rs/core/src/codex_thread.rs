@@ -1,6 +1,5 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
-use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
@@ -176,39 +175,6 @@ impl CodexThread {
             .session
             .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
             .await
-    }
-
-    pub async fn prepare_external_goal_mutation(&self) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
-            .await
-        {
-            tracing::warn!("failed to prepare external goal mutation: {err}");
-        }
-    }
-
-    pub async fn apply_external_goal_set(&self, external_set: ExternalGoalSet) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { external_set })
-            .await
-        {
-            tracing::warn!("failed to apply external goal status runtime effects: {err}");
-        }
-    }
-
-    pub async fn apply_external_goal_clear(&self) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalClear)
-            .await
-        {
-            tracing::warn!("failed to apply external goal clear runtime effects: {err}");
-        }
     }
 
     #[doc(hidden)]

@@ -1,5 +1,9 @@
 use super::*;
-use codex_protocol::protocol::validate_thread_goal_objective;
+use codex_goal_extension::GoalApi;
+use codex_goal_extension::GoalApiError;
+use codex_goal_extension::GoalObjectiveUpdate;
+use codex_goal_extension::GoalSetRequest;
+use codex_goal_extension::GoalTokenBudgetUpdate;
 
 #[derive(Clone)]
 pub(crate) struct ThreadGoalRequestProcessor {
@@ -8,6 +12,7 @@ pub(crate) struct ThreadGoalRequestProcessor {
     config: Arc<Config>,
     thread_state_manager: ThreadStateManager,
     state_db: Option<StateDbHandle>,
+    goal_api: Arc<GoalApi>,
 }
 
 impl ThreadGoalRequestProcessor {
@@ -24,6 +29,7 @@ impl ThreadGoalRequestProcessor {
             config,
             thread_state_manager,
             state_db,
+            goal_api: Arc::new(GoalApi::new()),
         }
     }
 
@@ -134,106 +140,25 @@ impl ThreadGoalRequestProcessor {
             let thread_state = thread_state.lock().await;
             thread_state.listener_command_tx()
         };
-        let status = params.status.map(thread_goal_status_to_state);
-        let objective = params.objective.as_deref().map(str::trim);
-
-        if let Some(objective) = objective {
-            validate_thread_goal_objective(objective).map_err(invalid_request)?;
-        }
-        if objective.is_some() || params.token_budget.is_some() {
-            validate_goal_budget(params.token_budget.flatten()).map_err(invalid_request)?;
-        }
-
-        if let Some(thread) = running_thread.as_ref() {
-            thread.prepare_external_goal_mutation().await;
-        }
-
-        let should_set_thread_preview = objective.is_some();
-        let (goal, previous_status) = (if let Some(objective) = objective {
-            let existing_goal = state_db
-                .thread_goals()
-                .get_thread_goal(thread_id)
-                .await
-                .map_err(|err| invalid_request(err.to_string()))?;
-            if let Some(goal) = existing_goal.as_ref() {
-                let previous_status = ExternalGoalPreviousStatus::from(goal);
-                state_db
-                    .thread_goals()
-                    .update_thread_goal(
-                        thread_id,
-                        codex_state::GoalUpdate {
-                            objective: Some(objective.to_string()),
-                            status,
-                            token_budget: params.token_budget,
-                            expected_goal_id: Some(goal.goal_id.clone()),
-                        },
-                    )
-                    .await
-                    .and_then(|goal| {
-                        goal.ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "cannot update goal for thread {thread_id}: no goal exists"
-                            )
-                        })
-                    })
-                    .map(|goal| (goal, previous_status))
-            } else {
-                let previous_status = ExternalGoalPreviousStatus::NewGoal;
-                state_db
-                    .thread_goals()
-                    .replace_thread_goal(
-                        thread_id,
-                        objective,
-                        status.unwrap_or(codex_state::ThreadGoalStatus::Active),
-                        params.token_budget.flatten(),
-                    )
-                    .await
-                    .map(|goal| (goal, previous_status))
-            }
-        } else {
-            let existing_goal = state_db
-                .thread_goals()
-                .get_thread_goal(thread_id)
-                .await
-                .map_err(|err| invalid_request(err.to_string()))?;
-            let Some(existing_goal) = existing_goal else {
-                return Err(invalid_request(format!(
-                    "cannot update goal for thread {thread_id}: no goal exists"
-                )));
-            };
-            let previous_status = ExternalGoalPreviousStatus::from(&existing_goal);
-            state_db
-                .thread_goals()
-                .update_thread_goal(
+        let outcome = self
+            .goal_api
+            .set_thread_goal(
+                &state_db,
+                GoalSetRequest {
                     thread_id,
-                    codex_state::GoalUpdate {
-                        objective: None,
-                        status,
-                        token_budget: params.token_budget,
-                        expected_goal_id: None,
-                    },
-                )
-                .await
-                .and_then(|goal| {
-                    goal.ok_or_else(|| {
-                        anyhow::anyhow!("cannot update goal for thread {thread_id}: no goal exists")
-                    })
-                })
-                .map(|goal| (goal, previous_status))
-        })
-        .map_err(|err| invalid_request(err.to_string()))?;
-        if should_set_thread_preview
-            && let Err(err) = state_db
-                .set_thread_preview_if_empty(thread_id, goal.objective.as_str())
-                .await
-        {
-            warn!("failed to set empty thread preview from goal objective for {thread_id}: {err}");
-        }
-        let external_goal_set = ExternalGoalSet {
-            goal: goal.clone(),
-            previous_status,
-        };
-        let goal = api_thread_goal_from_state(goal);
+                    objective: params
+                        .objective
+                        .as_deref()
+                        .map_or(GoalObjectiveUpdate::Keep, GoalObjectiveUpdate::Set),
+                    status: params.status.map(ThreadGoalStatus::to_core),
+                    token_budget: params
+                        .token_budget
+                        .map_or(GoalTokenBudgetUpdate::Keep, GoalTokenBudgetUpdate::Set),
+                },
+            )
+            .await
+            .map_err(goal_api_error)?;
+        let goal: ThreadGoal = outcome.goal.clone().into();
         self.outgoing
             .send_response(
                 request_id.clone(),
@@ -242,9 +167,7 @@ impl ThreadGoalRequestProcessor {
             .await;
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
-        if let Some(thread) = running_thread.as_ref() {
-            thread.apply_external_goal_set(external_goal_set).await;
-        }
+        outcome.apply_runtime_effects(&self.goal_api).await;
         Ok(())
     }
 
@@ -258,12 +181,12 @@ impl ThreadGoalRequestProcessor {
 
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
         let state_db = self.state_db_for_materialized_thread(thread_id).await?;
-        let goal = state_db
-            .thread_goals()
-            .get_thread_goal(thread_id)
+        let goal = self
+            .goal_api
+            .get_thread_goal(&state_db, thread_id)
             .await
-            .map_err(|err| internal_error(format!("failed to read thread goal: {err}")))?
-            .map(api_thread_goal_from_state);
+            .map_err(goal_api_error)?
+            .map(ThreadGoal::from);
         Ok(ThreadGoalGetResponse { goal })
     }
 
@@ -307,24 +230,16 @@ impl ThreadGoalRequestProcessor {
         )
         .await;
 
-        if let Some(thread) = running_thread.as_ref() {
-            thread.prepare_external_goal_mutation().await;
-        }
-
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             let thread_state = thread_state.lock().await;
             thread_state.listener_command_tx()
         };
-        let cleared = state_db
-            .thread_goals()
-            .delete_thread_goal(thread_id)
+        let cleared = self
+            .goal_api
+            .clear_thread_goal(&state_db, thread_id)
             .await
-            .map_err(|err| internal_error(format!("failed to clear thread goal: {err}")))?;
-
-        if cleared && let Some(thread) = running_thread.as_ref() {
-            thread.apply_external_goal_clear().await;
-        }
+            .map_err(goal_api_error)?;
 
         self.outgoing
             .send_response(request_id, ThreadGoalClearResponse { cleared })
@@ -449,26 +364,6 @@ impl ThreadGoalRequestProcessor {
     }
 }
 
-fn validate_goal_budget(value: Option<i64>) -> Result<(), String> {
-    if let Some(value) = value
-        && value <= 0
-    {
-        return Err("goal budgets must be positive when provided".to_string());
-    }
-    Ok(())
-}
-
-fn thread_goal_status_to_state(status: ThreadGoalStatus) -> codex_state::ThreadGoalStatus {
-    match status {
-        ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
-        ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,
-        ThreadGoalStatus::Blocked => codex_state::ThreadGoalStatus::Blocked,
-        ThreadGoalStatus::UsageLimited => codex_state::ThreadGoalStatus::UsageLimited,
-        ThreadGoalStatus::BudgetLimited => codex_state::ThreadGoalStatus::BudgetLimited,
-        ThreadGoalStatus::Complete => codex_state::ThreadGoalStatus::Complete,
-    }
-}
-
 fn thread_goal_status_from_state(status: codex_state::ThreadGoalStatus) -> ThreadGoalStatus {
     match status {
         codex_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
@@ -496,4 +391,11 @@ pub(super) fn api_thread_goal_from_state(goal: codex_state::ThreadGoal) -> Threa
 fn parse_thread_id_for_request(thread_id: &str) -> Result<ThreadId, JSONRPCErrorError> {
     ThreadId::from_string(thread_id)
         .map_err(|err| invalid_request(format!("invalid thread id: {err}")))
+}
+
+fn goal_api_error(err: GoalApiError) -> JSONRPCErrorError {
+    match err {
+        GoalApiError::InvalidRequest(message) => invalid_request(message),
+        GoalApiError::Internal(message) => internal_error(message),
+    }
 }
