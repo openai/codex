@@ -1391,10 +1391,7 @@ mod tests {
         );
         assert_eq!(
             aliased.skill_lines,
-            vec![format!(
-                "- gh-fix-ci: desc (env: devbox, file: r0{separator}gh-fix-ci{separator}SKILL.md)",
-                separator = std::path::MAIN_SEPARATOR
-            )]
+            vec!["- gh-fix-ci: desc (env: devbox, file: r0/gh-fix-ci/SKILL.md)"]
         );
     }
 
