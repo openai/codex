@@ -461,7 +461,15 @@ fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Option<Vec<Skill
         .data
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd)
-        .map(|entry| entry.errors.clone())
+        .map(|entry| {
+            let mut errors = entry.errors.clone();
+            errors.sort_by(|left, right| {
+                left.path
+                    .cmp(&right.path)
+                    .then_with(|| left.message.cmp(&right.message))
+            });
+            errors
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
