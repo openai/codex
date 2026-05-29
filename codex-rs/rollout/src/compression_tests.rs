@@ -330,6 +330,10 @@ fn archived_rollout_path(home: &std::path::Path, ts: &str, uuid: Uuid) -> std::p
         .join(format!("rollout-{ts}-{uuid}.jsonl"))
 }
 
+fn compressed_rollout_path(path: &std::path::Path) -> std::path::PathBuf {
+    super::path::compressed_rollout_path(path)
+}
+
 fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> anyhow::Result<()> {
     let parent = path.parent().expect("rollout path should have parent");
     fs::create_dir_all(parent)?;
@@ -377,8 +381,12 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
 
 fn compress_now(path: &std::path::Path) -> anyhow::Result<()> {
     let compressed_path = compressed_rollout_path(path);
-    let permissions = fs::metadata(path)?.permissions();
-    worker::encode_zstd(path, compressed_path.as_path(), &permissions)?;
+    let input = fs::File::open(path)?;
+    let output = fs::File::create(compressed_path)?;
+    let mut encoder = zstd::stream::write::Encoder::new(output, 3)?;
+    let mut input = std::io::BufReader::new(input);
+    std::io::copy(&mut input, &mut encoder)?;
+    encoder.finish()?;
     fs::remove_file(path)?;
     Ok(())
 }
