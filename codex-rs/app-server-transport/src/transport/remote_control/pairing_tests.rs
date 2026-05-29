@@ -204,6 +204,7 @@ async fn start_remote_control_pairing_rejects_expired_server_token() {
         "server-id".to_string(),
         "environment-id".to_string(),
         OffsetDateTime::from_unix_timestamp(0).expect("expired timestamp should parse"),
+        /*auth_change_revision*/ 0,
     );
 
     let err = client
@@ -273,6 +274,7 @@ async fn start_remote_control_pairing_rejects_mismatched_enrollment() {
         "server-id".to_string(),
         "environment-id".to_string(),
         OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
+        /*auth_change_revision*/ 0,
     );
 
     let err = client

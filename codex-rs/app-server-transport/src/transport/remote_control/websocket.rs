@@ -1263,17 +1263,25 @@ pub(super) async fn connect_remote_control_websocket(
         ));
     };
 
-    let auth_change_revision = *auth_context.auth_change_rx.borrow();
-    let auth = match load_remote_control_auth(auth_context.auth_manager).await {
-        Ok(auth) => auth,
-        Err(err) => {
-            if err.kind() == ErrorKind::PermissionDenied {
-                *enrollment = None;
-                status_publisher.publish_environment_id(/*environment_id*/ None);
-                clear_pairing_client(pairing_client);
+    let (auth, auth_change_revision) = loop {
+        let auth_change_revision = *auth_context.auth_change_rx.borrow_and_update();
+        let auth = match load_remote_control_auth(auth_context.auth_manager).await {
+            Ok(auth) => auth,
+            Err(err) => {
+                if err.kind() == ErrorKind::PermissionDenied {
+                    *enrollment = None;
+                    status_publisher.publish_environment_id(/*environment_id*/ None);
+                    clear_pairing_client(pairing_client);
+                }
+                return Err(err);
             }
-            return Err(err);
+        };
+        if *auth_context.auth_change_rx.borrow() == auth_change_revision {
+            break (auth, auth_change_revision);
         }
+        info!(
+            "retrying app-server remote control websocket auth load after auth changed while loading"
+        );
     };
     let enrollment_account_id = enrollment.as_ref().map(|enrollment| &enrollment.account_id);
     if enrollment_account_id.is_some_and(|account_id| account_id != &auth.account_id) {

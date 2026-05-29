@@ -1821,6 +1821,111 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
 }
 
 #[tokio::test]
+async fn remote_control_pairs_after_auth_reloads_during_connect() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(/*account_id*/ None),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("auth without account id should save");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(Some("account_id")),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("auth with account id should save before connect");
+
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(state_db),
+        auth_manager,
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(
+        enroll_request.request_line,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            "srv_e_ready",
+            "env_ready",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    let (_handshake_request, mut websocket) =
+        accept_remote_control_backend_connection(&listener).await;
+    timeout(Duration::from_secs(5), async {
+        while remote_handle.status().status != RemoteControlConnectionStatus::Connected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("remote control should publish connected before pairing");
+    tokio::task::yield_now().await;
+
+    let pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+    let pairing_request = accept_http_request(&listener).await;
+    assert_eq!(
+        pairing_request.request_line,
+        "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+    );
+    respond_with_json(
+        pairing_request.stream,
+        json!({
+            "pairing_code": "pairing-code",
+            "manual_pairing_code": "ABCD-EFGH",
+            "server_id": "srv_e_ready",
+            "environment_id": "env_ready",
+            "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await;
+    pairing_task
+        .await
+        .expect("pairing task should join")
+        .expect("pairing should use auth reloaded during connect");
+
+    websocket.close(None).await.expect("websocket should close");
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
 async fn remote_control_http_mode_reenrolls_when_refresh_reports_stale_enrollment() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
