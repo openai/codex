@@ -21,6 +21,22 @@ pub(crate) fn outbound_proxy_config_from_network_config(
     }
 }
 
+/// Returns the auth proxy config for the explicit Windows system-proxy startup path.
+pub fn windows_system_proxy_config_from_network_config(
+    network: Option<&NetworkConfigToml>,
+) -> Option<OutboundProxyConfig> {
+    let network = network?;
+    if !system_proxy_mode_enabled()
+        || network.proxy_mode != Some(NetworkProxyMode::System)
+        || network.proxy_url.is_some()
+    {
+        return None;
+    }
+
+    // Legacy startup auth builders only need the explicit Windows system-proxy selection here.
+    Some(outbound_proxy_config_from_network_config(network))
+}
+
 const fn system_proxy_mode_enabled() -> bool {
     cfg!(target_os = "windows")
 }
@@ -54,5 +70,37 @@ mod tests {
             OutboundProxyMode::Auto
         };
         assert_eq!(config.mode, expected);
+    }
+
+    #[test]
+    fn startup_system_proxy_config_is_scoped_to_windows_pac_path() {
+        let network = NetworkConfigToml {
+            proxy_mode: Some(NetworkProxyMode::System),
+            proxy_url: None,
+        };
+
+        let config = windows_system_proxy_config_from_network_config(Some(&network));
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(
+                config,
+                Some(outbound_proxy_config_from_network_config(&network))
+            );
+        } else {
+            assert_eq!(config, None);
+        }
+    }
+
+    #[test]
+    fn startup_system_proxy_config_skips_concrete_proxy_override() {
+        let network = NetworkConfigToml {
+            proxy_mode: Some(NetworkProxyMode::System),
+            proxy_url: Some("http://proxy.example.test:8080".to_string()),
+        };
+
+        assert_eq!(
+            windows_system_proxy_config_from_network_config(Some(&network)),
+            None
+        );
     }
 }

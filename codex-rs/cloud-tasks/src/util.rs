@@ -44,15 +44,28 @@ pub fn normalize_base_url(input: &str) -> String {
 pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
     let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
-    Some(
+    let outbound_proxy_config =
+        codex_login::windows_system_proxy_config_from_network_config(config.network.as_ref());
+    let chatgpt_base_url = chatgpt_base_url.or(Some(config.chatgpt_base_url));
+    Some(if let Some(outbound_proxy_config) = outbound_proxy_config {
+        // Keep the existing cloud auth path unless Windows system proxy discovery is selected.
+        AuthManager::new_with_proxy_config(
+            config.codex_home.to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            config.cli_auth_credentials_store_mode,
+            chatgpt_base_url,
+            Some(outbound_proxy_config),
+        )
+        .await
+    } else {
         AuthManager::new(
             config.codex_home.to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             config.cli_auth_credentials_store_mode,
-            chatgpt_base_url.or(Some(config.chatgpt_base_url)),
+            chatgpt_base_url,
         )
-        .await,
-    )
+        .await
+    })
 }
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,

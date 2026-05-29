@@ -50,4 +50,5 @@ pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;
 pub use auth_env_telemetry::AuthEnvTelemetry;
 pub use auth_env_telemetry::collect_auth_env_telemetry;
+pub use outbound_proxy::windows_system_proxy_config_from_network_config;
 pub use token_data::TokenData;

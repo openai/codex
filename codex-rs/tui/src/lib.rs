@@ -38,7 +38,7 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_cloud_config::cloud_requirements_loader_for_storage;
+use codex_cloud_config::cloud_requirements_loader_for_storage_with_network_config;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
@@ -1011,11 +1011,12 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_requirements = cloud_requirements_loader_for_storage(
+    let cloud_requirements = cloud_requirements_loader_for_storage_with_network_config(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
+        config_toml.network.as_ref(),
     )
     .await;
 
@@ -1455,11 +1456,12 @@ async fn run_ratatui_app(
         // rebuild config. This avoids missing newly available cloud requirements due to login
         // status detection edge cases.
         if show_login_screen && !uses_remote_workspace {
-            cloud_requirements = cloud_requirements_loader_for_storage(
+            cloud_requirements = cloud_requirements_loader_for_storage_with_network_config(
                 initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
+                initial_config.network.as_ref(),
             )
             .await;
         }

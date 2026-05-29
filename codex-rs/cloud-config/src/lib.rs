@@ -20,6 +20,7 @@ use codex_config::CloudRequirementsLoadErrorCode;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigRequirementsToml;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_config::types::NetworkConfigToml;
 use codex_core::util::backoff;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -734,13 +735,47 @@ pub async fn cloud_requirements_loader_for_storage(
     credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: String,
 ) -> CloudRequirementsLoader {
-    let auth_manager = AuthManager::shared(
-        codex_home.clone(),
+    cloud_requirements_loader_for_storage_with_network_config(
+        codex_home,
         enable_codex_api_key_env,
         credentials_store_mode,
-        Some(chatgpt_base_url.clone()),
+        chatgpt_base_url,
+        /*network_config*/ None,
     )
-    .await;
+    .await
+}
+
+/// Loads cloud requirements while allowing resolved startup network config to reach auth recovery.
+pub async fn cloud_requirements_loader_for_storage_with_network_config(
+    codex_home: PathBuf,
+    enable_codex_api_key_env: bool,
+    credentials_store_mode: AuthCredentialsStoreMode,
+    chatgpt_base_url: String,
+    network_config: Option<&NetworkConfigToml>,
+) -> CloudRequirementsLoader {
+    let outbound_proxy_config =
+        codex_login::windows_system_proxy_config_from_network_config(network_config);
+    let auth_manager = if let Some(outbound_proxy_config) = outbound_proxy_config {
+        // Keep the existing startup auth path unless Windows system proxy discovery is selected.
+        Arc::new(
+            AuthManager::new_with_proxy_config(
+                codex_home.clone(),
+                enable_codex_api_key_env,
+                credentials_store_mode,
+                Some(chatgpt_base_url.clone()),
+                Some(outbound_proxy_config),
+            )
+            .await,
+        )
+    } else {
+        AuthManager::shared(
+            codex_home.clone(),
+            enable_codex_api_key_env,
+            credentials_store_mode,
+            Some(chatgpt_base_url.clone()),
+        )
+        .await
+    };
     cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home)
 }
 
