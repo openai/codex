@@ -84,7 +84,7 @@ async fn sqlite_rollout_path_can_load_history_for_thread(
     path: &std::path::Path,
     thread_id: codex_protocol::ThreadId,
 ) -> bool {
-    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+    if codex_rollout::existing_rollout_path(path).await.is_none() {
         return false;
     }
     // SQLite metadata can outlive a moved/recreated rollout path. When history is
@@ -101,7 +101,7 @@ pub(super) async fn read_thread_by_rollout_path(
     include_archived: bool,
     include_history: bool,
 ) -> ThreadStoreResult<StoredThread> {
-    let path = resolve_requested_rollout_path(store, rollout_path)?;
+    let path = resolve_requested_rollout_path(store, rollout_path).await?;
     let mut thread = read_thread_from_rollout_path(store, path).await?;
     if !include_archived && thread.archived_at.is_some() {
         return Err(ThreadStoreError::InvalidRequest {
@@ -128,7 +128,7 @@ pub(super) async fn read_thread_by_rollout_path(
     Ok(thread)
 }
 
-fn resolve_requested_rollout_path(
+async fn resolve_requested_rollout_path(
     store: &LocalThreadStore,
     rollout_path: std::path::PathBuf,
 ) -> ThreadStoreResult<std::path::PathBuf> {
@@ -137,7 +137,15 @@ fn resolve_requested_rollout_path(
     } else {
         rollout_path
     };
-    std::fs::canonicalize(&path).map_err(|err| ThreadStoreError::InvalidRequest {
+    let Some(path) = codex_rollout::existing_rollout_path(path.as_path()).await else {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!(
+                "failed to resolve rollout path `{}`: file does not exist",
+                path.display()
+            ),
+        });
+    };
+    std::fs::canonicalize(path.as_path()).map_err(|err| ThreadStoreError::InvalidRequest {
         message: format!("failed to resolve rollout path `{}`: {err}", path.display()),
     })
 }
@@ -166,11 +174,9 @@ async fn resolve_rollout_path(
     include_archived: bool,
 ) -> ThreadStoreResult<Option<std::path::PathBuf>> {
     if let Ok(path) = live_writer::rollout_path(store, thread_id).await
-        && tokio::fs::try_exists(path.as_path()).await.map_err(|err| {
-            ThreadStoreError::InvalidRequest {
-                message: format!("failed to check rollout path for thread id {thread_id}: {err}"),
-            }
-        })?
+        && codex_rollout::existing_rollout_path(path.as_path())
+            .await
+            .is_some()
         && (include_archived || !rollout_path_is_archived(store.config.codex_home.as_path(), &path))
     {
         return Ok(Some(path));
@@ -280,6 +286,9 @@ async fn stored_thread_from_sqlite_metadata(
         .await
         .ok()
         .map(|meta_line| meta_line.meta);
+    let rollout_path = codex_rollout::existing_rollout_path(metadata.rollout_path.as_path())
+        .await
+        .unwrap_or_else(|| metadata.rollout_path.clone());
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
     let preview = metadata
         .preview
@@ -288,7 +297,7 @@ async fn stored_thread_from_sqlite_metadata(
         .unwrap_or_default();
     StoredThread {
         thread_id: metadata.id,
-        rollout_path: Some(metadata.rollout_path),
+        rollout_path: Some(rollout_path),
         forked_from_id,
         preview,
         name,

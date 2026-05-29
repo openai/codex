@@ -72,10 +72,11 @@ pub(super) fn matching_rollout_file_name(
             ),
         });
     };
-    let required_suffix = format!("{thread_id}.jsonl");
-    if file_name
-        .to_string_lossy()
-        .ends_with(required_suffix.as_str())
+    let required_plain_suffix = format!("{thread_id}.jsonl");
+    let required_compressed_suffix = format!("{required_plain_suffix}.zst");
+    let file_name_str = file_name.to_string_lossy();
+    if file_name_str.ends_with(required_plain_suffix.as_str())
+        || file_name_str.ends_with(required_compressed_suffix.as_str())
     {
         Ok(file_name)
     } else {
@@ -186,6 +187,7 @@ pub(super) fn git_info_from_parts(
 
 fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
     let file_name = path.file_name()?.to_str()?;
+    let file_name = file_name.strip_suffix(".zst").unwrap_or(file_name);
     let stem = file_name.strip_suffix(".jsonl")?;
     if stem.len() < 37 {
         return None;

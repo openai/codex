@@ -14,11 +14,11 @@ use crate::cwd_prompt::CwdPromptOutcome;
 use crate::cwd_prompt::CwdSelection;
 use crate::tui::Tui;
 use codex_protocol::ThreadId;
+use codex_rollout::open_rollout_line_reader;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::io::AsyncBufReadExt;
 
 #[derive(Default)]
 struct RolloutResumeState {
@@ -142,13 +142,11 @@ pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
 }
 
 async fn read_rollout_resume_state(path: &Path) -> io::Result<RolloutResumeState> {
-    let file = tokio::fs::File::open(path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
+    let mut reader = open_rollout_line_reader(path).await?;
     let mut state = RolloutResumeState::default();
     let mut saw_record = false;
 
-    while let Some(line) = lines.next_line().await? {
+    while let Some(line) = reader.next_line().await? {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
