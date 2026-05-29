@@ -3,27 +3,10 @@ use codex_features::Feature;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ModelRuntimeModes {
-    tool_mode: ToolMode,
-}
-
-impl ModelRuntimeModes {
-    pub(crate) fn resolve(model_info: &ModelInfo, features: &ManagedFeatures) -> Self {
-        Self {
-            tool_mode: model_info
-                .tool_mode
-                .unwrap_or_else(|| tool_mode_from_features(features)),
-        }
-    }
-
-    pub(crate) fn code_mode_enabled(self) -> bool {
-        matches!(self.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
-    }
-
-    pub(crate) fn code_mode_only_enabled(self) -> bool {
-        self.tool_mode == ToolMode::CodeModeOnly
-    }
+pub(crate) fn resolve_tool_mode(model_info: &ModelInfo, features: &ManagedFeatures) -> ToolMode {
+    model_info
+        .tool_mode
+        .unwrap_or_else(|| tool_mode_from_features(features))
 }
 
 fn tool_mode_from_features(features: &ManagedFeatures) -> ToolMode {
@@ -57,31 +40,21 @@ mod tests {
 
     #[test]
     fn omitted_selector_follows_feature_flags() {
-        let modes = ModelRuntimeModes::resolve(
+        let tool_mode = resolve_tool_mode(
             &model_info(/*tool_mode*/ None),
             &features(&[Feature::CodeModeOnly]),
         );
 
-        assert_eq!(
-            modes,
-            ModelRuntimeModes {
-                tool_mode: ToolMode::CodeModeOnly,
-            }
-        );
+        assert_eq!(tool_mode, ToolMode::CodeModeOnly);
     }
 
     #[test]
     fn explicit_selector_overrides_feature_flags() {
-        let modes = ModelRuntimeModes::resolve(
+        let tool_mode = resolve_tool_mode(
             &model_info(Some(ToolMode::Direct)),
             &features(&[Feature::CodeModeOnly]),
         );
 
-        assert_eq!(
-            modes,
-            ModelRuntimeModes {
-                tool_mode: ToolMode::Direct,
-            }
-        );
+        assert_eq!(tool_mode, ToolMode::Direct);
     }
 }

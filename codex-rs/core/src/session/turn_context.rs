@@ -2,11 +2,12 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
-use crate::model_runtime::ModelRuntimeModes;
+use crate::tool_mode::resolve_tool_mode;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
@@ -56,7 +57,7 @@ pub struct TurnContext {
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
-    pub(crate) model_runtime_modes: ModelRuntimeModes,
+    pub(crate) tool_mode: ToolMode,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -165,11 +166,11 @@ impl TurnContext {
     }
 
     pub(crate) fn code_mode_enabled(&self) -> bool {
-        self.model_runtime_modes.code_mode_enabled()
+        matches!(self.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
     }
 
     pub(crate) fn code_mode_only_enabled(&self) -> bool {
-        self.model_runtime_modes.code_mode_only_enabled()
+        self.tool_mode == ToolMode::CodeModeOnly
     }
 
     pub(crate) async fn with_model(
@@ -182,7 +183,7 @@ impl TurnContext {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let model_runtime_modes = ModelRuntimeModes::resolve(&model_info, &config.features);
+        let tool_mode = resolve_tool_mode(&model_info, &config.features);
         let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
@@ -223,7 +224,7 @@ impl TurnContext {
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
-            model_runtime_modes,
+            tool_mode,
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -487,8 +488,7 @@ impl Session {
         );
 
         let mut per_turn_config = per_turn_config;
-        let model_runtime_modes =
-            ModelRuntimeModes::resolve(&model_info, &per_turn_config.features);
+        let tool_mode = resolve_tool_mode(&model_info, &per_turn_config.features);
         per_turn_config.service_tier = get_service_tier(
             per_turn_config.service_tier,
             per_turn_config.features.enabled(Feature::FastMode),
@@ -515,7 +515,7 @@ impl Session {
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
-            model_runtime_modes,
+            tool_mode,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             reasoning_effort,
