@@ -2983,7 +2983,7 @@ impl ThreadRequestProcessor {
         if stored_thread.archived_at.is_some() {
             let thread_id = stored_thread.thread_id;
             return Err(invalid_request(format!(
-                "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it before resuming."
+                "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
             )));
         }
 

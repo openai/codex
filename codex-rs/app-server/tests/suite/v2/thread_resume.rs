@@ -823,7 +823,9 @@ async fn thread_resume_rejects_archived_session_by_id() -> Result<()> {
     let message = resume_err.error.message;
     assert!(
         message.contains(&format!("session {conversation_id} is archived"))
-            && message.contains(&format!("codex unarchive {conversation_id}")),
+            && message.contains(&format!(
+                "codex unarchive {conversation_id}` to unarchive it first"
+            )),
         "unexpected resume error: {message}"
     );
 
