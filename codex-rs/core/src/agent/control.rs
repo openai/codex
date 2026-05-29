@@ -218,12 +218,6 @@ impl AgentControl {
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
         let state = self.upgrade()?;
-        let multi_agent_v2 = match session_source.as_ref() {
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. })) => {
-                agent_path.is_some()
-            }
-            _ => config.features.enabled(Feature::MultiAgentV2),
-        };
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
@@ -345,7 +339,7 @@ impl AgentControl {
 
         self.send_input(new_thread.thread_id, initial_operation)
             .await?;
-        if !multi_agent_v2 {
+        if agent_metadata.agent_path.is_none() {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -422,10 +416,9 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-        let multi_agent_v2 = session_source.get_agent_path().is_some();
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
-                if multi_agent_v2 {
+                if session_source.get_agent_path().is_some() {
                     let parent_config = parent_thread.codex.session.get_config().await;
                     [
                         parent_config
@@ -443,7 +436,7 @@ impl AgentControl {
                 } else {
                     Vec::new()
                 }
-            } else if multi_agent_v2 {
+            } else if session_source.get_agent_path().is_some() {
                 [
                     config.multi_agent_v2.root_agent_usage_hint_text.clone(),
                     config.multi_agent_v2.subagent_usage_hint_text.clone(),
@@ -479,7 +472,7 @@ impl AgentControl {
             }
         }
         if preserve_reference_context_item
-            && multi_agent_v2
+            && session_source.get_agent_path().is_some()
             && let Some(subagent_usage_hint_text) =
                 config.multi_agent_v2.subagent_usage_hint_text.clone()
             && let Some(subagent_usage_hint_message) =
@@ -595,15 +588,9 @@ impl AgentControl {
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
-        let multi_agent_v2 = match &session_source {
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
-                agent_path.is_some()
-            }
-            _ => config.features.enabled(Feature::MultiAgentV2),
-        };
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
             && *depth >= config.agent_max_depth
-            && !multi_agent_v2
+            && !config.features.enabled(Feature::MultiAgentV2)
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
@@ -679,7 +666,7 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        if !multi_agent_v2 {
+        if agent_metadata.agent_path.is_none() {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()

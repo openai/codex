@@ -640,10 +640,7 @@ impl ThreadManager {
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
-            InterruptedTurnHistoryMarker::from_config(
-                &options.config,
-                /*multi_agent_version*/ None,
-            ),
+            InterruptedTurnHistoryMarker::from_config(&options.config),
         );
         self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
             .await
@@ -898,8 +895,7 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let interrupted_marker =
-            InterruptedTurnHistoryMarker::from_config(&config, /*multi_agent_version*/ None);
+        let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),

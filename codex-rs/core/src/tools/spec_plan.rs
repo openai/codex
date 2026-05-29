@@ -1,4 +1,3 @@
-use crate::guardian::is_guardian_reviewer_source;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
@@ -640,20 +639,6 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
 fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let turn_context = context.turn_context;
-    if is_guardian_reviewer_source(&turn_context.session_source)
-        || matches!(
-            &turn_context.session_source,
-            SessionSource::SubAgent(SubAgentSource::Review)
-        )
-        || matches!(
-            &turn_context.session_source,
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. })
-                if turn_context.multi_agent_version == Some(MultiAgentVersion::V1)
-                    && *depth >= turn_context.config.agent_max_depth
-        )
-    {
-        return;
-    }
     if turn_context.multi_agent_version.is_some() {
         if turn_context.multi_agent_version == Some(MultiAgentVersion::V2) {
             let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {

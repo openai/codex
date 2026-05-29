@@ -35,6 +35,7 @@ use serde_json::json;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::resolve_multi_agent_version;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
@@ -882,8 +883,12 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
     ]);
 
     let review = probe(|turn| {
-        turn.multi_agent_version = Some(MultiAgentVersion::V2);
         turn.session_source = SessionSource::SubAgent(SubAgentSource::Review);
+        turn.multi_agent_version = resolve_multi_agent_version(
+            &turn.model_info,
+            turn.config.as_ref(),
+            &turn.session_source,
+        );
     })
     .await;
     review.assert_visible_lacks(&[
@@ -897,9 +902,13 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
     ]);
 
     let guardian_review = probe(|turn| {
-        turn.multi_agent_version = Some(MultiAgentVersion::V2);
         turn.session_source =
             SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()));
+        turn.multi_agent_version = resolve_multi_agent_version(
+            &turn.model_info,
+            turn.config.as_ref(),
+            &turn.session_source,
+        );
     })
     .await;
     guardian_review.assert_visible_lacks(&[
@@ -913,7 +922,6 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
     ]);
 
     let max_depth_v1 = probe(|turn| {
-        turn.multi_agent_version = Some(MultiAgentVersion::V1);
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: ThreadId::new(),
             depth: turn.config.agent_max_depth,
@@ -921,6 +929,11 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
             agent_nickname: None,
             agent_role: None,
         });
+        turn.multi_agent_version = resolve_multi_agent_version(
+            &turn.model_info,
+            turn.config.as_ref(),
+            &turn.session_source,
+        );
     })
     .await;
     max_depth_v1.assert_visible_lacks(&[MULTI_AGENT_V1_NAMESPACE]);

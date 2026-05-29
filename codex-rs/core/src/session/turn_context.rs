@@ -2,6 +2,7 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::guardian::is_guardian_reviewer_source;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
@@ -110,14 +111,27 @@ pub(crate) fn resolve_multi_agent_version(
     config: &Config,
     session_source: &SessionSource,
 ) -> Option<MultiAgentVersion> {
+    if is_guardian_reviewer_source(session_source)
+        || matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::Review)
+        )
+    {
+        return None;
+    }
     match session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             agent_path: Some(_),
             ..
         }) => Some(MultiAgentVersion::V2),
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            depth,
+            agent_path: None,
+            ..
+        }) if *depth < config.agent_max_depth => Some(MultiAgentVersion::V1),
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             agent_path: None, ..
-        }) => Some(MultiAgentVersion::V1),
+        }) => None,
         _ => model_info.multi_agent_version.or_else(|| {
             if config.features.enabled(Feature::MultiAgentV2) {
                 Some(MultiAgentVersion::V2)

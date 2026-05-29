@@ -71,20 +71,11 @@ pub(crate) enum InterruptedTurnHistoryMarker {
 }
 
 impl InterruptedTurnHistoryMarker {
-    pub(crate) fn from_config(
-        config: &Config,
-        multi_agent_version: Option<MultiAgentVersion>,
-    ) -> Self {
+    pub(crate) fn from_config(config: &Config) -> Self {
         if !config.agent_interrupt_message_enabled {
             return Self::Disabled;
         }
-        if multi_agent_version.or_else(|| {
-            config
-                .features
-                .enabled(Feature::MultiAgentV2)
-                .then_some(MultiAgentVersion::V2)
-        }) == Some(MultiAgentVersion::V2)
-        {
+        if config.features.enabled(Feature::MultiAgentV2) {
             Self::Developer
         } else {
             Self::ContextualUser
@@ -850,11 +841,15 @@ impl Session {
             .await;
 
         if reason == TurnAbortReason::Interrupted
-            && let Some(marker) =
-                interrupted_turn_history_marker(InterruptedTurnHistoryMarker::from_config(
-                    task.turn_context.config.as_ref(),
-                    task.turn_context.multi_agent_version,
-                ))
+            && let Some(marker) = interrupted_turn_history_marker(
+                if !task.turn_context.config.agent_interrupt_message_enabled {
+                    InterruptedTurnHistoryMarker::Disabled
+                } else if task.turn_context.multi_agent_version == Some(MultiAgentVersion::V2) {
+                    InterruptedTurnHistoryMarker::Developer
+                } else {
+                    InterruptedTurnHistoryMarker::ContextualUser
+                },
+            )
         {
             self.record_conversation_items(
                 task.turn_context.as_ref(),
