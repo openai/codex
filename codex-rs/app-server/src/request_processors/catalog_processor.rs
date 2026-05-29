@@ -499,7 +499,11 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams { cwds, force_reload } = params;
+        let SkillsListParams {
+            cwds,
+            environment_id,
+            force_reload,
+        } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
         } else {
@@ -513,15 +517,28 @@ impl CatalogRequestProcessor {
             .await;
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let fs = self
-            .thread_manager
-            .environment_manager()
-            .default_environment()
+        let environment_manager = self.thread_manager.environment_manager();
+        let selected_environment = match environment_id {
+            Some(environment_id) => {
+                let environment = environment_manager
+                    .get_environment(&environment_id)
+                    .ok_or_else(|| {
+                        invalid_request(format!(
+                            "unknown skills/list environment id `{environment_id}`"
+                        ))
+                    })?;
+                Some(environment)
+            }
+            None => environment_manager.try_local_environment(),
+        };
+        let local_file_system = environment_manager
+            .try_local_environment()
             .map(|environment| environment.get_filesystem());
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
-                let fs = fs.clone();
+                let local_file_system = local_file_system.clone();
+                let selected_environment = selected_environment.clone();
                 let plugins_manager = &plugins_manager;
                 let skills_manager = &skills_manager;
                 async move {
@@ -553,14 +570,31 @@ impl CatalogRequestProcessor {
                     } else {
                         Vec::new()
                     };
+                    let Some(environment) = selected_environment.as_ref() else {
+                        // Omitted `environmentId` uses the legacy implicit local target. When
+                        // local exec is disabled there is no valid implicit target, so return an
+                        // empty catalog rather than silently switching to the default environment.
+                        return (
+                            index,
+                            codex_app_server_protocol::SkillsListEntry {
+                                cwd,
+                                skills: Vec::new(),
+                                errors: Vec::new(),
+                            },
+                        );
+                    };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        cwd_abs.clone(),
+                        codex_exec_server::EnvironmentPathRef::new(
+                            environment.get_filesystem(),
+                            cwd_abs.clone(),
+                        ),
+                        local_file_system,
                         effective_skill_roots,
                         config_layer_stack,
                         config.bundled_skills_enabled(),
                     );
                     let outcome = skills_manager
-                        .skills_for_cwd(&skills_input, force_reload, fs)
+                        .skills_for_cwd(&skills_input, force_reload)
                         .await;
                     let errors = errors_to_info(&outcome.errors);
                     let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);

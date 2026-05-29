@@ -1,12 +1,11 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::fmt;
-use std::sync::Arc;
-
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillMetadata {
@@ -209,4 +208,31 @@ pub fn filter_skill_load_outcome_for_product(
             .collect(),
     );
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use codex_exec_server::EnvironmentPathRef;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn environment_path_ref_joins_only_relative_paths() {
+        let root_path = std::env::temp_dir().join("skills");
+        let path_ref = EnvironmentPathRef::local(root_path.abs());
+
+        assert_eq!(
+            path_ref
+                .join_relative(Path::new("demo/SKILL.md"))
+                .map(|path_ref| path_ref.path().clone()),
+            Some(root_path.join("demo/SKILL.md").abs())
+        );
+        assert!(
+            path_ref
+                .join_relative(std::env::temp_dir().join("SKILL.md").as_path())
+                .is_none()
+        );
+    }
 }
