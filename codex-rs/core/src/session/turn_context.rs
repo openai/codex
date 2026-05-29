@@ -1,6 +1,7 @@
 use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
+use crate::environment_path;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -678,21 +679,32 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
-        let plugin_outcome = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&per_turn_config.plugins_config_input())
-            .await;
-        let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let fs = primary_turn_environment
-            .map(|turn_environment| turn_environment.environment.get_filesystem());
-        let skills_outcome = Arc::new(
-            self.services
-                .skills_manager
-                .skills_for_config(&skills_input, fs)
-                .await,
-        );
+        let path_ref = primary_turn_environment.map(|turn_environment| {
+            environment_path(
+                turn_environment.environment_id.clone(),
+                turn_environment.environment.get_filesystem(),
+                turn_environment.cwd.clone(),
+            )
+        });
+        let skills_outcome = if let Some(path_ref) = path_ref {
+            let plugins_input = per_turn_config.plugins_config_input();
+            let plugin_outcome = self
+                .services
+                .plugins_manager
+                .plugins_for_config(&plugins_input)
+                .await;
+            let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+            let skills_input =
+                skills_load_input_from_config(&per_turn_config, path_ref, effective_skill_roots);
+            Arc::new(
+                self.services
+                    .skills_manager
+                    .skills_for_config(&skills_input)
+                    .await,
+            )
+        } else {
+            Arc::new(SkillLoadOutcome::default())
+        };
         let goal_tools_supported = !per_turn_config.ephemeral && self.state_db().is_some();
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),

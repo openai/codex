@@ -92,6 +92,7 @@ pub(crate) use skills::build_skill_injections;
 pub(crate) use skills::build_skill_name_counts;
 pub(crate) use skills::collect_explicit_skill_mentions;
 pub(crate) use skills::default_skill_metadata_budget;
+pub(crate) use skills::environment_path_ref;
 pub(crate) use skills::injection;
 pub(crate) use skills::manager;
 pub(crate) use skills::maybe_emit_implicit_skill_invocation;

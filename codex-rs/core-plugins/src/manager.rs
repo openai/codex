@@ -1420,7 +1420,7 @@ impl PluginsManager {
             marketplace_category,
         );
         let resolved_skills = load_plugin_skills(
-            &source_path,
+            codex_exec_server::EnvironmentPathRef::local(source_path.clone()),
             &plugin_id,
             &manifest.paths,
             self.restriction_product,

@@ -4127,9 +4127,16 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .services
         .skills_manager
         .skills_for_cwd(
-            &crate::skills_load_input_from_config(&parent_config, Vec::new()),
+            &crate::skills_load_input_from_config(
+                &parent_config,
+                crate::environment_path(
+                    codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    Arc::clone(&skill_fs),
+                    parent_config.cwd.clone(),
+                ),
+                Vec::new(),
+            ),
             /*force_reload*/ true,
-            Some(Arc::clone(&skill_fs)),
         )
         .await;
     let parent_skill = parent_outcome
@@ -4692,13 +4699,17 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+    let cwd = crate::environment_path(
+        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        environment.get_filesystem(),
+        per_turn_config.cwd.clone(),
+    );
     let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-    let skill_fs = environment.get_filesystem();
+        crate::skills_load_input_from_config(&per_turn_config, cwd, effective_skill_roots);
     let skills_outcome = Arc::new(
         services
             .skills_manager
-            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .skills_for_config(&skills_input)
             .await,
     );
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
@@ -6535,13 +6546,17 @@ where
         .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
+    let cwd = crate::environment_path(
+        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        environment.get_filesystem(),
+        per_turn_config.cwd.clone(),
+    );
     let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-    let skill_fs = environment.get_filesystem();
+        crate::skills_load_input_from_config(&per_turn_config, cwd, effective_skill_roots);
     let skills_outcome = Arc::new(
         services
             .skills_manager
-            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .skills_for_config(&skills_input)
             .await,
     );
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);

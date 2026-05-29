@@ -7,6 +7,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::skills::EnvironmentPathRef;
 use codex_core::skills::SkillsLoadInput;
 use codex_core::skills::SkillsManager;
 use codex_file_watcher::FileWatcher;
@@ -100,22 +101,27 @@ impl SkillsWatcher {
             return WatchRegistration::default();
         }
 
+        let root_path_ref = EnvironmentPathRef::new(
+            environment_selection.environment_id.clone(),
+            environment.get_filesystem(),
+            config.cwd.clone(),
+        );
         let plugins_input = config.plugins_config_input();
         let plugins_manager = thread_manager.plugins_manager();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let skills_input = SkillsLoadInput::new(
-            config.cwd.clone(),
+            root_path_ref,
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),
             config.bundled_skills_enabled(),
         );
         let roots = thread_manager
             .skills_manager()
-            .skill_roots_for_config(&skills_input, Some(environment.get_filesystem()))
+            .skill_roots_for_config(&skills_input)
             .await
             .into_iter()
             .map(|root| WatchPath {
-                path: root.path.into_path_buf(),
+                path: root.path.path().to_path_buf(),
                 recursive: true,
             })
             .collect();

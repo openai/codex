@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -44,11 +43,6 @@ impl ResolvedTurnEnvironments {
     pub(crate) fn primary_environment(&self) -> Option<Arc<codex_exec_server::Environment>> {
         self.primary()
             .map(|environment| Arc::clone(&environment.environment))
-    }
-
-    pub(crate) fn primary_filesystem(&self) -> Option<Arc<dyn ExecutorFileSystem>> {
-        self.primary()
-            .map(|environment| environment.environment.get_filesystem())
     }
 }
 
