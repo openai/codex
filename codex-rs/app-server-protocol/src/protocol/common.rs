@@ -3167,6 +3167,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 thread_settings: v2::ThreadSettings {
                     cwd: absolute_path("/tmp/repo"),
+                    runtime_workspace_roots: None,
                     approval_policy: v2::AskForApproval::Never,
                     approvals_reviewer: v2::ApprovalsReviewer::User,
                     sandbox_policy: v2::SandboxPolicy::DangerFullAccess,
@@ -3191,6 +3192,12 @@ mod tests {
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&notification),
             Some("thread/settings/updated")
+        );
+        assert_eq!(
+            serde_json::to_value(notification)
+                .expect("thread settings notification should serialize")
+                .pointer("/params/threadSettings/runtimeWorkspaceRoots"),
+            Some(&serde_json::Value::Null)
         );
     }
 

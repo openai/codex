@@ -176,6 +176,14 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
     }
     session.model_provider_id = settings.model_provider.clone();
     session.service_tier = settings.service_tier.clone();
+    if let Some(runtime_workspace_roots) = settings.runtime_workspace_roots.as_ref() {
+        session
+            .runtime_workspace_roots
+            .clone_from(runtime_workspace_roots);
+        session.cwd.clone_from(&settings.cwd);
+    } else {
+        session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
+    }
     session.approval_policy = settings.approval_policy;
     session.approvals_reviewer = settings.approvals_reviewer.to_core();
     session.permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
@@ -183,7 +191,6 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
         settings.cwd.as_path(),
     );
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
-    session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
     session.personality = settings.personality;
     let mut collaboration_mode = settings.collaboration_mode.clone();
     collaboration_mode
@@ -196,6 +203,7 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
 
 fn thread_settings_update_has_changes(params: &ThreadSettingsUpdateParams) -> bool {
     params.cwd.is_some()
+        || params.runtime_workspace_roots.is_some()
         || params.approval_policy.is_some()
         || params.approvals_reviewer.is_some()
         || params.sandbox_policy.is_some()

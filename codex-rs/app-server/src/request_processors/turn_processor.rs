@@ -3,6 +3,10 @@ use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 
+const MAX_RUNTIME_WORKSPACE_ROOTS: usize = 100;
+const MAX_RUNTIME_WORKSPACE_ROOT_CHARS: usize = 4096;
+const MAX_RUNTIME_WORKSPACE_ROOTS_TOTAL_CHARS: usize = 1 << 20;
+
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -23,15 +27,38 @@ pub(crate) struct TurnRequestProcessor {
 fn resolve_runtime_workspace_roots(
     workspace_roots: Vec<PathBuf>,
     base_cwd: &AbsolutePathBuf,
-) -> Vec<AbsolutePathBuf> {
+) -> Result<Vec<AbsolutePathBuf>, JSONRPCErrorError> {
     let mut resolved_roots = Vec::new();
     for path in workspace_roots {
         let root = AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path());
+        if root.as_path().to_string_lossy().chars().count() > MAX_RUNTIME_WORKSPACE_ROOT_CHARS {
+            return Err(invalid_params(format!(
+                "Runtime workspace root exceeds the maximum length of {MAX_RUNTIME_WORKSPACE_ROOT_CHARS} characters."
+            )));
+        }
         if !resolved_roots.iter().any(|existing| existing == &root) {
             resolved_roots.push(root);
         }
     }
-    resolved_roots
+    Ok(resolved_roots)
+}
+
+fn validate_runtime_workspace_roots(workspace_roots: &[PathBuf]) -> Result<(), JSONRPCErrorError> {
+    if workspace_roots.len() > MAX_RUNTIME_WORKSPACE_ROOTS {
+        return Err(invalid_params(format!(
+            "Runtime workspace roots exceed the maximum count of {MAX_RUNTIME_WORKSPACE_ROOTS}."
+        )));
+    }
+    let total_chars = workspace_roots
+        .iter()
+        .map(|path| path.to_string_lossy().chars().count())
+        .sum::<usize>();
+    if total_chars > MAX_RUNTIME_WORKSPACE_ROOTS_TOTAL_CHARS {
+        return Err(invalid_params(format!(
+            "Runtime workspace roots exceed the maximum total length of {MAX_RUNTIME_WORKSPACE_ROOTS_TOTAL_CHARS} characters."
+        )));
+    }
+    Ok(())
 }
 
 fn map_additional_context(
@@ -621,22 +648,23 @@ impl TurnRequestProcessor {
             || collaboration_mode.is_some()
             || personality.is_some();
 
-        let runtime_workspace_roots = if let Some(workspace_roots) =
-            runtime_workspace_roots_request.clone()
-        {
-            let Some(snapshot) = snapshot.as_ref() else {
-                return Err(internal_error(format!(
-                    "{method} runtime workspace roots missing thread snapshot"
-                )));
+        let runtime_workspace_roots =
+            if let Some(workspace_roots) = runtime_workspace_roots_request.clone() {
+                validate_runtime_workspace_roots(&workspace_roots)?;
+                let Some(snapshot) = snapshot.as_ref() else {
+                    return Err(internal_error(format!(
+                        "{method} runtime workspace roots missing thread snapshot"
+                    )));
+                };
+                let base_cwd = match cwd.as_ref() {
+                    Some(cwd) => AbsolutePathBuf::relative_to_current_dir(cwd)
+                        .map_err(|err| invalid_request(format!("invalid cwd: {err}")))?,
+                    None => snapshot.cwd.clone(),
+                };
+                Some(resolve_runtime_workspace_roots(workspace_roots, &base_cwd)?)
+            } else {
+                None
             };
-            let base_cwd = cwd
-                .as_ref()
-                .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, snapshot.cwd.as_path()))
-                .unwrap_or_else(|| snapshot.cwd.clone());
-            Some(resolve_runtime_workspace_roots(workspace_roots, &base_cwd))
-        } else {
-            None
-        };
         let approval_policy =
             approval_policy.map(codex_app_server_protocol::AskForApproval::to_core);
         let approvals_reviewer =
@@ -750,7 +778,7 @@ impl TurnRequestProcessor {
                 ThreadSettingsBuildParams {
                     method: "thread/settings/update",
                     cwd: params.cwd,
-                    runtime_workspace_roots: None,
+                    runtime_workspace_roots: params.runtime_workspace_roots,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,

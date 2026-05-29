@@ -29,6 +29,7 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -92,6 +93,117 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
                     == Some(service_tier_id.as_str())
         }),
         "future turn did not use updated model/service tier: {request_bodies:#?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_resolves_runtime_workspace_roots_against_effective_cwd()
+-> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let initial_cwd = codex_home.path().join("initial");
+    std::fs::create_dir_all(&initial_cwd)?;
+    let thread = start_thread_with_cwd(&mut mcp, &initial_cwd).await?.thread;
+    let cwd = PathBuf::from("workspace");
+    let canonical_codex_home = std::fs::canonicalize(codex_home.path())?;
+    let expected_cwd = canonical_codex_home.join(&cwd);
+    let expected_root = expected_cwd.join("nested");
+    std::fs::create_dir_all(&expected_root)?;
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            cwd: Some(cwd),
+            runtime_workspace_roots: Some(vec![PathBuf::from("nested"), PathBuf::from("nested")]),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(updated.thread_id, thread.id);
+    assert_eq!(
+        std::fs::canonicalize(updated.thread_settings.cwd.as_path())?,
+        std::fs::canonicalize(expected_cwd)?
+    );
+    assert_eq!(
+        updated
+            .thread_settings
+            .runtime_workspace_roots
+            .as_ref()
+            .expect("new app-server should report runtime workspace roots")
+            .iter()
+            .map(|root| std::fs::canonicalize(root.as_path()))
+            .collect::<Result<Vec<_>, _>>()?,
+        vec![std::fs::canonicalize(expected_root)?]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_rejects_too_many_runtime_workspace_roots() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+    let request_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread.id,
+            runtime_workspace_roots: Some(
+                (0..101)
+                    .map(|index| PathBuf::from(format!("root-{index}")))
+                    .collect(),
+            ),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        error.error.message,
+        "Runtime workspace roots exceed the maximum count of 100."
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_update_rejects_too_long_runtime_workspace_root() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+    let request_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread.id,
+            runtime_workspace_roots: Some(vec![PathBuf::from("r".repeat(4097))]),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        error.error.message,
+        "Runtime workspace root exceeds the maximum length of 4096 characters."
     );
     Ok(())
 }
@@ -337,6 +449,25 @@ async fn start_thread(mcp: &mut McpProcess) -> Result<ThreadStartResponse> {
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
+
+async fn start_thread_with_cwd(
+    mcp: &mut McpProcess,
+    cwd: &std::path::Path,
+) -> Result<ThreadStartResponse> {
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(cwd.display().to_string()),
             ..Default::default()
         })
         .await?;
