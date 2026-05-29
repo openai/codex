@@ -50,6 +50,8 @@ mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
 mod remote_control_cmd;
+#[cfg(target_os = "windows")]
+mod sandbox_setup;
 mod state_db_recovery;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -1250,6 +1252,16 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 .await?;
         }
         Some(Subcommand::Sandbox(mut sandbox_cli)) => {
+            #[cfg(target_os = "windows")]
+            if let Some(setup_cli) = sandbox_setup::parse_setup_command(&sandbox_cli.command)? {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "sandbox setup",
+                )?;
+                sandbox_setup::run(setup_cli).await?;
+                return Ok(());
+            }
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),

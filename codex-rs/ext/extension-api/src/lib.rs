@@ -13,6 +13,7 @@ pub use capabilities::ResponseItemInjector;
 pub use codex_tools::ConversationHistory;
 pub use codex_tools::ExtensionTurnItem;
 pub use codex_tools::FunctionCallError;
+pub use codex_tools::ImageGenerationCompletionFuture;
 pub use codex_tools::JsonToolOutput;
 pub use codex_tools::NoopTurnItemEmitter;
 pub use codex_tools::ResponsesApiTool;

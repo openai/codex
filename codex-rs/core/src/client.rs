@@ -1734,19 +1734,9 @@ fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
 }
 
 fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) => Some(parent_thread_id.to_string()),
-        SessionSource::Cli
-        | SessionSource::VSCode
-        | SessionSource::Exec
-        | SessionSource::Mcp
-        | SessionSource::Custom(_)
-        | SessionSource::Internal(_)
-        | SessionSource::SubAgent(_)
-        | SessionSource::Unknown => None,
-    }
+    session_source
+        .parent_thread_id()
+        .map(|parent_thread_id| parent_thread_id.to_string())
 }
 
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;

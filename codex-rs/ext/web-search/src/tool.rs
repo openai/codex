@@ -90,7 +90,7 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
         );
         let request = SearchRequest {
             id: self.session_id.clone(),
-            model: None,
+            model: call.model.clone(),
             reasoning: None,
             input: recent_input(call.conversation_history.items()),
             commands: Some(commands),
