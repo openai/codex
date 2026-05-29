@@ -377,6 +377,10 @@ pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const PROXY_ACTIVE_ENV_KEY: &str = "CODEX_NETWORK_PROXY_ACTIVE";
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 pub const MITM_CA_ENV_KEYS: &[&str] = &crate::certs::CUSTOM_CA_ENV_KEYS;
+/// Returns whether `value` points at a Codex-generated managed MITM CA bundle.
+pub fn is_managed_mitm_ca_trust_bundle_path(value: &str) -> bool {
+    crate::certs::is_managed_mitm_ca_trust_bundle_path(std::path::Path::new(value))
+}
 const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
 const NODE_USE_ENV_PROXY_ENV_KEY: &str = "NODE_USE_ENV_PROXY";
 #[cfg(any(target_os = "macos", test))]
@@ -1101,8 +1105,6 @@ mod tests {
         let mitm_ca_trust_bundles = crate::certs::ManagedMitmCaTrustBundles {
             managed_ca_cert_path: Path::new("/tmp/codex-proxy/ca.pem").to_path_buf(),
             default_path: mitm_ca_trust_bundle_path.to_path_buf(),
-            env_paths: HashMap::new(),
-            inherited_env_values: HashMap::new(),
         };
         apply_proxy_env_overrides(
             &mut env,
