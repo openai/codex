@@ -2,8 +2,6 @@ use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::io;
-use std::path::Component;
-use std::path::Path;
 use std::sync::Arc;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -59,24 +57,6 @@ impl EnvironmentPathRef {
         self.file_system.read_directory(&self.path, sandbox).await
     }
 
-    pub fn join_relative(&self, relative: &Path) -> Option<Self> {
-        relative
-            .components()
-            .all(|component| {
-                !matches!(
-                    component,
-                    Component::ParentDir | Component::Prefix(_) | Component::RootDir
-                )
-            })
-            .then(|| self.path.as_path().join(relative))
-            .and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
-            .map(|path| self.with_path(path))
-    }
-
-    pub fn parent_dir(&self) -> Option<Self> {
-        self.path.parent().map(|path| self.with_path(path))
-    }
-
     pub fn with_path(&self, path: AbsolutePathBuf) -> Self {
         Self::new(Arc::clone(&self.file_system), path)
     }
@@ -113,7 +93,6 @@ mod tests {
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;
-    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
     use std::sync::Mutex;
@@ -337,33 +316,5 @@ mod tests {
 
         let set = HashSet::from([left, same, different_path, different_fs]);
         assert_eq!(set.len(), 3);
-    }
-
-    #[test]
-    fn join_relative_keeps_literal_tilde_under_bound_path() {
-        let path_ref = EnvironmentPathRef::local(std::env::temp_dir().join("skills").abs());
-
-        assert_eq!(
-            path_ref
-                .join_relative(Path::new("~"))
-                .map(|path_ref| path_ref.path().clone()),
-            Some(std::env::temp_dir().join("skills/~").abs())
-        );
-    }
-
-    #[test]
-    fn join_relative_rejects_parent_dirs() {
-        let path_ref = EnvironmentPathRef::local(std::env::temp_dir().join("skills").abs());
-
-        assert_eq!(path_ref.join_relative(Path::new("../outside")), None);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn join_relative_rejects_windows_prefixed_and_rooted_paths() {
-        let path_ref = EnvironmentPathRef::local(std::env::temp_dir().join("skills").abs());
-
-        assert_eq!(path_ref.join_relative(Path::new(r"C:temp")), None);
-        assert_eq!(path_ref.join_relative(Path::new(r"\temp")), None);
     }
 }
