@@ -3,6 +3,16 @@ use codex_tools::JsonSchema;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
+fn described_object(description: &str) -> JsonSchema {
+    let mut schema = JsonSchema::object(
+        BTreeMap::new(),
+        /*required*/ None,
+        /*additional_properties*/ None,
+    );
+    schema.description = Some(description.to_string());
+    schema
+}
+
 #[test]
 fn spawn_agents_on_csv_tool_requires_csv_and_instruction() {
     assert_eq!(
@@ -30,13 +40,15 @@ fn spawn_agents_on_csv_tool_requires_csv_and_instruction() {
                     (
                         "id_column".to_string(),
                         JsonSchema::string(Some(
-                            "Optional column name to use as stable item id.".to_string(),
+                            "CSV column to use as stable item id. Omit to use row numbers."
+                                .to_string(),
                         )),
                     ),
                     (
                         "output_csv_path".to_string(),
                         JsonSchema::string(Some(
-                            "Optional output CSV path for exported results.".to_string(),
+                            "Output CSV path for exported results. Omit to create one next to the input CSV."
+                                .to_string(),
                         )),
                     ),
                     (
@@ -49,22 +61,21 @@ fn spawn_agents_on_csv_tool_requires_csv_and_instruction() {
                     (
                         "max_workers".to_string(),
                         JsonSchema::number(Some(
-                            "Alias for max_concurrency. Set to 1 to run sequentially.".to_string(),
+                            "Alias for max_concurrency. Defaults to 16 and is capped by config."
+                                .to_string(),
                         )),
                     ),
                     (
                         "max_runtime_seconds".to_string(),
                         JsonSchema::number(Some(
-                            "Maximum runtime per worker before it is failed. Defaults to 1800 seconds."
+                            "Maximum runtime per worker before failure. Defaults to 1800 seconds; config may set a different default."
                                 .to_string(),
                         )),
                     ),
                     (
                         "output_schema".to_string(),
-                        JsonSchema::object(
-                            BTreeMap::new(),
-                            /*required*/ None,
-                            /*additional_properties*/ None,
+                        described_object(
+                            "JSON Schema for each worker result. Omit to accept any result object.",
                         ),
                     ),
                 ]), Some(vec!["csv_path".to_string(), "instruction".to_string()]), Some(false.into())),
@@ -95,16 +106,12 @@ fn report_agent_job_result_tool_requires_result_payload() {
                     ),
                     (
                         "result".to_string(),
-                        JsonSchema::object(
-                            BTreeMap::new(),
-                            /*required*/ None,
-                            /*additional_properties*/ None,
-                        ),
+                        described_object("Result object for this job item."),
                     ),
                     (
                         "stop".to_string(),
                         JsonSchema::boolean(Some(
-                            "Optional. When true, cancels the remaining job items after this result is recorded."
+                            "True cancels remaining job items after this result is recorded; false or omitted continues the job."
                                 .to_string(),
                         )),
                     ),

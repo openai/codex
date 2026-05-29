@@ -12,15 +12,15 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
+use anyhow::Context;
 use codex_login::CodexAuth;
+use codex_protocol::mcp::McpServerInfo;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
 use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
-
-pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexAppsToolsCacheKey {
@@ -44,11 +44,19 @@ pub(crate) struct CodexAppsToolsCacheContext {
 }
 
 impl CodexAppsToolsCacheContext {
-    pub(crate) fn cache_path(&self) -> PathBuf {
+    pub(crate) fn tools_cache_path(&self) -> PathBuf {
+        self.cache_path_in(CODEX_APPS_TOOLS_CACHE_DIR)
+    }
+
+    pub(crate) fn server_info_cache_path(&self) -> PathBuf {
+        self.cache_path_in(CODEX_APPS_SERVER_INFO_CACHE_DIR)
+    }
+
+    fn cache_path_in(&self, cache_dir: &str) -> PathBuf {
         let user_key_json = serde_json::to_string(&self.user_key).unwrap_or_default();
         let user_key_hash = sha1_hex(&user_key_json);
         self.codex_home
-            .join(CODEX_APPS_TOOLS_CACHE_DIR)
+            .join(cache_dir)
             .join(format!("{user_key_hash}.json"))
     }
 }
@@ -127,15 +135,16 @@ pub(crate) fn normalize_codex_apps_callable_namespace(
     if server_name == CODEX_APPS_MCP_SERVER_NAME
         && let Some(connector_name) = connector_name
     {
-        format!("mcp__{}__{}", server_name, sanitize_name(connector_name))
+        format!("{}__{}", server_name, sanitize_name(connector_name))
     } else {
-        format!("mcp__{server_name}__")
+        server_name.to_string()
     }
 }
 
 pub(crate) fn write_cached_codex_apps_tools_if_needed(
     server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
+    server_info: &McpServerInfo,
     tools: &[ToolInfo],
 ) {
     if server_name != CODEX_APPS_MCP_SERVER_NAME {
@@ -145,6 +154,9 @@ pub(crate) fn write_cached_codex_apps_tools_if_needed(
     if let Some(cache_context) = cache_context {
         let cache_write_start = Instant::now();
         write_cached_codex_apps_tools(cache_context, tools);
+        if let Err(err) = write_cached_codex_apps_server_info(cache_context, server_info) {
+            tracing::warn!("failed to write Codex Apps server info cache: {err:#}");
+        }
         emit_duration(
             MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
             cache_write_start.elapsed(),
@@ -169,6 +181,17 @@ pub(crate) fn load_startup_cached_codex_apps_tools_snapshot(
     }
 }
 
+pub(crate) fn load_startup_cached_codex_apps_server_info(
+    server_name: &str,
+    cache_context: Option<&CodexAppsToolsCacheContext>,
+) -> Option<McpServerInfo> {
+    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
+    load_cached_codex_apps_server_info(cache_context?)
+}
+
 #[cfg(test)]
 pub(crate) fn read_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
@@ -182,7 +205,7 @@ pub(crate) fn read_cached_codex_apps_tools(
 pub(crate) fn load_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> CachedCodexAppsToolsLoad {
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     let bytes = match std::fs::read(cache_path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -204,7 +227,7 @@ pub(crate) fn write_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
     tools: &[ToolInfo],
 ) {
-    let cache_path = cache_context.cache_path();
+    let cache_path = cache_context.tools_cache_path();
     if let Some(parent) = cache_path.parent()
         && std::fs::create_dir_all(parent).is_err()
     {
@@ -218,6 +241,42 @@ pub(crate) fn write_cached_codex_apps_tools(
         return;
     };
     let _ = std::fs::write(cache_path, bytes);
+}
+
+pub(crate) fn load_cached_codex_apps_server_info(
+    cache_context: &CodexAppsToolsCacheContext,
+) -> Option<McpServerInfo> {
+    let bytes = std::fs::read(cache_context.server_info_cache_path()).ok()?;
+    let cache: CodexAppsServerInfoDiskCache = serde_json::from_slice(&bytes).ok()?;
+    (cache.schema_version == CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION)
+        .then_some(cache.server_info)
+}
+
+fn write_cached_codex_apps_server_info(
+    cache_context: &CodexAppsToolsCacheContext,
+    server_info: &McpServerInfo,
+) -> anyhow::Result<()> {
+    let cache_path = cache_context.server_info_cache_path();
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create Codex Apps server info cache directory `{}`",
+                parent.display()
+            )
+        })?;
+    }
+    let bytes = serde_json::to_vec_pretty(&CodexAppsServerInfoDiskCache {
+        schema_version: CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION,
+        server_info: server_info.clone(),
+    })
+    .context("failed to serialize Codex Apps server info cache")?;
+    std::fs::write(&cache_path, bytes).with_context(|| {
+        format!(
+            "failed to write Codex Apps server info cache `{}`",
+            cache_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 pub(crate) fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
@@ -237,7 +296,17 @@ struct CodexAppsToolsDiskCache {
     tools: Vec<ToolInfo>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodexAppsServerInfoDiskCache {
+    schema_version: u8,
+    server_info: McpServerInfo,
+}
+
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
+pub(crate) const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 3;
+
+const CODEX_APPS_SERVER_INFO_CACHE_DIR: &str = "cache/codex_apps_server_info";
+const CODEX_APPS_SERVER_INFO_CACHE_SCHEMA_VERSION: u8 = 1;
 
 fn sha1_hex(s: &str) -> String {
     let mut hasher = Sha1::new();

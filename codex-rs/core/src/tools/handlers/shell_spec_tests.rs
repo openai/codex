@@ -31,7 +31,7 @@ fn exec_command_tool_matches_expected_spec() {
         (
             "workdir".to_string(),
             JsonSchema::string(Some(
-                    "Optional working directory to run the command in; defaults to the turn cwd."
+                    "Working directory for the command. Defaults to the turn cwd."
                         .to_string(),
                 )),
         ),
@@ -44,27 +44,26 @@ fn exec_command_tool_matches_expected_spec() {
         (
             "tty".to_string(),
             JsonSchema::boolean(Some(
-                    "Whether to allocate a TTY for the command. Defaults to false (plain pipes); set to true to open a PTY and access TTY process."
+                    "True allocates a PTY for the command; false or omitted uses plain pipes."
                         .to_string(),
                 )),
         ),
         (
             "yield_time_ms".to_string(),
             JsonSchema::number(Some(
-                    "How long to wait (in milliseconds) for output before yielding.".to_string(),
+                    "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.".to_string(),
                 )),
         ),
         (
             "max_output_tokens".to_string(),
             JsonSchema::number(Some(
-                    "Maximum number of tokens to return. Excess output will be truncated."
-                        .to_string(),
+                    "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.".to_string(),
                 )),
         ),
         (
             "login".to_string(),
             JsonSchema::boolean(Some(
-                    "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
+                    "True runs the shell with -l/-i semantics; false disables them. Defaults to true.".to_string(),
                 )),
         ),
     ]);
@@ -103,19 +102,19 @@ fn write_stdin_tool_matches_expected_spec() {
         (
             "chars".to_string(),
             JsonSchema::string(Some(
-                "Bytes to write to stdin (may be empty to poll).".to_string(),
+                "Bytes to write to stdin. Defaults to empty, which polls without writing.".to_string(),
             )),
         ),
         (
             "yield_time_ms".to_string(),
             JsonSchema::number(Some(
-                "How long to wait (in milliseconds) for output before yielding.".to_string(),
+                "Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default.".to_string(),
             )),
         ),
         (
             "max_output_tokens".to_string(),
             JsonSchema::number(Some(
-                "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
+                "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.".to_string(),
             )),
         ),
     ]);
@@ -201,25 +200,25 @@ Examples of valid command strings:
         (
             "command".to_string(),
             JsonSchema::string(Some(
-                "The shell script to execute in the user's default shell".to_string(),
+                "Shell script to run in the user's default shell.".to_string(),
             )),
         ),
         (
             "workdir".to_string(),
             JsonSchema::string(Some(
-                "The working directory to execute the command in".to_string(),
+                "Working directory for the command. Defaults to the turn cwd.".to_string(),
             )),
         ),
         (
             "timeout_ms".to_string(),
             JsonSchema::number(Some(
-                "The timeout for the command in milliseconds".to_string(),
+                "Maximum command runtime. Defaults to 10000 ms.".to_string(),
             )),
         ),
         (
             "login".to_string(),
             JsonSchema::boolean(Some(
-                "Whether to run the shell with login shell semantics. Defaults to true."
+                "True runs with login shell semantics; false disables them. Defaults to true."
                     .to_string(),
             )),
         ),

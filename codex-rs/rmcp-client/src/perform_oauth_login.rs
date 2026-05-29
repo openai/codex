@@ -621,19 +621,15 @@ async fn start_authorization(
     auth_manager.with_client(http_client)?;
     let metadata = auth_manager.discover_metadata().await?;
     auth_manager.set_metadata(metadata);
-    auth_manager.configure_client(OAuthClientConfig {
-        client_id: oauth_client_id.to_string(),
-        client_secret: None,
-        scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
-        redirect_uri: redirect_uri.to_string(),
-    })?;
+    auth_manager.configure_client(
+        OAuthClientConfig::new(oauth_client_id, redirect_uri)
+            .with_scopes(scopes.iter().map(|scope| (*scope).to_string()).collect()),
+    )?;
     let auth_url = auth_manager.get_authorization_url(scopes).await?;
 
-    Ok(OAuthState::Session(AuthorizationSession {
-        auth_manager,
-        auth_url,
-        redirect_uri: redirect_uri.to_string(),
-    }))
+    Ok(OAuthState::Session(
+        AuthorizationSession::for_scope_upgrade(auth_manager, auth_url, redirect_uri),
+    ))
 }
 
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {

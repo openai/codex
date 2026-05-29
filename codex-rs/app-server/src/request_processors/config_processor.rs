@@ -54,6 +54,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "mentions_v2",
     "plugins",
     "remote_control",
+    "remote_plugin",
     "tool_suggest",
     "tool_call_mcp_elicitation",
 ];
@@ -431,6 +432,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             normalized
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
+        allow_appshots: requirements.allow_appshots,
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
@@ -609,7 +611,7 @@ fn map_network_unix_socket_permission_to_api(
 ) -> NetworkUnixSocketPermission {
     match permission {
         codex_config::NetworkUnixSocketPermissionToml::Allow => NetworkUnixSocketPermission::Allow,
-        codex_config::NetworkUnixSocketPermissionToml::None => NetworkUnixSocketPermission::None,
+        codex_config::NetworkUnixSocketPermissionToml::Deny => NetworkUnixSocketPermission::Deny,
     }
 }
 
@@ -655,6 +657,17 @@ mod tests {
             ])
         );
         assert_eq!(mapped.allow_managed_hooks_only, Some(true));
+        assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
+    fn requirements_api_includes_allow_appshots() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_appshots: Some(false),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_appshots, Some(false));
         assert_eq!(mapped.hooks, None);
     }
 

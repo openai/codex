@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_event::HistoryLookupResponse;
 use codex_app_server_protocol::NetworkAccess;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_protocol::models::ManagedFileSystemPermissions;
@@ -72,6 +73,120 @@ async fn resumed_initial_messages_render_history() {
         text_blob.contains("assistant reply"),
         "expected replayed agent message",
     );
+}
+
+#[tokio::test]
+async fn replayed_user_messages_seed_composer_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_history_metadata(
+        ThreadId::new(),
+        /*log_id*/ 1,
+        /*entry_count*/ 3,
+    );
+
+    let mut replay_mention = |id: &str, text: &str, name: &str, path: &str| {
+        replay_user_message_inputs(
+            &mut chat,
+            id,
+            vec![
+                AppServerUserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                },
+                AppServerUserInput::Mention {
+                    name: name.to_string(),
+                    path: path.to_string(),
+                },
+            ],
+            ReplayKind::ResumeInitialMessages,
+        );
+    };
+    replay_mention(
+        "user-1",
+        "use $sample",
+        "Sample Plugin",
+        "plugin://sample@test",
+    );
+    replay_mention(
+        "user-2",
+        "use $google-calendar",
+        "Google Calendar",
+        "app://google_calendar",
+    );
+    drain_insert_history(&mut rx);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "use $google-calendar");
+    assert_eq!(
+        chat.bottom_pane.take_mention_bindings(),
+        vec![MentionBinding {
+            sigil: '$',
+            mention: "google-calendar".to_string(),
+            path: "app://google_calendar".to_string(),
+        }]
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "use $sample");
+    assert_eq!(
+        chat.bottom_pane.take_mention_bindings(),
+        vec![MentionBinding {
+            sigil: '$',
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }]
+    );
+
+    let mut next_lookup_offset = || {
+        let AppEvent::LookupMessageHistoryEntry { offset, .. } =
+            rx.try_recv().expect("expected lookup")
+        else {
+            panic!("unexpected event variant");
+        };
+        offset
+    };
+    let response = |offset, entry: &str| HistoryLookupResponse {
+        offset,
+        log_id: 1,
+        entry: Some(entry.to_string()),
+    };
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.handle_history_entry_response(response(
+        next_lookup_offset(),
+        "use [$google-calendar](app://google_calendar)",
+    ));
+
+    assert_eq!(next_lookup_offset(), 1);
+    chat.handle_history_entry_response(response(1, "use [$sample](plugin://sample@test)"));
+
+    assert_eq!(next_lookup_offset(), 0);
+    chat.handle_history_entry_response(response(0, "/rename smoke-1"));
+    assert_eq!(chat.bottom_pane.composer_text(), "/rename smoke-1");
+}
+
+#[tokio::test]
+async fn replayed_review_prompt_does_not_seed_composer_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_item(
+        AppServerThreadItem::EnteredReviewMode {
+            id: "review-start".to_string(),
+            review: "changes against main".to_string(),
+        },
+        "turn-1".to_string(),
+        ReplayKind::ResumeInitialMessages,
+    );
+    replay_user_message_text(
+        &mut chat,
+        "review-prompt",
+        "Review the code changes against the base branch 'main'.",
+        ReplayKind::ResumeInitialMessages,
+    );
+    drain_insert_history(&mut rx);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "");
 }
 
 #[tokio::test]

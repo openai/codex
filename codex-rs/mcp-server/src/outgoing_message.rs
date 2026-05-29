@@ -169,7 +169,7 @@ impl From<OutgoingMessage> for OutgoingJsonRpcMessage {
             }
             Error(OutgoingError { id, error }) => JsonRpcMessage::Error(JsonRpcError {
                 jsonrpc: JsonRpcVersion2_0,
-                id,
+                id: Some(id),
                 error,
             }),
         }

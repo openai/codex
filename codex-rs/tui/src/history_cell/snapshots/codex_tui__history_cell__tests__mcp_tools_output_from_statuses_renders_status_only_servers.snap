@@ -1,5 +1,5 @@
 ---
-source: tui/src/history_cell.rs
+source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
 /mcp
@@ -8,5 +8,4 @@ expression: rendered
 
   • plugin_docs
     • Auth: Unsupported
-    • Command: docs-server --stdio
     • Tools: lookup

@@ -29,6 +29,17 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
 fn inter_agent_msg(text: &str, trigger_turn: bool) -> ResponseItem {
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
@@ -190,6 +201,23 @@ fn truncates_rollout_to_last_n_fork_turns_counts_trigger_turn_messages() {
 
     let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
     let expected = rollout[4..].to_vec();
+
+    assert_eq!(
+        serde_json::to_value(&truncated).unwrap(),
+        serde_json::to_value(&expected).unwrap()
+    );
+}
+
+#[test]
+fn truncates_rollout_to_last_n_fork_turns_drops_startup_prefix_even_when_under_limit() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(developer_msg("startup developer context")),
+        RolloutItem::ResponseItem(user_msg("current task")),
+        RolloutItem::ResponseItem(assistant_msg("answer")),
+    ];
+
+    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
+    let expected = rollout[1..].to_vec();
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),

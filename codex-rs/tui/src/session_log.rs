@@ -30,6 +30,10 @@ impl SessionLogger {
         let mut opts = OpenOptions::new();
         opts.create(true).truncate(true).write(true);
 
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;

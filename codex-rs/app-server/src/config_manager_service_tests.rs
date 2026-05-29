@@ -163,6 +163,38 @@ async fn write_value_rejects_legacy_profile_selector() -> Result<()> {
 }
 
 #[tokio::test]
+async fn write_value_rejects_legacy_profile_table() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "")?;
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "profiles.work.model".to_string(),
+            value: serde_json::json!("gpt-work"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("legacy profile table write should fail");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("`profiles` contains legacy config profile tables"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, "");
+    Ok(())
+}
+
+#[tokio::test]
 async fn batch_write_rejects_legacy_profile_selector() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let path = tmp.path().join(CONFIG_TOML_FILE);
@@ -704,52 +736,6 @@ async fn write_value_rejects_feature_requirement_conflict() {
         error
             .to_string()
             .contains("invalid value for `features`: `features.personality=false`"),
-        "{error}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap(),
-        ""
-    );
-}
-
-#[tokio::test]
-async fn write_value_rejects_profile_feature_requirement_conflict() {
-    let tmp = tempdir().expect("tempdir");
-    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
-
-    let service = ConfigManager::new_for_tests(
-        tmp.path().to_path_buf(),
-        vec![],
-        LoaderOverrides::without_managed_config_for_tests(),
-        CloudRequirementsLoader::new(async {
-            Ok(Some(ConfigRequirementsToml {
-                feature_requirements: Some(FeatureRequirementsToml {
-                    entries: BTreeMap::from([("personality".to_string(), true)]),
-                }),
-                ..Default::default()
-            }))
-        }),
-    );
-
-    let error = service
-        .write_value(ConfigValueWriteParams {
-            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-            key_path: "profiles.enterprise.features.personality".to_string(),
-            value: serde_json::json!(false),
-            merge_strategy: MergeStrategy::Replace,
-            expected_version: None,
-        })
-        .await
-        .expect_err("conflicting profile feature write should fail");
-
-    assert_eq!(
-        error.write_error_code(),
-        Some(ConfigWriteErrorCode::ConfigValidationError)
-    );
-    assert!(
-        error.to_string().contains(
-            "invalid value for `features`: `profiles.enterprise.features.personality=false`"
-        ),
         "{error}"
     );
     assert_eq!(

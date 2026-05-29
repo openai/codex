@@ -1,0 +1,72 @@
+{
+  "source": "golden/notion/tools",
+  "tools": [
+    {
+      "name": "notion_fetch_page",
+      "description": "Fetch a Notion page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "$ref": "#/$defs/Page%20Ref"
+          },
+          "filter": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/Filter"
+            }
+          },
+          "content_mode": {
+            "description": "How much content to return.",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "summary",
+                  "full"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "$defs": {
+          "Page Ref": {
+            "type": "string",
+            "description": "Notion page ID or URL."
+          },
+          "Filter": {
+            "type": "object",
+            "description": "Filter object.",
+            "properties": {
+              "created_by": {
+                "type": "string",
+                "description": "Creator user ID."
+              }
+            }
+          },
+          "UnusedDatabase": {
+            "type": "object",
+            "description": "Unreachable Notion database schema."
+          }
+        }
+      },
+      "expected_preserved": [
+        {
+          "pointer": "/properties/page/$ref",
+          "value": "#/$defs/Page%20Ref"
+        },
+        {
+          "pointer": "/properties/content_mode/anyOf/0/enum/0",
+          "value": "summary"
+        }
+      ],
+      "expected_pruned": [
+        "/$defs/UnusedDatabase"
+      ],
+      "expected_dropped_fields": []
+    }
+  ]
+}

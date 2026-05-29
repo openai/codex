@@ -38,7 +38,9 @@ impl EnvironmentRegistryClient {
         Ok(Self {
             base_url,
             auth_provider,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?,
         })
     }
 
@@ -310,6 +312,41 @@ mod tests {
                 url: "wss://rendezvous.test/cloud-agent/default/ws/environment/env-1?role=environment&sig=abc".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn register_environment_does_not_follow_redirects_with_auth_headers() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/register"))
+            .and(header("authorization", "Bearer registry-token"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("{}/redirect-target", server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/redirect-target"))
+            .and(header("authorization", "Bearer registry-token"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+            .expect("client");
+
+        let error = client
+            .register_environment("environment-requested")
+            .await
+            .expect_err("redirect response should not be followed");
+
+        assert!(matches!(
+            error,
+            ExecServerError::EnvironmentRegistryHttp {
+                status: StatusCode::FOUND,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -1,123 +1,60 @@
 //! Plugin mention capability enrichment for the TUI.
 //!
-//! Mention inventory comes from app-server `plugin/list`, while mention eligibility still reuses
-//! the older local bulk capability summaries. That keeps the feature app-server-shaped without
-//! paying for a `plugin/read` per plugin.
+//! Mention inventory comes from app-server `plugin/list`, matching the GUI
+//! client. The current API exposes plugin-level mention metadata there, but not
+//! effective per-session capability summaries.
 
 use super::background_requests::request_plugin_list;
 use super::*;
+use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginListResponse;
-use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginSummary;
-use codex_core_plugins::PluginsManager;
 use codex_plugin::PluginCapabilitySummary;
-use std::collections::HashMap;
-
-#[derive(Debug, Clone)]
-struct PluginMentionEntry {
-    config_name: String,
-    display_name: String,
-    description: Option<String>,
-}
-
-impl PluginMentionEntry {
-    fn capability_summary(
-        self,
-        capabilities_by_config_name: &HashMap<String, PluginCapabilitySummary>,
-    ) -> Option<PluginCapabilitySummary> {
-        let capabilities = capabilities_by_config_name.get(&self.config_name)?;
-        Some(PluginCapabilitySummary {
-            config_name: self.config_name,
-            display_name: self.display_name,
-            description: self.description,
-            has_skills: capabilities.has_skills,
-            mcp_server_names: capabilities.mcp_server_names.clone(),
-            app_connector_ids: capabilities.app_connector_ids.clone(),
-        })
-    }
-}
 
 pub(super) async fn fetch_plugin_mentions(
     request_handle: AppServerRequestHandle,
-    config: crate::legacy_core::config::Config,
+    cwd: PathBuf,
 ) -> Result<Vec<PluginCapabilitySummary>> {
-    let response = request_plugin_list(request_handle, config.cwd.to_path_buf()).await?;
-    let mention_entries = plugin_mention_entries_from_list_response(response);
-    let capabilities_by_config_name = load_plugin_mention_capabilities(&config).await;
-
-    Ok(mention_entries
-        .into_iter()
-        .filter_map(|entry| entry.capability_summary(&capabilities_by_config_name))
-        .collect())
+    let response = request_plugin_list(request_handle, cwd).await?;
+    Ok(plugin_mentions_from_list_response(response))
 }
 
-async fn load_plugin_mention_capabilities(
-    config: &crate::legacy_core::config::Config,
-) -> HashMap<String, PluginCapabilitySummary> {
-    let plugins_input = config.plugins_config_input();
-    PluginsManager::new(config.codex_home.to_path_buf())
-        .plugins_for_config(&plugins_input)
-        .await
-        .capability_summaries()
-        .iter()
-        .cloned()
-        .map(|summary| (summary.config_name.clone(), summary))
-        .collect()
-}
-
-fn plugin_mention_entries_from_list_response(
+fn plugin_mentions_from_list_response(
     response: PluginListResponse,
-) -> Vec<PluginMentionEntry> {
+) -> Vec<PluginCapabilitySummary> {
     response
         .marketplaces
         .into_iter()
-        .flat_map(plugin_mention_entries_from_marketplace)
+        .flat_map(|marketplace| {
+            let marketplace_name = marketplace.name;
+            marketplace
+                .plugins
+                .into_iter()
+                .filter_map(move |plugin| plugin_mention_from_summary(&marketplace_name, plugin))
+        })
         .collect()
 }
 
-fn plugin_mention_entries_from_marketplace(
-    marketplace: PluginMarketplaceEntry,
-) -> Vec<PluginMentionEntry> {
-    let marketplace_name = marketplace.name;
-    marketplace
-        .plugins
-        .into_iter()
-        .filter_map(|plugin| plugin_mention_entry(&marketplace_name, plugin))
-        .collect()
+fn plugin_is_eligible_for_mentions(plugin: &PluginSummary) -> bool {
+    plugin.installed && plugin.enabled && plugin.availability != PluginAvailability::DisabledByAdmin
 }
 
-fn plugin_mention_entry(
+fn plugin_mention_from_summary(
     marketplace_name: &str,
     plugin: PluginSummary,
-) -> Option<PluginMentionEntry> {
+) -> Option<PluginCapabilitySummary> {
     if !plugin_is_eligible_for_mentions(&plugin) {
         return None;
     }
 
-    let config_name = plugin_mention_config_name(marketplace_name, &plugin)?;
-    Some(PluginMentionEntry {
-        config_name,
+    Some(PluginCapabilitySummary {
+        config_name: plugin.id.clone(),
         display_name: plugin_mention_display_name(&plugin),
-        description: plugin_mention_description(&plugin),
+        description: plugin_mention_description(marketplace_name, &plugin),
+        has_skills: false,
+        mcp_server_names: Vec::new(),
+        app_connector_ids: Vec::new(),
     })
-}
-
-fn plugin_is_eligible_for_mentions(plugin: &PluginSummary) -> bool {
-    plugin.installed && plugin.enabled
-}
-
-fn plugin_mention_config_name(marketplace_name: &str, plugin: &PluginSummary) -> Option<String> {
-    codex_plugin::PluginId::new(plugin.name.clone(), marketplace_name.to_string())
-        .map(|plugin_id| plugin_id.as_key())
-        .map_err(|err| {
-            tracing::warn!(
-                plugin_name = plugin.name,
-                marketplace_name,
-                error = %err,
-                "skipping plugin mention with invalid identity"
-            );
-        })
-        .ok()
 }
 
 fn plugin_mention_display_name(plugin: &PluginSummary) -> String {
@@ -131,17 +68,80 @@ fn plugin_mention_display_name(plugin: &PluginSummary) -> String {
         .unwrap_or_else(|| plugin.name.clone())
 }
 
-fn plugin_mention_description(plugin: &PluginSummary) -> Option<String> {
+fn plugin_mention_description(marketplace_name: &str, plugin: &PluginSummary) -> Option<String> {
     plugin
         .interface
         .as_ref()
-        .and_then(|interface| {
-            interface
-                .short_description
-                .as_deref()
-                .or(interface.long_description.as_deref())
-        })
+        .and_then(|interface| interface.short_description.as_deref())
         .map(str::trim)
         .filter(|description| !description.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            let marketplace_name = marketplace_name.trim();
+            (!marketplace_name.is_empty()).then(|| marketplace_name.to_string())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::PluginAuthPolicy;
+    use codex_app_server_protocol::PluginAvailability;
+    use codex_app_server_protocol::PluginInstallPolicy;
+    use codex_app_server_protocol::PluginListResponse;
+    use codex_app_server_protocol::PluginMarketplaceEntry;
+    use codex_app_server_protocol::PluginSource;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn plugin_mentions_use_plugin_list_summaries_and_gui_eligibility() {
+        let active = plugin_summary("active");
+        let mut disabled_by_admin = plugin_summary("disabled-by-admin");
+        disabled_by_admin.availability = PluginAvailability::DisabledByAdmin;
+        let mut disabled = plugin_summary("disabled");
+        disabled.enabled = false;
+        let mut uninstalled = plugin_summary("uninstalled");
+        uninstalled.installed = false;
+
+        let response = PluginListResponse {
+            marketplaces: vec![PluginMarketplaceEntry {
+                name: "server-marketplace".to_string(),
+                path: None,
+                interface: None,
+                plugins: vec![active, disabled_by_admin, disabled, uninstalled],
+            }],
+            marketplace_load_errors: Vec::new(),
+            featured_plugin_ids: Vec::new(),
+        };
+
+        assert_eq!(
+            plugin_mentions_from_list_response(response),
+            vec![PluginCapabilitySummary {
+                config_name: "active@server-marketplace".to_string(),
+                display_name: "active".to_string(),
+                description: Some("server-marketplace".to_string()),
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            }]
+        );
+    }
+
+    fn plugin_summary(name: &str) -> PluginSummary {
+        PluginSummary {
+            id: format!("{name}@server-marketplace"),
+            remote_plugin_id: Some(format!("plugins~{name}")),
+            local_version: None,
+            name: name.to_string(),
+            share_context: None,
+            source: PluginSource::Remote,
+            installed: true,
+            enabled: true,
+            install_policy: PluginInstallPolicy::Available,
+            auth_policy: PluginAuthPolicy::OnInstall,
+            availability: PluginAvailability::Available,
+            interface: None,
+            keywords: Vec::new(),
+        }
+    }
 }

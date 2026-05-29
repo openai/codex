@@ -508,9 +508,6 @@ impl App {
                 self.chat_widget
                     .on_marketplace_add_loaded(cwd.clone(), source, result);
                 if add_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(error = %err, "failed to refresh config after marketplace add");
-                    }
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }
@@ -518,14 +515,7 @@ impl App {
                 let marketplace_contents_changed =
                     matches!(&result, Ok(response) if !response.upgraded_roots.is_empty());
                 if marketplace_contents_changed {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(
-                            error = %err,
-                            "failed to refresh config after marketplace upgrade"
-                        );
-                    }
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.refresh_plugin_mentions_after_config_write();
                 }
                 self.chat_widget
                     .on_marketplace_upgrade_loaded(cwd.clone(), result);
@@ -560,11 +550,7 @@ impl App {
                 );
                 if remove_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
                 {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(error = %err, "failed to refresh config after marketplace remove");
-                    }
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.refresh_plugin_mentions_after_config_write();
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }
@@ -611,11 +597,7 @@ impl App {
             } => {
                 let install_succeeded = result.is_ok();
                 if install_succeeded {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(error = %err, "failed to refresh config after plugin install");
-                    }
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.refresh_plugin_mentions_after_config_write();
                 }
                 let should_refresh_plugin_detail = self.chat_widget.on_plugin_install_loaded(
                     cwd.clone(),
@@ -667,24 +649,21 @@ impl App {
                     self.pending_plugin_enabled_writes.remove(&plugin_id);
                     let update_succeeded = result.is_ok();
                     if update_succeeded {
-                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                            tracing::warn!(
-                                error = %err,
-                                "failed to refresh config after plugin toggle"
-                            );
-                        }
-                        self.chat_widget.refresh_plugin_mentions();
-                        self.chat_widget.submit_op(AppCommand::reload_user_config());
+                        self.refresh_plugin_mentions_after_config_write();
                     }
                     self.chat_widget
                         .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
                 }
             }
-            AppEvent::FetchMcpInventory { detail } => {
-                self.fetch_mcp_inventory(app_server, detail);
+            AppEvent::FetchMcpInventory { detail, thread_id } => {
+                self.fetch_mcp_inventory(app_server, detail, thread_id);
             }
-            AppEvent::McpInventoryLoaded { result, detail } => {
-                self.handle_mcp_inventory_result(result, detail);
+            AppEvent::McpInventoryLoaded {
+                result,
+                detail,
+                thread_id,
+            } => {
+                self.handle_mcp_inventory_result(result, detail, thread_id);
             }
             AppEvent::SkillsListLoaded { result } => {
                 self.handle_skills_list_result(
@@ -902,11 +881,11 @@ impl App {
                 }
                 #[cfg(target_os = "windows")]
                 {
-                    let permission_profile = match self
-                        .permission_profile_for_windows_setup(&preset, profile_selection.as_ref())
+                    let setup_permissions = match self
+                        .windows_setup_permissions(&preset, profile_selection.as_ref())
                         .await
                     {
-                        Ok(permission_profile) => permission_profile,
+                        Ok(setup_permissions) => setup_permissions,
                         Err(err) => {
                             tracing::warn!(
                                 error = %err,
@@ -918,8 +897,9 @@ impl App {
                             return Ok(AppRunControl::Continue);
                         }
                     };
-                    let policy_cwd = self.config.cwd.clone();
-                    let command_cwd = policy_cwd.clone();
+                    let permission_profile = setup_permissions.permission_profile;
+                    let workspace_roots = setup_permissions.workspace_roots;
+                    let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
@@ -941,25 +921,10 @@ impl App {
                     self.chat_widget.show_windows_sandbox_setup_status();
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
                     let session_telemetry = self.session_telemetry.clone();
-                    let Ok(policy) = permission_profile
-                        .to_legacy_sandbox_policy(policy_cwd.as_path())
-                        .inspect_err(|err| {
-                            tracing::error!(
-                                %err,
-                                "approval preset permissions cannot be projected for elevated Windows sandbox setup"
-                            );
-                        })
-                    else {
-                        tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt {
-                            preset,
-                            profile_selection,
-                        });
-                        return Ok(AppRunControl::Continue);
-                    };
                     tokio::task::spawn_blocking(move || {
                         let result = crate::legacy_core::windows_sandbox::run_elevated_setup(
-                            &policy,
-                            policy_cwd.as_path(),
+                            &permission_profile,
+                            workspace_roots.as_slice(),
                             command_cwd.as_path(),
                             &env_map,
                             codex_home.as_path(),
@@ -1039,11 +1004,11 @@ impl App {
                 }
                 #[cfg(target_os = "windows")]
                 {
-                    let permission_profile = match self
-                        .permission_profile_for_windows_setup(&preset, profile_selection.as_ref())
+                    let setup_permissions = match self
+                        .windows_setup_permissions(&preset, profile_selection.as_ref())
                         .await
                     {
-                        Ok(permission_profile) => permission_profile,
+                        Ok(setup_permissions) => setup_permissions,
                         Err(err) => {
                             tracing::warn!(
                                 error = %err,
@@ -1055,8 +1020,9 @@ impl App {
                             return Ok(AppRunControl::Continue);
                         }
                     };
-                    let policy_cwd = self.config.cwd.clone();
-                    let command_cwd = policy_cwd.clone();
+                    let permission_profile = setup_permissions.permission_profile;
+                    let workspace_roots = setup_permissions.workspace_roots;
+                    let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
@@ -1064,26 +1030,11 @@ impl App {
                     let session_telemetry = self.session_telemetry.clone();
 
                     self.chat_widget.show_windows_sandbox_setup_status();
-                    let Ok(policy) = permission_profile
-                        .to_legacy_sandbox_policy(policy_cwd.as_path())
-                        .inspect_err(|err| {
-                            tracing::error!(
-                                %err,
-                                "approval preset permissions cannot be projected for legacy Windows sandbox setup"
-                            );
-                        })
-                    else {
-                        tx.send(AppEvent::OpenWindowsSandboxFallbackPrompt {
-                            preset,
-                            profile_selection,
-                        });
-                        return Ok(AppRunControl::Continue);
-                    };
                     tokio::task::spawn_blocking(move || {
                         if let Err(err) =
                             crate::legacy_core::windows_sandbox::run_legacy_setup_preflight(
-                                &policy,
-                                policy_cwd.as_path(),
+                                &permission_profile,
+                                workspace_roots.as_slice(),
                                 command_cwd.as_path(),
                                 &env_map,
                                 codex_home.as_path(),
@@ -1120,11 +1071,8 @@ impl App {
                             /*hint*/ None,
                         ));
 
-                    let policy = self
-                        .config
-                        .permissions
-                        .legacy_sandbox_policy(self.config.cwd.as_path());
-                    let policy_cwd = self.config.cwd.clone();
+                    let permission_profile = self.config.permissions.effective_permission_profile();
+                    let workspace_roots = self.config.effective_workspace_roots();
                     let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
@@ -1134,8 +1082,8 @@ impl App {
                     tokio::task::spawn_blocking(move || {
                         let requested_path = PathBuf::from(path);
                         let event = match crate::legacy_core::grant_read_root_non_elevated(
-                            &policy,
-                            policy_cwd.as_path(),
+                            &permission_profile,
+                            workspace_roots.as_slice(),
                             command_cwd.as_path(),
                             &env_map,
                             codex_home.as_path(),
@@ -1376,14 +1324,7 @@ impl App {
             } => {
                 let uninstall_succeeded = result.is_ok();
                 if uninstall_succeeded {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(
-                            error = %err,
-                            "failed to refresh config after plugin uninstall"
-                        );
-                    }
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.refresh_plugin_mentions_after_config_write();
                 }
                 self.chat_widget.on_plugin_uninstall_loaded(
                     cwd.clone(),
@@ -1580,6 +1521,7 @@ impl App {
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
                         let cwd = self.config.cwd.clone();
+                        let workspace_roots = self.config.effective_workspace_roots();
                         let env_map: std::collections::HashMap<String, String> =
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
@@ -1588,6 +1530,7 @@ impl App {
                             self.config.permissions.effective_permission_profile();
                         Self::spawn_world_writable_scan(
                             cwd,
+                            workspace_roots,
                             env_map,
                             logs_base_dir,
                             permission_profile,
@@ -1781,14 +1724,6 @@ impl App {
                 {
                     Ok(()) => {
                         self.chat_widget.update_skill_enabled(path, enabled);
-                        if !app_server.uses_remote_workspace()
-                            && let Err(err) = self.refresh_in_memory_config_from_disk().await
-                        {
-                            tracing::warn!(
-                                error = %err,
-                                "failed to refresh config after skill toggle"
-                            );
-                        }
                     }
                     Err(err) => {
                         let path_display = path.display();
@@ -1825,11 +1760,6 @@ impl App {
                 {
                     Ok(_) => {
                         self.chat_widget.update_connector_enabled(&id, enabled);
-                        if !app_server.uses_remote_workspace()
-                            && let Err(err) = self.refresh_in_memory_config_from_disk().await
-                        {
-                            tracing::warn!(error = %err, "failed to refresh config after app toggle");
-                        }
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
@@ -2172,6 +2102,11 @@ impl App {
                     .add_error_message(format!("Failed to save shortcut: {err}"));
             }
         }
+    }
+
+    fn refresh_plugin_mentions_after_config_write(&mut self) {
+        self.chat_widget.refresh_plugin_mentions();
+        self.chat_widget.submit_op(AppCommand::reload_user_config());
     }
 
     async fn apply_keymap_clear(&mut self, context: String, action: String) {

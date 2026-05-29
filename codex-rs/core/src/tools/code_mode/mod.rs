@@ -13,7 +13,7 @@ use codex_code_mode::CodeModeTurnHost;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
 
@@ -30,7 +30,7 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::unified_exec::resolve_max_tokens;
-use codex_features::Feature;
+use codex_protocol::openai_models::ToolMode;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
@@ -66,17 +66,6 @@ impl CodeModeService {
         }
     }
 
-    pub(crate) async fn stored_values(&self) -> std::collections::HashMap<String, JsonValue> {
-        self.inner.stored_values().await
-    }
-
-    pub(crate) async fn replace_stored_values(
-        &self,
-        values: std::collections::HashMap<String, JsonValue>,
-    ) {
-        self.inner.replace_stored_values(values).await;
-    }
-
     pub(crate) fn allocate_cell_id(&self) -> String {
         self.inner.allocate_cell_id()
     }
@@ -102,7 +91,7 @@ impl CodeModeService {
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<codex_code_mode::CodeModeTurnWorker> {
-        if !turn.features.enabled(Feature::CodeMode) {
+        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
             return None;
         }
 
@@ -145,7 +134,7 @@ impl CodeModeTurnHost for CoreTurnHost {
         }
         self.exec
             .session
-            .inject_response_items(vec![ResponseInputItem::CustomToolCallOutput {
+            .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
                 call_id,
                 name: Some(PUBLIC_TOOL_NAME.to_string()),
                 output: FunctionCallOutputPayload::from_text(text),
@@ -182,17 +171,11 @@ pub(super) async fn handle_runtime_response(
         }
         RuntimeResponse::Result {
             content_items,
-            stored_values,
             error_text,
             ..
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
-            exec.session
-                .services
-                .code_mode_service
-                .replace_stored_values(stored_values)
-                .await;
             let success = error_text.is_none();
             if let Some(error_text) = error_text {
                 content_items.push(FunctionCallOutputContentItem::InputText {

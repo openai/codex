@@ -32,17 +32,14 @@ pub async fn maybe_migrate_personality(
         return Ok(PersonalityMigrationStatus::SkippedMarker);
     }
 
-    let config_profile = config_toml
-        .get_config_profile(/*override_profile*/ None)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    if config_toml.personality.is_some() || config_profile.personality.is_some() {
+    if config_toml.personality.is_some() {
         create_marker(&marker_path).await?;
         return Ok(PersonalityMigrationStatus::SkippedExplicitPersonality);
     }
 
-    let model_provider_id = config_profile
+    let model_provider_id = config_toml
         .model_provider
-        .or_else(|| config_toml.model_provider.clone())
+        .clone()
         .unwrap_or_else(|| "openai".to_string());
 
     if !has_recorded_sessions(codex_home, model_provider_id.as_str(), state_db).await? {

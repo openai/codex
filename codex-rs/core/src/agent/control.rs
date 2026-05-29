@@ -262,10 +262,12 @@ impl AgentControl {
                 .await?
             }
             (Some(session_source), None) => {
+                let forked_from_thread_id = thread_spawn_parent_thread_id(&session_source);
                 Box::pin(state.spawn_new_thread_with_source(
                     config.clone(),
                     self.clone(),
                     session_source,
+                    forked_from_thread_id,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*persist_extended_history*/ false,
                     /*metrics_service_name*/ None,
@@ -315,6 +317,7 @@ impl AgentControl {
                     .services
                     .analytics_events_client,
                 client_metadata,
+                new_thread.thread.codex.session.session_id(),
                 new_thread.thread_id,
                 /*parent_thread_id*/ None,
                 thread_config,
@@ -487,6 +490,7 @@ impl AgentControl {
                 self.clone(),
                 session_source,
                 /*thread_source*/ Some(ThreadSource::Subagent),
+                /*forked_from_thread_id*/ Some(parent_thread_id),
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
@@ -700,22 +704,6 @@ impl AgentControl {
         result
     }
 
-    /// Append a prebuilt message to an existing agent thread outside the normal user-input path.
-    #[cfg(test)]
-    pub(crate) async fn append_message(
-        &self,
-        agent_id: ThreadId,
-        message: ResponseItem,
-    ) -> CodexResult<String> {
-        let state = self.upgrade()?;
-        self.handle_thread_request_result(
-            agent_id,
-            &state,
-            state.append_message(agent_id, message).await,
-        )
-        .await
-    }
-
     pub(crate) async fn send_inter_agent_communication(
         &self,
         agent_id: ThreadId,
@@ -784,15 +772,45 @@ impl AgentControl {
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
-        if let Ok(thread) = state.get_thread(agent_id).await
-            && let Some(state_db_ctx) = thread.state_db()
-            && let Err(err) = state_db_ctx
-                .set_thread_spawn_edge_status(agent_id, DirectionalThreadSpawnEdgeStatus::Closed)
-                .await
-        {
-            warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
+        let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
+        match state.get_thread(agent_id).await {
+            Ok(thread) => {
+                if let Some(state_db_ctx) = thread.state_db()
+                    && let Err(err) = state_db_ctx
+                        .set_thread_spawn_edge_status(
+                            agent_id,
+                            DirectionalThreadSpawnEdgeStatus::Closed,
+                        )
+                        .await
+                {
+                    warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
+                }
+            }
+            Err(CodexErr::ThreadNotFound(_)) if known_agent => {
+                if let Some(state_db_ctx) = state.state_db()
+                    && let Err(err) = state_db_ctx
+                        .set_thread_spawn_edge_status(
+                            agent_id,
+                            DirectionalThreadSpawnEdgeStatus::Closed,
+                        )
+                        .await
+                {
+                    return Err(CodexErr::Fatal(format!(
+                        "failed to persist stale thread-spawn edge status for {agent_id}: {err}"
+                    )));
+                }
+            }
+            Err(CodexErr::ThreadNotFound(_)) => {}
+            Err(err) => {
+                warn!("failed to inspect agent before close {agent_id}: {err}");
+            }
         }
-        Box::pin(self.shutdown_agent_tree(agent_id)).await
+        match Box::pin(self.shutdown_agent_tree(agent_id)).await {
+            Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) if known_agent => {
+                Ok(String::new())
+            }
+            result => result,
+        }
     }
 
     /// Shut down `agent_id` and any live descendants reachable from the in-memory spawn tree.
@@ -1278,8 +1296,10 @@ pub(crate) fn render_input_preview(initial_operation: &Op) -> String {
                 UserInput::LocalImage { path, .. } => {
                     format!("[local_image:{}]", path.display())
                 }
-                UserInput::Skill { name, path } => format!("[skill:${name}]({})", path.display()),
-                UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
+                UserInput::Skill { name, path, .. } => {
+                    format!("[skill:${name}]({})", path.display())
+                }
+                UserInput::Mention { name, path, .. } => format!("[mention:${name}]({path})"),
                 _ => "[input]".to_string(),
             })
             .collect::<Vec<_>>()

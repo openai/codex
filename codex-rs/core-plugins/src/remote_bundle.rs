@@ -1,3 +1,5 @@
+use crate::plugin_bundle_archive::PluginBundleUnpackError;
+use crate::plugin_bundle_archive::unpack_plugin_bundle_tar_gz;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::store::PluginInstallResult;
 use crate::store::PluginStore;
@@ -8,17 +10,14 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
-use flate2::read::GzDecoder;
 use reqwest::Response;
 use reqwest::StatusCode;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
-use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
-use tar::Archive;
 use url::Host;
 use url::Url;
 
@@ -542,146 +541,17 @@ fn extract_plugin_bundle_tar_gz_with_limits(
     destination: &Path,
     max_total_bytes: u64,
 ) -> Result<(), RemotePluginBundleInstallError> {
-    fs::create_dir_all(destination).map_err(|source| {
-        RemotePluginBundleInstallError::io(
-            "failed to create remote plugin bundle extraction directory",
-            source,
-        )
-    })?;
-
-    let archive = GzDecoder::new(std::io::Cursor::new(bytes));
-    let mut archive = Archive::new(archive);
-    extract_plugin_bundle_tar(&mut archive, destination, max_total_bytes)
-}
-
-fn extract_plugin_bundle_tar<R: Read>(
-    archive: &mut Archive<R>,
-    destination: &Path,
-    max_total_bytes: u64,
-) -> Result<(), RemotePluginBundleInstallError> {
-    let mut extracted_bytes = 0u64;
-    let entries = archive.entries().map_err(|source| {
-        RemotePluginBundleInstallError::io("failed to read remote plugin bundle tar", source)
-    })?;
-    let entries = entries.raw(true);
-    for entry in entries {
-        let mut entry = entry.map_err(|source| {
-            RemotePluginBundleInstallError::io(
-                "failed to read remote plugin bundle tar entry",
-                source,
-            )
-        })?;
-        let entry_type = entry.header().entry_type();
-        let entry_size = entry.size();
-        let entry_path = entry.path().map_err(|source| {
-            RemotePluginBundleInstallError::io(
-                "failed to read remote plugin bundle tar entry path",
-                source,
-            )
-        })?;
-        let entry_path = entry_path.into_owned();
-        let output_path = checked_tar_output_path(destination, &entry_path)?;
-
-        if entry_type.is_dir() {
-            fs::create_dir_all(&output_path).map_err(|source| {
-                RemotePluginBundleInstallError::io(
-                    "failed to create remote plugin bundle directory",
-                    source,
-                )
-            })?;
-            continue;
+    unpack_plugin_bundle_tar_gz(bytes, destination, max_total_bytes).map_err(|err| match err {
+        PluginBundleUnpackError::ExtractedBundleTooLarge { bytes, max_bytes } => {
+            RemotePluginBundleInstallError::ExtractedBundleTooLarge { bytes, max_bytes }
         }
-
-        if entry_type.is_file() {
-            enforce_total_extracted_size(entry_size, &mut extracted_bytes, max_total_bytes)?;
-            let Some(parent) = output_path.parent() else {
-                return Err(RemotePluginBundleInstallError::InvalidBundle(format!(
-                    "remote plugin bundle output path has no parent: {}",
-                    output_path.display()
-                )));
-            };
-            fs::create_dir_all(parent).map_err(|source| {
-                RemotePluginBundleInstallError::io(
-                    "failed to create remote plugin bundle directory",
-                    source,
-                )
-            })?;
-            entry.unpack(&output_path).map_err(|source| {
-                RemotePluginBundleInstallError::io(
-                    "failed to unpack remote plugin bundle entry",
-                    source,
-                )
-            })?;
-            continue;
+        PluginBundleUnpackError::Io { context, source } => {
+            RemotePluginBundleInstallError::io(context, source)
         }
-
-        if entry_type.is_hard_link() || entry_type.is_symlink() {
-            return Err(RemotePluginBundleInstallError::InvalidBundle(format!(
-                "remote plugin bundle tar entry `{}` is a link",
-                entry_path.display()
-            )));
+        PluginBundleUnpackError::InvalidBundle(message) => {
+            RemotePluginBundleInstallError::InvalidBundle(message)
         }
-
-        return Err(RemotePluginBundleInstallError::InvalidBundle(format!(
-            "remote plugin bundle tar entry `{}` has unsupported type {:?}",
-            entry_path.display(),
-            entry_type
-        )));
-    }
-
-    Ok(())
-}
-
-fn checked_tar_output_path(
-    destination: &Path,
-    entry_name: &Path,
-) -> Result<PathBuf, RemotePluginBundleInstallError> {
-    let mut output_path = destination.to_path_buf();
-    let mut has_component = false;
-    for component in entry_name.components() {
-        match component {
-            std::path::Component::Normal(component) => {
-                has_component = true;
-                output_path.push(component);
-            }
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir
-            | std::path::Component::RootDir
-            | std::path::Component::Prefix(_) => {
-                return Err(RemotePluginBundleInstallError::InvalidBundle(format!(
-                    "remote plugin bundle tar entry `{}` escapes extraction root",
-                    entry_name.display()
-                )));
-            }
-        }
-    }
-    if !has_component {
-        return Err(RemotePluginBundleInstallError::InvalidBundle(
-            "remote plugin bundle tar entry has an empty path".to_string(),
-        ));
-    }
-    Ok(output_path)
-}
-
-fn enforce_total_extracted_size(
-    entry_size: u64,
-    extracted_bytes: &mut u64,
-    max_total_bytes: u64,
-) -> Result<(), RemotePluginBundleInstallError> {
-    let next_total = extracted_bytes.checked_add(entry_size).ok_or(
-        RemotePluginBundleInstallError::ExtractedBundleTooLarge {
-            bytes: u64::MAX,
-            max_bytes: max_total_bytes,
-        },
-    )?;
-    if next_total > max_total_bytes {
-        return Err(RemotePluginBundleInstallError::ExtractedBundleTooLarge {
-            bytes: next_total,
-            max_bytes: max_total_bytes,
-        });
-    }
-    *extracted_bytes = next_total;
-    Ok(())
+    })
 }
 
 fn find_extracted_plugin_root(
@@ -706,6 +576,7 @@ mod tests {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use pretty_assertions::assert_eq;
+    use std::io::Write;
     use tempfile::tempdir;
 
     const REMOTE_PLUGIN_ID: &str = "plugins~Plugin_00000000000000000000000000000000";
@@ -830,7 +701,7 @@ mod tests {
         )
         .expect_err("invalid tar.gz should be rejected");
 
-        assert!(format!("{err}").contains("failed to read remote plugin bundle tar"));
+        assert!(format!("{err}").contains("failed to read plugin bundle tar"));
     }
 
     #[test]
@@ -961,8 +832,11 @@ mod tests {
     #[test]
     fn extraction_rejects_tar_path_traversal() {
         let destination = tempdir().expect("tempdir");
-        let err = checked_tar_output_path(destination.path(), Path::new("../evil.txt"))
-            .expect_err("tar path traversal should be rejected");
+        let err = extract_plugin_bundle_tar_gz(
+            &tar_gz_bytes_with_raw_path("../evil.txt", b"evil", /*mode*/ 0o644),
+            destination.path(),
+        )
+        .expect_err("tar path traversal should be rejected");
 
         assert!(format!("{err}").contains("escapes extraction root"));
     }
@@ -987,20 +861,20 @@ mod tests {
     }
 
     #[test]
-    fn extraction_rejects_pax_metadata_entries() {
+    fn extraction_supports_gnu_long_name_entries() {
         let destination = tempdir().expect("tempdir");
-        let err = extract_plugin_bundle_tar_gz(
-            &tar_gz_bytes_with_entry_type(
-                tar::EntryType::XHeader,
-                "PaxHeaders.0/linear",
-                b"18 path=linear\n",
-                /*mode*/ 0o644,
-            ),
+        let long_path = format!("{}/file.txt", ["segment"; 40].join("/"));
+
+        extract_plugin_bundle_tar_gz(
+            &tar_gz_bytes(&[(long_path.as_str(), b"long", /*mode*/ 0o644)]),
             destination.path(),
         )
-        .expect_err("pax metadata entries should be rejected");
+        .expect("extract bundle with GNU long name entry");
 
-        assert!(format!("{err}").contains("unsupported type"));
+        assert_eq!(
+            std::fs::read(destination.path().join(long_path)).expect("read extracted file"),
+            b"long"
+        );
     }
 
     #[cfg(unix)]
@@ -1051,16 +925,25 @@ mod tests {
         finish_tar_gz(tar)
     }
 
-    fn tar_gz_bytes_with_entry_type(
-        entry_type: tar::EntryType,
-        path: &str,
-        contents: &[u8],
-        mode: u32,
-    ) -> Vec<u8> {
-        let encoder = GzEncoder::new(Vec::new(), Compression::default());
-        let mut tar = tar::Builder::new(encoder);
-        append_tar_entry(&mut tar, entry_type, path, contents, mode);
-        finish_tar_gz(tar)
+    fn tar_gz_bytes_with_raw_path(path: &str, contents: &[u8], mode: u32) -> Vec<u8> {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(contents.len() as u64);
+        header.set_mode(mode);
+        header.as_mut_bytes()[..path.len()].copy_from_slice(path.as_bytes());
+        header.set_cksum();
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder
+            .write_all(header.as_bytes())
+            .expect("write tar header");
+        encoder.write_all(contents).expect("write tar contents");
+        let padding = (512 - (contents.len() % 512)) % 512;
+        encoder
+            .write_all(&vec![0; padding])
+            .expect("write tar padding");
+        encoder.write_all(&[0; 1024]).expect("write tar terminator");
+        encoder.finish().expect("finish gzip")
     }
 
     fn append_tar_entry<W: std::io::Write>(

@@ -5,7 +5,9 @@
 //! events, and owns helper hooks used by goal lifecycle behavior.
 
 use crate::StateDbHandle;
-use crate::context::GoalContext;
+use crate::context::ContextualUserFragment;
+use crate::context::InternalContextSource;
+use crate::context::InternalModelContextFragment;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -25,7 +27,7 @@ use codex_otel::GOAL_TOKEN_COUNT_METRIC;
 use codex_otel::GOAL_USAGE_LIMITED_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
@@ -171,13 +173,12 @@ pub(crate) struct GoalRuntimeState {
     pub(crate) budget_limit_reported_goal_id: Mutex<Option<String>>,
     accounting_lock: Semaphore,
     accounting: Mutex<GoalAccountingSnapshot>,
-    continuation_turn_id: Mutex<Option<String>>,
     pub(crate) continuation_lock: Semaphore,
 }
 
 struct GoalContinuationCandidate {
     goal_id: String,
-    items: Vec<ResponseInputItem>,
+    items: Vec<ResponseItem>,
 }
 
 impl GoalRuntimeState {
@@ -187,7 +188,6 @@ impl GoalRuntimeState {
             budget_limit_reported_goal_id: Mutex::new(None),
             accounting_lock: Semaphore::new(/*permits*/ 1),
             accounting: Mutex::new(GoalAccountingSnapshot::new()),
-            continuation_turn_id: Mutex::new(None),
             continuation_lock: Semaphore::new(/*permits*/ 1),
         }
     }
@@ -687,7 +687,7 @@ impl Session {
                     .await;
                 if let Some(goal) = goal_for_steering {
                     let item = goal_context_input_item(objective_updated_prompt(&goal));
-                    if self.inject_response_items(vec![item]).await.is_err() {
+                    if self.inject_if_running(vec![item]).await.is_err() {
                         tracing::debug!(
                             "skipping objective-updated goal steering because no turn is active"
                         );
@@ -836,7 +836,7 @@ impl Session {
         let active = self.active_turn.lock().await;
         active
             .as_ref()
-            .and_then(|active_turn| active_turn.tasks.values().next())
+            .and_then(|active_turn| active_turn.task.as_ref())
             .map(|task| Arc::clone(&task.turn_context))
     }
 
@@ -899,24 +899,10 @@ impl Session {
         }
     }
 
-    async fn mark_thread_goal_continuation_turn_started(&self, turn_id: String) {
-        *self.goal_runtime.continuation_turn_id.lock().await = Some(turn_id);
-    }
-
-    async fn take_thread_goal_continuation_turn(&self, turn_id: &str) -> bool {
-        let mut continuation_turn_id = self.goal_runtime.continuation_turn_id.lock().await;
-        if continuation_turn_id.as_deref() == Some(turn_id) {
-            *continuation_turn_id = None;
-            true
-        } else {
-            false
-        }
-    }
-
     async fn clear_reserved_goal_continuation_turn(&self, turn_state: &Arc<Mutex<TurnState>>) {
         let mut active_turn_guard = self.active_turn.lock().await;
         if let Some(active_turn) = active_turn_guard.as_ref()
-            && active_turn.tasks.is_empty()
+            && active_turn.task.is_none()
             && Arc::ptr_eq(&active_turn.turn_state, turn_state)
         {
             *active_turn_guard = None;
@@ -940,8 +926,6 @@ impl Session {
             tracing::warn!("failed to account thread goal progress at turn end: {err}");
         }
 
-        self.take_thread_goal_continuation_turn(&turn_context.sub_id)
-            .await;
         if turn_completed {
             let mut accounting = self.goal_runtime.accounting.lock().await;
             if accounting
@@ -956,8 +940,6 @@ impl Session {
 
     async fn handle_thread_goal_task_abort(&self, turn_context: Option<&TurnContext>) {
         if let Some(turn_context) = turn_context {
-            self.take_thread_goal_continuation_turn(&turn_context.sub_id)
-                .await;
             if let Err(err) = self
                 .account_thread_goal_progress(
                     turn_context,
@@ -1093,7 +1075,7 @@ impl Session {
         .await;
         if should_steer_budget_limit {
             let item = budget_limit_steering_item(&goal);
-            if self.inject_response_items(vec![item]).await.is_err() {
+            if self.inject_if_running(vec![item]).await.is_err() {
                 tracing::debug!("skipping budget-limit goal steering because no turn is active");
             }
             *self.goal_runtime.budget_limit_reported_goal_id.lock().await = Some(goal_id);
@@ -1351,7 +1333,7 @@ impl Session {
                 candidate
                     .items
                     .into_iter()
-                    .map(TurnInput::ResponseInputItem)
+                    .map(TurnInput::ResponseItem)
                     .collect(),
             )
             .await;
@@ -1364,7 +1346,7 @@ impl Session {
         let still_reserved = {
             let active_turn = self.active_turn.lock().await;
             active_turn.as_ref().is_some_and(|active_turn| {
-                active_turn.tasks.is_empty() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
+                active_turn.task.is_none() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
             })
         };
         if !still_reserved {
@@ -1372,8 +1354,6 @@ impl Session {
                 .await;
             return;
         }
-        self.mark_thread_goal_continuation_turn_started(turn_context.sub_id.clone())
-            .await;
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
     }
@@ -1390,14 +1370,6 @@ impl Session {
         }
         if self.active_turn.lock().await.is_some() {
             tracing::debug!("skipping active goal continuation because a turn is already active");
-            return None;
-        }
-        if self
-            .input_queue
-            .has_queued_response_items_for_next_turn()
-            .await
-        {
-            tracing::debug!("skipping active goal continuation because queued input exists");
             return None;
         }
         if self.input_queue.has_trigger_turn_mailbox_items().await {
@@ -1437,10 +1409,6 @@ impl Session {
             return None;
         }
         if self.active_turn.lock().await.is_some()
-            || self
-                .input_queue
-                .has_queued_response_items_for_next_turn()
-                .await
             || self.input_queue.has_trigger_turn_mailbox_items().await
         {
             tracing::debug!("skipping active goal continuation because pending work appeared");
@@ -1625,12 +1593,15 @@ fn escape_xml_text(input: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
+fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseItem {
     goal_context_input_item(budget_limit_prompt(goal))
 }
 
-fn goal_context_input_item(prompt: String) -> ResponseInputItem {
-    GoalContext::new(prompt).into_response_input_item()
+fn goal_context_input_item(prompt: String) -> ResponseItem {
+    ContextualUserFragment::into(InternalModelContextFragment::new(
+        InternalContextSource::from_static("goal"),
+        prompt,
+    ))
 }
 
 pub(crate) fn protocol_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
@@ -1699,7 +1670,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::TokenUsage;
@@ -1828,10 +1799,11 @@ mod tests {
 
         assert_eq!(
             item,
-            ResponseInputItem::Message {
+            ResponseItem::Message {
+                id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<goal_context>\nContinue working.\n</goal_context>".to_string(),
+                    text: "<codex_internal_context source=\"goal\">\nContinue working.\n</codex_internal_context>".to_string(),
                 }],
                 phase: None,
             }

@@ -17,6 +17,8 @@ impl IntoProtocol<ImageDetail> for CodeModeImageDetail {
     fn into_protocol(self) -> ImageDetail {
         let value = self;
         match value {
+            CodeModeImageDetail::Auto => ImageDetail::Auto,
+            CodeModeImageDetail::Low => ImageDetail::Low,
             CodeModeImageDetail::High => ImageDetail::High,
             CodeModeImageDetail::Original => ImageDetail::Original,
         }

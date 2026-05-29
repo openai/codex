@@ -110,7 +110,7 @@ fn canonical_json(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut entries = map.iter().collect::<Vec<_>>();
-            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+            entries.sort_by_key(|(left_key, _)| *left_key);
             Value::Object(
                 entries
                     .into_iter()
@@ -326,6 +326,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -343,6 +344,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -366,6 +368,36 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_request.header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
+    let compact_metadata: Value = serde_json::from_str(
+        &compact_request
+            .header("x-codex-turn-metadata")
+            .expect("remote compact request should include turn metadata"),
+    )
+    .expect("remote compact turn metadata should be valid json");
+    assert!(
+        compact_metadata["turn_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "remote compact turn metadata should include its turn id"
+    );
+    assert_eq!(
+        compact_metadata["request_kind"].as_str(),
+        Some("compaction")
+    );
+    assert_eq!(
+        compact_metadata["window_id"].as_str(),
+        compact_request.header("x-codex-window-id").as_deref()
+    );
+    assert_eq!(
+        compact_metadata["compaction"],
+        json!({
+            "trigger": "manual",
+            "reason": "user_requested",
+            "implementation": "responses_compact",
+            "phase": "standalone_turn",
+            "strategy": "memento",
+        })
+    );
     let compact_body = compact_request.body_json();
     assert_eq!(
         compact_body.get("model").and_then(|v| v.as_str()),
@@ -373,6 +405,16 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     );
     let response_requests = responses_mock.requests();
     let first_response_request = response_requests.first().expect("initial request missing");
+    let first_response_metadata: Value = serde_json::from_str(
+        &first_response_request
+            .header("x-codex-turn-metadata")
+            .expect("initial request should include turn metadata"),
+    )
+    .expect("initial turn metadata should be valid json");
+    assert_ne!(
+        first_response_metadata["turn_id"], compact_metadata["turn_id"],
+        "manual compaction should use its own turn id"
+    );
     assert_eq!(
         compact_body["tools"],
         first_response_request.body_json()["tools"],
@@ -405,6 +447,33 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
 
     let response_requests = responses_mock.requests();
     let follow_up_request = response_requests.last().expect("follow-up request missing");
+    let follow_up_metadata: Value = serde_json::from_str(
+        &follow_up_request
+            .header("x-codex-turn-metadata")
+            .expect("follow-up request should include turn metadata"),
+    )
+    .expect("follow-up turn metadata should be valid json");
+    assert_eq!(
+        follow_up_metadata["request_kind"].as_str(),
+        Some("turn"),
+        "regular requests after compaction should remain turn requests"
+    );
+    assert!(
+        follow_up_metadata.get("compaction").is_none(),
+        "regular requests after compaction should not be marked as compact requests"
+    );
+    assert_ne!(
+        follow_up_metadata["turn_id"], compact_metadata["turn_id"],
+        "the following user turn should not reuse a manual compact turn id"
+    );
+    assert_eq!(
+        follow_up_metadata["window_id"].as_str(),
+        follow_up_request.header("x-codex-window-id").as_deref()
+    );
+    assert_ne!(
+        follow_up_metadata["window_id"], compact_metadata["window_id"],
+        "the following user turn should use the new compacted context window"
+    );
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(
         follow_up_body.contains("\"type\":\"compaction\""),
@@ -518,6 +587,7 @@ async fn assert_remote_manual_compact_request_parity(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -538,6 +608,7 @@ async fn assert_remote_manual_compact_request_parity(
             ],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -552,6 +623,7 @@ async fn assert_remote_manual_compact_request_parity(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -572,6 +644,7 @@ async fn assert_remote_manual_compact_request_parity(
             ],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -586,6 +659,7 @@ async fn assert_remote_manual_compact_request_parity(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -754,6 +828,7 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -771,6 +846,7 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -788,6 +864,30 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
         "expected compact request to advertise the remote_compaction_v2 beta feature"
     );
     assert_eq!(compact_request.path(), "/v1/responses");
+    let compact_metadata: Value = serde_json::from_str(
+        &compact_request
+            .header("x-codex-turn-metadata")
+            .expect("v2 compact request should include turn metadata"),
+    )
+    .expect("v2 compact turn metadata should be valid json");
+    assert_eq!(
+        compact_metadata["request_kind"].as_str(),
+        Some("compaction")
+    );
+    assert_eq!(
+        compact_metadata["window_id"].as_str(),
+        compact_request.header("x-codex-window-id").as_deref()
+    );
+    assert_eq!(
+        compact_metadata["compaction"],
+        json!({
+            "trigger": "manual",
+            "reason": "user_requested",
+            "implementation": "responses_compaction_v2",
+            "phase": "standalone_turn",
+            "strategy": "memento",
+        })
+    );
     let compact_body = compact_request.body_json().to_string();
     assert!(
         compact_body.contains("\"type\":\"compaction_trigger\""),
@@ -811,6 +911,120 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     assert!(
         follow_up_body.contains("hello remote compact"),
         "expected v2 follow-up request to preserve retained original user messages"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.model_provider.request_max_retries = Some(0);
+                config.model_provider.stream_max_retries = Some(2);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ])),
+            ResponseTemplate::new(500).set_body_string("first compact open failed"),
+            responses::sse_response(responses::sse(vec![serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "compaction",
+                    "encrypted_content": "FAILED_COMPACT_SUMMARY",
+                }
+            })])),
+            responses::sse_response(responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "RETRIED_COMPACT_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("resp-compact-retry"),
+            ])),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ])),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let response_requests = responses_mock.requests();
+    assert_eq!(
+        5,
+        response_requests.len(),
+        "expected initial turn, failed open, failed stream, compact retry, and follow-up turn"
+    );
+
+    for compact_request in &response_requests[1..=3] {
+        assert_eq!("/v1/responses", compact_request.path());
+        assert!(
+            compact_request
+                .body_json()
+                .to_string()
+                .contains("\"type\":\"compaction_trigger\""),
+            "expected v2 compaction request to include the compaction_trigger item"
+        );
+    }
+
+    let follow_up_request = response_requests.last().expect("follow-up request missing");
+    let follow_up_body = follow_up_request.body_json().to_string();
+    assert!(
+        follow_up_body.contains("RETRIED_COMPACT_SUMMARY"),
+        "expected follow-up request to include the retried compaction payload"
+    );
+    assert!(
+        !follow_up_body.contains("FAILED_COMPACT_SUMMARY"),
+        "expected failed compaction attempt output to be discarded"
     );
 
     Ok(())
@@ -865,6 +1079,7 @@ async fn remote_compact_v2_accepts_additional_output_items_before_compaction() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -882,6 +1097,7 @@ async fn remote_compact_v2_accepts_additional_output_items_before_compaction() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -973,6 +1189,7 @@ async fn remote_compact_filters_deferred_dynamic_tools() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1013,7 +1230,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     let session_id = harness.test().session_configured.session_id.to_string();
     let thread_id = harness.test().session_configured.thread_id.to_string();
 
-    mount_sse_once(
+    let initial_request = mount_sse_once(
         harness.server(),
         sse(vec![
             responses::ev_shell_command_call("m1", "echo 'hi'"),
@@ -1045,6 +1262,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1068,7 +1286,63 @@ async fn remote_compact_runs_automatically() -> Result<()> {
         compact_mock.single_request().header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
+    let compact_metadata: Value = serde_json::from_str(
+        &compact_mock
+            .single_request()
+            .header("x-codex-turn-metadata")
+            .expect("auto remote compact request should include turn metadata"),
+    )
+    .expect("auto remote compact turn metadata should be valid json");
+    assert_eq!(
+        compact_metadata["request_kind"].as_str(),
+        Some("compaction")
+    );
+    assert_eq!(
+        compact_metadata["compaction"],
+        json!({
+            "trigger": "auto",
+            "reason": "context_limit",
+            "implementation": "responses_compact",
+            "phase": "mid_turn",
+            "strategy": "memento",
+        })
+    );
+    let initial_metadata: Value = serde_json::from_str(
+        &initial_request
+            .single_request()
+            .header("x-codex-turn-metadata")
+            .expect("initial request should include turn metadata"),
+    )
+    .expect("initial turn metadata should be valid json");
+    assert_eq!(
+        initial_metadata["turn_id"], compact_metadata["turn_id"],
+        "automatic mid-turn compaction should keep the current turn id"
+    );
+    assert_eq!(
+        initial_metadata["window_id"], compact_metadata["window_id"],
+        "automatic mid-turn compaction summarizes the current context window"
+    );
     let follow_up_request = responses_mock.single_request();
+    let follow_up_metadata: Value = serde_json::from_str(
+        &follow_up_request
+            .header("x-codex-turn-metadata")
+            .expect("post-compaction continuation should include turn metadata"),
+    )
+    .expect("post-compaction turn metadata should be valid json");
+    assert_eq!(
+        follow_up_metadata["request_kind"].as_str(),
+        Some("turn"),
+        "post-compaction continuation should be a regular request"
+    );
+    assert!(follow_up_metadata.get("compaction").is_none());
+    assert_eq!(
+        follow_up_metadata["turn_id"], compact_metadata["turn_id"],
+        "automatic mid-turn continuation should keep the current turn id"
+    );
+    assert_ne!(
+        follow_up_metadata["window_id"], compact_metadata["window_id"],
+        "post-compaction continuation should use the next context window"
+    );
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"));
 
@@ -1126,6 +1400,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1140,6 +1415,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1258,6 +1534,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1272,6 +1549,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1292,6 +1570,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1392,6 +1671,7 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1406,6 +1686,7 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1500,6 +1781,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1517,6 +1799,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1608,6 +1891,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1625,6 +1909,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1696,6 +1981,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1777,6 +2063,7 @@ async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -1861,6 +2148,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2004,6 +2292,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2022,6 +2311,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2047,6 +2337,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2143,6 +2434,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2160,6 +2452,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2232,6 +2525,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_sta
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2246,6 +2540,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_sta
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2313,6 +2608,7 @@ async fn remote_request_uses_custom_experimental_realtime_start_instructions() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2374,6 +2670,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_end
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2390,6 +2687,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_end
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2465,6 +2763,7 @@ async fn snapshot_request_shape_remote_manual_compact_restates_realtime_start() 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2482,6 +2781,7 @@ async fn snapshot_request_shape_remote_manual_compact_restates_realtime_start() 
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2565,6 +2865,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_does_not_restate_real
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2581,6 +2882,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_does_not_restate_real
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2672,6 +2974,7 @@ async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() ->
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2702,6 +3005,7 @@ async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() ->
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2791,6 +3095,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                additional_context: Default::default(),
                 thread_settings: Default::default(),
             })
             .await?;
@@ -2878,6 +3183,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2900,6 +3206,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3019,6 +3326,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3033,6 +3341,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3118,6 +3427,7 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3196,6 +3506,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3282,6 +3593,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3299,6 +3611,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3381,6 +3694,7 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;

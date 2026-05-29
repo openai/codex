@@ -98,6 +98,7 @@ async fn models_client_hits_models_endpoint() {
             input_modalities: default_input_modalities(),
             used_fallback_model_metadata: false,
             supports_search_tool: false,
+            tool_mode: None,
         }],
     };
 
