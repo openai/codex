@@ -245,6 +245,33 @@ async fn usage_output_reports_unattributed_usage() {
 }
 
 #[tokio::test]
+async fn usage_error_wraps_long_backend_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.add_usage_output();
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchUsage {
+            request_id: 0,
+            range: UsageRange::Day,
+        })
+    );
+    chat.on_usage_loaded(
+        /*request_id*/ 0,
+        Err(
+            "sqlite state database could not be opened because the configured path is unavailable"
+                .to_string(),
+        ),
+    );
+
+    let Ok(AppEvent::InsertHistoryCell(cell)) = rx.try_recv() else {
+        panic!("expected usage history cell");
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 60));
+    assert_chatwidget_snapshot!("usage_error_wraps_long_backend_message", rendered);
+}
+
+#[tokio::test]
 async fn usage_output_weekly_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

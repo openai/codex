@@ -106,12 +106,16 @@ impl HistoryCell for UsageErrorHistoryCell {
         let Some(available_width) = usage_card_available_width(width) else {
             return Vec::new();
         };
-        let lines = vec![
+        let mut lines = vec![
             Line::from(USAGE_TITLE.bold()),
             Line::from(USAGE_SUBTITLE.dim()),
             Line::default(),
-            Line::from(format!(" Failed to load usage: {}", self.error)),
         ];
+        push_wrapped_text(
+            &mut lines,
+            format!(" Failed to load usage: {}", self.error),
+            available_width,
+        );
         let inner_width = lines
             .iter()
             .map(line_display_width)
