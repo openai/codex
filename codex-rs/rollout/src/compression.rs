@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fs::File;
+use std::fs::FileTimes;
 use std::fs::Permissions;
 use std::io;
 use std::io::Read;
@@ -9,17 +10,79 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
+use std::time::SystemTime;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
+
+use crate::ARCHIVED_SESSIONS_SUBDIR;
+use crate::SESSIONS_SUBDIR;
 
 const COMPRESSED_SUFFIX: &str = ".zst";
 const MAX_NOT_FOUND_RETRIES: usize = 3;
 const OPEN_ROLLOUT_LINE_READER_RETRY_DELAY: Duration = Duration::from_millis(50);
 const TEMP_SUFFIX: &str = ".tmp";
+const COMPRESSION_LEVEL: i32 = 3;
+const MIN_ROLLOUT_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const GLOBAL_LOCK_STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
+const LOCK_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
+const TEMP_FILE_STALE_AFTER: Duration = GLOBAL_LOCK_STALE_AFTER;
+const WORKER_MAX_RUNTIME: Duration = Duration::from_secs(5 * 60 * 60);
+const LOCK_FILE_NAME: &str = "rollout-compression.lock";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Starts a best-effort background job that compresses cold local rollout files.
+///
+/// The worker is fire-and-forget: failures are logged, startup is not blocked,
+/// and a process-wide lock under `codex_home` prevents overlapping compression
+/// runs from the same local store.
+pub fn spawn_rollout_compression_worker(codex_home: PathBuf) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        warn!(
+            "failed to start rollout compression worker for {}: no Tokio runtime",
+            codex_home.display()
+        );
+        return;
+    };
+    handle.spawn(async move {
+        if let Err(err) = run_rollout_compression_worker(codex_home.clone()).await {
+            warn!(
+                "rollout compression worker failed for {}: {err}",
+                codex_home.display()
+            );
+        }
+    });
+}
+
+async fn run_rollout_compression_worker(codex_home: PathBuf) -> io::Result<()> {
+    let Some(lock) = CompressionLock::try_acquire(codex_home.as_path())? else {
+        debug!(
+            "rollout compression worker already running for {}",
+            codex_home.display()
+        );
+        return Ok(());
+    };
+    let _heartbeat = lock.start_heartbeat();
+
+    let started_at = Instant::now();
+    cleanup_stale_temps(codex_home.as_path()).await?;
+    let mut stats = CompressionStats::default();
+    if started_at.elapsed() < WORKER_MAX_RUNTIME {
+        let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+        compress_rollouts_in_root(archived_root.as_path(), started_at, &mut stats).await?;
+    }
+    info!(
+        "rollout compression worker finished: scanned={}, compressed={}, skipped={}, failed={}",
+        stats.scanned, stats.compressed, stats.skipped, stats.failed
+    );
+    Ok(())
+}
 
 /// Returns the modified time for the existing plain or compressed rollout file.
 pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::OffsetDateTime>> {
@@ -33,8 +96,9 @@ pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::O
 
 /// Opens a rollout line reader that transparently handles plain `.jsonl` and `.jsonl.zst` files.
 ///
-/// If the requested path disappears during a representation transition, this briefly retries
-/// resolution so callers do not need to know which representation is on disk.
+/// If the requested path disappears during a compression or decompression transition, this retries
+/// the matching plain/compressed sibling once so readers do not need to know which representation is
+/// currently stored on disk.
 pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineReader> {
     for _ in 0..MAX_NOT_FOUND_RETRIES {
         match reader::open_once(path).await {
@@ -49,8 +113,7 @@ pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineRead
 }
 
 /// Returns the compressed `.jsonl.zst` path for a rollout path.
-#[cfg(test)]
-pub(crate) fn compressed_rollout_path(path: &Path) -> PathBuf {
+fn compressed_rollout_path(path: &Path) -> PathBuf {
     path::compressed_rollout_path(path)
 }
 
@@ -209,6 +272,375 @@ impl RolloutLineReader {
 
 type BlockingLineReader = std::io::Lines<std::io::BufReader<Box<dyn Read + Send>>>;
 
+#[derive(Default)]
+struct CompressionStats {
+    scanned: usize,
+    compressed: usize,
+    skipped: usize,
+    failed: usize,
+}
+
+struct CompressionLock {
+    path: PathBuf,
+}
+
+impl CompressionLock {
+    fn try_acquire(codex_home: &Path) -> io::Result<Option<Self>> {
+        let lock_dir = codex_home.join(".tmp");
+        std::fs::create_dir_all(lock_dir.as_path())?;
+        let path = lock_dir.join(LOCK_FILE_NAME);
+        match create_lock_file(path.as_path()) {
+            Ok(()) => return Ok(Some(Self { path })),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+
+        let stale = std::fs::metadata(path.as_path())
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age >= GLOBAL_LOCK_STALE_AFTER);
+        if !stale {
+            return Ok(None);
+        }
+        match std::fs::remove_file(path.as_path()) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+        match create_lock_file(path.as_path()) {
+            Ok(()) => Ok(Some(Self { path })),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn start_heartbeat(&self) -> CompressionLockHeartbeat {
+        let path = self.path.clone();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            loop {
+                match stop_rx.recv_timeout(LOCK_HEARTBEAT_INTERVAL) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        let times = FileTimes::new().set_modified(SystemTime::now());
+                        let _ = std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(path.as_path())
+                            .and_then(|file| file.set_times(times));
+                    }
+                }
+            }
+        });
+        CompressionLockHeartbeat {
+            stop_tx: Some(stop_tx),
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for CompressionLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(self.path.as_path());
+    }
+}
+
+struct CompressionLockHeartbeat {
+    stop_tx: Option<std::sync::mpsc::Sender<()>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for CompressionLockHeartbeat {
+    fn drop(&mut self) {
+        if let Some(stop_tx) = self.stop_tx.take() {
+            let _ = stop_tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn create_lock_file(path: &Path) -> io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    writeln!(
+        file,
+        "pid={} started_at={:?}",
+        std::process::id(),
+        SystemTime::now()
+    )?;
+    Ok(())
+}
+
+async fn compress_rollouts_in_root(
+    root: &Path,
+    started_at: Instant,
+    stats: &mut CompressionStats,
+) -> io::Result<()> {
+    if !tokio::fs::try_exists(root).await.unwrap_or(false) {
+        return Ok(());
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if started_at.elapsed() >= WORKER_MAX_RUNTIME {
+            break;
+        }
+        let mut read_dir = match tokio::fs::read_dir(dir.as_path()).await {
+            Ok(read_dir) => read_dir,
+            Err(err) => {
+                warn!(
+                    "failed to read rollout compression directory {}: {err}",
+                    dir.display()
+                );
+                continue;
+            }
+        };
+        while let Some(entry) = read_dir.next_entry().await? {
+            if started_at.elapsed() >= WORKER_MAX_RUNTIME {
+                break;
+            }
+            let path = entry.path();
+            let file_type = match entry.file_type().await {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    warn!(
+                        "failed to read rollout compression file type {}: {err}",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(rollout_file) = RolloutFile::from_path(path) else {
+                continue;
+            };
+            if rollout_file.is_compressed() {
+                continue;
+            }
+            let path = rollout_file.into_path();
+            stats.scanned = stats.scanned.saturating_add(1);
+            match compress_rollout_if_cold(path.as_path()).await {
+                Ok(true) => stats.compressed = stats.compressed.saturating_add(1),
+                Ok(false) => stats.skipped = stats.skipped.saturating_add(1),
+                Err(err) => {
+                    stats.failed = stats.failed.saturating_add(1);
+                    warn!("failed to compress rollout {}: {err}", path.display());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn compress_rollout_if_cold(path: &Path) -> io::Result<bool> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || compress_rollout_if_cold_blocking(path.as_path()))
+        .await
+        .map_err(io::Error::other)?
+}
+
+fn compress_rollout_if_cold_blocking(path: &Path) -> io::Result<bool> {
+    let before = match cold_file_state(path)? {
+        Some(state) => state,
+        None => return Ok(false),
+    };
+    let compressed_path = compressed_rollout_path(path);
+    if compressed_path.exists() {
+        return Ok(false);
+    }
+    let temp_path = temp_path_for(compressed_path.as_path(), "compress");
+    let result = (|| {
+        encode_zstd(path, temp_path.as_path(), &before.permissions)?;
+        verify_zstd(temp_path.as_path())?;
+        if !same_file_state(path, &before)? {
+            return Ok(false);
+        }
+        set_modified_time(temp_path.as_path(), before.modified)?;
+        match std::fs::hard_link(temp_path.as_path(), compressed_path.as_path()) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+            Err(err) => return Err(err),
+        }
+        let _ = std::fs::remove_file(temp_path.as_path());
+        if !same_file_state(path, &before)? {
+            let _ = std::fs::remove_file(compressed_path.as_path());
+            return Ok(false);
+        }
+        std::fs::remove_file(path)?;
+        Ok(true)
+    })();
+    if !matches!(result, Ok(true)) {
+        let _ = std::fs::remove_file(temp_path.as_path());
+    }
+    result
+}
+
+struct FileState {
+    len: u64,
+    modified: SystemTime,
+    permissions: Permissions,
+}
+
+fn cold_file_state(path: &Path) -> io::Result<Option<FileState>> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+    let modified = metadata.modified()?;
+    let age = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or(Duration::ZERO);
+    if age < MIN_ROLLOUT_AGE {
+        return Ok(None);
+    }
+    Ok(Some(FileState {
+        len: metadata.len(),
+        modified,
+        permissions: metadata.permissions(),
+    }))
+}
+
+fn same_file_state(path: &Path, expected: &FileState) -> io::Result<bool> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.len() == expected.len
+            && metadata.modified()? == expected.modified
+            && metadata.permissions() == expected.permissions),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+fn encode_zstd(source: &Path, temp_path: &Path, permissions: &Permissions) -> io::Result<()> {
+    let mut input = File::open(source)?;
+    let output = create_file_with_permissions(temp_path, permissions)?;
+    let mut encoder = zstd::stream::write::Encoder::new(output, COMPRESSION_LEVEL)?;
+    io::copy(&mut input, &mut encoder)?;
+    encoder.finish()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_file_with_permissions(path: &Path, permissions: &Permissions) -> io::Result<File> {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(permissions.mode() & 0o7777)
+        .open(path)?;
+    file.set_permissions(permissions.clone())?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn create_file_with_permissions(path: &Path, permissions: &Permissions) -> io::Result<File> {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.set_permissions(permissions.clone())?;
+    Ok(file)
+}
+
+fn verify_zstd(path: &Path) -> io::Result<()> {
+    let input = File::open(path)?;
+    let mut decoder = zstd::stream::read::Decoder::new(input)?;
+    let mut sink = io::sink();
+    io::copy(&mut decoder, &mut sink)?;
+    Ok(())
+}
+
+fn set_modified_time(path: &Path, modified: SystemTime) -> io::Result<()> {
+    let times = FileTimes::new().set_modified(modified);
+    std::fs::OpenOptions::new()
+        .read(true)
+        .open(path)?
+        .set_times(times)
+}
+
+async fn cleanup_stale_temps(codex_home: &Path) -> io::Result<()> {
+    for root in [
+        codex_home.join(SESSIONS_SUBDIR),
+        codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
+    ] {
+        cleanup_stale_temps_in_root(root.as_path()).await?;
+    }
+    Ok(())
+}
+
+async fn cleanup_stale_temps_in_root(root: &Path) -> io::Result<()> {
+    if !tokio::fs::try_exists(root).await.unwrap_or(false) {
+        return Ok(());
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut read_dir = match tokio::fs::read_dir(dir.as_path()).await {
+            Ok(read_dir) => read_dir,
+            Err(err) => {
+                warn!(
+                    "failed to read rollout temp cleanup directory {}: {err}",
+                    dir.display()
+                );
+                continue;
+            }
+        };
+        while let Some(entry) = read_dir.next_entry().await? {
+            let path = entry.path();
+            let file_type = match entry.file_type().await {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    warn!(
+                        "failed to read rollout temp cleanup file type {}: {err}",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if file_type.is_file()
+                && path
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|name| name.ends_with(TEMP_SUFFIX))
+            {
+                let stale = entry
+                    .metadata()
+                    .await
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                    .is_some_and(|age| age >= TEMP_FILE_STALE_AFTER);
+                if !stale {
+                    continue;
+                }
+                match tokio::fs::remove_file(path.as_path()).await {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => warn!(
+                        "failed to remove stale rollout temp {}: {err}",
+                        path.display()
+                    ),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Returns the existing rollout path, preferring the plain `.jsonl` file over
 /// its `.jsonl.zst` compressed sibling.
 pub async fn existing_rollout_path(path: &Path) -> Option<PathBuf> {
@@ -321,27 +753,6 @@ mod reader {
             inner: RolloutLineReaderInner::Plain(tokio::io::BufReader::new(file).lines()),
         })
     }
-}
-
-#[cfg(unix)]
-fn create_file_with_permissions(path: &Path, permissions: &Permissions) -> io::Result<File> {
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(permissions.mode() & 0o7777)
-        .open(path)?;
-    file.set_permissions(permissions.clone())?;
-    Ok(file)
-}
-
-#[cfg(not(unix))]
-fn create_file_with_permissions(path: &Path, permissions: &Permissions) -> io::Result<File> {
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    file.set_permissions(permissions.clone())?;
-    Ok(file)
 }
 
 fn temp_path_for(path: &Path, operation: &str) -> PathBuf {

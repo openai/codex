@@ -1,6 +1,9 @@
 use std::fs;
+use std::fs::FileTimes;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
+use std::time::SystemTime;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
@@ -98,17 +101,65 @@ async fn append_rollout_item_materializes_compressed_rollout() -> anyhow::Result
     Ok(())
 }
 
+#[tokio::test]
+async fn worker_compresses_old_archived_rollouts_only() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let active_uuid = Uuid::from_u128(3);
+    let active_id = ThreadId::from_string(&active_uuid.to_string())?;
+    let active_path = rollout_path(home.path(), "2025-01-03T12-00-00", active_uuid);
+    write_rollout(&active_path, active_id, "old active")?;
+    set_old_mtime(&active_path)?;
+
+    let archived_uuid = Uuid::from_u128(4);
+    let archived_id = ThreadId::from_string(&archived_uuid.to_string())?;
+    let archived_path = archived_rollout_path(home.path(), "2025-01-04T12-00-00", archived_uuid);
+    write_rollout(&archived_path, archived_id, "old archived")?;
+    set_old_mtime(&archived_path)?;
+
+    let fresh_uuid = Uuid::from_u128(5);
+    let fresh_id = ThreadId::from_string(&fresh_uuid.to_string())?;
+    let fresh_path = rollout_path(home.path(), "2025-01-05T12-00-00", fresh_uuid);
+    write_rollout(&fresh_path, fresh_id, "fresh active")?;
+
+    let stale_temp = active_path.with_file_name("rollout-stale.jsonl.zst.tmp");
+    fs::write(&stale_temp, "stale temp")?;
+    set_old_mtime(&stale_temp)?;
+
+    let fresh_temp = active_path.with_file_name("rollout-fresh.jsonl.zst.tmp");
+    fs::write(&fresh_temp, "fresh temp")?;
+
+    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+
+    assert!(active_path.exists());
+    assert!(!compressed_rollout_path(&active_path).exists());
+    assert!(!archived_path.exists());
+    assert!(compressed_rollout_path(&archived_path).exists());
+    assert!(fresh_path.exists());
+    assert!(!compressed_rollout_path(&fresh_path).exists());
+    assert!(!stale_temp.exists());
+    assert!(fresh_temp.exists());
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
-async fn append_materialization_preserves_compressed_rollout_permissions() -> anyhow::Result<()> {
+async fn compression_preserves_rollout_permissions() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let uuid = Uuid::from_u128(6);
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
-    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    let rollout_path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
     write_rollout(&rollout_path, thread_id, "restricted transcript")?;
-    compress_now(&rollout_path)?;
+    fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o600))?;
+    set_old_mtime(&rollout_path)?;
+
+    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+
     let compressed_path = compressed_rollout_path(&rollout_path);
-    fs::set_permissions(&compressed_path, fs::Permissions::from_mode(0o600))?;
+    assert!(!rollout_path.exists());
+    assert_eq!(
+        fs::metadata(&compressed_path)?.permissions().mode() & 0o777,
+        0o600
+    );
 
     append_rollout_item_to_path(
         &rollout_path,
@@ -125,6 +176,80 @@ async fn append_materialization_preserves_compressed_rollout_permissions() -> an
         fs::metadata(&rollout_path)?.permissions().mode() & 0o777,
         0o600
     );
+    Ok(())
+}
+
+#[test]
+fn persist_temp_file_noclobber_installs_completed_temp() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let temp_path = home.path().join("rollout.jsonl.tmp");
+    let destination = home.path().join("rollout.jsonl");
+    fs::write(&temp_path, "completed rollout")?;
+
+    persist_temp_file_noclobber(&temp_path, &destination)?;
+
+    assert!(!temp_path.exists());
+    assert_eq!(fs::read_to_string(destination)?, "completed rollout");
+    Ok(())
+}
+
+#[test]
+fn persist_temp_file_noclobber_does_not_replace_existing_destination() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let temp_path = home.path().join("rollout.jsonl.tmp");
+    let destination = home.path().join("rollout.jsonl");
+    fs::write(&temp_path, "candidate rollout")?;
+    fs::write(&destination, "existing rollout")?;
+
+    persist_temp_file_noclobber(&temp_path, &destination)?;
+
+    assert!(!temp_path.exists());
+    assert_eq!(fs::read_to_string(destination)?, "existing rollout");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn compression_preserves_read_only_rollout_permissions() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(7);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "read-only transcript")?;
+    set_old_mtime(&rollout_path)?;
+    fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o400))?;
+    let source_modified = fs::metadata(&rollout_path)?.modified()?;
+
+    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+
+    let compressed_path = compressed_rollout_path(&rollout_path);
+    let compressed_metadata = fs::metadata(&compressed_path)?;
+    assert!(!rollout_path.exists());
+    assert_eq!(compressed_metadata.permissions().mode() & 0o777, 0o400);
+    assert_eq!(compressed_metadata.modified()?, source_modified);
+    Ok(())
+}
+
+#[tokio::test]
+async fn worker_skips_existing_compressed_archived_rollouts() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(10);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "already compressed")?;
+    compress_now(&rollout_path)?;
+    let compressed_path = compressed_rollout_path(&rollout_path);
+    set_old_mtime(&compressed_path)?;
+
+    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+
+    assert!(!rollout_path.exists());
+    assert!(compressed_path.exists());
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 2);
     Ok(())
 }
 
@@ -181,6 +306,11 @@ fn rollout_path(home: &std::path::Path, ts: &str, uuid: Uuid) -> std::path::Path
         .join(format!("rollout-{ts}-{uuid}.jsonl"))
 }
 
+fn archived_rollout_path(home: &std::path::Path, ts: &str, uuid: Uuid) -> std::path::PathBuf {
+    home.join("archived_sessions")
+        .join(format!("rollout-{ts}-{uuid}.jsonl"))
+}
+
 fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> anyhow::Result<()> {
     let parent = path.parent().expect("rollout path should have parent");
     fs::create_dir_all(parent)?;
@@ -228,12 +358,20 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
 
 fn compress_now(path: &std::path::Path) -> anyhow::Result<()> {
     let compressed_path = compressed_rollout_path(path);
-    let input = fs::File::open(path)?;
-    let output = fs::File::create(compressed_path)?;
-    let mut encoder = zstd::stream::write::Encoder::new(output, 3)?;
-    let mut input = std::io::BufReader::new(input);
-    std::io::copy(&mut input, &mut encoder)?;
-    encoder.finish()?;
+    let permissions = fs::metadata(path)?.permissions();
+    encode_zstd(path, compressed_path.as_path(), &permissions)?;
     fs::remove_file(path)?;
+    Ok(())
+}
+
+fn set_old_mtime(path: &std::path::Path) -> anyhow::Result<()> {
+    let old = SystemTime::now()
+        .checked_sub(Duration::from_secs(8 * 24 * 60 * 60))
+        .expect("old timestamp should be representable");
+    let times = FileTimes::new().set_modified(old);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_times(times)?;
     Ok(())
 }

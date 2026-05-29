@@ -37,6 +37,7 @@ pub use compression::RolloutLineReader;
 pub use compression::existing_rollout_path;
 pub use compression::open_rollout_line_reader;
 pub use compression::plain_rollout_path;
+pub use compression::spawn_rollout_compression_worker;
 pub use config::Config;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;
