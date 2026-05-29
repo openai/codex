@@ -58,6 +58,7 @@ pub struct RemoteControlHandle {
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
     pairing_client: Arc<StdMutex<Option<RemoteControlPairingClient>>>,
+    auth_change_rx: Arc<StdMutex<watch::Receiver<u64>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,22 +148,48 @@ impl RemoteControlHandle {
             ));
         }
 
-        let pairing_client = self
-            .pairing_client
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "remote control pairing is unavailable until enrollment completes",
-                )
-            })?;
-        pairing_client
+        let auth_change_revision = self.auth_change_revision();
+        let pairing_client = {
+            let mut pairing_client = self
+                .pairing_client
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let current_pairing_client = pairing_client
+                .as_ref()
+                .filter(|pairing_client| {
+                    pairing_client.matches_auth_change_revision(auth_change_revision)
+                })
+                .cloned();
+            if current_pairing_client.is_none() {
+                *pairing_client = None;
+            }
+            current_pairing_client
+        }
+        .ok_or_else(Self::pairing_unavailable_error)?;
+        let pairing_response = pairing_client
             .start(protocol::StartRemoteControlPairingRequest {
                 manual_code: params.manual_code,
             })
-            .await
+            .await;
+        if self.auth_change_revision() != auth_change_revision {
+            return Err(Self::pairing_unavailable_error());
+        }
+        pairing_response
+    }
+
+    fn auth_change_revision(&self) -> u64 {
+        *self
+            .auth_change_rx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .borrow()
+    }
+
+    fn pairing_unavailable_error() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "remote control pairing is unavailable until enrollment completes",
+        )
     }
 
     fn publish_status(
@@ -242,6 +269,7 @@ pub async fn start_remote_control(
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
     let pairing_client = Arc::new(StdMutex::new(None));
     let websocket_pairing_client = Arc::clone(&pairing_client);
+    let auth_change_rx = Arc::new(StdMutex::new(auth_manager.auth_change_receiver()));
     let server_name = gethostname().to_string_lossy().trim().to_string();
     let remote_control_url = config.remote_control_url;
     let installation_id = config.installation_id;
@@ -335,6 +363,7 @@ pub async fn start_remote_control(
             status_tx: Arc::new(status_tx),
             state_db_available,
             pairing_client,
+            auth_change_rx,
         },
     ))
 }

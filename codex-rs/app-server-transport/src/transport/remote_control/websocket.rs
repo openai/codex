@@ -286,6 +286,8 @@ enum ConnectionEndReason {
     Shutdown,
     Disabled,
     EnabledWatchClosed,
+    AuthChanged,
+    AuthWatchClosed,
     ConnectionWorkerStopped,
 }
 
@@ -703,7 +705,7 @@ impl RemoteControlWebsocket {
     }
 
     async fn run_connection(
-        &self,
+        &mut self,
         websocket_connection: WebSocketStream<MaybeTlsStream<TcpStream>>,
         shutdown_token: CancellationToken,
     ) -> ConnectionEndReason {
@@ -738,8 +740,17 @@ impl RemoteControlWebsocket {
                     ConnectionEndReason::EnabledWatchClosed
                 }
             }
+            changed = self.auth_change_rx.changed() => {
+                if changed.is_ok() {
+                    self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                    ConnectionEndReason::AuthChanged
+                } else {
+                    ConnectionEndReason::AuthWatchClosed
+                }
+            }
             _ = join_set.join_next() => ConnectionEndReason::ConnectionWorkerStopped,
         };
+        clear_pairing_client(&self.pairing_client);
         shutdown_token.cancel();
 
         Self::join_connection_workers(&mut join_set, REMOTE_CONTROL_CONNECTION_SHUTDOWN_TIMEOUT)
@@ -1252,6 +1263,7 @@ pub(super) async fn connect_remote_control_websocket(
         ));
     };
 
+    let auth_change_revision = *auth_context.auth_change_rx.borrow();
     let auth = match load_remote_control_auth(auth_context.auth_manager).await {
         Ok(auth) => auth,
         Err(err) => {
@@ -1386,7 +1398,6 @@ pub(super) async fn connect_remote_control_websocket(
     let enrollment_ref = enrollment.as_ref().ok_or_else(|| {
         io::Error::other("missing remote control enrollment after enrollment step")
     })?;
-    set_pairing_client(pairing_client, remote_control_target, enrollment_ref)?;
     let request = build_remote_control_websocket_request(
         &remote_control_target.websocket_url,
         enrollment_ref,
@@ -1410,8 +1421,17 @@ pub(super) async fn connect_remote_control_websocket(
     })?;
 
     match websocket_connect_result {
-        Ok((websocket_stream, response)) => Ok((websocket_stream, response.map(|_| ()))),
+        Ok((websocket_stream, response)) => {
+            set_pairing_client(
+                pairing_client,
+                remote_control_target,
+                enrollment_ref,
+                auth_change_revision,
+            )?;
+            Ok((websocket_stream, response.map(|_| ())))
+        }
         Err(err) => {
+            clear_pairing_client(pairing_client);
             match &err {
                 tungstenite::Error::Http(response) if response.status().as_u16() == 404 => {
                     info!(
@@ -1490,6 +1510,7 @@ fn set_pairing_client(
     pairing_client: &Arc<StdMutex<Option<RemoteControlPairingClient>>>,
     remote_control_target: &RemoteControlTarget,
     enrollment: &RemoteControlEnrollment,
+    auth_change_revision: u64,
 ) -> io::Result<()> {
     let remote_control_token = enrollment.remote_control_token.clone().ok_or_else(|| {
         io::Error::new(
@@ -1512,6 +1533,7 @@ fn set_pairing_client(
             enrollment.server_id.clone(),
             enrollment.environment_id.clone(),
             expires_at,
+            auth_change_revision,
         ));
     Ok(())
 }
@@ -1890,6 +1912,12 @@ mod tests {
 
         server_task.await.expect("server task should succeed");
         assert_eq!(err.to_string(), expected_error);
+        assert!(
+            pairing_client
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
         assert_eq!(
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {

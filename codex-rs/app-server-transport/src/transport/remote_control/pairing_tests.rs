@@ -105,6 +105,7 @@ async fn start_remote_control_pairing_uses_server_token_and_maps_response() {
         "server-id".to_string(),
         "environment-id".to_string(),
         OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
+        /*auth_change_revision*/ 0,
     );
 
     let response = client
@@ -173,6 +174,7 @@ async fn start_remote_control_pairing_preserves_backend_error_context() {
         "server-id".to_string(),
         "environment-id".to_string(),
         OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
+        /*auth_change_revision*/ 0,
     );
 
     let err = client

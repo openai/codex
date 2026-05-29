@@ -19,6 +19,7 @@ pub(super) struct RemoteControlPairingClient {
     server_id: String,
     environment_id: String,
     expires_at: OffsetDateTime,
+    auth_change_revision: u64,
 }
 
 impl RemoteControlPairingClient {
@@ -28,6 +29,7 @@ impl RemoteControlPairingClient {
         server_id: String,
         environment_id: String,
         expires_at: OffsetDateTime,
+        auth_change_revision: u64,
     ) -> Self {
         Self {
             pairing_url: remote_control_target.pair_url.clone(),
@@ -35,7 +37,12 @@ impl RemoteControlPairingClient {
             server_id,
             environment_id,
             expires_at,
+            auth_change_revision,
         }
+    }
+
+    pub(super) fn matches_auth_change_revision(&self, auth_change_revision: u64) -> bool {
+        self.auth_change_revision == auth_change_revision
     }
 
     pub(super) async fn start(
