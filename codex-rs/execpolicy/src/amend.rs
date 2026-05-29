@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use crate::decision::Decision;
 use crate::rule::NetworkRuleProtocol;
 use crate::rule::normalize_network_rule_host;
-use serde_json;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

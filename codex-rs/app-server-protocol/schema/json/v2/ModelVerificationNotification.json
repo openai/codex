@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ModelVerification": {
+      "enum": [
+        "trustedAccessForCyber"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    },
+    "verifications": {
+      "items": {
+        "$ref": "#/definitions/ModelVerification"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "threadId",
+    "turnId",
+    "verifications"
+  ],
+  "title": "ModelVerificationNotification",
+  "type": "object"
+}

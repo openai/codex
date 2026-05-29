@@ -32,6 +32,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -65,8 +66,9 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CONNECTOR_ID: &str = "calendar";
 const CONNECTOR_NAME: &str = "Calendar";
+const TOOL_NAMESPACE: &str = "mcp__codex_apps__calendar";
+const CALLABLE_TOOL_NAME: &str = "_confirm_action";
 const TOOL_NAME: &str = "calendar_confirm_action";
-const QUALIFIED_TOOL_NAME: &str = "mcp__codex_apps__calendar_confirm_action";
 const TOOL_CALL_ID: &str = "call-calendar-confirm";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
 
@@ -84,9 +86,10 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
             ]),
             responses::sse(vec![
                 responses::ev_response_created("resp-1"),
-                responses::ev_function_call(
+                responses::ev_function_call_with_namespace(
                     TOOL_CALL_ID,
-                    QUALIFIED_TOOL_NAME,
+                    TOOL_NAMESPACE,
+                    CALLABLE_TOOL_NAME,
                     &tool_call_arguments,
                 ),
                 responses::ev_completed("resp-1"),
@@ -132,6 +135,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     let warmup_turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Warm up connectors.".to_string(),
                 text_elements: Vec::new(),
@@ -164,6 +168,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Use [$calendar](app://calendar) to run the calendar tool.".to_string(),
                 text_elements: Vec::new(),
@@ -274,8 +279,15 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         .get("output")
         .and_then(Value::as_str)
         .expect("function_call_output output should be a JSON string");
+    let payload = assert_regex_match(
+        r#"(?s)^Wall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n(.*)$"#,
+        output,
+    )
+    .get(1)
+    .expect("wall-time wrapped output should include payload")
+    .as_str();
     assert_eq!(
-        serde_json::from_str::<Value>(output)?,
+        serde_json::from_str::<Value>(payload)?,
         json!([{
             "type": "text",
             "text": "accepted"
@@ -298,11 +310,8 @@ struct ElicitationAppsMcpServer;
 
 impl ServerHandler for ElicitationAppsMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: rmcp::model::ProtocolVersion::V_2025_06_18,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..ServerInfo::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(rmcp::model::ProtocolVersion::V_2025_06_18)
     }
 
     async fn list_tools(

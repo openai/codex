@@ -2,20 +2,16 @@ use super::effective_file_system_sandbox_policy;
 use super::intersect_permission_profiles;
 use super::merge_file_system_policy_with_additional_permissions;
 use super::normalize_additional_permissions;
-use super::sandbox_policy_with_additional_permissions;
 use super::should_require_platform_sandbox;
+use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
@@ -52,8 +48,7 @@ fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
     let blocked = AbsolutePathBuf::resolve_path_against_base(
         "blocked",
         std::env::current_dir().expect("current dir"),
-    )
-    .expect("blocked path");
+    );
     let policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -63,7 +58,7 @@ fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: blocked },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -107,10 +102,10 @@ fn normalize_additional_permissions_preserves_network() {
         network: Some(NetworkPermissions {
             enabled: Some(true),
         }),
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![path.clone()]),
-            write: Some(vec![path.clone()]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path.clone()]),
+            Some(vec![path.clone()]),
+        )),
     })
     .expect("permissions");
 
@@ -122,16 +117,16 @@ fn normalize_additional_permissions_preserves_network() {
     );
     assert_eq!(
         permissions.file_system,
-        Some(FileSystemPermissions {
-            read: Some(vec![path.clone()]),
-            write: Some(vec![path]),
-        })
+        Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path.clone()]),
+            Some(vec![path]),
+        ))
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
+fn normalize_additional_permissions_preserves_symlinked_write_paths() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let real_root = temp_dir.path().join("real");
     let link_root = temp_dir.path().join("link");
@@ -141,26 +136,79 @@ fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
 
     let link_write_dir =
         AbsolutePathBuf::from_absolute_path(link_root.join("write")).expect("link write dir");
-    let expected_write_dir = AbsolutePathBuf::from_absolute_path(
-        write_dir.canonicalize().expect("canonicalize write dir"),
-    )
-    .expect("absolute canonical write dir");
-
     let permissions = normalize_additional_permissions(PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![link_write_dir]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![link_write_dir]),
+        )),
         ..Default::default()
     })
     .expect("permissions");
 
     assert_eq!(
         permissions.file_system,
-        Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![expected_write_dir]),
-        })
+        Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![
+                AbsolutePathBuf::from_absolute_path(link_root.join("write"))
+                    .expect("link write dir"),
+            ]),
+        ))
+    );
+}
+
+#[test]
+fn normalize_additional_permissions_rejects_glob_read_grants() {
+    let err = normalize_additional_permissions(PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: FileSystemAccessMode::Read,
+            }],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    })
+    .expect_err("read glob permissions are unsupported");
+
+    assert_eq!(
+        err,
+        "glob file system permissions only support deny-read entries"
+    );
+}
+
+#[test]
+fn normalize_additional_permissions_preserves_deny_globs() {
+    let permissions = normalize_additional_permissions(PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: FileSystemAccessMode::Deny,
+            }],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        }),
+        ..Default::default()
+    })
+    .expect("deny glob permissions are supported");
+
+    assert_eq!(
+        permissions,
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                }],
+                glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+            }),
+            ..Default::default()
+        }
     );
 }
 
@@ -168,10 +216,7 @@ fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
 fn normalize_additional_permissions_drops_empty_nested_profiles() {
     let permissions = normalize_additional_permissions(PermissionProfile {
         network: Some(NetworkPermissions { enabled: None }),
-        file_system: Some(FileSystemPermissions {
-            read: None,
-            write: None,
-        }),
+        file_system: Some(FileSystemPermissions::default()),
     })
     .expect("permissions");
 
@@ -186,16 +231,16 @@ fn intersect_permission_profiles_preserves_explicit_empty_requested_reads() {
     )
     .expect("absolute temp dir");
     let requested = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![path]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![path]),
+        )),
         ..Default::default()
     };
     let granted = requested.clone();
 
     assert_eq!(
-        intersect_permission_profiles(requested.clone(), granted),
+        intersect_permission_profiles(requested.clone(), granted, temp_dir.path()),
         requested
     );
 }
@@ -208,15 +253,15 @@ fn intersect_permission_profiles_drops_ungranted_nonempty_path_requests() {
     )
     .expect("absolute temp dir");
     let requested = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![path]),
-            write: None,
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path]),
+            /*write*/ None,
+        )),
         ..Default::default()
     };
 
     assert_eq!(
-        intersect_permission_profiles(requested, PermissionProfile::default()),
+        intersect_permission_profiles(requested, PermissionProfile::default(), temp_dir.path()),
         PermissionProfile::default()
     );
 }
@@ -229,83 +274,482 @@ fn intersect_permission_profiles_drops_explicit_empty_reads_without_grant() {
     )
     .expect("absolute temp dir");
     let requested = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![path]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![path]),
+        )),
         ..Default::default()
     };
 
     assert_eq!(
-        intersect_permission_profiles(requested, PermissionProfile::default()),
+        intersect_permission_profiles(requested, PermissionProfile::default(), temp_dir.path()),
         PermissionProfile::default()
     );
 }
 
 #[test]
-fn read_only_additional_permissions_can_enable_network_without_writes() {
+fn intersect_permission_profiles_accepts_child_path_granted_for_requested_cwd() {
     let temp_dir = TempDir::new().expect("create temp dir");
-    let path = AbsolutePathBuf::from_absolute_path(
+    let cwd = AbsolutePathBuf::from_absolute_path(
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let policy = sandbox_policy_with_additional_permissions(
-        &SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![path.clone()],
-            },
-            network_access: false,
-        },
-        &PermissionProfile {
-            network: Some(NetworkPermissions {
-                enabled: Some(true),
-            }),
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![path.clone()]),
-                write: Some(Vec::new()),
-            }),
-        },
+    let child = cwd.join("child");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![child]),
+        )),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted.clone(), cwd.as_path()),
+        granted
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_materializes_cwd_grant_for_reuse() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let request_cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("request-cwd"))
+        .expect("absolute request cwd");
+    let later_cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("later-cwd"))
+        .expect("absolute later cwd");
+    let cwd_write_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    let intersected = intersect_permission_profiles(
+        cwd_write_permissions.clone(),
+        cwd_write_permissions,
+        request_cwd.as_path(),
     );
 
     assert_eq!(
-        policy,
-        SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![path],
+        intersected,
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                /*read*/ None,
+                Some(vec![request_cwd]),
+            )),
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        intersect_permission_profiles(
+            PermissionProfile {
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    /*read*/ None,
+                    Some(vec![later_cwd.join("child")]),
+                )),
+                ..Default::default()
             },
-            network_access: true,
+            intersected,
+            later_cwd.as_path(),
+        ),
+        PermissionProfile::default()
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_deduplicates_materialized_grants() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let cwd =
+        AbsolutePathBuf::from_absolute_path(temp_dir.path().join("cwd")).expect("absolute cwd");
+    let permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: cwd.clone() },
+                    access: FileSystemAccessMode::Write,
+                },
+            ],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(permissions.clone(), permissions, cwd.as_path()),
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                /*read*/ None,
+                Some(vec![cwd]),
+            )),
+            ..Default::default()
         }
     );
 }
 
 #[test]
-fn external_sandbox_additional_permissions_can_enable_network() {
+fn intersect_permission_profiles_materializes_cwd_deny_entries() {
     let temp_dir = TempDir::new().expect("create temp dir");
-    let path = AbsolutePathBuf::from_absolute_path(
+    let request_cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("request-cwd"))
+        .expect("absolute request cwd");
+    let permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+            ],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(permissions.clone(), permissions, request_cwd.as_path()),
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path { path: request_cwd },
+                        access: FileSystemAccessMode::Deny,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            }),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_drops_deny_entries_without_filesystem_grants() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let cwd = AbsolutePathBuf::from_absolute_path(
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let policy = sandbox_policy_with_additional_permissions(
-        &SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Restricted,
-        },
-        &PermissionProfile {
-            network: Some(NetworkPermissions {
-                enabled: Some(true),
-            }),
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![path]),
-                write: Some(Vec::new()),
-            }),
-        },
-    );
+    let secret = cwd.join("secret");
+    let requested = PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        file_system: Some(FileSystemPermissions {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: secret },
+                    access: FileSystemAccessMode::Deny,
+                },
+            ],
+            glob_scan_max_depth: None,
+        }),
+    };
+    let granted = PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        ..Default::default()
+    };
 
     assert_eq!(
-        policy,
-        SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Enabled,
+        intersect_permission_profiles(requested, granted.clone(), cwd.as_path()),
+        granted
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_rejects_concrete_grants_matched_by_requested_deny_globs() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let cwd = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let env_file = cwd.join(".env");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+            ],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![env_file]),
+        )),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted, cwd.as_path()),
+        PermissionProfile::default()
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_materializes_relative_deny_globs_for_reuse() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let request_cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("request-cwd"))
+        .expect("absolute request cwd");
+    let later_cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("later-cwd"))
+        .expect("absolute later cwd");
+    let cwd_write = FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+        },
+        access: FileSystemAccessMode::Write,
+    };
+    let deny_env_files = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::Deny,
+    };
+    let permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![cwd_write, deny_env_files],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        }),
+        ..Default::default()
+    };
+
+    let intersected =
+        intersect_permission_profiles(permissions.clone(), permissions, request_cwd.as_path());
+
+    assert_eq!(
+        intersected,
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: request_cwd.clone(),
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: request_cwd.join("**/*.env").to_string_lossy().into_owned(),
+                        },
+                        access: FileSystemAccessMode::Deny,
+                    },
+                ],
+                glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+            }),
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        intersect_permission_profiles(
+            PermissionProfile {
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    /*read*/ None,
+                    Some(vec![later_cwd.join("token.env")]),
+                )),
+                ..Default::default()
+            },
+            intersected,
+            later_cwd.as_path(),
+        ),
+        PermissionProfile::default()
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_drops_broader_cwd_grant_for_requested_child_path() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let cwd = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let child = cwd.join("child");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![child]),
+        )),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted, cwd.as_path()),
+        PermissionProfile::default()
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_uses_granted_bounded_glob_scan_depth() {
+    let cwd = std::env::current_dir().expect("current dir");
+    let root_write = FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Write,
+    };
+    let deny_env_files = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::Deny,
+    };
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![root_write.clone(), deny_env_files.clone()],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![root_write.clone(), deny_env_files],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(4),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted, cwd.as_path()),
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![
+                    root_write,
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: AbsolutePathBuf::resolve_path_against_base(
+                                "**/*.env",
+                                cwd.as_path()
+                            )
+                            .to_string_lossy()
+                            .into_owned(),
+                        },
+                        access: FileSystemAccessMode::Deny,
+                    },
+                ],
+                glob_scan_max_depth: std::num::NonZeroUsize::new(4),
+            }),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_uses_granted_unbounded_glob_scan_depth() {
+    let cwd = std::env::current_dir().expect("current dir");
+    let root_write = FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Write,
+    };
+    let deny_env_files = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::Deny,
+    };
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![root_write.clone(), deny_env_files.clone()],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![root_write.clone(), deny_env_files],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted, cwd.as_path()),
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![
+                    root_write,
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: AbsolutePathBuf::resolve_path_against_base(
+                                "**/*.env",
+                                cwd.as_path()
+                            )
+                            .to_string_lossy()
+                            .into_owned(),
+                        },
+                        access: FileSystemAccessMode::Deny,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            }),
+            ..Default::default()
         }
     );
 }
@@ -317,8 +761,8 @@ fn merge_file_system_policy_with_additional_permissions_preserves_unreadable_roo
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let allowed_path = cwd.join("allowed").expect("allowed path");
-    let denied_path = cwd.join("denied").expect("denied path");
+    let allowed_path = cwd.join("allowed");
+    let denied_path = cwd.join("denied");
     let merged_policy = merge_file_system_policy_with_additional_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
@@ -331,17 +775,19 @@ fn merge_file_system_policy_with_additional_permissions_preserves_unreadable_roo
                 path: FileSystemPath::Path {
                     path: denied_path.clone(),
                 },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             },
         ]),
-        vec![allowed_path.clone()],
-        Vec::new(),
+        &FileSystemPermissions::from_read_write_roots(
+            Some(vec![allowed_path.clone()]),
+            Some(Vec::new()),
+        ),
     );
 
     assert_eq!(
         merged_policy.entries.contains(&FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: denied_path },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         }),
         true
     );
@@ -355,13 +801,49 @@ fn merge_file_system_policy_with_additional_permissions_preserves_unreadable_roo
 }
 
 #[test]
+fn merge_file_system_policy_with_additional_permissions_carries_bounded_glob_scan_depth() {
+    let deny_env_files = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::Deny,
+    };
+    let merged_policy = merge_file_system_policy_with_additional_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]),
+        &FileSystemPermissions {
+            entries: vec![deny_env_files.clone()],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        },
+    );
+
+    assert_eq!(merged_policy, {
+        let mut policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            deny_env_files,
+        ]);
+        policy.glob_scan_max_depth = Some(2);
+        policy
+    });
+}
+
+#[test]
 fn effective_file_system_sandbox_policy_returns_base_policy_without_additional_permissions() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let cwd = AbsolutePathBuf::from_absolute_path(
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let denied_path = cwd.join("denied").expect("denied path");
+    let denied_path = cwd.join("denied");
     let base_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -371,7 +853,7 @@ fn effective_file_system_sandbox_policy_returns_base_policy_without_additional_p
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: denied_path },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
 
@@ -388,8 +870,8 @@ fn effective_file_system_sandbox_policy_merges_additional_write_roots() {
         canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
     )
     .expect("absolute temp dir");
-    let allowed_path = cwd.join("allowed").expect("allowed path");
-    let denied_path = cwd.join("denied").expect("denied path");
+    let allowed_path = cwd.join("allowed");
+    let denied_path = cwd.join("denied");
     let base_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -401,14 +883,14 @@ fn effective_file_system_sandbox_policy_merges_additional_write_roots() {
             path: FileSystemPath::Path {
                 path: denied_path.clone(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let additional_permissions = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![allowed_path.clone()]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![allowed_path.clone()]),
+        )),
         ..Default::default()
     };
 
@@ -418,7 +900,7 @@ fn effective_file_system_sandbox_policy_merges_additional_write_roots() {
     assert_eq!(
         effective_policy.entries.contains(&FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: denied_path },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         }),
         true
     );

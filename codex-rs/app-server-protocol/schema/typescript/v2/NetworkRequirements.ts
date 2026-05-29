@@ -4,28 +4,28 @@
 import type { NetworkDomainPermission } from "./NetworkDomainPermission";
 import type { NetworkUnixSocketPermission } from "./NetworkUnixSocketPermission";
 
-export type NetworkRequirements = { enabled: boolean | null, httpPort: number | null, socksPort: number | null, allowUpstreamProxy: boolean | null, dangerouslyAllowNonLoopbackProxy: boolean | null, dangerouslyAllowAllUnixSockets: boolean | null, 
+export type NetworkRequirements = { enabled: boolean | null, httpPort: number | null, socksPort: number | null, allowUpstreamProxy: boolean | null, dangerouslyAllowNonLoopbackProxy: boolean | null, dangerouslyAllowAllUnixSockets: boolean | null,
 /**
  * Canonical network permission map for `experimental_network`.
  */
-domains: { [key in string]?: NetworkDomainPermission } | null, 
+domains: { [key in string]?: NetworkDomainPermission } | null,
 /**
  * When true, only managed allowlist entries are respected while managed
  * network enforcement is active.
  */
-managedAllowedDomainsOnly: boolean | null, 
+managedAllowedDomainsOnly: boolean | null,
 /**
  * Legacy compatibility view derived from `domains`.
  */
-allowedDomains: Array<string> | null, 
+allowedDomains: Array<string> | null,
 /**
  * Legacy compatibility view derived from `domains`.
  */
-deniedDomains: Array<string> | null, 
+deniedDomains: Array<string> | null,
 /**
  * Canonical unix socket permission map for `experimental_network`.
  */
-unixSockets: { [key in string]?: NetworkUnixSocketPermission } | null, 
+unixSockets: { [key in string]?: NetworkUnixSocketPermission } | null,
 /**
  * Legacy compatibility view derived from `unix_sockets`.
  */

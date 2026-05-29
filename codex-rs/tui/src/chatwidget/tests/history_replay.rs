@@ -1,47 +1,56 @@
 use super::*;
+use codex_app_server_protocol::NetworkAccess;
+use codex_app_server_protocol::SandboxPolicy;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: Some(vec![
-            EventMsg::UserMessage(UserMessageEvent {
-                message: "hello from user".to_string(),
-                images: None,
-                text_elements: Vec::new(),
-                local_images: Vec::new(),
-            }),
-            EventMsg::AgentMessage(AgentMessageEvent {
-                message: "assistant reply".to_string(),
-                phase: None,
-                memory_citation: None,
-            }),
-        ]),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
+    replay_user_message_text(
+        &mut chat,
+        "user-1",
+        "hello from user",
+        ReplayKind::ResumeInitialMessages,
+    );
+    replay_agent_message(
+        &mut chat,
+        "assistant-1",
+        "assistant reply",
+        ReplayKind::ResumeInitialMessages,
+    );
 
     let cells = drain_insert_history(&mut rx);
     let mut merged_lines = Vec::new();
@@ -66,47 +75,6 @@ async fn resumed_initial_messages_render_history() {
 }
 
 #[tokio::test]
-async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
-    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.handle_codex_event_replay(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".to_string(),
-            item: TurnItem::AgentMessage(AgentMessageItem {
-                id: "msg-1".to_string(),
-                content: vec![AgentMessageContent::Text {
-                    text: "assistant reply".to_string(),
-                }],
-                phase: None,
-                memory_citation: None,
-            }),
-        }),
-    });
-    chat.handle_codex_event_replay(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "assistant reply".to_string(),
-            phase: None,
-            memory_citation: None,
-        }),
-    });
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(
-        cells.len(),
-        1,
-        "expected replayed assistant message to render once"
-    );
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains("assistant reply"),
-        "expected replayed assistant message, got {rendered:?}"
-    );
-}
-
-#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -118,36 +86,47 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
     )];
     let local_images = vec![PathBuf::from("/tmp/replay.png")];
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
-            message: message.clone(),
-            images: None,
-            text_elements: text_elements.clone(),
-            local_images: local_images.clone(),
-        })]),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
+    replay_user_message_inputs(
+        &mut chat,
+        "user-1",
+        vec![
+            AppServerUserInput::Text {
+                text: message.clone(),
+                text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
+            },
+            AppServerUserInput::LocalImage {
+                path: local_images[0].clone(),
+                detail: None,
+            },
+        ],
+        ReplayKind::ResumeInitialMessages,
+    );
 
     let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
@@ -179,36 +158,47 @@ async fn replayed_user_message_preserves_remote_image_urls() {
     let message = "replayed with remote image".to_string();
     let remote_image_urls = vec!["https://example.com/image.png".to_string()];
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
-            message: message.clone(),
-            images: Some(remote_image_urls.clone()),
-            text_elements: Vec::new(),
-            local_images: Vec::new(),
-        })]),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
+    replay_user_message_inputs(
+        &mut chat,
+        "user-1",
+        vec![
+            AppServerUserInput::Text {
+                text: message.clone(),
+                text_elements: Vec::new(),
+            },
+            AppServerUserInput::Image {
+                url: remote_image_urls[0].clone(),
+                detail: None,
+            },
+        ],
+        ReplayKind::ResumeInitialMessages,
+    );
 
     let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
@@ -238,50 +228,191 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     chat.config
         .permissions
         .approval_policy
-        .set(AskForApproval::OnRequest)
+        .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     chat.config
         .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::new_workspace_write_policy())
-        .expect("set sandbox policy");
-    chat.config.cwd = PathBuf::from("/home/user/main").abs();
+        .set_permission_profile(PermissionProfile::workspace_write())
+        .expect("set permission profile");
+    chat.config.cwd = test_path_buf("/home/user/main").abs();
 
-    let expected_sandbox = SandboxPolicy::new_read_only_policy();
-    let expected_cwd = PathBuf::from("/home/user/sub-agent").abs();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: ThreadId::new(),
+    let expected_cwd = test_path_buf("/home/user/sub-agent").abs();
+    let expected_app_server_permission_profile = PermissionProfile::Managed {
+        network: NetworkSandboxPolicy::Restricted,
+        file_system: ManagedFileSystemPermissions::Restricted {
+            entries: vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/.secret".to_string(),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+            ],
+            glob_scan_max_depth: None,
+        },
+    };
+    let expected_permission_profile = expected_app_server_permission_profile.clone();
+    let expected_core_sandbox = expected_permission_profile
+        .to_legacy_sandbox_policy(expected_cwd.as_path())
+        .expect("permission profile should project to legacy sandbox policy");
+    let expected_sandbox = SandboxPolicy::from(expected_core_sandbox);
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: expected_sandbox.clone(),
-        cwd: expected_cwd.to_path_buf(),
+        permission_profile: expected_permission_profile,
+        active_permission_profile: None,
+        cwd: expected_cwd.clone(),
+        runtime_workspace_roots: vec![expected_cwd.clone()],
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
         network_proxy: None,
         rollout_path: None,
     };
 
-    chat.handle_codex_event(Event {
-        id: "session-configured".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
 
     assert_eq!(
-        chat.config_ref().permissions.approval_policy.value(),
+        AskForApproval::from(chat.config_ref().permissions.approval_policy.value()),
         AskForApproval::Never
     );
+    let actual_sandbox = SandboxPolicy::from(chat.config_ref().legacy_sandbox_policy());
+    assert_eq!(&actual_sandbox, &expected_sandbox);
     assert_eq!(
-        chat.config_ref().permissions.sandbox_policy.get(),
-        &expected_sandbox
+        chat.config_ref().permissions.effective_permission_profile(),
+        expected_app_server_permission_profile
     );
     assert_eq!(&chat.config_ref().cwd, &expected_cwd);
+
+    let updated_profile = PermissionProfile::workspace_write();
+    chat.set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
+        updated_profile.clone(),
+    ))
+    .expect("set permission profile");
+    assert_eq!(
+        chat.config_ref().permissions.permission_profile(),
+        &updated_profile,
+        "local permission changes should replace SessionConfigured canonical permissions"
+    );
+    assert_eq!(
+        chat.config_ref().permissions.effective_permission_profile(),
+        updated_profile
+            .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&expected_cwd,)),
+        "effective permissions should still use the current thread runtime workspace roots"
+    );
+}
+
+#[tokio::test]
+async fn session_configured_preserves_profile_workspace_roots() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let previous_cwd = test_path_buf("/home/user/main").abs();
+    let profile_root = test_path_buf("/home/user/shared").abs();
+    chat.config.cwd = previous_cwd.clone();
+    chat.config.workspace_roots = vec![previous_cwd, profile_root.clone()];
+    chat.config.workspace_roots_explicit = false;
+    chat.config
+        .permissions
+        .set_workspace_roots(chat.config.workspace_roots.clone());
+
+    let session_cwd = test_path_buf("/home/user/sub-agent").abs();
+    let session_runtime_workspace_roots = vec![session_cwd.clone()];
+    let session_effective_workspace_roots = vec![session_cwd.clone(), profile_root];
+    let session_permission_profile = PermissionProfile::workspace_write()
+        .materialize_project_roots_with_workspace_roots(&session_effective_workspace_roots);
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: session_permission_profile.clone(),
+        active_permission_profile: None,
+        cwd: session_cwd.clone(),
+        runtime_workspace_roots: session_runtime_workspace_roots.clone(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    chat.handle_thread_session(configured);
+
+    assert_eq!(&chat.config_ref().cwd, &session_cwd);
+    assert_eq!(
+        chat.config_ref().permissions.user_visible_workspace_roots(),
+        session_runtime_workspace_roots.as_slice()
+    );
+    assert_eq!(
+        chat.config_ref().permissions.effective_permission_profile(),
+        session_permission_profile
+    );
+}
+
+#[tokio::test]
+async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let expected_app_server_permission_profile = PermissionProfile::External {
+        network: NetworkSandboxPolicy::Restricted,
+    };
+    let expected_permission_profile = expected_app_server_permission_profile.clone();
+    let expected_sandbox = SandboxPolicy::ExternalSandbox {
+        network_access: NetworkAccess::Restricted,
+    };
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: expected_permission_profile,
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/external").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    chat.handle_thread_session(configured);
+
+    let actual_sandbox = SandboxPolicy::from(chat.config_ref().legacy_sandbox_policy());
+    assert_eq!(&actual_sandbox, &expected_sandbox);
+    assert_eq!(
+        chat.config_ref().permissions.effective_permission_profile(),
+        expected_app_server_permission_profile
+    );
 }
 
 #[tokio::test]
@@ -290,36 +421,41 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
 
     let remote_image_urls = vec!["https://example.com/remote-only.png".to_string()];
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
-            message: String::new(),
-            images: Some(remote_image_urls.clone()),
-            text_elements: Vec::new(),
-            local_images: Vec::new(),
-        })]),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
+    replay_user_message_inputs(
+        &mut chat,
+        "user-1",
+        vec![AppServerUserInput::Image {
+            url: remote_image_urls[0].clone(),
+            detail: None,
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
 
     let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
@@ -338,71 +474,72 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
 }
 
 #[tokio::test]
-async fn replayed_user_message_with_only_local_images_does_not_render_history_cell() {
+async fn replayed_user_message_with_only_local_images_renders_history_cell() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    let local_images = vec![PathBuf::from("/tmp/replay-local-only.png")];
+    let local_images = [PathBuf::from("/tmp/replay-local-only.png")];
 
-    let conversation_id = ThreadId::new();
+    let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_protocol::protocol::SessionConfiguredEvent {
-        session_id: conversation_id,
+    let configured = crate::session_state::ThreadSessionState {
+        thread_id,
         forked_from_id: None,
+        fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/home/user/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
-        history_log_id: 0,
-        history_entry_count: 0,
-        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
-            message: String::new(),
-            images: None,
-            text_elements: Vec::new(),
-            local_images,
-        })]),
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
-    chat.handle_codex_event(Event {
-        id: "initial".into(),
-        msg: EventMsg::SessionConfigured(configured),
-    });
+    chat.handle_thread_session(configured);
+    replay_user_message_inputs(
+        &mut chat,
+        "user-1",
+        vec![AppServerUserInput::LocalImage {
+            path: local_images[0].clone(),
+            detail: None,
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
 
-    let mut found_user_history_cell = false;
+    let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = ev
-            && cell.as_any().downcast_ref::<UserHistoryCell>().is_some()
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
         {
-            found_user_history_cell = true;
+            user_cell = Some((cell.message.clone(), cell.local_image_paths.clone()));
             break;
         }
     }
 
-    assert!(!found_user_history_cell);
+    let (stored_message, stored_local_images) =
+        user_cell.expect("expected a replayed local-image-only user history cell");
+    assert!(stored_message.is_empty());
+    assert_eq!(stored_local_images, local_images);
 }
 
 #[tokio::test]
 async fn forked_thread_history_line_includes_name_and_id_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut chat = chat;
-    let temp = tempdir().expect("tempdir");
-    chat.config.codex_home = temp.path().to_path_buf();
 
     let forked_from_id =
         ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
-    let session_index_entry = format!(
-        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"named-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
-    );
-    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
-        .expect("write session index");
 
-    chat.emit_forked_thread_event(forked_from_id);
+    chat.emit_forked_thread_event(forked_from_id, Some("named-thread".to_string()));
 
     let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -429,11 +566,13 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut chat = chat;
     let temp = tempdir().expect("tempdir");
-    chat.config.codex_home = temp.path().to_path_buf();
+    chat.config.codex_home =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(temp.path())
+            .expect("temp dir is absolute");
 
     let forked_from_id =
         ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
-    chat.emit_forked_thread_event(forked_from_id);
+    chat.emit_forked_thread_event(forked_from_id, /*fork_parent_title*/ None);
 
     let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -452,76 +591,104 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
 }
 
 #[tokio::test]
+async fn app_server_forked_thread_history_line_uses_app_server_title_snapshot() {
+    let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut chat = chat;
+    let temp = tempdir().expect("tempdir");
+    chat.config.codex_home =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(temp.path())
+            .expect("temp dir is absolute");
+
+    let forked_from_id =
+        ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
+    let session_index_entry = format!(
+        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"stale-local-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
+    );
+    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
+        .expect("write session index");
+
+    chat.emit_forked_thread_event(forked_from_id, Some("app-server-parent-thread".to_string()));
+
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("app event channel closed before forked thread history was emitted"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for forked thread history");
+    let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
+
+    assert!(combined.contains("app-server-parent-thread"));
+    assert!(
+        !combined.contains("stale-local-thread"),
+        "app-server fork title lookup should not read local CODEX_HOME"
+    );
+    assert_chatwidget_snapshot!("app_server_forked_thread_history_line", combined);
+}
+
+#[tokio::test]
+async fn app_server_forked_thread_history_line_without_app_server_name_ignores_local_snapshot() {
+    let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut chat = chat;
+    let temp = tempdir().expect("tempdir");
+    chat.config.codex_home =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(temp.path())
+            .expect("temp dir is absolute");
+
+    let forked_from_id =
+        ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
+    let session_index_entry = format!(
+        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"stale-local-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
+    );
+    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
+        .expect("write session index");
+
+    chat.emit_forked_thread_event(forked_from_id, /*fork_parent_title*/ None);
+
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("app event channel closed before forked thread history was emitted"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for forked thread history");
+    let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
+
+    assert!(
+        !combined.contains("stale-local-thread"),
+        "app-server fork title lookup should not read local CODEX_HOME"
+    );
+    assert_chatwidget_snapshot!(
+        "app_server_forked_thread_history_line_without_app_server_name",
+        combined
+    );
+}
+
+#[tokio::test]
 async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event_replay(Event {
-        id: "review-start".into(),
-        msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            user_facing_hint: None,
-        }),
-    });
+    replay_entered_review_mode(&mut chat, "current changes");
     let _ = drain_insert_history(&mut rx);
 
-    chat.handle_codex_event_replay(Event {
-        id: "review-message".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Review progress update".to_string(),
-            phase: None,
-            memory_citation: None,
-        }),
-    });
+    replay_agent_message(
+        &mut chat,
+        "review-message",
+        "Review progress update",
+        ReplayKind::ThreadSnapshot,
+    );
 
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("Review progress update"));
-}
-
-#[tokio::test]
-async fn replayed_thread_rollback_emits_ordered_app_event() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-
-    chat.replay_initial_messages(vec![EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
-        num_turns: 2,
-    })]);
-
-    let mut saw = false;
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::ApplyThreadRollback { num_turns } = event {
-            saw = true;
-            assert_eq!(num_turns, 2);
-            break;
-        }
-    }
-
-    assert!(saw, "expected replay rollback app event");
-}
-
-#[tokio::test]
-async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assistant_message() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    complete_assistant_message(
-        &mut chat,
-        "msg-live",
-        "hello",
-        Some(MessagePhase::FinalAnswer),
-    );
-    let inserted = drain_insert_history(&mut rx);
-    assert_eq!(inserted.len(), 1);
-    assert!(lines_to_single_string(&inserted[0]).contains("hello"));
-
-    chat.handle_codex_event(Event {
-        id: "legacy-live".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "hello".into(),
-            phase: Some(MessagePhase::FinalAnswer),
-            memory_citation: None,
-        }),
-    });
-
-    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]
@@ -533,6 +700,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
@@ -587,26 +755,27 @@ async fn replayed_thread_closed_notification_does_not_exit_tui() {
 async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.show_raw_agent_reasoning = false;
-    chat.handle_codex_event(Event {
-        id: "configured".into(),
-        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-            session_id: ThreadId::new(),
-            forked_from_id: None,
-            thread_name: None,
-            model: "test-model".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: test_project_path(),
-            reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            network_proxy: None,
-            rollout_path: None,
-        }),
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_project_path().abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
     });
     let _ = drain_insert_history(&mut rx);
 
@@ -634,26 +803,27 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
 async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.show_raw_agent_reasoning = true;
-    chat.handle_codex_event(Event {
-        id: "configured".into(),
-        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-            session_id: ThreadId::new(),
-            forked_from_id: None,
-            thread_name: None,
-            model: "test-model".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: test_project_path(),
-            reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            network_proxy: None,
-            rollout_path: None,
-        }),
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_project_path().abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
     });
     let _ = drain_insert_history(&mut rx);
 
@@ -677,6 +847,34 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
 }
 
 #[tokio::test]
+async fn replayed_in_progress_mcp_tool_call_stays_active() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let _ = drain_insert_history(&mut rx);
+
+    chat.replay_thread_item(
+        AppServerThreadItem::McpToolCall {
+            id: "mcp-1".to_string(),
+            server: "copilot-bridge".to_string(),
+            tool: "copilot".to_string(),
+            status: codex_app_server_protocol::McpToolCallStatus::InProgress,
+            arguments: json!({"action": "wait"}),
+            mcp_app_resource_uri: None,
+            plugin_id: None,
+            result: None,
+            error: None,
+            duration_ms: None,
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    let active = active_blob(&chat);
+    assert!(active.contains("Calling"));
+    assert!(!active.contains("MCP tool call completed without a result"));
+}
+
+#[tokio::test]
 async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
@@ -686,6 +884,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
                 error: None,
@@ -713,6 +912,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
             item: AppServerThreadItem::Reasoning {
                 id: "reasoning-1".to_string(),
                 summary: vec!["Summary only".to_string()],
@@ -732,33 +932,10 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
 }
 
 #[tokio::test]
-async fn replayed_turn_started_does_not_mark_task_running() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.replay_initial_messages(vec![EventMsg::TurnStarted(TurnStartedEvent {
-        turn_id: "turn-1".to_string(),
-        started_at: None,
-        model_context_window: None,
-        collaboration_mode_kind: ModeKind::Default,
-    })]);
-
-    assert!(!chat.bottom_pane.is_task_running());
-    assert!(chat.bottom_pane.status_widget().is_none());
-}
-
-#[tokio::test]
 async fn thread_snapshot_replayed_turn_started_marks_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event_replay(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    replay_turn_started(&mut chat, ReplayKind::ThreadSnapshot);
 
     drain_insert_history(&mut rx);
     assert!(chat.bottom_pane.is_task_running());
@@ -776,6 +953,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
     chat.replay_thread_turns(
         vec![AppServerTurn {
             id: "turn-1".to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: Vec::new(),
             status: AppServerTurnStatus::InProgress,
             error: None,
@@ -800,19 +978,20 @@ async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_status_header("Idle".to_string());
 
-    chat.replay_initial_messages(vec![EventMsg::StreamError(StreamErrorEvent {
-        message: "Reconnecting... 2/5".to_string(),
-        codex_error_info: Some(CodexErrorInfo::Other),
-        additional_details: Some("Idle timeout waiting for SSE".to_string()),
-    })]);
+    handle_stream_error_with_replay(
+        &mut chat,
+        "Reconnecting... 2/5",
+        Some("Idle timeout waiting for SSE".to_string()),
+        Some(ReplayKind::ResumeInitialMessages),
+    );
 
     let cells = drain_insert_history(&mut rx);
     assert!(
         cells.is_empty(),
         "expected no history cell for replayed StreamError event"
     );
-    assert_eq!(chat.current_status.header, "Idle");
-    assert!(chat.retry_status_header.is_none());
+    assert_eq!(chat.status_state.current_status.header, "Idle");
+    assert!(chat.status_state.retry_status_header.is_none());
     assert!(chat.bottom_pane.status_widget().is_none());
 }
 
@@ -820,33 +999,18 @@ async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
 async fn thread_snapshot_replayed_stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.handle_codex_event_replay(Event {
-        id: "task".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    replay_turn_started(&mut chat, ReplayKind::ThreadSnapshot);
     drain_insert_history(&mut rx);
 
-    chat.handle_codex_event_replay(Event {
-        id: "retry".into(),
-        msg: EventMsg::StreamError(StreamErrorEvent {
-            message: "Reconnecting... 1/5".to_string(),
-            codex_error_info: Some(CodexErrorInfo::Other),
-            additional_details: None,
-        }),
-    });
+    handle_stream_error_with_replay(
+        &mut chat,
+        "Reconnecting... 1/5",
+        /*additional_details*/ None,
+        Some(ReplayKind::ThreadSnapshot),
+    );
     drain_insert_history(&mut rx);
 
-    chat.handle_codex_event_replay(Event {
-        id: "delta".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "hello".to_string(),
-        }),
-    });
+    replay_agent_message_delta(&mut chat, "hello", ReplayKind::ThreadSnapshot);
 
     let status = chat
         .bottom_pane
@@ -854,96 +1018,21 @@ async fn thread_snapshot_replayed_stream_recovery_restores_previous_status_heade
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
-    assert!(chat.retry_status_header.is_none());
-}
-
-#[tokio::test]
-async fn resume_replay_interrupted_reconnect_does_not_leave_stale_working_state() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_status_header("Idle".to_string());
-
-    chat.replay_initial_messages(vec![
-        EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-        EventMsg::StreamError(StreamErrorEvent {
-            message: "Reconnecting... 1/5".to_string(),
-            codex_error_info: Some(CodexErrorInfo::Other),
-            additional_details: None,
-        }),
-        EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "hello".to_string(),
-        }),
-    ]);
-
-    let cells = drain_insert_history(&mut rx);
-    assert!(
-        cells.is_empty(),
-        "expected no history cells for replayed interrupted reconnect sequence"
-    );
-    assert!(!chat.bottom_pane.is_task_running());
-    assert!(chat.bottom_pane.status_widget().is_none());
-    assert_eq!(chat.current_status.header, "Idle");
-    assert!(chat.retry_status_header.is_none());
-}
-
-#[tokio::test]
-async fn replayed_interrupted_reconnect_footer_row_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.replay_initial_messages(vec![
-        EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-        EventMsg::StreamError(StreamErrorEvent {
-            message: "Reconnecting... 2/5".to_string(),
-            codex_error_info: Some(CodexErrorInfo::Other),
-            additional_details: Some("Idle timeout waiting for SSE".to_string()),
-        }),
-    ]);
-
-    let header = render_bottom_first_row(&chat, /*width*/ 80);
-    assert!(
-        !header.contains("Reconnecting") && !header.contains("Working"),
-        "expected replayed interrupted reconnect to avoid active status row, got {header:?}"
-    );
-    assert_chatwidget_snapshot!("replayed_interrupted_reconnect_footer_row", header);
+    assert!(chat.status_state.retry_status_header.is_none());
 }
 
 #[tokio::test]
 async fn stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.handle_codex_event(Event {
-        id: "task".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
+    handle_turn_started(&mut chat, "turn-1");
     drain_insert_history(&mut rx);
-    chat.handle_codex_event(Event {
-        id: "retry".into(),
-        msg: EventMsg::StreamError(StreamErrorEvent {
-            message: "Reconnecting... 1/5".to_string(),
-            codex_error_info: Some(CodexErrorInfo::Other),
-            additional_details: None,
-        }),
-    });
+    handle_stream_error(
+        &mut chat,
+        "Reconnecting... 1/5",
+        /*additional_details*/ None,
+    );
     drain_insert_history(&mut rx);
-    chat.handle_codex_event(Event {
-        id: "delta".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "hello".to_string(),
-        }),
-    });
+    handle_agent_message_delta(&mut chat, "hello");
 
     let status = chat
         .bottom_pane
@@ -951,5 +1040,5 @@ async fn stream_recovery_restores_previous_status_header() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
-    assert!(chat.retry_status_header.is_none());
+    assert!(chat.status_state.retry_status_header.is_none());
 }

@@ -5,6 +5,7 @@ use crate::formatted_truncate_text;
 use crate::formatted_truncate_text_content_items_with_policy;
 use crate::truncate_function_output_items_with_policy;
 use crate::truncate_text;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
 
@@ -114,7 +115,7 @@ fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
         FunctionCallOutputContentItem::InputText { text: t2.clone() },
         FunctionCallOutputContentItem::InputImage {
             image_url: "img:mid".to_string(),
-            detail: None,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         },
         FunctionCallOutputContentItem::InputText { text: t3 },
         FunctionCallOutputContentItem::InputText { text: t4 },
@@ -142,7 +143,7 @@ fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
         output[2],
         FunctionCallOutputContentItem::InputImage {
             image_url: "img:mid".to_string(),
-            detail: None,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         }
     );
 
@@ -214,7 +215,7 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_ima
         },
         FunctionCallOutputContentItem::InputImage {
             image_url: "img:one".to_string(),
-            detail: None,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         },
         FunctionCallOutputContentItem::InputText {
             text: "efgh".to_string(),
@@ -224,7 +225,7 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_ima
         },
         FunctionCallOutputContentItem::InputImage {
             image_url: "img:two".to_string(),
-            detail: None,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         },
     ];
 
@@ -239,15 +240,69 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_ima
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "img:one".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "img:two".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]
     );
     assert_eq!(original_token_count, Some(4));
+}
+
+#[test]
+fn formatted_truncate_text_content_items_with_policy_preserves_encrypted_content() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "abcdefgh".to_string(),
+        },
+        FunctionCallOutputContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".to_string(),
+        },
+    ];
+
+    let (output, original_token_count) =
+        formatted_truncate_text_content_items_with_policy(&items, TruncationPolicy::Bytes(2));
+
+    assert_eq!(
+        output,
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "Total output lines: 1\n\na…6 chars truncated…h".to_string(),
+            },
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: "enc_opaque".to_string(),
+            },
+        ]
+    );
+    assert_eq!(original_token_count, Some(2));
+}
+
+#[test]
+fn truncate_function_output_items_with_policy_preserves_encrypted_content() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "abcdefgh".to_string(),
+        },
+        FunctionCallOutputContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".to_string(),
+        },
+    ];
+
+    let output = truncate_function_output_items_with_policy(&items, TruncationPolicy::Bytes(2));
+
+    assert_eq!(
+        output,
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "a…6 chars truncated…h".to_string(),
+            },
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: "enc_opaque".to_string(),
+            },
+        ]
+    );
 }
 
 #[test]

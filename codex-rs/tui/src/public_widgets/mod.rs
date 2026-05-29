@@ -1,1 +1,1 @@
-pub mod composer_input;
+pub(crate) mod composer_input;

@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fs;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -9,11 +10,15 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::http::HeaderValue;
 use axum::http::Method;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::http::header::CONTENT_TYPE;
+use axum::http::header::HOST;
+use axum::http::header::WWW_AUTHENTICATE;
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -60,73 +65,6 @@ const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp tes
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
 
-impl TestToolServer {
-    fn new() -> Self {
-        let tools = vec![Self::echo_tool()];
-        let resources = vec![Self::memo_resource()];
-        let resource_templates = vec![Self::memo_template()];
-        Self {
-            tools: Arc::new(tools),
-            resources: Arc::new(resources),
-            resource_templates: Arc::new(resource_templates),
-        }
-    }
-
-    fn echo_tool() -> Tool {
-        #[expect(clippy::expect_used)]
-        let schema: JsonObject = serde_json::from_value(json!({
-            "type": "object",
-            "properties": {
-                "message": { "type": "string" },
-                "env_var": { "type": "string" }
-            },
-            "required": ["message"],
-            "additionalProperties": false
-        }))
-        .expect("echo tool schema should deserialize");
-
-        let mut tool = Tool::new(
-            Cow::Borrowed("echo"),
-            Cow::Borrowed("Echo back the provided message and include environment data."),
-            Arc::new(schema),
-        );
-        tool.annotations = Some(ToolAnnotations::new().read_only(true));
-        tool
-    }
-
-    fn memo_resource() -> Resource {
-        let raw = RawResource {
-            uri: MEMO_URI.to_string(),
-            name: "example-note".to_string(),
-            title: Some("Example Note".to_string()),
-            description: Some("A sample MCP resource exposed for integration tests.".to_string()),
-            mime_type: Some("text/plain".to_string()),
-            size: None,
-            icons: None,
-            meta: None,
-        };
-        Resource::new(raw, None)
-    }
-
-    fn memo_template() -> ResourceTemplate {
-        let raw = RawResourceTemplate {
-            uri_template: "memo://codex/{slug}".to_string(),
-            name: "codex-memo".to_string(),
-            title: Some("Codex Memo".to_string()),
-            description: Some(
-                "Template for memo://codex/{slug} resources used in tests.".to_string(),
-            ),
-            mime_type: Some("text/plain".to_string()),
-            icons: None,
-        };
-        ResourceTemplate::new(raw, None)
-    }
-
-    fn memo_text() -> &'static str {
-        MEMO_CONTENT
-    }
-}
-
 #[derive(Clone, Default)]
 struct SessionFailureState {
     armed_failure: Arc<Mutex<Option<ArmedFailure>>>,
@@ -136,12 +74,17 @@ struct SessionFailureState {
 struct ArmedFailure {
     status: StatusCode,
     remaining: usize,
+    /// Raw `WWW-Authenticate` challenge header field values returned with the failure.
+    www_authenticate_headers: Vec<HeaderValue>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ArmSessionPostFailureRequest {
     status: u16,
     remaining: usize,
+    /// Raw `WWW-Authenticate` challenge header field values to add to the failure.
+    #[serde(default)]
+    www_authenticate_headers: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -151,16 +94,100 @@ struct EchoArgs {
     env_var: Option<String>,
 }
 
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let bind_addr = parse_bind_addr()?;
+    let session_failure_state = SessionFailureState::default();
+    const MAX_BIND_RETRIES: u32 = 20;
+    const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+    let mut bind_retries = 0;
+    let listener = loop {
+        match tokio::net::TcpListener::bind(&bind_addr).await {
+            Ok(listener) => break listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!(
+                    "failed to bind to {bind_addr}: {err}. make sure the process has network access"
+                );
+                return Ok(());
+            }
+            Err(err) if err.kind() == ErrorKind::AddrInUse && bind_retries < MAX_BIND_RETRIES => {
+                bind_retries += 1;
+                sleep(BIND_RETRY_DELAY).await;
+            }
+            Err(err) => return Err(err.into()),
+        }
+    };
+    let actual_bind_addr = listener.local_addr()?;
+    if let Ok(bound_addr_file) = std::env::var("MCP_STREAMABLE_HTTP_BOUND_ADDR_FILE") {
+        fs::write(bound_addr_file, actual_bind_addr.to_string())?;
+    }
+    eprintln!("starting rmcp streamable http test server on http://{actual_bind_addr}/mcp");
+
+    let router = Router::new()
+        .route(
+            SESSION_POST_FAILURE_CONTROL_PATH,
+            post(arm_session_post_failure),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server/mcp",
+            get({
+                move |headers: HeaderMap| async move {
+                    let metadata_base = headers
+                        .get(HOST)
+                        .and_then(|value| value.to_str().ok())
+                        .map(|host| format!("http://{host}"))
+                        .unwrap_or_else(|| format!("http://{actual_bind_addr}"));
+                    #[expect(clippy::expect_used)]
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&json!({
+                                "authorization_endpoint": format!("{metadata_base}/oauth/authorize"),
+                                "token_endpoint": format!("{metadata_base}/oauth/token"),
+                                "scopes_supported": [""],
+                            })).expect("failed to serialize metadata"),
+                        ))
+                        .expect("valid metadata response")
+                }
+            }),
+        )
+        .nest_service(
+            "/mcp",
+            StreamableHttpService::new(
+                || Ok(TestToolServer::new()),
+                Arc::new(LocalSessionManager::default()),
+                StreamableHttpServerConfig::default(),
+            ),
+        )
+        .layer(middleware::from_fn_with_state(
+            session_failure_state.clone(),
+            fail_session_post_when_armed,
+        ))
+        .with_state(session_failure_state);
+
+    let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
+        let expected = Arc::new(format!("Bearer {token}"));
+        router.layer(middleware::from_fn_with_state(expected, require_bearer))
+    } else {
+        router
+    };
+
+    axum::serve(listener, router).await?;
+    task::yield_now().await;
+    Ok(())
+}
+
 impl ServerHandler for TestToolServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
                 .enable_resources()
                 .build(),
-            ..ServerInfo::default()
-        }
+        )
     }
 
     fn list_tools(
@@ -211,14 +238,14 @@ impl ServerHandler for TestToolServer {
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         if uri == MEMO_URI {
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::TextResourceContents {
+            Ok(ReadResourceResult::new(vec![
+                ResourceContents::TextResourceContents {
                     uri,
                     mime_type: Some("text/plain".to_string()),
                     text: Self::memo_text().to_string(),
                     meta: None,
-                }],
-            })
+                },
+            ]))
         } else {
             Err(McpError::resource_not_found(
                 "resource_not_found",
@@ -253,12 +280,9 @@ impl ServerHandler for TestToolServer {
                     "env": env_snapshot.get("MCP_TEST_VALUE"),
                 });
 
-                Ok(CallToolResult {
-                    content: Vec::new(),
-                    structured_content: Some(structured_content),
-                    is_error: Some(false),
-                    meta: None,
-                })
+                let mut result = CallToolResult::success(Vec::new());
+                result.structured_content = Some(structured_content);
+                Ok(result)
             }
             other => Err(McpError::invalid_params(
                 format!("unknown tool: {other}"),
@@ -268,89 +292,96 @@ impl ServerHandler for TestToolServer {
     }
 }
 
+impl TestToolServer {
+    fn new() -> Self {
+        let tools = vec![Self::echo_tool()];
+        let resources = vec![Self::memo_resource()];
+        let resource_templates = vec![Self::memo_template()];
+        Self {
+            tools: Arc::new(tools),
+            resources: Arc::new(resources),
+            resource_templates: Arc::new(resource_templates),
+        }
+    }
+
+    fn echo_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "message": { "type": "string" },
+                "env_var": { "type": "string" }
+            },
+            "required": ["message"],
+            "additionalProperties": false
+        }))
+        .expect("echo tool schema should deserialize");
+
+        let mut tool = Tool::new(
+            Cow::Borrowed("echo"),
+            Cow::Borrowed("Echo back the provided message and include environment data."),
+            Arc::new(schema),
+        );
+        #[expect(clippy::expect_used)]
+        let output_schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "echo": { "type": "string" },
+                "env": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": "null" }
+                    ]
+                }
+            },
+            "required": ["echo", "env"],
+            "additionalProperties": false
+        }))
+        .expect("echo tool output schema should deserialize");
+        tool.output_schema = Some(Arc::new(output_schema));
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
+    }
+
+    fn memo_resource() -> Resource {
+        let raw = RawResource {
+            uri: MEMO_URI.to_string(),
+            name: "example-note".to_string(),
+            title: Some("Example Note".to_string()),
+            description: Some("A sample MCP resource exposed for integration tests.".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            size: None,
+            icons: None,
+            meta: None,
+        };
+        Resource::new(raw, None)
+    }
+
+    fn memo_template() -> ResourceTemplate {
+        let raw = RawResourceTemplate {
+            uri_template: "memo://codex/{slug}".to_string(),
+            name: "codex-memo".to_string(),
+            title: Some("Codex Memo".to_string()),
+            description: Some(
+                "Template for memo://codex/{slug} resources used in tests.".to_string(),
+            ),
+            mime_type: Some("text/plain".to_string()),
+            icons: None,
+        };
+        ResourceTemplate::new(raw, None)
+    }
+
+    fn memo_text() -> &'static str {
+        MEMO_CONTENT
+    }
+}
+
 fn parse_bind_addr() -> Result<SocketAddr, Box<dyn std::error::Error>> {
     let default_addr = "127.0.0.1:3920";
     let bind_addr = std::env::var("MCP_STREAMABLE_HTTP_BIND_ADDR")
         .or_else(|_| std::env::var("BIND_ADDR"))
         .unwrap_or_else(|_| default_addr.to_string());
     Ok(bind_addr.parse()?)
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let bind_addr = parse_bind_addr()?;
-    let session_failure_state = SessionFailureState::default();
-    const MAX_BIND_RETRIES: u32 = 20;
-    const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
-
-    let mut bind_retries = 0;
-    let listener = loop {
-        match tokio::net::TcpListener::bind(&bind_addr).await {
-            Ok(listener) => break listener,
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                eprintln!(
-                    "failed to bind to {bind_addr}: {err}. make sure the process has network access"
-                );
-                return Ok(());
-            }
-            Err(err) if err.kind() == ErrorKind::AddrInUse && bind_retries < MAX_BIND_RETRIES => {
-                bind_retries += 1;
-                sleep(BIND_RETRY_DELAY).await;
-            }
-            Err(err) => return Err(err.into()),
-        }
-    };
-    eprintln!("starting rmcp streamable http test server on http://{bind_addr}/mcp");
-
-    let router = Router::new()
-        .route(
-            SESSION_POST_FAILURE_CONTROL_PATH,
-            post(arm_session_post_failure),
-        )
-        .route(
-            "/.well-known/oauth-authorization-server/mcp",
-            get({
-                move || async move {
-                    let metadata_base = format!("http://{bind_addr}");
-                    #[expect(clippy::expect_used)]
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header(CONTENT_TYPE, "application/json")
-                        .body(Body::from(
-                            serde_json::to_vec(&json!({
-                                "authorization_endpoint": format!("{metadata_base}/oauth/authorize"),
-                                "token_endpoint": format!("{metadata_base}/oauth/token"),
-                                "scopes_supported": [""],
-                            })).expect("failed to serialize metadata"),
-                        ))
-                        .expect("valid metadata response")
-                }
-            }),
-        )
-        .nest_service(
-            "/mcp",
-            StreamableHttpService::new(
-                || Ok(TestToolServer::new()),
-                Arc::new(LocalSessionManager::default()),
-                StreamableHttpServerConfig::default(),
-            ),
-        )
-        .layer(middleware::from_fn_with_state(
-            session_failure_state.clone(),
-            fail_session_post_when_armed,
-        ))
-        .with_state(session_failure_state);
-
-    let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
-        let expected = Arc::new(format!("Bearer {token}"));
-        router.layer(middleware::from_fn_with_state(expected, require_bearer))
-    } else {
-        router
-    };
-
-    axum::serve(listener, router).await?;
-    task::yield_now().await;
-    Ok(())
 }
 
 async fn require_bearer(
@@ -377,12 +408,18 @@ async fn arm_session_post_failure(
     Json(request): Json<ArmSessionPostFailureRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let status = StatusCode::from_u16(request.status).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let www_authenticate_headers = request
+        .www_authenticate_headers
+        .into_iter()
+        .map(|value| HeaderValue::from_str(&value).map_err(|_| StatusCode::BAD_REQUEST))
+        .collect::<Result<Vec<_>, _>>()?;
     let armed_failure = if request.remaining == 0 {
         None
     } else {
         Some(ArmedFailure {
             status,
             remaining: request.remaining,
+            www_authenticate_headers,
         })
     };
     *state.armed_failure.lock().await = armed_failure;
@@ -401,22 +438,29 @@ async fn fail_session_post_when_armed(
         return next.run(request).await;
     }
 
-    let mut armed_failure = state.armed_failure.lock().await;
-    if let Some(failure) = armed_failure.as_mut()
-        && failure.remaining > 0
     {
-        failure.remaining -= 1;
-        let status = failure.status;
-        if failure.remaining == 0 {
-            *armed_failure = None;
+        let mut armed_failure = state.armed_failure.lock().await;
+        if let Some(failure) = armed_failure.as_mut()
+            && failure.remaining > 0
+        {
+            failure.remaining -= 1;
+            let status = failure.status;
+            let www_authenticate_headers = failure.www_authenticate_headers.clone();
+            if failure.remaining == 0 {
+                *armed_failure = None;
+            }
+            let mut response = Response::new(Body::from(format!(
+                "forced session failure with status {status}"
+            )));
+            *response.status_mut() = status;
+            for www_authenticate_header in www_authenticate_headers {
+                response
+                    .headers_mut()
+                    .append(WWW_AUTHENTICATE, www_authenticate_header);
+            }
+            return response;
         }
-        let mut response = Response::new(Body::from(format!(
-            "forced session failure with status {status}"
-        )));
-        *response.status_mut() = status;
-        return response;
     }
 
-    drop(armed_failure);
     next.run(request).await
 }

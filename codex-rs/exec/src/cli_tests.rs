@@ -14,10 +14,14 @@ fn resume_parses_prompt_after_global_flags() {
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
         PROMPT,
     ]);
 
     assert!(cli.ephemeral);
+    assert!(cli.ignore_user_config);
+    assert!(cli.ignore_rules);
     let Some(Command::Resume(args)) = cli.command else {
         panic!("expected resume command");
     };
@@ -32,7 +36,7 @@ fn resume_parses_prompt_after_global_flags() {
 }
 
 #[test]
-fn resume_accepts_output_last_message_flag_after_subcommand() {
+fn resume_accepts_output_flags_after_subcommand() {
     const PROMPT: &str = "echo resume-with-output-file";
     let cli = Cli::parse_from([
         "codex-exec",
@@ -40,6 +44,8 @@ fn resume_accepts_output_last_message_flag_after_subcommand() {
         "session-123",
         "-o",
         "/tmp/resume-output.md",
+        "--output-schema",
+        "/tmp/schema.json",
         PROMPT,
     ]);
 
@@ -47,9 +53,33 @@ fn resume_accepts_output_last_message_flag_after_subcommand() {
         cli.last_message_file,
         Some(PathBuf::from("/tmp/resume-output.md"))
     );
+    assert_eq!(cli.output_schema, Some(PathBuf::from("/tmp/schema.json")));
     let Some(Command::Resume(args)) = cli.command else {
         panic!("expected resume command");
     };
     assert_eq!(args.session_id.as_deref(), Some("session-123"));
     assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+}
+
+#[test]
+fn parses_config_isolation_flags() {
+    let cli = Cli::parse_from([
+        "codex-exec",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "summarize",
+    ]);
+
+    assert!(cli.ignore_user_config);
+    assert!(cli.ignore_rules);
+}
+
+#[test]
+fn removed_full_auto_flag_reports_migration_path() {
+    let cli = Cli::parse_from(["codex-exec", "--full-auto", "summarize"]);
+
+    assert_eq!(
+        cli.removed_full_auto_warning(),
+        Some("warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.")
+    );
 }

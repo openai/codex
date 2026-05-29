@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use codex_connectors::metadata::connector_mention_slug;
 use codex_protocol::user_input::UserInput;
 
 use crate::connectors;
@@ -108,7 +109,7 @@ pub(crate) fn build_connector_slug_counts(
 ) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for connector in connectors {
-        let slug = connectors::connector_mention_slug(connector);
+        let slug = connector_mention_slug(connector);
         *counts.entry(slug).or_insert(0) += 1;
     }
     counts

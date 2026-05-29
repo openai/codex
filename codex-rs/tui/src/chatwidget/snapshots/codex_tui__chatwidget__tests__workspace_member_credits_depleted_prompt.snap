@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: popup
+---
+  You've reached your workspace credit limit
+  Your workspace is out of credits. Ask your workspace owner to add more. Notify owner?
+
+  1. Yes (y)
+› 2. No (default) (n)
+
+  Press enter to confirm or esc to go back

@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::CompactionInput;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
@@ -11,13 +11,14 @@ use http::Method;
 use serde::Deserialize;
 use serde_json::to_value;
 use std::sync::Arc;
+use std::time::Duration;
 
-pub struct CompactClient<T: HttpTransport, A: AuthProvider> {
-    session: EndpointSession<T, A>,
+pub struct CompactClient<T: HttpTransport> {
+    session: EndpointSession<T>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
-    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> CompactClient<T> {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -37,10 +38,19 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         &self,
         body: serde_json::Value,
         extra_headers: HeaderMap,
+        request_timeout: Duration,
     ) -> Result<Vec<ResponseItem>, ApiError> {
         let resp = self
             .session
-            .execute(Method::POST, Self::path(), extra_headers, Some(body))
+            .execute_with(
+                Method::POST,
+                Self::path(),
+                extra_headers,
+                Some(body),
+                |req| {
+                    req.timeout = Some(request_timeout);
+                },
+            )
             .await?;
         let parsed: CompactHistoryResponse =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
@@ -51,10 +61,11 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         &self,
         input: &CompactionInput<'_>,
         extra_headers: HeaderMap,
+        request_timeout: Duration,
     ) -> Result<Vec<ResponseItem>, ApiError> {
         let body = to_value(input)
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
-        self.compact(body, extra_headers).await
+        self.compact(body, extra_headers, request_timeout).await
     }
 }
 
@@ -86,20 +97,8 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Default)]
-    struct DummyAuth;
-
-    impl AuthProvider for DummyAuth {
-        fn bearer_token(&self) -> Option<String> {
-            None
-        }
-    }
-
     #[test]
     fn path_is_responses_compact() {
-        assert_eq!(
-            CompactClient::<DummyTransport, DummyAuth>::path(),
-            "responses/compact"
-        );
+        assert_eq!(CompactClient::<DummyTransport>::path(), "responses/compact");
     }
 }

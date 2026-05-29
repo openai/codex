@@ -1,4 +1,5 @@
 use codex_code_mode::ImageDetail as CodeModeImageDetail;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
 
@@ -36,7 +37,9 @@ impl IntoProtocol<FunctionCallOutputContentItem>
             codex_code_mode::FunctionCallOutputContentItem::InputImage { image_url, detail } => {
                 FunctionCallOutputContentItem::InputImage {
                     image_url,
-                    detail: detail.map(IntoProtocol::into_protocol),
+                    detail: detail
+                        .map(IntoProtocol::into_protocol)
+                        .or(Some(DEFAULT_IMAGE_DETAIL)),
                 }
             }
         }

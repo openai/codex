@@ -9,7 +9,6 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 
 use codex_config::config_toml::ConfigToml;
-use codex_config::profile_toml::ConfigProfile;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -27,17 +26,53 @@ pub struct ManagedFeatures {
     pinned_features: BTreeMap<Feature, bool>,
 }
 
+impl Default for ManagedFeatures {
+    fn default() -> Self {
+        Self {
+            value: ConstrainedWithSource::new(
+                Constrained::allow_any(Features::default()),
+                /*source*/ None,
+            ),
+            pinned_features: BTreeMap::new(),
+        }
+    }
+}
+
 impl ManagedFeatures {
     pub(crate) fn from_configured(
         configured_features: Features,
         feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+    ) -> std::io::Result<Self> {
+        Self::from_configured_with_optional_warnings(
+            configured_features,
+            feature_requirements,
+            /*startup_warnings*/ None,
+        )
+    }
+
+    pub(crate) fn from_configured_with_warnings(
+        configured_features: Features,
+        feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+        startup_warnings: &mut Vec<String>,
+    ) -> std::io::Result<Self> {
+        Self::from_configured_with_optional_warnings(
+            configured_features,
+            feature_requirements,
+            Some(startup_warnings),
+        )
+    }
+
+    fn from_configured_with_optional_warnings(
+        configured_features: Features,
+        feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+        startup_warnings: Option<&mut Vec<String>>,
     ) -> std::io::Result<Self> {
         let (pinned_features, source) = match feature_requirements {
             Some(Sourced {
                 value: feature_requirements,
                 source,
             }) => (
-                parse_feature_requirements(feature_requirements, &source)?,
+                parse_feature_requirements(feature_requirements, &source, startup_warnings),
                 Some(source),
             ),
             None => (BTreeMap::new(), None),
@@ -171,40 +206,58 @@ fn feature_requirements_display(feature_requirements: &BTreeMap<Feature, bool>) 
 fn parse_feature_requirements(
     feature_requirements: FeatureRequirementsToml,
     source: &RequirementSource,
-) -> std::io::Result<BTreeMap<Feature, bool>> {
+    mut startup_warnings: Option<&mut Vec<String>>,
+) -> BTreeMap<Feature, bool> {
     let mut pinned_features = BTreeMap::new();
     for (key, enabled) in feature_requirements.entries {
+        if key == "auto_review" {
+            pinned_features.insert(Feature::GuardianApproval, enabled);
+            continue;
+        }
+
         if let Some(feature) = canonical_feature_for_key(&key) {
             pinned_features.insert(feature, enabled);
             continue;
         }
 
         if let Some(feature) = feature_for_key(&key) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            push_feature_requirement_warning(
+                &mut startup_warnings,
                 format!(
-                    "invalid `features` requirement `{key}` from {source}: use canonical feature key `{}`",
+                    "Using legacy `features` requirement `{key}` from {source}; prefer canonical feature key `{}`",
                     feature.key()
                 ),
-            ));
+            );
+            pinned_features.insert(feature, enabled);
+            continue;
         }
 
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("invalid `features` requirement `{key}` from {source}"),
-        ));
+        push_feature_requirement_warning(
+            &mut startup_warnings,
+            format!("Ignoring unknown `features` requirement `{key}` from {source}"),
+        );
     }
 
-    Ok(pinned_features)
+    pinned_features
+}
+
+fn push_feature_requirement_warning(
+    startup_warnings: &mut Option<&mut Vec<String>>,
+    message: String,
+) {
+    tracing::warn!("{message}");
+    if let Some(startup_warnings) = startup_warnings.as_deref_mut() {
+        startup_warnings.push(message);
+    }
 }
 
 fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature, bool)> {
     let mut explicit_settings = Vec::new();
 
     if let Some(features) = cfg.features.as_ref() {
-        for (key, enabled) in &features.entries {
-            if let Some(feature) = feature_for_key(key) {
-                explicit_settings.push((format!("features.{key}"), feature, *enabled));
+        for (key, enabled) in features.entries() {
+            if let Some(feature) = feature_for_key(&key) {
+                explicit_settings.push((format!("features.{key}"), feature, enabled));
             }
         }
     }
@@ -215,48 +268,6 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
             enabled,
         ));
     }
-    if let Some(enabled) = cfg.experimental_use_freeform_apply_patch {
-        explicit_settings.push((
-            "experimental_use_freeform_apply_patch".to_string(),
-            Feature::ApplyPatchFreeform,
-            enabled,
-        ));
-    }
-    for (profile_name, profile) in &cfg.profiles {
-        if let Some(features) = profile.features.as_ref() {
-            for (key, enabled) in &features.entries {
-                if let Some(feature) = feature_for_key(key) {
-                    explicit_settings.push((
-                        format!("profiles.{profile_name}.features.{key}"),
-                        feature,
-                        *enabled,
-                    ));
-                }
-            }
-        }
-        if let Some(enabled) = profile.include_apply_patch_tool {
-            explicit_settings.push((
-                format!("profiles.{profile_name}.include_apply_patch_tool"),
-                Feature::ApplyPatchFreeform,
-                enabled,
-            ));
-        }
-        if let Some(enabled) = profile.experimental_use_unified_exec_tool {
-            explicit_settings.push((
-                format!("profiles.{profile_name}.experimental_use_unified_exec_tool"),
-                Feature::UnifiedExec,
-                enabled,
-            ));
-        }
-        if let Some(enabled) = profile.experimental_use_freeform_apply_patch {
-            explicit_settings.push((
-                format!("profiles.{profile_name}.experimental_use_freeform_apply_patch"),
-                Feature::ApplyPatchFreeform,
-                enabled,
-            ));
-        }
-    }
-
     explicit_settings
 }
 
@@ -272,7 +283,11 @@ pub(crate) fn validate_explicit_feature_settings_in_config_toml(
         return Ok(());
     };
 
-    let pinned_features = parse_feature_requirements(feature_requirements.clone(), source)?;
+    let pinned_features = parse_feature_requirements(
+        feature_requirements.clone(),
+        source,
+        /*startup_warnings*/ None,
+    );
     if pinned_features.is_empty() {
         return Ok(());
     }
@@ -302,52 +317,13 @@ pub(crate) fn validate_feature_requirements_in_config_toml(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<()> {
-    fn validate_profile(
-        cfg: &ConfigToml,
-        profile_name: Option<&str>,
-        profile: &ConfigProfile,
-        feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
-    ) -> std::io::Result<()> {
-        let configured_features = Features::from_sources(
-            FeatureConfigSource {
-                features: cfg.features.as_ref(),
-                include_apply_patch_tool: None,
-                experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
-                experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            },
-            FeatureConfigSource {
-                features: profile.features.as_ref(),
-                include_apply_patch_tool: profile.include_apply_patch_tool,
-                experimental_use_freeform_apply_patch: profile
-                    .experimental_use_freeform_apply_patch,
-                experimental_use_unified_exec_tool: profile.experimental_use_unified_exec_tool,
-            },
-            FeatureOverrides::default(),
-        );
-        ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())
-            .map(|_| ())
-            .map_err(|err| {
-                if let Some(profile_name) = profile_name {
-                    std::io::Error::new(
-                        err.kind(),
-                        format!(
-                            "invalid feature configuration for profile `{profile_name}`: {err}"
-                        ),
-                    )
-                } else {
-                    err
-                }
-            })
-    }
-
-    validate_profile(
-        cfg,
-        /*profile_name*/ None,
-        &ConfigProfile::default(),
-        feature_requirements,
-    )?;
-    for (profile_name, profile) in &cfg.profiles {
-        validate_profile(cfg, Some(profile_name), profile, feature_requirements)?;
-    }
-    Ok(())
+    let configured_features = Features::from_sources(
+        FeatureConfigSource {
+            features: cfg.features.as_ref(),
+            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    ManagedFeatures::from_configured(configured_features, feature_requirements.cloned()).map(|_| ())
 }

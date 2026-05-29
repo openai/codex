@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::MemorySummarizeInput;
 use crate::common::MemorySummarizeOutput;
 use crate::endpoint::session::EndpointSession;
@@ -12,12 +12,12 @@ use serde::Deserialize;
 use serde_json::to_value;
 use std::sync::Arc;
 
-pub struct MemoriesClient<T: HttpTransport, A: AuthProvider> {
-    session: EndpointSession<T, A>,
+pub struct MemoriesClient<T: HttpTransport> {
+    session: EndpointSession<T>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> MemoriesClient<T, A> {
-    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> MemoriesClient<T> {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -67,11 +67,13 @@ struct SummarizeResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::AuthProvider;
     use crate::common::RawMemory;
     use crate::common::RawMemoryMetadata;
     use crate::provider::RetryConfig;
     use async_trait::async_trait;
     use codex_client::Request;
+    use codex_client::RequestBody;
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
@@ -102,9 +104,7 @@ mod tests {
     struct DummyAuth;
 
     impl AuthProvider for DummyAuth {
-        fn bearer_token(&self) -> Option<String> {
-            None
-        }
+        fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
     }
 
     #[derive(Clone)]
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn path_is_memories_trace_summarize_for_wire_compatibility() {
         assert_eq!(
-            MemoriesClient::<DummyTransport, DummyAuth>::path(),
+            MemoriesClient::<DummyTransport>::path(),
             "memories/trace_summarize"
         );
     }
@@ -179,7 +179,7 @@ mod tests {
         let client = MemoriesClient::new(
             transport.clone(),
             provider("https://example.com/api/codex"),
-            DummyAuth,
+            Arc::new(DummyAuth),
         );
 
         let input = MemorySummarizeInput {
@@ -213,7 +213,11 @@ mod tests {
             request.url,
             "https://example.com/api/codex/memories/trace_summarize"
         );
-        let body = request.body.expect("request body should be present");
+        let body = request
+            .body
+            .as_ref()
+            .and_then(RequestBody::json)
+            .expect("request body should be JSON");
         assert_eq!(body["model"], "gpt-test");
         assert_eq!(body["traces"][0]["id"], "trace-1");
         assert_eq!(

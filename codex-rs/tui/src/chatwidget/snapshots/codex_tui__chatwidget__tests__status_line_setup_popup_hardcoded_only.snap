@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: status_line_popup_snapshot(&mut chat)
+---
+  Configure Status Line
+  Select which items to display in the status line.
+
+  Type to search
+  >
+› [x] Use theme colors      Apply colors from the active /theme
+  ───────────────────────
+  [x] project-name          Project name (omitted when unavailable)
+  [x] git-branch            Current Git branch (omitted when unavailable)
+  [x] thread-title          Current thread title, or thread identifier when unnamed
+  [ ] model                 Current model name
+  [ ] model-with-reasoning  Current model name with reasoning level
+  [ ] current-dir           Current working directory
+
+  my-project · feat/awesome-feature · thread title
+  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

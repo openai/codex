@@ -6,7 +6,7 @@
       "type": "string"
     }
   },
-  "description": "Created watch handle returned by `fs/watch`.",
+  "description": "Successful response for `fs/watch`.",
   "properties": {
     "path": {
       "allOf": [
@@ -15,15 +15,10 @@
         }
       ],
       "description": "Canonicalized path associated with the watch."
-    },
-    "watchId": {
-      "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
-      "type": "string"
     }
   },
   "required": [
-    "path",
-    "watchId"
+    "path"
   ],
   "title": "FsWatchResponse",
   "type": "object"

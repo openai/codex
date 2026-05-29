@@ -28,6 +28,21 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     false
 }
 
+/// Returns whether already-tokenized PowerShell words should be treated as
+/// dangerous by the Windows unmatched-command heuristics.
+pub fn is_dangerous_powershell_words(command: &[String]) -> bool {
+    #[cfg(windows)]
+    {
+        windows_dangerous_commands::is_dangerous_powershell_words(command)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+        false
+    }
+}
+
 fn is_git_global_option_with_value(arg: &str) -> bool {
     matches!(
         arg,
@@ -51,29 +66,6 @@ fn is_git_global_option_with_inline_value(arg: &str) -> bool {
             || s.starts_with("--super-prefix=")
             || s.starts_with("--work-tree=")
     ) || ((arg.starts_with("-C") || arg.starts_with("-c")) && arg.len() > 2)
-}
-
-/// Git global options that can redirect config, repository, or helper lookup
-/// and therefore must never be auto-approved as "safe".
-pub(crate) fn git_global_option_requires_prompt(arg: &str) -> bool {
-    matches!(
-        arg,
-        "-c" | "--config-env"
-            | "--exec-path"
-            | "--git-dir"
-            | "--namespace"
-            | "--super-prefix"
-            | "--work-tree"
-    ) || matches!(
-        arg,
-        s if (s.starts_with("-c") && s.len() > 2)
-            || s.starts_with("--config-env=")
-            || s.starts_with("--exec-path=")
-            || s.starts_with("--git-dir=")
-            || s.starts_with("--namespace=")
-            || s.starts_with("--super-prefix=")
-            || s.starts_with("--work-tree=")
-    )
 }
 
 pub(crate) fn executable_name_lookup_key(raw: &str) -> Option<String> {
@@ -180,5 +172,16 @@ mod tests {
     #[test]
     fn rm_f_is_dangerous() {
         assert!(command_might_be_dangerous(&vec_str(&["rm", "-f", "/"])));
+    }
+
+    #[test]
+    fn direct_powershell_words_reuse_windows_dangerous_detection() {
+        let command = vec_str(&["Remove-Item", "test", "-Force"]);
+
+        if cfg!(windows) {
+            assert!(is_dangerous_powershell_words(&command));
+        } else {
+            assert!(!is_dangerous_powershell_words(&command));
+        }
     }
 }

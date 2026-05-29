@@ -1,7 +1,7 @@
 use codex_api::AuthProvider;
 use codex_api::ModelsClient;
-use codex_api::provider::Provider;
-use codex_api::provider::RetryConfig;
+use codex_api::Provider;
+use codex_api::RetryConfig;
 use codex_client::ReqwestTransport;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -14,6 +14,7 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
 use http::Method;
+use std::sync::Arc;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -24,9 +25,7 @@ use wiremock::matchers::path;
 struct DummyAuth;
 
 impl AuthProvider for DummyAuth {
-    fn bearer_token(&self) -> Option<String> {
-        None
-    }
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
 fn provider(base_url: &str) -> Provider {
@@ -75,6 +74,9 @@ async fn models_client_hits_models_endpoint() {
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
+            additional_speed_tiers: Vec::new(),
+            service_tiers: Vec::new(),
+            default_service_tier: None,
             upgrade: None,
             base_instructions: "base instructions".to_string(),
             model_messages: None,
@@ -89,6 +91,7 @@ async fn models_client_hits_models_endpoint() {
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
             context_window: Some(272_000),
+            max_context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
@@ -109,7 +112,7 @@ async fn models_client_hits_models_endpoint() {
         .await;
 
     let transport = ReqwestTransport::new(reqwest::Client::new());
-    let client = ModelsClient::new(transport, provider(&base_url), DummyAuth);
+    let client = ModelsClient::new(transport, provider(&base_url), Arc::new(DummyAuth));
 
     let (models, _) = client
         .list_models("0.1.0", HeaderMap::new())

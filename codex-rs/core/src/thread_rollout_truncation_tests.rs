@@ -1,5 +1,5 @@
 use super::*;
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -14,7 +14,6 @@ fn user_msg(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
-        end_turn: None,
         phase: None,
     }
 }
@@ -26,7 +25,17 @@ fn assistant_msg(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
-        end_turn: None,
+        phase: None,
+    }
+}
+
+fn developer_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
         phase: None,
     }
 }
@@ -192,6 +201,23 @@ fn truncates_rollout_to_last_n_fork_turns_counts_trigger_turn_messages() {
 
     let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
     let expected = rollout[4..].to_vec();
+
+    assert_eq!(
+        serde_json::to_value(&truncated).unwrap(),
+        serde_json::to_value(&expected).unwrap()
+    );
+}
+
+#[test]
+fn truncates_rollout_to_last_n_fork_turns_drops_startup_prefix_even_when_under_limit() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(developer_msg("startup developer context")),
+        RolloutItem::ResponseItem(user_msg("current task")),
+        RolloutItem::ResponseItem(assistant_msg("answer")),
+    ];
+
+    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, /*n_from_end*/ 2);
+    let expected = rollout[1..].to_vec();
 
     assert_eq!(
         serde_json::to_value(&truncated).unwrap(),

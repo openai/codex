@@ -2,7 +2,7 @@ use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
 use crate::error::TransportError;
 use crate::request::Request;
-use crate::request::RequestCompression;
+use crate::request::RequestBody;
 use crate::request::Response;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -42,12 +42,14 @@ impl ReqwestTransport {
     }
 
     fn build(&self, req: Request) -> Result<CodexRequestBuilder, TransportError> {
+        let prepared = req.prepare_body_for_send().map_err(TransportError::Build)?;
+
         let Request {
             method,
             url,
-            mut headers,
-            body,
-            compression,
+            headers: _,
+            body: _,
+            compression: _,
             timeout,
         } = req;
 
@@ -60,52 +62,9 @@ impl ReqwestTransport {
             builder = builder.timeout(timeout);
         }
 
-        if let Some(body) = body {
-            if compression != RequestCompression::None {
-                if headers.contains_key(http::header::CONTENT_ENCODING) {
-                    return Err(TransportError::Build(
-                        "request compression was requested but content-encoding is already set"
-                            .to_string(),
-                    ));
-                }
-
-                let json = serde_json::to_vec(&body)
-                    .map_err(|err| TransportError::Build(err.to_string()))?;
-                let pre_compression_bytes = json.len();
-                let compression_start = std::time::Instant::now();
-                let (compressed, content_encoding) = match compression {
-                    RequestCompression::None => unreachable!("guarded by compression != None"),
-                    RequestCompression::Zstd => (
-                        zstd::stream::encode_all(std::io::Cursor::new(json), 3)
-                            .map_err(|err| TransportError::Build(err.to_string()))?,
-                        http::HeaderValue::from_static("zstd"),
-                    ),
-                };
-                let post_compression_bytes = compressed.len();
-                let compression_duration = compression_start.elapsed();
-
-                // Ensure the server knows to unpack the request body.
-                headers.insert(http::header::CONTENT_ENCODING, content_encoding);
-                if !headers.contains_key(http::header::CONTENT_TYPE) {
-                    headers.insert(
-                        http::header::CONTENT_TYPE,
-                        http::HeaderValue::from_static("application/json"),
-                    );
-                }
-
-                tracing::info!(
-                    pre_compression_bytes,
-                    post_compression_bytes,
-                    compression_duration_ms = compression_duration.as_millis(),
-                    "Compressed request body with zstd"
-                );
-
-                builder = builder.headers(headers).body(compressed);
-            } else {
-                builder = builder.headers(headers).json(&body);
-            }
-        } else {
-            builder = builder.headers(headers);
+        builder = builder.headers(prepared.headers);
+        if let Some(body) = prepared.body {
+            builder = builder.body(body);
         }
         Ok(builder)
     }
@@ -119,6 +78,14 @@ impl ReqwestTransport {
     }
 }
 
+fn request_body_for_trace(req: &Request) -> String {
+    match req.body.as_ref() {
+        Some(RequestBody::Json(body)) => body.to_string(),
+        Some(RequestBody::Raw(body)) => format!("<raw body: {} bytes>", body.len()),
+        None => String::new(),
+    }
+}
+
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
@@ -127,7 +94,7 @@ impl HttpTransport for ReqwestTransport {
                 "{} to {}: {}",
                 req.method,
                 req.url,
-                req.body.as_ref().unwrap_or_default()
+                request_body_for_trace(&req)
             );
         }
 
@@ -159,7 +126,7 @@ impl HttpTransport for ReqwestTransport {
                 "{} to {}: {}",
                 req.method,
                 req.url,
-                req.body.as_ref().unwrap_or_default()
+                request_body_for_trace(&req)
             );
         }
 

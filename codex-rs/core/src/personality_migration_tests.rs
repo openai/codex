@@ -7,6 +7,8 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_rollout::SESSIONS_SUBDIR;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -25,6 +27,16 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
         .join("2025")
         .join("01")
         .join("01");
+    write_rollout_with_user_event(&dir, thread_id).await
+}
+
+async fn write_archived_session_with_user_event(codex_home: &Path) -> io::Result<()> {
+    let thread_id = ThreadId::new();
+    let dir = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    write_rollout_with_user_event(&dir, thread_id).await
+}
+
+async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::Result<()> {
     tokio::fs::create_dir_all(&dir).await?;
     let file_path = dir.join(format!("rollout-{TEST_TIMESTAMP}-{thread_id}.jsonl"));
     let mut file = tokio::fs::File::create(&file_path).await?;
@@ -38,6 +50,7 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
             originator: "test_originator".to_string(),
             cli_version: "test_version".to_string(),
             source: SessionSource::Cli,
+            thread_source: None,
             agent_path: None,
             agent_nickname: None,
             agent_role: None,
@@ -55,10 +68,12 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
     let user_event = RolloutLine {
         timestamp: TEST_TIMESTAMP.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "hello".to_string(),
             images: None,
             local_images: Vec::new(),
             text_elements: Vec::new(),
+            ..Default::default()
         })),
     };
 
@@ -75,7 +90,23 @@ async fn applies_when_sessions_exist_and_no_personality() -> io::Result<()> {
     write_session_with_user_event(temp.path()).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
+
+    assert_eq!(status, PersonalityMigrationStatus::Applied);
+    assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
+
+    let persisted = read_config_toml(temp.path()).await?;
+    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
+    Ok(())
+}
+
+#[tokio::test]
+async fn applies_when_only_archived_sessions_exist_and_no_personality() -> io::Result<()> {
+    let temp = TempDir::new()?;
+    write_archived_session_with_user_event(temp.path()).await?;
+
+    let config_toml = ConfigToml::default();
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::Applied);
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
@@ -91,7 +122,7 @@ async fn skips_when_marker_exists() -> io::Result<()> {
     create_marker(&temp.path().join(PERSONALITY_MIGRATION_FILENAME)).await?;
 
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::SkippedMarker);
     assert!(!temp.path().join("config.toml").exists());
@@ -108,7 +139,7 @@ async fn skips_when_personality_explicit() -> io::Result<()> {
         .map_err(|err| io::Error::other(format!("failed to write config: {err}")))?;
 
     let config_toml = read_config_toml(temp.path()).await?;
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(
         status,
@@ -125,7 +156,7 @@ async fn skips_when_personality_explicit() -> io::Result<()> {
 async fn skips_when_no_sessions() -> io::Result<()> {
     let temp = TempDir::new()?;
     let config_toml = ConfigToml::default();
-    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+    let status = maybe_migrate_personality(temp.path(), &config_toml, /*state_db*/ None).await?;
 
     assert_eq!(status, PersonalityMigrationStatus::SkippedNoSessions);
     assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());

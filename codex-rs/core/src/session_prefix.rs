@@ -1,20 +1,17 @@
 use codex_protocol::protocol::AgentStatus;
 
-/// Helpers for model-visible session state markers that are stored in user-role
-/// messages but are not user intent.
-use crate::contextual_user_message::SUBAGENT_NOTIFICATION_FRAGMENT;
+use crate::context::ContextualUserFragment;
+use crate::context::SubagentNotification;
+
+// Helpers for model-visible session state markers that are stored in user-role
+// messages but are not user intent.
 
 // TODO(jif) unify with structured schema
 pub(crate) fn format_subagent_notification_message(
     agent_reference: &str,
     status: &AgentStatus,
 ) -> String {
-    let payload_json = serde_json::json!({
-        "agent_path": agent_reference,
-        "status": status,
-    })
-    .to_string();
-    SUBAGENT_NOTIFICATION_FRAGMENT.wrap(payload_json)
+    SubagentNotification::new(agent_reference, status.clone()).render()
 }
 
 pub(crate) fn format_subagent_context_line(

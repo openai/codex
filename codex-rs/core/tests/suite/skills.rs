@@ -2,10 +2,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -14,24 +17,28 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
-use std::fs;
-use std::path::Path;
+use core_test_support::test_codex::turn_permission_fields;
+use std::sync::Arc;
 
-fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::path::PathBuf {
-    let skill_dir = home.join("skills").join(name);
-    fs::create_dir_all(&skill_dir).unwrap();
+async fn write_repo_skill(
+    cwd: AbsolutePathBuf,
+    fs: Arc<dyn ExecutorFileSystem>,
+    name: &str,
+    description: &str,
+    body: &str,
+) -> Result<()> {
+    let skill_dir = cwd.join(".agents").join("skills").join(name);
+    fs.create_directory(
+        &skill_dir,
+        CreateDirectoryOptions { recursive: true },
+        /*sandbox*/ None,
+    )
+    .await?;
     let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
     let path = skill_dir.join("SKILL.md");
-    fs::write(&path, contents).unwrap();
-    path
-}
-
-fn system_skill_md_path(home: impl AsRef<Path>, name: &str) -> std::path::PathBuf {
-    home.as_ref()
-        .join("skills")
-        .join(".system")
-        .join(name)
-        .join("SKILL.md")
+    fs.write_file(&path, contents.into_bytes(), /*sandbox*/ None)
+        .await?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -40,13 +47,18 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
 
     let server = start_mock_server().await;
     let skill_body = "skill body";
-    let mut builder = test_codex().with_pre_build_hook(|home| {
-        write_skill(home, "demo", "demo skill", skill_body);
+    let mut builder = test_codex().with_workspace_setup(move |cwd, fs| async move {
+        write_repo_skill(cwd, fs, "demo", "demo skill", skill_body).await
     });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
 
-    let skill_path = test.codex_home_path().join("skills/demo/SKILL.md");
-    let skill_path = std::fs::canonicalize(skill_path)?;
+    let skill_path = test
+        .config
+        .cwd
+        .join(".agents/skills/demo/SKILL.md")
+        .canonicalize()
+        .unwrap_or_else(|_| test.config.cwd.join(".agents/skills/demo/SKILL.md"))
+        .to_path_buf();
 
     let mock = mount_sse_once(
         &server,
@@ -59,8 +71,10 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
     .await;
 
     let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![
                 UserInput::Text {
                     text: "please use $demo".to_string(),
@@ -71,17 +85,25 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
                     path: skill_path.clone(),
                 },
             ],
+            environments: None,
             final_output_json_schema: None,
-            cwd: test.cwd_path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -101,126 +123,6 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
                 && text.contains(skill_path_str.as_ref())
         }),
         "expected skill instructions in user input, got {user_texts:?}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_pre_build_hook(|home| {
-        let skill_dir = home.join("skills").join("broken");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "not yaml").unwrap();
-    });
-    let test = builder.build(&server).await?;
-
-    test.codex
-        .submit(Op::ListSkills {
-            cwds: Vec::new(),
-            force_reload: false,
-        })
-        .await?;
-    let response =
-        core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
-            codex_protocol::protocol::EventMsg::ListSkillsResponse(response) => {
-                Some(response.clone())
-            }
-            _ => None,
-        })
-        .await;
-
-    let cwd = test.cwd_path();
-    let (skills, errors) = response
-        .skills
-        .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
-        .map(|entry| (entry.skills.clone(), entry.errors.clone()))
-        .unwrap_or_default();
-
-    assert!(
-        skills.iter().all(|skill| {
-            !skill
-                .path
-                .to_string_lossy()
-                .ends_with("skills/broken/SKILL.md")
-        }),
-        "expected broken skill not loaded, got {skills:?}"
-    );
-    assert_eq!(errors.len(), 1, "expected one load error");
-    let error_path = errors[0].path.to_string_lossy();
-    assert!(
-        error_path.ends_with("skills/broken/SKILL.md"),
-        "unexpected error path: {error_path}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_skills_includes_system_cache_entries() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    const SYSTEM_SKILL_NAME: &str = "skill-creator";
-
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_pre_build_hook(|home| {
-        let system_skill_path = system_skill_md_path(home, SYSTEM_SKILL_NAME);
-        assert!(
-            !system_skill_path.exists(),
-            "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
-        );
-    });
-    let test = builder.build(&server).await?;
-
-    let system_skill_path = system_skill_md_path(test.codex_home_path(), SYSTEM_SKILL_NAME);
-    assert!(
-        system_skill_path.exists(),
-        "expected embedded system skills installed to {system_skill_path:?}"
-    );
-    let system_skill_contents = fs::read_to_string(&system_skill_path)?;
-    let expected_name_line = format!("name: {SYSTEM_SKILL_NAME}");
-    assert!(
-        system_skill_contents.contains(&expected_name_line),
-        "expected embedded system skill file, got:\n{system_skill_contents}"
-    );
-
-    test.codex
-        .submit(Op::ListSkills {
-            cwds: Vec::new(),
-            force_reload: true,
-        })
-        .await?;
-    let response =
-        core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
-            codex_protocol::protocol::EventMsg::ListSkillsResponse(response) => {
-                Some(response.clone())
-            }
-            _ => None,
-        })
-        .await;
-
-    let cwd = test.cwd_path();
-    let (skills, _errors) = response
-        .skills
-        .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
-        .map(|entry| (entry.skills.clone(), entry.errors.clone()))
-        .unwrap_or_default();
-
-    let skill = skills
-        .iter()
-        .find(|skill| skill.name == SYSTEM_SKILL_NAME)
-        .expect("expected system skill to be present");
-    assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::System);
-    let path_str = skill.path.to_string_lossy().replace('\\', "/");
-    let expected_path_suffix = format!("/skills/.system/{SYSTEM_SKILL_NAME}/SKILL.md");
-    assert!(
-        path_str.ends_with(&expected_path_suffix),
-        "unexpected skill path: {path_str}"
     );
 
     Ok(())

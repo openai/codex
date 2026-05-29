@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "server": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "uri": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "server",
+    "uri"
+  ],
+  "title": "McpResourceReadParams",
+  "type": "object"
+}

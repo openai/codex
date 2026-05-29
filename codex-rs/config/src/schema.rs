@@ -25,6 +25,33 @@ pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
         if feature.id == codex_features::Feature::Artifact {
             continue;
         }
+        if feature.id == codex_features::Feature::MultiAgentV2 {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::MultiAgentV2ConfigToml,
+                >>(),
+            );
+            continue;
+        }
+        if feature.id == codex_features::Feature::AppsMcpPathOverride {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::AppsMcpPathOverrideConfigToml,
+                >>(),
+            );
+            continue;
+        }
+        if feature.id == codex_features::Feature::NetworkProxy {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::NetworkProxyConfigToml,
+                >>(),
+            );
+            continue;
+        }
         validation
             .properties
             .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());
@@ -72,7 +99,7 @@ pub fn canonicalize(value: &Value) -> Value {
         Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
         Value::Object(map) => {
             let mut entries: Vec<_> = map.iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            entries.sort_by_key(|(key, _)| *key);
             let mut sorted = Map::with_capacity(map.len());
             for (key, child) in entries {
                 sorted.insert(key.clone(), canonicalize(child));

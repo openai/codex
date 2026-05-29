@@ -14,6 +14,7 @@ use crate::api::TaskText;
 use chrono::DateTime;
 use chrono::Utc;
 
+use codex_api::SharedAuthProvider;
 use codex_backend_client as backend;
 use codex_backend_client::CodeTaskDetailsResponseExt;
 use codex_git_utils::ApplyGitRequest;
@@ -32,13 +33,13 @@ impl HttpClient {
         Ok(Self { base_url, backend })
     }
 
-    pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
-        self.backend = self.backend.clone().with_bearer_token(token);
+    pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
+        self.backend = self.backend.clone().with_user_agent(ua);
         self
     }
 
-    pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
-        self.backend = self.backend.clone().with_user_agent(ua);
+    pub fn with_auth_provider(mut self, auth: SharedAuthProvider) -> Self {
+        self.backend = self.backend.clone().with_auth_provider(auth);
         self
     }
 

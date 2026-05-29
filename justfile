@@ -1,6 +1,8 @@
 set working-directory := "codex-rs"
 set positional-arguments
 
+rust_min_stack := "8388608" # 8 MiB
+
 # Display help
 help:
     just -l
@@ -14,10 +16,10 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
-# Start codex-exec-server and run codex-tui.
+# Start `codex exec-server` and run codex-tui.
 [no-cd]
 tui-with-exec-server *args:
-    ./scripts/run_tui_with_exec_server.sh "$@"
+    {{ justfile_directory() }}/scripts/run_tui_with_exec_server.sh "$@"
 
 # Run the CLI version of the file-search crate.
 file-search *args:
@@ -28,9 +30,11 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
 
-# format code
+# Format Rust and Python SDK code.
 fmt:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
+    uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
 
 fix *args:
     cargo clippy --fix --tests --allow-dirty "$@"
@@ -42,14 +46,22 @@ install:
     rustup show active-toolchain
     cargo fetch
 
-# Run `cargo nextest` since it's faster than `cargo test`, though including
-# --no-fail-fast is important to ensure all tests are run.
+# Run nextest with --no-fail-fast so all tests are run.
 #
-# Run `cargo install cargo-nextest` if you don't have it installed.
+# Run `cargo install --locked cargo-nextest` if you don't have it installed.
 # Prefer this for routine local runs. Workspace crate features are banned, so
 # there should be no need to add `--all-features`.
-test:
-    cargo nextest run --no-fail-fast
+test *args:
+    RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast "$@"
+    just bench-smoke
+
+# Run explicit workspace benchmark targets.
+bench *args:
+    cargo bench --workspace --bench '*' "$@"
+
+# Run benchmark targets once to ensure they start successfully.
+bench-smoke:
+    just bench -- --test
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`
@@ -64,18 +76,18 @@ bazel-lock-update:
 
 [no-cd]
 bazel-lock-check:
-    ./scripts/check-module-bazel-lock.sh
+    {{ justfile_directory() }}/scripts/check-module-bazel-lock.sh
 
 bazel-test:
     bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
 
 [no-cd]
 bazel-clippy:
-    bazel_targets="$(./scripts/list-bazel-clippy-targets.sh)" && bazel build --config=clippy -- ${bazel_targets}
+    bazel_targets="$({{ justfile_directory() }}/scripts/list-bazel-clippy-targets.sh)" && bazel build --config=clippy -- ${bazel_targets}
 
 [no-cd]
 bazel-argument-comment-lint:
-    bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh)
+    bazel build --config=argument-comment-lint -- $({{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh)
 
 bazel-remote-test:
     bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
@@ -97,20 +109,20 @@ write-app-server-schema *args:
 
 [no-cd]
 write-hooks-schema:
-    cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
+    cargo run --manifest-path {{ justfile_directory() }}/codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
 
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
 argument-comment-lint *args:
     if [ "$#" -eq 0 ]; then \
-      bazel build --config=argument-comment-lint -- $(./tools/argument-comment-lint/list-bazel-targets.sh); \
+      bazel build --config=argument-comment-lint -- $({{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh); \
     else \
-      ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
+      {{ justfile_directory() }}/tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
     fi
 
 [no-cd]
 argument-comment-lint-from-source *args:
-    ./tools/argument-comment-lint/run.py "$@"
+    {{ justfile_directory() }}/tools/argument-comment-lint/run.py "$@"
 
 # Tail logs from the state SQLite database
 log *args:

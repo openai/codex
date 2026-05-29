@@ -12,7 +12,8 @@ Start the app-server client (it will spawn `codex app-server` itself):
 ```
 cargo run -p codex-debug-client -- \
   --codex-bin codex \
-  --approval-policy on-request
+  --approval-policy on-request \
+  --output-file /tmp/app-server-server-json.jsonl
 ```
 
 You can resume a specific thread:
@@ -29,6 +30,7 @@ cargo run -p codex-debug-client -- --thread-id thr_123
 - `--approval-policy <policy>`: `untrusted`, `on-failure` (deprecated), `on-request`, `never`.
 - `--auto-approve`: auto-approve command/file-change approvals (default: decline).
 - `--final-only`: only show completed assistant messages and tool items.
+- `--output-file <path>`: write raw server JSONL to this file instead of stdout.
 - `--model <name>`: optional model override for thread start/resume.
 - `--model-provider <name>`: optional provider override.
 - `--cwd <path>`: optional working directory override.
@@ -46,7 +48,8 @@ Type a line to send it as a new turn. Commands are prefixed with `:`:
 
 The prompt shows the active thread id. Client messages (help, errors, approvals)
 print to stderr; raw server JSON prints to stdout so you can pipe/record it
-unless `--final-only` is set.
+unless `--final-only` is set. Pass `--output-file <path>` to record raw server
+JSONL to a file instead of stdout.
 
 ## Notes
 

@@ -34,6 +34,16 @@ pub(super) fn parse_with_powershell_ast(executable: &str, script: &str) -> Power
     parse_with_cached_process(&mut parser_processes, executable, script)
 }
 
+pub(crate) fn try_parse_powershell_ast_commands(
+    executable: &str,
+    script: &str,
+) -> Option<Vec<Vec<String>>> {
+    match parse_with_powershell_ast(executable, script) {
+        PowershellParseOutcome::Commands(commands) => Some(commands),
+        PowershellParseOutcome::Unsupported | PowershellParseOutcome::Failed => None,
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PowershellParseOutcome {
     Commands(Vec<Vec<String>>),
@@ -285,5 +295,19 @@ mod tests {
                 vec!["Measure-Object".to_string()],
             ]),
         );
+    }
+
+    #[test]
+    fn parser_process_rejects_stop_parsing_forms() {
+        let Some(powershell) = try_find_powershell_executable_blocking() else {
+            return;
+        };
+        let powershell = powershell.as_path().to_str().unwrap();
+        let mut parser = PowershellParserProcess::spawn(powershell).unwrap();
+
+        let parsed = parser
+            .parse("git log --% HEAD --output=codex_poc.txt")
+            .unwrap();
+        assert_eq!(parsed, PowershellParseOutcome::Unsupported);
     }
 }

@@ -1,0 +1,10 @@
+---
+source: core/tests/suite/realtime_conversation.rs
+expression: snapshot
+---
+type: conversation.item.create
+item.type: message
+item.role: user
+content[0].type: input_text
+content[0].text: [USER] typed follow-up for realtime
+response.create: false

@@ -2,16 +2,6 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "HookEventNameWire": {
-      "enum": [
-        "PreToolUse",
-        "PostToolUse",
-        "SessionStart",
-        "UserPromptSubmit",
-        "Stop"
-      ],
-      "type": "string"
-    },
     "PreToolUseDecisionWire": {
       "enum": [
         "approve",
@@ -27,7 +17,8 @@
           "type": "string"
         },
         "hookEventName": {
-          "$ref": "#/definitions/HookEventNameWire"
+          "const": "PreToolUse",
+          "type": "string"
         },
         "permissionDecision": {
           "allOf": [

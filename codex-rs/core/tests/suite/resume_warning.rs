@@ -27,13 +27,15 @@ fn resume_history(
     let turn_id = "resume-warning-seed-turn".to_string();
     let turn_ctx = TurnContextItem {
         turn_id: Some(turn_id.clone()),
-        trace_id: None,
         cwd: config.cwd.to_path_buf(),
+        workspace_roots: None,
         current_date: None,
         timezone: None,
         approval_policy: config.permissions.approval_policy.value(),
-        sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+        sandbox_policy: config.legacy_sandbox_policy(),
+        permission_profile: None,
         network: None,
+        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         personality: None,
         collaboration_mode: None,
@@ -42,10 +44,6 @@ fn resume_history(
         summary: config
             .model_reasoning_summary
             .unwrap_or(ReasoningSummary::Auto),
-        user_instructions: None,
-        developer_instructions: None,
-        final_output_json_schema: None,
-        truncation_policy: None,
     };
 
     InitialHistory::Resumed(ResumedHistory {
@@ -53,15 +51,18 @@ fn resume_history(
         history: vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.clone(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: ModeKind::Default,
             })),
             RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "seed".to_string(),
                 images: None,
                 local_images: vec![],
                 text_elements: vec![],
+                ..Default::default()
             })),
             RolloutItem::TurnContext(turn_ctx),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
@@ -69,9 +70,10 @@ fn resume_history(
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             })),
         ],
-        rollout_path: rollout_path.to_path_buf(),
+        rollout_path: Some(rollout_path.to_path_buf()),
     })
 }
 
@@ -102,7 +104,7 @@ async fn emits_warning_when_resumed_model_differs() {
         ..
     } = thread_manager
         .resume_thread_with_history(
-            config,
+            config.clone(),
             initial_history,
             auth_manager,
             /*persist_extended_history*/ false,

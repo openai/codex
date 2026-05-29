@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "_meta": true,
+    "arguments": true,
+    "server": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "tool": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "server",
+    "threadId",
+    "tool"
+  ],
+  "title": "McpServerToolCallParams",
+  "type": "object"
+}

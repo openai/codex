@@ -1,5 +1,7 @@
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
     match sandbox_policy {
@@ -23,7 +25,6 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
-            read_only_access: _,
         } => {
             let mut summary = "workspace-write".to_string();
 
@@ -50,9 +51,54 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
     }
 }
 
+pub fn summarize_permission_profile(
+    permission_profile: &PermissionProfile,
+    cwd: &AbsolutePathBuf,
+    workspace_roots: &[AbsolutePathBuf],
+) -> String {
+    match permission_profile.to_legacy_sandbox_policy(cwd.as_path()) {
+        Ok(SandboxPolicy::WorkspaceWrite {
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+            ..
+        }) => {
+            let mut summary = "workspace-write".to_string();
+            let mut writable_entries = vec!["workdir".to_string()];
+            if !exclude_slash_tmp {
+                writable_entries.push("/tmp".to_string());
+            }
+            if !exclude_tmpdir_env_var {
+                writable_entries.push("$TMPDIR".to_string());
+            }
+            writable_entries.extend(
+                workspace_roots
+                    .iter()
+                    .filter(|root| *root != cwd)
+                    .map(|root| root.to_string_lossy().to_string()),
+            );
+
+            summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
+            if network_access {
+                summary.push_str(" (network access enabled)");
+            }
+            summary
+        }
+        Ok(policy) => summarize_sandbox_policy(&policy),
+        Err(_) => {
+            if permission_profile.network_sandbox_policy().is_enabled() {
+                "custom permissions (network access enabled)".to_string()
+            } else {
+                "custom permissions".to_string()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
@@ -75,7 +121,6 @@ mod tests {
     #[test]
     fn summarizes_read_only_with_enabled_network() {
         let summary = summarize_sandbox_policy(&SandboxPolicy::ReadOnly {
-            access: Default::default(),
             network_access: true,
         });
         assert_eq!(summary, "read-only (network access enabled)");
@@ -87,7 +132,6 @@ mod tests {
         let writable_root = AbsolutePathBuf::try_from(root).unwrap();
         let summary = summarize_sandbox_policy(&SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![writable_root.clone()],
-            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -97,6 +141,41 @@ mod tests {
             format!(
                 "workspace-write [workdir, {}] (network access enabled)",
                 writable_root.to_string_lossy()
+            )
+        );
+    }
+
+    #[test]
+    fn permission_profile_summary_uses_runtime_workspace_roots_and_hides_internal_writes() {
+        let cwd =
+            AbsolutePathBuf::try_from(if cfg!(windows) { "C:\\repo" } else { "/repo" }).unwrap();
+        let extra_root = AbsolutePathBuf::try_from(if cfg!(windows) {
+            "C:\\repo-extra"
+        } else {
+            "/repo-extra"
+        })
+        .unwrap();
+        let hidden_root = AbsolutePathBuf::try_from(if cfg!(windows) {
+            "C:\\Users\\test\\.codex\\memories"
+        } else {
+            "/Users/test/.codex/memories"
+        })
+        .unwrap();
+        let profile = PermissionProfile::workspace_write_with(
+            std::slice::from_ref(&hidden_root),
+            NetworkSandboxPolicy::Restricted,
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ false,
+        );
+
+        let summary =
+            summarize_permission_profile(&profile, &cwd, &[cwd.clone(), extra_root.clone()]);
+
+        assert_eq!(
+            summary,
+            format!(
+                "workspace-write [workdir, /tmp, $TMPDIR, {}]",
+                extra_root.display()
             )
         );
     }

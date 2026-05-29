@@ -1,6 +1,7 @@
 //! Path normalization, symlink resolution, and atomic writes shared across Codex crates.
 
-pub mod env;
+pub(crate) mod env;
+pub use env::is_wsl;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
@@ -12,6 +13,19 @@ use tempfile::NamedTempFile;
 pub fn normalize_for_path_comparison(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     let canonical = path.as_ref().canonicalize()?;
     Ok(normalize_for_wsl(canonical))
+}
+
+/// Compare paths after applying Codex's filesystem normalization.
+///
+/// If either path cannot be normalized, this falls back to direct path equality.
+pub fn paths_match_after_normalization(left: impl AsRef<Path>, right: impl AsRef<Path>) -> bool {
+    if let (Ok(left), Ok(right)) = (
+        normalize_for_path_comparison(left.as_ref()),
+        normalize_for_path_comparison(right.as_ref()),
+    ) {
+        return left == right;
+    }
+    left.as_ref() == right.as_ref()
 }
 
 pub fn normalize_for_native_workdir(path: impl AsRef<Path>) -> PathBuf {
@@ -82,7 +96,7 @@ pub fn resolve_symlink_write_paths(path: &Path) -> io::Result<SymlinkWritePaths>
         let next = if target.is_absolute() {
             AbsolutePathBuf::from_absolute_path(&target)
         } else if let Some(parent) = current.parent() {
-            AbsolutePathBuf::resolve_path_against_base(&target, parent)
+            Ok(AbsolutePathBuf::resolve_path_against_base(&target, parent))
         } else {
             return Ok(SymlinkWritePaths {
                 read_path: None,

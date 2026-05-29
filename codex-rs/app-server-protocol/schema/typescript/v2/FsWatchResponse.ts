@@ -4,13 +4,9 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 
 /**
- * Created watch handle returned by `fs/watch`.
+ * Successful response for `fs/watch`.
  */
-export type FsWatchResponse = { 
-/**
- * Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.
- */
-watchId: string, 
+export type FsWatchResponse = {
 /**
  * Canonicalized path associated with the watch.
  */

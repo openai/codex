@@ -1,23 +1,26 @@
 use super::message_tool::FollowupTaskArgs;
 use super::message_tool::MessageDeliveryMode;
-use super::message_tool::MessageToolResult;
 use super::message_tool::handle_message_string_tool;
 use super::*;
+use crate::tools::handlers::multi_agents_spec::create_followup_task_tool;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-impl ToolHandler for Handler {
-    type Output = MessageToolResult;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for Handler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("followup_task")
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
+    fn spec(&self) -> ToolSpec {
+        create_followup_task_tool()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let arguments = function_arguments(invocation.payload.clone())?;
         let args: FollowupTaskArgs = parse_arguments(&arguments)?;
         handle_message_string_tool(
@@ -25,8 +28,14 @@ impl ToolHandler for Handler {
             MessageDeliveryMode::TriggerTurn,
             args.target,
             args.message,
-            args.interrupt,
         )
         .await
+        .map(boxed_tool_output)
+    }
+}
+
+impl CoreToolRuntime for Handler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }

@@ -48,11 +48,11 @@ fn as_query_product_surface(product_surface: RemoteSkillProductSurface) -> &'sta
     }
 }
 
-fn ensure_chatgpt_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth> {
+fn ensure_codex_backend_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth> {
     let Some(auth) = auth else {
         anyhow::bail!("chatgpt authentication required for remote skill scopes");
     };
-    if !auth.is_chatgpt_auth() {
+    if !auth.uses_codex_backend() {
         anyhow::bail!(
             "chatgpt authentication required for remote skill scopes; api key auth is not supported"
         );
@@ -94,7 +94,7 @@ pub async fn list_remote_skills(
     enabled: Option<bool>,
 ) -> Result<Vec<RemoteSkillSummary>> {
     let base_url = chatgpt_base_url.trim_end_matches('/');
-    let auth = ensure_chatgpt_auth(auth)?;
+    let auth = ensure_codex_backend_auth(auth)?;
 
     let url = format!("{base_url}/hazelnuts");
     let product_surface = as_query_product_surface(product_surface);
@@ -108,17 +108,11 @@ pub async fn list_remote_skills(
     }
 
     let client = build_reqwest_client();
-    let mut request = client
+    let request = client
         .get(&url)
         .timeout(REMOTE_SKILLS_API_TIMEOUT)
-        .query(&query_params);
-    let token = auth
-        .get_token()
-        .context("Failed to read auth token for remote skills")?;
-    request = request.bearer_auth(token);
-    if let Some(account_id) = auth.get_account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
+        .query(&query_params)
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
     let response = request
         .send()
         .await
@@ -150,20 +144,15 @@ pub async fn export_remote_skill(
     auth: Option<&CodexAuth>,
     skill_id: &str,
 ) -> Result<RemoteSkillDownloadResult> {
-    let auth = ensure_chatgpt_auth(auth)?;
+    let auth = ensure_codex_backend_auth(auth)?;
 
     let client = build_reqwest_client();
     let base_url = chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/hazelnuts/{skill_id}/export");
-    let mut request = client.get(&url).timeout(REMOTE_SKILLS_API_TIMEOUT);
-
-    let token = auth
-        .get_token()
-        .context("Failed to read auth token for remote skills")?;
-    request = request.bearer_auth(token);
-    if let Some(account_id) = auth.get_account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
+    let request = client
+        .get(&url)
+        .timeout(REMOTE_SKILLS_API_TIMEOUT)
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
 
     let response = request
         .send()

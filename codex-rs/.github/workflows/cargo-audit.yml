@@ -17,7 +17,7 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
       - name: Install cargo-audit
         uses: taiki-e/install-action@v2
         with:

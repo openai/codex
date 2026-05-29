@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "EXPERIMENTAL - emitted with the remote SDP for a WebRTC realtime session.",
+  "properties": {
+    "sdp": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "sdp",
+    "threadId"
+  ],
+  "title": "ThreadRealtimeSdpNotification",
+  "type": "object"
+}

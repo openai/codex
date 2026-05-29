@@ -1,0 +1,25 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "format!(\"exec running:\\n{exec_running}\\nexec and hook running:\\n{exec_and_hook_running}\\nhistory after exec:\\n{history_after_exec}\\nhook running after exec:\\n{hook_running_after_exec}\\nquiet hook completed lingering:\\n{quiet_hook_completed_lingering}\\nquiet hook completed:\\n{quiet_hook_completed}\")"
+---
+exec running:
+• Running echo done
+
+exec and hook running:
+active exec:
+• Running echo done
+active hooks:
+• Running PostToolUse hook: checking output policy
+
+history after exec:
+• Ran echo done
+  └ done
+
+hook running after exec:
+• Running PostToolUse hook: checking output policy
+
+quiet hook completed lingering:
+• Running PostToolUse hook: checking output policy
+
+quiet hook completed:
+<empty>

@@ -15,10 +15,15 @@
         }
       ],
       "description": "Absolute file or directory path to watch."
+    },
+    "watchId": {
+      "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
+      "type": "string"
     }
   },
   "required": [
-    "path"
+    "path",
+    "watchId"
   ],
   "title": "FsWatchParams",
   "type": "object"

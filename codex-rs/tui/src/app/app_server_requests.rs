@@ -1,19 +1,38 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
+use super::App;
 use crate::app_command::AppCommand;
-use crate::app_command::AppCommandView;
 use crate::app_server_approval_conversions::granted_permission_profile_from_request;
+use crate::app_server_session::AppServerSession;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
-use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ToolRequestUserInputResponse;
-use codex_protocol::mcp::RequestId as McpRequestId;
-use codex_protocol::protocol::ReviewDecision;
+
+impl App {
+    pub(super) async fn reject_app_server_request(
+        &self,
+        app_server_client: &AppServerSession,
+        request_id: AppServerRequestId,
+        reason: String,
+    ) -> std::result::Result<(), String> {
+        app_server_client
+            .reject_server_request(
+                request_id,
+                JSONRPCErrorError {
+                    code: -32000,
+                    message: reason,
+                    data: None,
+                },
+            )
+            .await
+            .map_err(|err| format!("failed to reject app-server request: {err}"))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AppServerRequestResolution {
@@ -27,13 +46,33 @@ pub(super) struct UnsupportedAppServerRequest {
     pub(super) message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedAppServerRequest {
+    ExecApproval {
+        id: String,
+    },
+    FileChangeApproval {
+        id: String,
+    },
+    PermissionsApproval {
+        id: String,
+    },
+    UserInput {
+        call_id: String,
+    },
+    McpElicitation {
+        server_name: String,
+        request_id: AppServerRequestId,
+    },
+}
+
 #[derive(Debug, Default)]
 pub(super) struct PendingAppServerRequests {
     exec_approvals: HashMap<String, AppServerRequestId>,
     file_change_approvals: HashMap<String, AppServerRequestId>,
     permissions_approvals: HashMap<String, AppServerRequestId>,
-    user_inputs: HashMap<String, AppServerRequestId>,
-    mcp_requests: HashMap<McpLegacyRequestKey, AppServerRequestId>,
+    user_inputs: HashMap<String, VecDeque<PendingUserInputRequest>>,
+    mcp_requests: HashMap<McpRequestKey, AppServerRequestId>,
 }
 
 impl PendingAppServerRequests {
@@ -70,14 +109,19 @@ impl PendingAppServerRequests {
             }
             ServerRequest::ToolRequestUserInput { request_id, params } => {
                 self.user_inputs
-                    .insert(params.turn_id.clone(), request_id.clone());
+                    .entry(params.turn_id.clone())
+                    .or_default()
+                    .push_back(PendingUserInputRequest {
+                        item_id: params.item_id.clone(),
+                        request_id: request_id.clone(),
+                    });
                 None
             }
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
                 self.mcp_requests.insert(
-                    McpLegacyRequestKey {
+                    McpRequestKey {
                         server_name: params.server_name.clone(),
-                        request_id: app_server_request_id_to_mcp_request_id(request_id),
+                        request_id: request_id.clone(),
                     },
                     request_id.clone(),
                 );
@@ -90,6 +134,12 @@ impl PendingAppServerRequests {
                 })
             }
             ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
+            ServerRequest::AttestationGenerate { request_id, .. } => {
+                Some(UnsupportedAppServerRequest {
+                    request_id: request_id.clone(),
+                    message: "Attestation generation is not available in TUI.".to_string(),
+                })
+            }
             ServerRequest::ApplyPatchApproval { request_id, .. } => {
                 Some(UnsupportedAppServerRequest {
                     request_id: request_id.clone(),
@@ -115,30 +165,32 @@ impl PendingAppServerRequests {
         T: Into<AppCommand>,
     {
         let op: AppCommand = op.into();
-        let resolution = match op.view() {
-            AppCommandView::ExecApproval { id, decision, .. } => self
+        let resolution = match &op {
+            AppCommand::ExecApproval { id, decision, .. } => self
                 .exec_approvals
                 .remove(id)
                 .map(|request_id| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(CommandExecutionRequestApprovalResponse {
-                            decision: decision.clone().into(),
+                            decision: decision.clone(),
                         })
                         .map_err(|err| {
-                            format!("failed to serialize command execution approval response: {err}")
+                            format!(
+                                "failed to serialize command execution approval response: {err}"
+                            )
                         })?,
                     })
                 })
                 .transpose()?,
-            AppCommandView::PatchApproval { id, decision } => self
+            AppCommand::PatchApproval { id, decision } => self
                 .file_change_approvals
                 .remove(id)
                 .map(|request_id| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(FileChangeRequestApprovalResponse {
-                            decision: file_change_decision(decision)?,
+                            decision: decision.clone(),
                         })
                         .map_err(|err| {
                             format!("failed to serialize file change approval response: {err}")
@@ -146,7 +198,7 @@ impl PendingAppServerRequests {
                     })
                 })
                 .transpose()?,
-            AppCommandView::RequestPermissionsResponse { id, response } => self
+            AppCommand::RequestPermissionsResponse { id, response } => self
                 .permissions_approvals
                 .remove(id)
                 .map(|request_id| {
@@ -157,6 +209,7 @@ impl PendingAppServerRequests {
                                 response.permissions.clone(),
                             ),
                             scope: response.scope.into(),
+                            strict_auto_review: response.strict_auto_review.then_some(true),
                         })
                         .map_err(|err| {
                             format!("failed to serialize permissions approval response: {err}")
@@ -164,31 +217,18 @@ impl PendingAppServerRequests {
                     })
                 })
                 .transpose()?,
-            AppCommandView::UserInputAnswer { id, response } => self
-                .user_inputs
-                .remove(id)
-                .map(|request_id| {
+            AppCommand::UserInputAnswer { id, response } => self
+                .pop_user_input_request_for_turn(id)
+                .map(|pending| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
-                        request_id,
-                        result: serde_json::to_value(
-                            serde_json::from_value::<ToolRequestUserInputResponse>(
-                                serde_json::to_value(response).map_err(|err| {
-                                    format!("failed to encode request_user_input response: {err}")
-                                })?,
-                            )
-                            .map_err(|err| {
-                                format!(
-                                    "failed to decode request_user_input response for app-server: {err}"
-                                )
-                            })?,
-                        )
-                        .map_err(|err| {
+                        request_id: pending.request_id,
+                        result: serde_json::to_value(response).map_err(|err| {
                             format!("failed to serialize request_user_input response: {err}")
                         })?,
                     })
                 })
                 .transpose()?,
-            AppCommandView::ResolveElicitation {
+            AppCommand::ResolveElicitation {
                 server_name,
                 request_id,
                 decision,
@@ -196,7 +236,7 @@ impl PendingAppServerRequests {
                 meta,
             } => self
                 .mcp_requests
-                .remove(&McpLegacyRequestKey {
+                .remove(&McpRequestKey {
                     server_name: server_name.to_string(),
                     request_id: request_id.clone(),
                 })
@@ -204,17 +244,7 @@ impl PendingAppServerRequests {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(McpServerElicitationRequestResponse {
-                            action: match decision {
-                                codex_protocol::approvals::ElicitationAction::Accept => {
-                                    McpServerElicitationAction::Accept
-                                }
-                                codex_protocol::approvals::ElicitationAction::Decline => {
-                                    McpServerElicitationAction::Decline
-                                }
-                                codex_protocol::approvals::ElicitationAction::Cancel => {
-                                    McpServerElicitationAction::Cancel
-                                }
-                            },
+                            action: *decision,
                             content: content.clone(),
                             meta: meta.clone(),
                         })
@@ -229,54 +259,154 @@ impl PendingAppServerRequests {
         Ok(resolution)
     }
 
-    pub(super) fn resolve_notification(&mut self, request_id: &AppServerRequestId) {
-        self.exec_approvals.retain(|_, value| value != request_id);
-        self.file_change_approvals
-            .retain(|_, value| value != request_id);
-        self.permissions_approvals
-            .retain(|_, value| value != request_id);
-        self.user_inputs.retain(|_, value| value != request_id);
-        self.mcp_requests.retain(|_, value| value != request_id);
+    pub(super) fn resolve_notification(
+        &mut self,
+        request_id: &AppServerRequestId,
+    ) -> Option<ResolvedAppServerRequest> {
+        if let Some(id) = self
+            .exec_approvals
+            .iter()
+            .find_map(|(id, value)| (value == request_id).then(|| id.clone()))
+        {
+            self.exec_approvals.remove(&id);
+            return Some(ResolvedAppServerRequest::ExecApproval { id });
+        }
+
+        if let Some(id) = self
+            .file_change_approvals
+            .iter()
+            .find_map(|(id, value)| (value == request_id).then(|| id.clone()))
+        {
+            self.file_change_approvals.remove(&id);
+            return Some(ResolvedAppServerRequest::FileChangeApproval { id });
+        }
+
+        if let Some(id) = self
+            .permissions_approvals
+            .iter()
+            .find_map(|(id, value)| (value == request_id).then(|| id.clone()))
+        {
+            self.permissions_approvals.remove(&id);
+            return Some(ResolvedAppServerRequest::PermissionsApproval { id });
+        }
+
+        if let Some(pending) = self.remove_user_input_request(request_id) {
+            return Some(ResolvedAppServerRequest::UserInput {
+                call_id: pending.item_id,
+            });
+        }
+
+        if let Some(key) = self
+            .mcp_requests
+            .iter()
+            .find_map(|(key, value)| (value == request_id).then(|| key.clone()))
+        {
+            self.mcp_requests.remove(&key);
+            return Some(ResolvedAppServerRequest::McpElicitation {
+                server_name: key.server_name,
+                request_id: key.request_id,
+            });
+        }
+
+        None
     }
+
+    pub(super) fn contains_server_request(&self, request: &ServerRequest) -> bool {
+        match request {
+            ServerRequest::CommandExecutionRequestApproval { request_id, .. } => self
+                .exec_approvals
+                .values()
+                .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::FileChangeRequestApproval { request_id, .. } => self
+                .file_change_approvals
+                .values()
+                .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::PermissionsRequestApproval { request_id, .. } => self
+                .permissions_approvals
+                .values()
+                .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::ToolRequestUserInput { request_id, .. } => {
+                self.user_inputs.values().any(|queue| {
+                    queue
+                        .iter()
+                        .any(|pending| &pending.request_id == request_id)
+                })
+            }
+            ServerRequest::McpServerElicitationRequest { request_id, .. } => self
+                .mcp_requests
+                .values()
+                .any(|pending_request_id| pending_request_id == request_id),
+            ServerRequest::DynamicToolCall { .. }
+            | ServerRequest::ChatgptAuthTokensRefresh { .. }
+            | ServerRequest::AttestationGenerate { .. }
+            | ServerRequest::ApplyPatchApproval { .. }
+            | ServerRequest::ExecCommandApproval { .. } => true,
+        }
+    }
+
+    fn pop_user_input_request_for_turn(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<PendingUserInputRequest> {
+        let pending = self
+            .user_inputs
+            .get_mut(turn_id)
+            .and_then(VecDeque::pop_front);
+        if self
+            .user_inputs
+            .get(turn_id)
+            .is_some_and(VecDeque::is_empty)
+        {
+            self.user_inputs.remove(turn_id);
+        }
+        pending
+    }
+
+    fn remove_user_input_request(
+        &mut self,
+        request_id: &AppServerRequestId,
+    ) -> Option<PendingUserInputRequest> {
+        let (turn_id, index) = self.user_inputs.iter().find_map(|(turn_id, queue)| {
+            queue
+                .iter()
+                .position(|pending| &pending.request_id == request_id)
+                .map(|index| (turn_id.clone(), index))
+        })?;
+        let queue = self.user_inputs.get_mut(&turn_id)?;
+        let removed = queue.remove(index);
+        if queue.is_empty() {
+            self.user_inputs.remove(&turn_id);
+        }
+        removed
+    }
+}
+
+#[derive(Debug)]
+struct PendingUserInputRequest {
+    item_id: String,
+    request_id: AppServerRequestId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct McpLegacyRequestKey {
+struct McpRequestKey {
     server_name: String,
-    request_id: McpRequestId,
-}
-
-fn app_server_request_id_to_mcp_request_id(request_id: &AppServerRequestId) -> McpRequestId {
-    match request_id {
-        AppServerRequestId::String(value) => McpRequestId::String(value.clone()),
-        AppServerRequestId::Integer(value) => McpRequestId::Integer(*value),
-    }
-}
-
-fn file_change_decision(decision: &ReviewDecision) -> Result<FileChangeApprovalDecision, String> {
-    match decision {
-        ReviewDecision::Approved => Ok(FileChangeApprovalDecision::Accept),
-        ReviewDecision::ApprovedForSession => Ok(FileChangeApprovalDecision::AcceptForSession),
-        ReviewDecision::Denied => Ok(FileChangeApprovalDecision::Decline),
-        ReviewDecision::Abort => Ok(FileChangeApprovalDecision::Cancel),
-        ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-            Err("execpolicy amendment is not a valid file change approval decision".to_string())
-        }
-        ReviewDecision::NetworkPolicyAmendment { .. } => {
-            Err("network policy amendment is not a valid file change approval decision".to_string())
-        }
-    }
+    request_id: AppServerRequestId,
 }
 
 #[cfg(test)]
 mod tests {
     use super::PendingAppServerRequests;
+    use super::ResolvedAppServerRequest;
+    use crate::app_command::AppCommand as Op;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
+    use codex_app_server_protocol::CommandExecutionApprovalDecision;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::FileChangeApprovalDecision;
     use codex_app_server_protocol::FileChangeRequestApprovalParams;
     use codex_app_server_protocol::McpElicitationObjectType;
     use codex_app_server_protocol::McpElicitationSchema;
+    use codex_app_server_protocol::McpServerElicitationAction;
     use codex_app_server_protocol::McpServerElicitationRequest;
     use codex_app_server_protocol::McpServerElicitationRequestParams;
     use codex_app_server_protocol::PermissionGrantScope;
@@ -287,18 +417,14 @@ mod tests {
     use codex_app_server_protocol::ToolRequestUserInputAnswer;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::ToolRequestUserInputResponse;
-    use codex_protocol::approvals::ElicitationAction;
-    use codex_protocol::approvals::ExecPolicyAmendment;
-    use codex_protocol::mcp::RequestId as McpRequestId;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
-    use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::request_permissions::RequestPermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[test]
@@ -310,6 +436,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 item_id: "call-1".to_string(),
+                started_at_ms: 0,
                 approval_id: Some("approval-1".to_string()),
                 reason: None,
                 network_approval_context: None,
@@ -329,7 +456,7 @@ mod tests {
             .take_resolution(&Op::ExecApproval {
                 id: "approval-1".to_string(),
                 turn_id: None,
-                decision: ReviewDecision::Approved,
+                decision: CommandExecutionApprovalDecision::Accept,
             })
             .expect("resolution should serialize")
             .expect("request should be pending");
@@ -362,6 +489,8 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: "perm-1".to_string(),
+                    started_at_ms: 0,
+                    cwd: absolute_path(if cfg!(windows) { r"C:\tmp" } else { "/tmp" }),
                     reason: None,
                     permissions: serde_json::from_value(json!({
                         "network": { "enabled": null }
@@ -392,12 +521,13 @@ mod tests {
                         network: Some(NetworkPermissions {
                             enabled: Some(true),
                         }),
-                        file_system: Some(FileSystemPermissions {
-                            read: Some(vec![absolute_path(read_path)]),
-                            write: Some(vec![absolute_path(write_path)]),
-                        }),
+                        file_system: Some(FileSystemPermissions::from_read_write_roots(
+                            Some(vec![absolute_path(read_path)]),
+                            Some(vec![absolute_path(write_path)]),
+                        )),
                     },
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
+                    strict_auto_review: false,
                 },
             })
             .expect("permissions response should serialize")
@@ -414,19 +544,35 @@ mod tests {
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![absolute_path(read_path)]),
                         write: Some(vec![absolute_path(write_path)]),
+                        glob_scan_max_depth: None,
+                        entries: Some(vec![
+                            codex_app_server_protocol::FileSystemSandboxEntry {
+                                path: codex_app_server_protocol::FileSystemPath::Path {
+                                    path: absolute_path(read_path),
+                                },
+                                access: codex_app_server_protocol::FileSystemAccessMode::Read,
+                            },
+                            codex_app_server_protocol::FileSystemSandboxEntry {
+                                path: codex_app_server_protocol::FileSystemPath::Path {
+                                    path: absolute_path(write_path),
+                                },
+                                access: codex_app_server_protocol::FileSystemAccessMode::Write,
+                            },
+                        ]),
                     }),
                 },
                 scope: PermissionGrantScope::Session,
+                strict_auto_review: None,
             }
         );
 
         let user_input = pending
             .take_resolution(&Op::UserInputAnswer {
                 id: "turn-2".to_string(),
-                response: codex_protocol::request_user_input::RequestUserInputResponse {
+                response: ToolRequestUserInputResponse {
                     answers: std::iter::once((
                         "question".to_string(),
-                        codex_protocol::request_user_input::RequestUserInputAnswer {
+                        ToolRequestUserInputAnswer {
                             answers: vec!["yes".to_string()],
                         },
                     ))
@@ -480,8 +626,8 @@ mod tests {
         let resolution = pending
             .take_resolution(&Op::ResolveElicitation {
                 server_name: "example".to_string(),
-                request_id: McpRequestId::Integer(12),
-                decision: ElicitationAction::Accept,
+                request_id: AppServerRequestId::Integer(12),
+                decision: McpServerElicitationAction::Accept,
                 content: Some(json!({ "answer": "yes" })),
                 meta: Some(json!({ "source": "tui" })),
             })
@@ -509,6 +655,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     call_id: "tool-1".to_string(),
+                    namespace: None,
                     tool: "tool".to_string(),
                     arguments: json!({}),
                 },
@@ -539,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_patch_decisions_for_file_change_requests() {
+    fn resolves_patch_approval_through_app_server_request_id() {
         let mut pending = PendingAppServerRequests::default();
         assert_eq!(
             pending.note_server_request(&ServerRequest::FileChangeRequestApproval {
@@ -548,6 +695,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: "patch-1".to_string(),
+                    started_at_ms: 0,
                     reason: None,
                     grant_root: None,
                 },
@@ -555,21 +703,145 @@ mod tests {
             None
         );
 
-        let error = pending
+        let resolution = pending
             .take_resolution(&Op::PatchApproval {
                 id: "patch-1".to_string(),
-                decision: ReviewDecision::ApprovedExecpolicyAmendment {
-                    proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
-                        "echo".to_string(),
-                        "hi".to_string(),
-                    ]),
-                },
+                decision: FileChangeApprovalDecision::Cancel,
             })
-            .expect_err("invalid patch decision should fail");
+            .expect("resolution should serialize")
+            .expect("request should be pending");
+
+        assert_eq!(resolution.request_id, AppServerRequestId::Integer(13));
+        assert_eq!(resolution.result, json!({ "decision": "cancel" }));
+    }
+
+    #[test]
+    fn resolve_notification_returns_resolved_exec_request() {
+        let mut pending = PendingAppServerRequests::default();
+        assert_eq!(
+            pending.note_server_request(&ServerRequest::CommandExecutionRequestApproval {
+                request_id: AppServerRequestId::Integer(41),
+                params: CommandExecutionRequestApprovalParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "call-1".to_string(),
+                    started_at_ms: 0,
+                    approval_id: Some("approval-1".to_string()),
+                    reason: None,
+                    network_approval_context: None,
+                    command: Some("ls".to_string()),
+                    cwd: None,
+                    command_actions: None,
+                    additional_permissions: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    available_decisions: None,
+                },
+            }),
+            None
+        );
 
         assert_eq!(
-            error,
-            "execpolicy amendment is not a valid file change approval decision"
+            pending.resolve_notification(&AppServerRequestId::Integer(41)),
+            Some(ResolvedAppServerRequest::ExecApproval {
+                id: "approval-1".to_string(),
+            })
         );
+        assert_eq!(
+            pending.resolve_notification(&AppServerRequestId::Integer(41)),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_notification_returns_resolved_mcp_request() {
+        let mut pending = PendingAppServerRequests::default();
+        assert_eq!(
+            pending.note_server_request(&ServerRequest::McpServerElicitationRequest {
+                request_id: AppServerRequestId::Integer(12),
+                params: McpServerElicitationRequestParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    server_name: "example".to_string(),
+                    request: McpServerElicitationRequest::Form {
+                        meta: None,
+                        message: "Need input".to_string(),
+                        requested_schema: McpElicitationSchema {
+                            schema_uri: None,
+                            type_: McpElicitationObjectType::Object,
+                            properties: BTreeMap::new(),
+                            required: None,
+                        },
+                    },
+                },
+            }),
+            None
+        );
+
+        assert_eq!(
+            pending.resolve_notification(&AppServerRequestId::Integer(12)),
+            Some(ResolvedAppServerRequest::McpElicitation {
+                server_name: "example".to_string(),
+                request_id: AppServerRequestId::Integer(12),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_notification_returns_resolved_user_input_item_id() {
+        let mut pending = PendingAppServerRequests::default();
+        pending.note_server_request(&ServerRequest::ToolRequestUserInput {
+            request_id: AppServerRequestId::Integer(8),
+            params: ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "tool-1".to_string(),
+                questions: Vec::new(),
+            },
+        });
+
+        assert_eq!(
+            pending.resolve_notification(&AppServerRequestId::Integer(8)),
+            Some(ResolvedAppServerRequest::UserInput {
+                call_id: "tool-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn same_turn_user_input_answers_resolve_app_server_requests_fifo() {
+        let mut pending = PendingAppServerRequests::default();
+        for (request_id, item_id) in [(8, "tool-1"), (9, "tool-2")] {
+            pending.note_server_request(&ServerRequest::ToolRequestUserInput {
+                request_id: AppServerRequestId::Integer(request_id),
+                params: ToolRequestUserInputParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: item_id.to_string(),
+                    questions: Vec::new(),
+                },
+            });
+        }
+
+        let response = ToolRequestUserInputResponse {
+            answers: HashMap::new(),
+        };
+        let first_response = pending
+            .take_resolution(&Op::UserInputAnswer {
+                id: "turn-1".to_string(),
+                response: response.clone(),
+            })
+            .expect("user input response should serialize")
+            .expect("first user input request should be pending");
+        let second_response = pending
+            .take_resolution(&Op::UserInputAnswer {
+                id: "turn-1".to_string(),
+                response,
+            })
+            .expect("user input response should serialize")
+            .expect("second user input request should be pending");
+
+        assert_eq!(first_response.request_id, AppServerRequestId::Integer(8));
+        assert_eq!(second_response.request_id, AppServerRequestId::Integer(9));
     }
 }

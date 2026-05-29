@@ -26,6 +26,18 @@ impl std::fmt::Display for RequestId {
     }
 }
 
+/// Presentation metadata advertised by an initialized MCP server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerInfo {
+    pub name: String,
+    pub title: Option<String>,
+    pub version: String,
+    pub description: Option<String>,
+    pub icons: Option<Vec<serde_json::Value>>,
+    pub website_url: Option<String>,
+}
+
 /// Definition for a tool the client can call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -80,6 +92,38 @@ pub struct Resource {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub meta: Option<serde_json::Value>,
+}
+
+/// Contents returned when reading a resource from an MCP server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum ResourceContent {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Text {
+        /// The URI of this resource.
+        uri: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        mime_type: Option<String>,
+        text: String,
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        meta: Option<serde_json::Value>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Blob {
+        /// The URI of this resource.
+        uri: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        mime_type: Option<String>,
+        blob: String,
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        meta: Option<serde_json::Value>,
+    },
 }
 
 /// A template description for resources available on the server.

@@ -3,10 +3,14 @@ use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::config::ValidatedUnixSocketPath;
 use crate::mitm::MitmState;
+use crate::mitm_hook::HookEvaluation;
+use crate::mitm_hook::MitmHooksByHost;
+use crate::mitm_hook::evaluate_mitm_hooks;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
 use crate::policy::normalize_host;
+use crate::policy::unscoped_ip_literal;
 use crate::reasons::REASON_DENIED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
@@ -24,6 +28,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -157,6 +162,7 @@ pub struct ConfigState {
     pub allow_set: GlobSet,
     pub deny_set: GlobSet,
     pub mitm: Option<Arc<MitmState>>,
+    pub mitm_hooks: MitmHooksByHost,
     pub constraints: NetworkProxyConstraints,
     pub blocked: VecDeque<BlockedRequest>,
     pub blocked_total: u64,
@@ -335,6 +341,17 @@ impl NetworkProxyState {
         }
     }
 
+    pub async fn replace_config_state(&self, mut new_state: ConfigState) -> Result<()> {
+        self.reload_if_needed().await?;
+        let mut guard = self.state.write().await;
+        log_policy_changes(&guard.config, &new_state.config);
+        new_state.blocked = guard.blocked.clone();
+        new_state.blocked_total = guard.blocked_total;
+        *guard = new_state;
+        info!("updated network proxy config state");
+        Ok(())
+    }
+
     pub async fn host_blocked(&self, host: &str, port: u16) -> Result<HostBlockDecision> {
         self.reload_if_needed().await?;
         let host = match Host::parse(host) {
@@ -360,11 +377,11 @@ impl NetworkProxyState {
         //  1) explicit deny always wins
         //  2) local/private networking is opt-in (defense-in-depth)
         //  3) allowlist is enforced when configured
-        if deny_set.is_match(host_str) {
+        if globset_matches_host_or_unscoped(&deny_set, host_str) {
             return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
         }
 
-        let is_allowlisted = allow_set.is_match(host_str);
+        let is_allowlisted = globset_matches_host_or_unscoped(&allow_set, host_str);
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
@@ -375,10 +392,7 @@ impl NetworkProxyState {
             // allowlisted; hostnames that resolve to local/private IPs are blocked even if
             // allowlisted.
             let local_literal = {
-                let host_no_scope = host_str
-                    .split_once('%')
-                    .map(|(ip, _)| ip)
-                    .unwrap_or(host_str);
+                let host_no_scope = unscoped_ip_literal(host_str).unwrap_or(host_str);
                 if is_loopback_host(&host) {
                     true
                 } else if let Ok(ip) = host_no_scope.parse::<IpAddr>() {
@@ -392,7 +406,18 @@ impl NetworkProxyState {
                 if !is_explicit_local_allowlisted(&allowed_domains, &host) {
                     return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }
-            } else if host_resolves_to_non_public_ip(host_str, port).await {
+            } else if host_resolves_to_non_public_ip(
+                host_str,
+                port,
+                DNS_LOOKUP_TIMEOUT,
+                |host, port| async move {
+                    lookup_host((host.as_str(), port))
+                        .await
+                        .map(Iterator::collect)
+                },
+            )
+            .await
+            {
                 return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
             }
         }
@@ -409,32 +434,29 @@ impl NetworkProxyState {
         let blocked_for_observer = entry.clone();
         let blocked_request_observer = self.blocked_request_observer.read().await.clone();
         let violation_line = blocked_request_violation_log_line(&entry);
-        let mut guard = self.state.write().await;
         let host = entry.host.clone();
         let reason = entry.reason.clone();
         let decision = entry.decision.clone();
         let source = entry.source.clone();
         let protocol = entry.protocol.clone();
         let port = entry.port;
-        guard.blocked.push_back(entry);
-        guard.blocked_total = guard.blocked_total.saturating_add(1);
-        let total = guard.blocked_total;
-        while guard.blocked.len() > MAX_BLOCKED_EVENTS {
-            guard.blocked.pop_front();
-        }
+        let (total, buffered) = {
+            let mut guard = self.state.write().await;
+            guard.blocked.push_back(entry);
+            guard.blocked_total = guard.blocked_total.saturating_add(1);
+            let total = guard.blocked_total;
+            while guard.blocked.len() > MAX_BLOCKED_EVENTS {
+                guard.blocked.pop_front();
+            }
+            (total, guard.blocked.len())
+        };
         debug!(
-            "recorded blocked request telemetry (total={}, host={}, reason={}, decision={:?}, source={:?}, protocol={}, port={:?}, buffered={})",
-            total,
-            host,
-            reason,
-            decision,
-            source,
-            protocol,
-            port,
-            guard.blocked.len()
+            "recorded blocked request telemetry (\
+             total={total}, host={host}, reason={reason}, \
+             decision={decision:?}, source={source:?}, \
+             protocol={protocol}, port={port:?}, buffered={buffered})"
         );
         debug!("{violation_line}");
-        drop(guard);
 
         if let Some(observer) = blocked_request_observer {
             observer.on_blocked_request(blocked_for_observer).await;
@@ -524,6 +546,12 @@ impl NetworkProxyState {
         Ok(guard.config.network.allow_upstream_proxy)
     }
 
+    pub async fn allow_local_binding(&self) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.config.network.allow_local_binding)
+    }
+
     pub async fn network_mode(&self) -> Result<NetworkMode> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
@@ -559,6 +587,22 @@ impl NetworkProxyState {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok(guard.mitm.clone())
+    }
+
+    pub(crate) async fn evaluate_mitm_hook_request(
+        &self,
+        host: &str,
+        req: &rama_http::Request,
+    ) -> Result<HookEvaluation> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(evaluate_mitm_hooks(&guard.mitm_hooks, host, req))
+    }
+
+    pub async fn host_has_mitm_hooks(&self, host: &str) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.mitm_hooks.contains_key(&normalize_host(host)))
     }
 
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
@@ -702,14 +746,23 @@ pub(crate) fn unix_socket_permissions_supported() -> bool {
     cfg!(target_os = "macos")
 }
 
-async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> bool {
+async fn host_resolves_to_non_public_ip<F, Fut>(
+    host: &str,
+    port: u16,
+    lookup_timeout: Duration,
+    lookup: F,
+) -> bool
+where
+    F: FnOnce(String, u16) -> Fut,
+    Fut: Future<Output = std::io::Result<Vec<SocketAddr>>>,
+{
     if let Ok(ip) = host.parse::<IpAddr>() {
         return is_non_public_ip(ip);
     }
 
     // Block the request if this DNS lookup fails. We resolve the hostname again when we connect,
     // so a failed check here does not prove the destination is public.
-    let addrs = match timeout(DNS_LOOKUP_TIMEOUT, lookup_host((host, port))).await {
+    let addrs = match timeout(lookup_timeout, lookup(host.to_string(), port)).await {
         Ok(Ok(addrs)) => addrs,
         Ok(Err(err)) => {
             debug!(
@@ -783,8 +836,13 @@ fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]
     }
 }
 
+fn globset_matches_host_or_unscoped(set: &GlobSet, host: &str) -> bool {
+    set.is_match(host) || unscoped_ip_literal(host).is_some_and(|ip| set.is_match(ip))
+}
+
 fn is_explicit_local_allowlisted(allowed_domains: &[String], host: &Host) -> bool {
     let normalized_host = host.as_str();
+    let unscoped_host = unscoped_ip_literal(normalized_host);
     allowed_domains.iter().any(|pattern| {
         let pattern = pattern.trim();
         if pattern == "*" || pattern.starts_with("*.") || pattern.starts_with("**.") {
@@ -793,7 +851,9 @@ fn is_explicit_local_allowlisted(allowed_domains: &[String], host: &Host) -> boo
         if pattern.contains('*') || pattern.contains('?') {
             return false;
         }
-        normalize_host(pattern) == normalized_host
+        let normalized_pattern = normalize_host(pattern);
+        normalized_pattern == normalized_host
+            || unscoped_host.is_some_and(|ip| normalized_pattern == ip)
     })
 }
 
@@ -806,9 +866,23 @@ pub(crate) fn network_proxy_state_for_policy(
     mut network: crate::config::NetworkProxySettings,
 ) -> NetworkProxyState {
     network.enabled = true;
-    network.mode = NetworkMode::Full;
     let config = NetworkProxyConfig { network };
-    let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
+    let state = ConfigState {
+        allow_set: crate::policy::compile_allowlist_globset(
+            &config.network.allowed_domains().unwrap_or_default(),
+        )
+        .unwrap(),
+        blocked: VecDeque::new(),
+        blocked_total: 0,
+        config: config.clone(),
+        constraints: NetworkProxyConstraints::default(),
+        deny_set: crate::policy::compile_denylist_globset(
+            &config.network.denied_domains().unwrap_or_default(),
+        )
+        .unwrap(),
+        mitm: None,
+        mitm_hooks: crate::mitm_hook::compile_mitm_hooks(&config).unwrap(),
+    };
 
     NetworkProxyState::with_reloader(state, Arc::new(NoopReloader))
 }
@@ -1233,11 +1307,73 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_allows_scoped_ipv6_literal_when_explicitly_allowlisted() {
-        let state = network_proxy_state_for_policy(network_settings(&["fe80::1%lo0"], &[]));
+        let state = network_proxy_state_for_policy(network_settings(&["fe80::1"], &[]));
 
         assert_eq!(
             state
                 .host_blocked("fe80::1%lo0", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Allowed
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_requires_exact_scoped_ipv6_allowlist_match() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allow_local_binding: true,
+            ..network_settings(&["fe80::1%eth0"], &[])
+        });
+
+        assert_eq!(
+            state
+                .host_blocked("fe80::1%eth0", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Allowed
+        );
+        assert_eq!(
+            state
+                .host_blocked("fe80::1%eth1", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_denies_scoped_ipv6_literal_before_local_binding() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allow_local_binding: true,
+            ..network_settings(&["*"], &["fd00::1"])
+        });
+
+        for host in ["fd00::1%eth0", "[fd00::1%eth0]", "[fd00::1%25eth0]"] {
+            assert_eq!(
+                state.host_blocked(host, /*port*/ 80).await.unwrap(),
+                HostBlockDecision::Blocked(HostBlockReason::Denied),
+                "host should be denied after normalization: {host}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn host_blocked_requires_exact_scoped_ipv6_denylist_match() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allow_local_binding: true,
+            ..network_settings(&["*"], &["fd00::1%eth0"])
+        });
+
+        assert_eq!(
+            state
+                .host_blocked("fd00::1%eth0", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
+        );
+        assert_eq!(
+            state
+                .host_blocked("fd00::1%eth1", /*port*/ 80)
                 .await
                 .unwrap(),
             HostBlockDecision::Allowed
@@ -1277,6 +1413,65 @@ mod tests {
                 .unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
+    }
+
+    #[tokio::test]
+    async fn host_resolves_to_non_public_ip_blocks_on_dns_lookup_timeout() {
+        let blocked = host_resolves_to_non_public_ip(
+            "slow.example",
+            /*port*/ 80,
+            Duration::from_millis(1),
+            |_host, _port| async {
+                std::future::pending::<std::io::Result<Vec<SocketAddr>>>().await
+            },
+        )
+        .await;
+
+        assert!(blocked);
+    }
+
+    #[tokio::test]
+    async fn host_resolves_to_non_public_ip_blocks_on_dns_lookup_error() {
+        let blocked = host_resolves_to_non_public_ip(
+            "error.example",
+            /*port*/ 80,
+            Duration::from_millis(10),
+            |_host, _port| async {
+                Err::<Vec<SocketAddr>, std::io::Error>(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "forced failure",
+                ))
+            },
+        )
+        .await;
+
+        assert!(blocked);
+    }
+
+    #[tokio::test]
+    async fn host_resolves_to_non_public_ip_blocks_private_resolution() {
+        let blocked = host_resolves_to_non_public_ip(
+            "local.example",
+            /*port*/ 80,
+            Duration::from_millis(10),
+            |_host, _port| async { Ok(vec!["127.0.0.1:80".parse().unwrap()]) },
+        )
+        .await;
+
+        assert!(blocked);
+    }
+
+    #[tokio::test]
+    async fn host_resolves_to_non_public_ip_allows_public_resolution() {
+        let blocked = host_resolves_to_non_public_ip(
+            "public.example",
+            /*port*/ 80,
+            Duration::from_millis(10),
+            |_host, _port| async { Ok(vec!["8.8.8.8:80".parse().unwrap()]) },
+        )
+        .await;
+
+        assert!(!blocked);
     }
 
     #[test]

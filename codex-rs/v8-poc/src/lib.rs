@@ -12,6 +12,17 @@ pub fn embedded_v8_version() -> &'static str {
     v8::V8::get_version()
 }
 
+/// Returns whether the linked V8 library was built with the in-process sandbox.
+#[must_use]
+pub fn linked_v8_has_sandbox() -> bool {
+    unsafe extern "C" {
+        fn v8__V8__IsSandboxEnabled() -> bool;
+    }
+
+    // `rusty_v8` exposes this symbol for its own sandbox verification tests.
+    unsafe { v8__V8__IsSandboxEnabled() }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -54,6 +65,11 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_feature_matches_linked_v8() {
+        assert_eq!(super::linked_v8_has_sandbox(), cfg!(feature = "sandbox"));
+    }
+
+    #[test]
     fn evaluates_integer_addition() {
         assert_eq!(evaluate_expression("1 + 2"), "3");
     }
@@ -61,5 +77,16 @@ mod tests {
     #[test]
     fn evaluates_string_concatenation() {
         assert_eq!(evaluate_expression("'hello ' + 'world'"), "hello world");
+    }
+
+    #[test]
+    fn parses_crdtp_dispatchable_messages() {
+        let cbor = v8::crdtp::json_to_cbor(br#"{"id":7,"method":"Runtime.evaluate","params":{}}"#)
+            .expect("JSON should convert to CBOR");
+        let dispatchable = v8::crdtp::Dispatchable::new(&cbor);
+
+        assert!(dispatchable.ok());
+        assert_eq!(dispatchable.call_id(), 7);
+        assert_eq!(dispatchable.method(), b"Runtime.evaluate");
     }
 }

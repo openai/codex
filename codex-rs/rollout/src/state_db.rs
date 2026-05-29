@@ -1,14 +1,13 @@
 use crate::config::RolloutConfig;
 use crate::config::RolloutConfigView;
 use crate::list::Cursor;
+use crate::list::SortDirection;
 use crate::list::ThreadSortKey;
 use crate::metadata;
+use crate::sqlite_metrics;
 use chrono::DateTime;
-use chrono::NaiveDateTime;
-use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 pub use codex_state::LogEntry;
@@ -18,78 +17,234 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
+use tracing::info;
 use tracing::warn;
-use uuid::Uuid;
 
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
-/// Initialize the state runtime for thread state persistence and backfill checks.
+#[cfg(not(test))]
+const STARTUP_BACKFILL_POLL_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const STARTUP_BACKFILL_POLL_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(not(test))]
+const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Initialize the state runtime for thread state persistence.
+///
+/// This is the process entry point for local state: it opens the SQLite-backed
+/// runtime, applies rollout metadata backfills as needed, and returns the
+/// initialized handle.
 pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let config = RolloutConfig::from_view(config);
-    let runtime = match codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
+    match try_init_with_roots(
+        config.codex_home,
+        config.sqlite_home,
+        config.model_provider_id,
     )
     .await
     {
-        Ok(runtime) => runtime,
+        Ok(runtime) => Some(runtime),
         Err(err) => {
-            warn!(
-                "failed to initialize state runtime at {}: {err}",
-                config.sqlite_home.display()
-            );
-            return None;
+            emit_startup_warning(&format!("failed to initialize state runtime: {err}"));
+            None
         }
-    };
-    let backfill_state = match runtime.get_backfill_state().await {
-        Ok(state) => state,
-        Err(err) => {
-            warn!(
-                "failed to read backfill state at {}: {err}",
-                config.codex_home.display()
-            );
-            return None;
-        }
-    };
-    if backfill_state.status != codex_state::BackfillStatus::Complete {
-        let runtime_for_backfill = runtime.clone();
-        let config = config.clone();
-        tokio::spawn(async move {
-            metadata::backfill_sessions(runtime_for_backfill.as_ref(), &config).await;
-        });
     }
-    Some(runtime)
 }
 
-/// Get the DB if the feature is enabled and the DB exists.
+/// Initialize the state runtime and return any initialization error to the caller.
+///
+/// Prefer [`init`] unless the caller needs to surface the exact failure after
+/// tracing or UI setup has completed.
+pub async fn try_init(config: &impl RolloutConfigView) -> anyhow::Result<StateDbHandle> {
+    let config = RolloutConfig::from_view(config);
+    try_init_with_roots(
+        config.codex_home,
+        config.sqlite_home,
+        config.model_provider_id,
+    )
+    .await
+}
+
+async fn try_init_with_roots(
+    codex_home: PathBuf,
+    sqlite_home: PathBuf,
+    default_model_provider_id: String,
+) -> anyhow::Result<StateDbHandle> {
+    try_init_with_roots_inner(
+        codex_home,
+        sqlite_home,
+        default_model_provider_id,
+        /*backfill_lease_seconds*/ None,
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn try_init_with_roots_and_backfill_lease(
+    codex_home: PathBuf,
+    sqlite_home: PathBuf,
+    default_model_provider_id: String,
+    backfill_lease_seconds: i64,
+) -> anyhow::Result<StateDbHandle> {
+    try_init_with_roots_inner(
+        codex_home,
+        sqlite_home,
+        default_model_provider_id,
+        Some(backfill_lease_seconds),
+    )
+    .await
+}
+
+async fn try_init_with_roots_inner(
+    codex_home: PathBuf,
+    sqlite_home: PathBuf,
+    default_model_provider_id: String,
+    backfill_lease_seconds: Option<i64>,
+) -> anyhow::Result<StateDbHandle> {
+    let runtime =
+        codex_state::StateRuntime::init(sqlite_home.clone(), default_model_provider_id.clone())
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "failed to initialize state runtime at {}: {err}",
+                    sqlite_home.display()
+                )
+            })?;
+    let backfill_gate_started = Instant::now();
+    let backfill_gate_result = wait_for_backfill_gate(
+        runtime.as_ref(),
+        codex_home.as_path(),
+        default_model_provider_id.as_str(),
+        backfill_lease_seconds,
+    )
+    .await;
+    codex_state::record_backfill_gate(
+        /*telemetry*/ None,
+        backfill_gate_started.elapsed(),
+        &backfill_gate_result,
+    );
+    backfill_gate_result?;
+    Ok(runtime)
+}
+
+async fn wait_for_backfill_gate(
+    runtime: &codex_state::StateRuntime,
+    codex_home: &Path,
+    default_model_provider_id: &str,
+    backfill_lease_seconds: Option<i64>,
+) -> anyhow::Result<()> {
+    let wait_started = Instant::now();
+    let mut reported_wait = false;
+    loop {
+        let backfill_state = runtime.get_backfill_state().await.map_err(|err| {
+            anyhow::anyhow!(
+                "failed to read backfill state at {}: {err}",
+                codex_home.display()
+            )
+        })?;
+        if backfill_state.status == codex_state::BackfillStatus::Complete {
+            return Ok(());
+        }
+
+        if let Some(backfill_lease_seconds) = backfill_lease_seconds {
+            metadata::backfill_sessions_with_lease(
+                runtime,
+                codex_home,
+                default_model_provider_id,
+                backfill_lease_seconds,
+            )
+            .await;
+        } else {
+            metadata::backfill_sessions(runtime, codex_home, default_model_provider_id).await;
+        }
+        let backfill_state = runtime.get_backfill_state().await.map_err(|err| {
+            anyhow::anyhow!(
+                "failed to read backfill state at {} after startup backfill: {err}",
+                codex_home.display()
+            )
+        })?;
+        if backfill_state.status == codex_state::BackfillStatus::Complete {
+            return Ok(());
+        }
+        if wait_started.elapsed() >= STARTUP_BACKFILL_WAIT_TIMEOUT {
+            return Err(anyhow::anyhow!(
+                "timed out waiting for state db backfill at {} after {:?} (status: {})",
+                codex_home.display(),
+                STARTUP_BACKFILL_WAIT_TIMEOUT,
+                backfill_state.status.as_str()
+            ));
+        }
+
+        let message = format!(
+            "state db backfill is {} at {}; waiting up to {:?} before retrying startup initialization",
+            backfill_state.status.as_str(),
+            codex_home.display(),
+            STARTUP_BACKFILL_WAIT_TIMEOUT,
+        );
+        if reported_wait {
+            info!("{message}");
+        } else {
+            emit_startup_warning(&message);
+            reported_wait = true;
+        }
+        tokio::time::sleep(STARTUP_BACKFILL_POLL_INTERVAL).await;
+    }
+}
+
+fn emit_startup_warning(message: &str) {
+    warn!("{message}");
+    if !tracing::dispatcher::has_been_set() {
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("{message}");
+        }
+    }
+}
+
+/// Open the DB if it exists and its startup backfill has already completed.
+///
+/// Unlike [`init`], this helper does not run rollout backfill. It is for
+/// optional local reads from non-owning contexts such as remote app-server mode.
 pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let state_path = codex_state::state_db_path(config.sqlite_home());
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
+        codex_state::record_fallback(
+            "get_state_db",
+            "db_unavailable",
+            /*telemetry_override*/ None,
+        );
         return None;
     }
-    let runtime = codex_state::StateRuntime::init(
+    let runtime = match codex_state::StateRuntime::init(
         config.sqlite_home().to_path_buf(),
         config.model_provider_id().to_string(),
     )
     .await
-    .ok()?;
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            codex_state::record_fallback(
+                "get_state_db",
+                "db_error",
+                /*telemetry_override*/ None,
+            );
+            return None;
+        }
+    };
     require_backfill_complete(runtime, config.sqlite_home()).await
 }
 
-/// Open the state runtime when the SQLite file exists, without feature gating.
-///
-/// This is used for parity checks during the SQLite migration phase.
-pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
-    let db_path = codex_state::state_db_path(codex_home);
-    if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
-        return None;
-    }
-    let runtime =
-        codex_state::StateRuntime::init(codex_home.to_path_buf(), default_provider.to_string())
-            .await
-            .ok()?;
-    require_backfill_complete(runtime, codex_home).await
+/// Build a SQLite telemetry recorder backed by an OTEL metrics client.
+pub fn sqlite_telemetry_recorder(
+    metrics: codex_otel::MetricsClient,
+    originator: &str,
+) -> codex_state::DbTelemetryHandle {
+    sqlite_metrics::recorder(metrics, originator)
 }
 
 async fn require_backfill_complete(
@@ -104,12 +259,22 @@ async fn require_backfill_complete(
                 codex_home.display(),
                 state.status.as_str()
             );
+            codex_state::record_fallback(
+                "get_state_db",
+                "backfill_incomplete",
+                /*telemetry_override*/ None,
+            );
             None
         }
         Err(err) => {
             warn!(
                 "failed to read backfill state at {}: {err}",
                 codex_home.display()
+            );
+            codex_state::record_fallback(
+                "get_state_db",
+                "db_error",
+                /*telemetry_override*/ None,
             );
             None
         }
@@ -118,22 +283,10 @@ async fn require_backfill_complete(
 
 fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     let cursor = cursor?;
-    let value = serde_json::to_value(cursor).ok()?;
-    let cursor_str = value.as_str()?;
-    let (ts_str, id_str) = cursor_str.split_once('|')?;
-    if id_str.contains('|') {
-        return None;
-    }
-    let id = Uuid::parse_str(id_str).ok()?;
-    let ts = if let Ok(naive) = NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S") {
-        DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
-    } else if let Ok(dt) = DateTime::parse_from_rfc3339(ts_str) {
-        dt.with_timezone(&Utc)
-    } else {
-        return None;
-    }
-    .with_nanosecond(0)?;
-    Some(codex_state::Anchor { ts, id })
+    let millis = cursor.timestamp().unix_timestamp_nanos() / 1_000_000;
+    let millis = i64::try_from(millis).ok()?;
+    let ts = chrono::DateTime::<Utc>::from_timestamp_millis(millis)?;
+    Some(codex_state::Anchor { ts })
 }
 
 pub fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
@@ -202,8 +355,10 @@ pub async fn list_threads_db(
     page_size: usize,
     cursor: Option<&Cursor>,
     sort_key: ThreadSortKey,
+    sort_direction: SortDirection,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
+    cwd_filters: Option<&[PathBuf]>,
     archived: bool,
     search_term: Option<&str>,
 ) -> Option<codex_state::ThreadsPage> {
@@ -226,18 +381,31 @@ pub async fn list_threads_db(
         })
         .collect();
     let model_providers = model_providers.map(<[String]>::to_vec);
+    let normalized_cwd_filters = cwd_filters.map(|filters| {
+        filters
+            .iter()
+            .map(|cwd| normalize_cwd_for_state_db(cwd))
+            .collect::<Vec<_>>()
+    });
     match ctx
         .list_threads(
             page_size,
-            anchor.as_ref(),
-            match sort_key {
-                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+            codex_state::ThreadFilterOptions {
+                archived_only: archived,
+                allowed_sources: allowed_sources.as_slice(),
+                model_providers: model_providers.as_deref(),
+                cwd_filters: normalized_cwd_filters.as_deref(),
+                anchor: anchor.as_ref(),
+                sort_key: match sort_key {
+                    ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
+                    ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+                },
+                sort_direction: match sort_direction {
+                    SortDirection::Asc => codex_state::SortDirection::Asc,
+                    SortDirection::Desc => codex_state::SortDirection::Desc,
+                },
+                search_term,
             },
-            allowed_sources.as_slice(),
-            model_providers.as_deref(),
-            archived,
-            search_term,
         )
         .await
     {
@@ -285,37 +453,6 @@ pub async fn find_rollout_path_by_id(
         })
 }
 
-/// Get dynamic tools for a thread id using SQLite.
-pub async fn get_dynamic_tools(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    stage: &str,
-) -> Option<Vec<DynamicToolSpec>> {
-    let ctx = context?;
-    match ctx.get_dynamic_tools(thread_id).await {
-        Ok(tools) => tools,
-        Err(err) => {
-            warn!("state db get_dynamic_tools failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
-/// Persist dynamic tools for a thread id using SQLite, if none exist yet.
-pub async fn persist_dynamic_tools(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    tools: Option<&[DynamicToolSpec]>,
-    stage: &str,
-) {
-    let Some(ctx) = context else {
-        return;
-    };
-    if let Err(err) = ctx.persist_dynamic_tools(thread_id, tools).await {
-        warn!("state db persist_dynamic_tools failed during {stage}: {err}");
-    }
-}
-
 pub async fn mark_thread_memory_mode_polluted(
     context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
@@ -324,8 +461,12 @@ pub async fn mark_thread_memory_mode_polluted(
     let Some(ctx) = context else {
         return;
     };
-    if let Err(err) = ctx.mark_thread_memory_mode_polluted(thread_id).await {
-        warn!("state db mark_thread_memory_mode_polluted failed during {stage}: {err}");
+    if let Err(err) = ctx
+        .memories()
+        .mark_thread_memory_mode_polluted(thread_id)
+        .await
+    {
+        warn!("memories db mark_thread_memory_mode_polluted failed during {stage}: {err}");
     }
 }
 
@@ -395,21 +536,6 @@ pub async fn reconcile_rollout(
     {
         warn!(
             "state db reconcile_rollout memory_mode update failed {}: {err}",
-            rollout_path.display()
-        );
-        return;
-    }
-    if let Ok(meta_line) = crate::list::read_session_meta_line(rollout_path).await {
-        persist_dynamic_tools(
-            Some(ctx),
-            meta_line.meta.id,
-            meta_line.meta.dynamic_tools.as_deref(),
-            "reconcile_rollout",
-        )
-        .await;
-    } else {
-        warn!(
-            "state db reconcile_rollout missing session meta {}",
             rollout_path.display()
         );
     }
@@ -486,7 +612,7 @@ pub async fn read_repair_rollout_path(
 pub async fn apply_rollout_items(
     context: Option<&codex_state::StateRuntime>,
     rollout_path: &Path,
-    _default_provider: &str,
+    default_provider: &str,
     builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
     stage: &str,
@@ -510,6 +636,9 @@ pub async fn apply_rollout_items(
             }
         },
     };
+    if builder.model_provider.is_none() {
+        builder.model_provider = Some(default_provider.to_string());
+    }
     builder.rollout_path = rollout_path.to_path_buf();
     builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
     if let Err(err) = ctx

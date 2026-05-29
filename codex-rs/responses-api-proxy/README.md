@@ -1,5 +1,33 @@
 # codex-responses-api-proxy
 
+#### tl;dr:
+
+```
+# Launch the proxy, dump request/response pairs to /tmp/proxy
+cd path/to/codex/codex-rs
+cargo build
+echo $OPENAI_API_KEY | ./target/debug/codex-responses-api-proxy \
+    --port 60001 \
+    --dump-dir /tmp/proxy
+
+
+# Add this to ~/.codex/config.toml:
+
+[model_providers.codex-responses-api-proxy]
+name = 'codex-responses-api-proxy'
+base_url = 'http://127.0.0.1:60001/v1'
+wire_api='responses'
+
+[profiles.proxy]
+model_provider = "codex-responses-api-proxy"
+
+
+# Use it
+codex -p proxy
+```
+
+# Detailed docs
+
 A strict HTTP proxy that only forwards `POST` requests to `/v1/responses` to the OpenAI API (`https://api.openai.com`), injecting the `Authorization: Bearer $OPENAI_API_KEY` header. Everything else is rejected with `403 Forbidden`.
 
 ## Expected Usage

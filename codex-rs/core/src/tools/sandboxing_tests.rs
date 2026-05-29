@@ -1,18 +1,47 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::hook_names::HookToolName;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::protocol::GranularApprovalConfig;
-use codex_protocol::protocol::NetworkAccess;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+
+#[test]
+fn bash_permission_request_payload_omits_missing_description() {
+    assert_eq!(
+        PermissionRequestPayload::bash("echo hi".to_string(), /*description*/ None),
+        PermissionRequestPayload {
+            tool_name: HookToolName::bash(),
+            tool_input: json!({ "command": "echo hi" }),
+        }
+    );
+}
+
+#[test]
+fn bash_permission_request_payload_includes_description_when_present() {
+    assert_eq!(
+        PermissionRequestPayload::bash(
+            "echo hi".to_string(),
+            Some("network-access example.com".to_string()),
+        ),
+        PermissionRequestPayload {
+            tool_name: HookToolName::bash(),
+            tool_input: json!({
+                "command": "echo hi",
+                "description": "network-access example.com",
+            }),
+        }
+    );
+}
 
 #[test]
 fn external_sandbox_skips_exec_approval_on_request() {
-    let sandbox_policy = SandboxPolicy::ExternalSandbox {
-        network_access: NetworkAccess::Restricted,
-    };
     assert_eq!(
         default_exec_approval_requirement(
             AskForApproval::OnRequest,
-            &FileSystemSandboxPolicy::from(&sandbox_policy),
+            &FileSystemSandboxPolicy::external_sandbox(),
         ),
         ExecApprovalRequirement::Skip {
             bypass_sandbox: false,
@@ -23,11 +52,10 @@ fn external_sandbox_skips_exec_approval_on_request() {
 
 #[test]
 fn restricted_sandbox_requires_exec_approval_on_request() {
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     assert_eq!(
         default_exec_approval_requirement(
             AskForApproval::OnRequest,
-            &FileSystemSandboxPolicy::from(&sandbox_policy)
+            &FileSystemSandboxPolicy::default()
         ),
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
@@ -46,9 +74,8 @@ fn default_exec_approval_requirement_rejects_sandbox_prompt_when_granular_disabl
         mcp_elicitations: true,
     });
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let requirement =
-        default_exec_approval_requirement(policy, &FileSystemSandboxPolicy::from(&sandbox_policy));
+        default_exec_approval_requirement(policy, &FileSystemSandboxPolicy::default());
 
     assert_eq!(
         requirement,
@@ -68,9 +95,8 @@ fn default_exec_approval_requirement_keeps_prompt_when_granular_allows_sandbox_a
         mcp_elicitations: false,
     });
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let requirement =
-        default_exec_approval_requirement(policy, &FileSystemSandboxPolicy::from(&sandbox_policy));
+        default_exec_approval_requirement(policy, &FileSystemSandboxPolicy::default());
 
     assert_eq!(
         requirement,
@@ -90,6 +116,7 @@ fn additional_permissions_allow_bypass_sandbox_first_attempt_when_execpolicy_ski
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
             },
+            &FileSystemSandboxPolicy::default(),
         ),
         SandboxOverride::BypassSandboxFirstAttempt
     );
@@ -104,7 +131,43 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             },
+            &FileSystemSandboxPolicy::default(),
         ),
         SandboxOverride::BypassSandboxFirstAttempt
+    );
+}
+
+#[test]
+fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::Deny,
+    }]);
+
+    assert_eq!(
+        sandbox_override_for_first_attempt(
+            SandboxPermissions::RequireEscalated,
+            &ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+            &file_system_policy,
+        ),
+        SandboxOverride::NoOverride,
+        "explicit escalation would drop deny-read filesystem policy, so keep the first attempt sandboxed",
+    );
+    assert_eq!(
+        sandbox_override_for_first_attempt(
+            SandboxPermissions::WithAdditionalPermissions,
+            &ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            },
+            &file_system_policy,
+        ),
+        SandboxOverride::BypassSandboxFirstAttempt,
+        "exec-policy allow rules intentionally bypass sandbox even when deny-read entries exist",
     );
 }

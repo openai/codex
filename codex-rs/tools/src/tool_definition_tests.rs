@@ -7,11 +7,11 @@ fn tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: "lookup_order".to_string(),
         description: "Look up an order".to_string(),
-        input_schema: JsonSchema::Object {
-            properties: BTreeMap::new(),
-            required: None,
-            additional_properties: None,
-        },
+        input_schema: JsonSchema::object(
+            BTreeMap::new(),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        ),
         output_schema: Some(serde_json::json!({
             "type": "object",
         })),

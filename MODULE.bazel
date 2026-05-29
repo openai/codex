@@ -1,8 +1,8 @@
 module(name = "codex")
 
-bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "llvm", version = "0.6.8")
+bazel_dep(name = "llvm", version = "0.7.1")
 # The upstream LLVM archive contains a few unix-only symlink entries and is
 # missing a couple of MinGW compatibility archives that windows-gnullvm needs
 # during extraction and linking, so patch it until upstream grows native support.
@@ -10,6 +10,7 @@ single_version_override(
     module_name = "llvm",
     patch_strip = 1,
     patches = [
+        "//patches:llvm_rusty_v8_custom_libcxx.patch",
         "//patches:llvm_windows_symlink_extract.patch",
     ],
 )
@@ -40,9 +41,17 @@ osx.frameworks(names = [
     "ColorSync",
     "CoreFoundation",
     "CoreGraphics",
+    "CoreImage",
+    "CoreMedia",
+    "CoreMIDI",
     "CoreServices",
     "CoreText",
+    "CoreVideo",
+    "DiskArbitration",
     "AudioToolbox",
+    "AVFoundation",
+    "AVFAudio",
+    "AVRouting",
     "CFNetwork",
     "FontServices",
     "AudioUnit",
@@ -50,20 +59,35 @@ osx.frameworks(names = [
     "CoreAudioTypes",
     "Foundation",
     "ImageIO",
+    "IOSurface",
     "IOKit",
     "Kernel",
+    "Metal",
+    "MetalKit",
+    "OpenGL",
     "OSLog",
+    "QuartzCore",
+    "ScreenCaptureKit",
     "Security",
     "SystemConfiguration",
+    "UniformTypeIdentifiers",
+    "VideoToolbox",
 ])
 use_repo(osx, "macos_sdk")
 
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
+single_version_override(
+    module_name = "rules_cc",
+    patch_strip = 1,
+    patches = [
+        "//patches:rules_cc_rusty_v8_custom_libcxx.patch",
+    ],
+)
 bazel_dep(name = "rules_platform", version = "0.1.0")
-bazel_dep(name = "rules_rs", version = "0.0.43")
-# `rules_rs` 0.0.43 does not model `windows-gnullvm` as a distinct Windows exec
+bazel_dep(name = "rules_rs", version = "0.0.58")
+# `rules_rs` still does not model `windows-gnullvm` as a distinct Windows exec
 # platform, so patch it until upstream grows that support for both x86_64 and
 # aarch64.
 single_version_override(
@@ -71,10 +95,9 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:rules_rs_windows_gnullvm_exec.patch",
-        "//patches:rules_rs_delete_git_worktree_pointer.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
-    version = "0.0.43",
+    version = "0.0.58",
 )
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
@@ -92,7 +115,6 @@ rules_rust.patch(
         "//patches:rules_rust_windows_exec_bin_target.patch",
         "//patches:rules_rust_windows_exec_std.patch",
         "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
-        "//patches:rules_rust_repository_set_exec_constraints.patch",
     ],
     strip = 1,
 )
@@ -141,7 +163,7 @@ use_repo(nightly_rust, "rust_toolchains")
 toolchains = use_extension("@rules_rs//rs/experimental/toolchains:module_extension.bzl", "toolchains")
 toolchains.toolchain(
     edition = "2024",
-    version = "1.93.0",
+    version = "1.95.0",
 )
 use_repo(toolchains, "default_rust_toolchains")
 
@@ -313,6 +335,18 @@ crate.annotation(
         "RUSTY_V8_SRC_BINDING_PATH": "$(execpath @v8_targets//:rusty_v8_binding_for_target)",
     },
     crate = "v8",
+    # Keep the Rust feature aligned with the source-built Bazel artifacts.
+    # Windows MSVC still consumes upstream non-sandboxed prebuilts.
+    crate_features_select = {
+        "aarch64-apple-darwin": ["v8_enable_sandbox"],
+        "aarch64-pc-windows-gnullvm": ["v8_enable_sandbox"],
+        "aarch64-unknown-linux-gnu": ["v8_enable_sandbox"],
+        "aarch64-unknown-linux-musl": ["v8_enable_sandbox"],
+        "x86_64-apple-darwin": ["v8_enable_sandbox"],
+        "x86_64-pc-windows-gnullvm": ["v8_enable_sandbox"],
+        "x86_64-unknown-linux-gnu": ["v8_enable_sandbox"],
+        "x86_64-unknown-linux-musl": ["v8_enable_sandbox"],
+    },
     gen_build_script = "on",
     patch_args = ["-p1"],
     patches = [
@@ -345,6 +379,23 @@ crate.annotation(
 
 inject_repo(crate, "llvm", "llvm-project", "macos_sdk")
 
+crate.annotation(
+    # Provide the hermetic SDK path so the build script doesn't try to invoke an unavailable `xcrun --show-sdk-path`.
+    build_script_data = [
+        "@macos_sdk//sysroot",
+    ],
+    build_script_env = {
+        "WEBRTC_SYS_DARWIN_SDK_PATH": "$(location @macos_sdk//sysroot)",
+        "WEBRTC_SYS_LINK_OUT_DIR": "1",
+    },
+    crate = "webrtc-sys",
+    gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:webrtc-sys_hermetic_darwin_sysroot.patch",
+    ],
+)
+
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",
@@ -364,18 +415,18 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-bazel_dep(name = "v8", version = "14.6.202.9")
+bazel_dep(name = "v8", version = "14.7.173.20")
 archive_override(
     module_name = "v8",
-    integrity = "sha256-JphDwLAzsd9KvgRZ7eQvNtPU6qGd3XjFt/a/1QITAJU=",
+    integrity = "sha256-v/x6I4X38a2wckzUIft3Dh0SUdkuOTokwxyF7lzW8Lc=",
     patch_strip = 3,
     patches = [
         "//patches:v8_module_deps.patch",
         "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
     ],
-    strip_prefix = "v8-14.6.202.9",
-    urls = ["https://github.com/v8/v8/archive/refs/tags/14.6.202.9.tar.gz"],
+    strip_prefix = "v8-14.7.173.20",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.7.173.20.tar.gz"],
 )
 
 http_archive(
@@ -387,83 +438,53 @@ http_archive(
     urls = ["https://static.crates.io/crates/v8/v8-146.4.0.crate"],
 )
 
-http_file(
-    name = "rusty_v8_146_4_0_aarch64_apple_darwin_archive",
-    downloaded_file_path = "librusty_v8_release_aarch64-apple-darwin.a.gz",
-    urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_aarch64-apple-darwin.a.gz",
-    ],
+http_archive(
+    name = "v8_crate_147_4_0",
+    build_file = "//third_party/v8:v8_crate.BUILD.bazel",
+    sha256 = "2df8fffd507fb18ed000673a83d937f58e60fb07f3306b2274284125b15137cd",
+    strip_prefix = "v8-147.4.0",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/v8/v8-147.4.0.crate"],
+)
+
+git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+git_repository(
+    name = "rusty_v8_libcxx",
+    build_file = "//third_party/v8:libcxx.BUILD.bazel",
+    commit = "7ab65651aed6802d2599dcb7a73b1f82d5179d05",
+    remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git",
+)
+
+git_repository(
+    name = "rusty_v8_libcxxabi",
+    build_file = "//third_party/v8:libcxxabi.BUILD.bazel",
+    commit = "8f11bb1d4438d0239d0dfc1bd9456a9f31629dda",
+    remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi.git",
+)
+
+git_repository(
+    name = "rusty_v8_llvm_libc",
+    build_file = "//third_party/v8:llvm_libc.BUILD.bazel",
+    commit = "b3aa5bb702ff9e890179fd1e7d3ba346e17ecf8e",
+    remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git",
 )
 
 http_file(
-    name = "rusty_v8_146_4_0_aarch64_unknown_linux_gnu_archive",
-    downloaded_file_path = "librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
-    urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
-    ],
-)
-
-http_file(
-    name = "rusty_v8_146_4_0_aarch64_pc_windows_msvc_archive",
+    name = "rusty_v8_147_4_0_aarch64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+    sha256 = "1fa3f94d9e09cff1f6bcce94c478e5cb072c0755f6a0357abadb9dd3b48d8127",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+        "https://github.com/denoland/rusty_v8/releases/download/v147.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
     ],
 )
 
 http_file(
-    name = "rusty_v8_146_4_0_x86_64_apple_darwin_archive",
-    downloaded_file_path = "librusty_v8_release_x86_64-apple-darwin.a.gz",
-    urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_x86_64-apple-darwin.a.gz",
-    ],
-)
-
-http_file(
-    name = "rusty_v8_146_4_0_x86_64_unknown_linux_gnu_archive",
-    downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
-    urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
-    ],
-)
-
-http_file(
-    name = "rusty_v8_146_4_0_x86_64_pc_windows_msvc_archive",
+    name = "rusty_v8_147_4_0_x86_64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+    sha256 = "e2827ff98b1a9d4c0343000fc5124ac30dfab3007bc0129c168c9355fc2fcd7c",
     urls = [
-        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
-    ],
-)
-
-http_file(
-    name = "rusty_v8_146_4_0_aarch64_unknown_linux_musl_archive",
-    downloaded_file_path = "librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
-    urls = [
-        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
-    ],
-)
-
-http_file(
-    name = "rusty_v8_146_4_0_aarch64_unknown_linux_musl_binding",
-    downloaded_file_path = "src_binding_release_aarch64-unknown-linux-musl.rs",
-    urls = [
-        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/src_binding_release_aarch64-unknown-linux-musl.rs",
-    ],
-)
-
-http_file(
-    name = "rusty_v8_146_4_0_x86_64_unknown_linux_musl_archive",
-    downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
-    urls = [
-        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
-    ],
-)
-
-http_file(
-    name = "rusty_v8_146_4_0_x86_64_unknown_linux_musl_binding",
-    downloaded_file_path = "src_binding_release_x86_64-unknown-linux-musl.rs",
-    urls = [
-        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/src_binding_release_x86_64-unknown-linux-musl.rs",
+        "https://github.com/denoland/rusty_v8/releases/download/v147.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
     ],
 )
 

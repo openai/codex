@@ -5,6 +5,12 @@
     "callId": {
       "type": "string"
     },
+    "namespace": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "threadId": {
       "type": "string"
     },

@@ -16,8 +16,12 @@ use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
+use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -57,6 +61,7 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
     let terminate_request_id = mcp
@@ -109,6 +114,7 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -167,6 +173,7 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
             ])),
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -181,6 +188,291 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
             stdout: format!("request|added|unset|{}", codex_home.path().display()),
             stderr: String::new(),
         }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_accepts_permission_profile() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf 'profile'".to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "profile".to_string(),
+            stderr: String::new(),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_permission_profile_starts_selected_network_proxy() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    insert_networked_permission_profile_config(
+        codex_home.path(),
+        /*default_permissions*/ None,
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf '%s' \"${CODEX_NETWORK_PROXY_ACTIVE-unset}\"".to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: Some("networked".to_string()),
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "1".to_string(),
+            stderr: String::new(),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    insert_networked_permission_profile_config(codex_home.path(), Some("networked"))?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf '%s' \"${CODEX_NETWORK_PROXY_ACTIVE-unset}\"".to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "unset".to_string(),
+            stderr: String::new(),
+        }
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    let command_dir = codex_home.path().join("command-cwd");
+    std::fs::create_dir(&command_dir)?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    insert_command_exec_config(
+        codex_home.path(),
+        r#"
+[permissions.command-cwd.filesystem]
+":root" = "read"
+":workspace_roots" = "write"
+"#,
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf child > child.txt && ! printf parent > ../parent.txt".to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: Some("command-cwd".into()),
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: Some("command-cwd".to_string()),
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response.exit_code, 0,
+        "parent cwd write should fail under command project-root profile: {response:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(command_dir.join("child.txt"))?,
+        "child"
+    );
+    assert!(
+        !codex_home.path().join("parent.txt").exists(),
+        "permissionProfile :workspace_roots write should not grant the server cwd when command cwd differs"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_returns_error_when_local_environment_is_disabled() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec!["sh".to_string(), "-lc".to_string(), "true".to_string()],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+        })
+        .await?;
+
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(command_request_id))
+        .await?;
+    assert_eq!(error.error.message, "local environment is not configured");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_rejects_sandbox_policy_with_permission_profile() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec!["sh".to_string(), "-lc".to_string(), "true".to_string()],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+            permission_profile: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+        })
+        .await?;
+
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(command_request_id))
+        .await?;
+    assert_eq!(
+        error.error.message,
+        "`permissionProfile` cannot be combined with `sandboxPolicy`"
     );
 
     Ok(())
@@ -209,6 +501,7 @@ async fn command_exec_rejects_disable_timeout_with_timeout_ms() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -246,6 +539,7 @@ async fn command_exec_rejects_disable_output_cap_with_output_bytes_cap() -> Resu
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -283,6 +577,7 @@ async fn command_exec_rejects_negative_timeout_ms() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -320,6 +615,7 @@ async fn command_exec_without_process_id_rejects_streaming() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -361,6 +657,7 @@ async fn command_exec_non_streaming_respects_output_cap() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -408,14 +705,18 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
-    let delta = read_command_exec_delta(&mut mcp).await?;
-    assert_eq!(delta.process_id, process_id.as_str());
-    assert_eq!(delta.stream, CommandExecOutputStream::Stdout);
-    assert_eq!(STANDARD.decode(&delta.delta_base64)?, b"abcde");
-    assert!(delta.cap_reached);
+    let output = collect_command_exec_output_until(
+        CommandExecDeltaReader::Mcp(&mut mcp),
+        process_id.as_str(),
+        "capped stdout",
+        |_output, delta| delta.stream == CommandExecOutputStream::Stdout && delta.cap_reached,
+    )
+    .await?;
+    assert_eq!(output.stdout, "abcde");
     let terminate_request_id = mcp
         .send_command_exec_terminate_request(CommandExecTerminateParams {
             process_id: process_id.clone(),
@@ -468,24 +769,17 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
-    let first_stdout = read_command_exec_delta(&mut mcp).await?;
-    let first_stderr = read_command_exec_delta(&mut mcp).await?;
-    let seen = [first_stdout, first_stderr];
-    assert!(
-        seen.iter()
-            .all(|delta| delta.process_id == process_id.as_str())
-    );
-    assert!(seen.iter().any(|delta| {
-        delta.stream == CommandExecOutputStream::Stdout
-            && delta.delta_base64 == STANDARD.encode("out-start\n")
-    }));
-    assert!(seen.iter().any(|delta| {
-        delta.stream == CommandExecOutputStream::Stderr
-            && delta.delta_base64 == STANDARD.encode("err-start\n")
-    }));
+    wait_for_command_exec_outputs_contains(
+        &mut mcp,
+        process_id.as_str(),
+        "out-start\n",
+        "err-start\n",
+    )
+    .await?;
 
     let write_request_id = mcp
         .send_command_exec_write_request(CommandExecWriteParams {
@@ -499,21 +793,13 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
         .await?;
     assert_eq!(write_response.result, serde_json::json!({}));
 
-    let next_delta = read_command_exec_delta(&mut mcp).await?;
-    let final_delta = read_command_exec_delta(&mut mcp).await?;
-    let seen = [next_delta, final_delta];
-    assert!(
-        seen.iter()
-            .all(|delta| delta.process_id == process_id.as_str())
-    );
-    assert!(seen.iter().any(|delta| {
-        delta.stream == CommandExecOutputStream::Stdout
-            && delta.delta_base64 == STANDARD.encode("out:hello\n")
-    }));
-    assert!(seen.iter().any(|delta| {
-        delta.stream == CommandExecOutputStream::Stderr
-            && delta.delta_base64 == STANDARD.encode("err:hello\n")
-    }));
+    wait_for_command_exec_outputs_contains(
+        &mut mcp,
+        process_id.as_str(),
+        "out:hello\n",
+        "err:hello\n",
+    )
+    .await?;
 
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
@@ -559,20 +845,17 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
-    let started_text = read_command_exec_output_until_contains(
+    wait_for_command_exec_output_contains(
         &mut mcp,
         process_id.as_str(),
         CommandExecOutputStream::Stdout,
         "tty\n",
     )
     .await?;
-    assert!(
-        started_text.contains("tty\n"),
-        "expected TTY startup output, got {started_text:?}"
-    );
 
     let write_request_id = mcp
         .send_command_exec_write_request(CommandExecWriteParams {
@@ -586,17 +869,13 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
         .await?;
     assert_eq!(write_response.result, serde_json::json!({}));
 
-    let echoed_text = read_command_exec_output_until_contains(
+    wait_for_command_exec_output_contains(
         &mut mcp,
         process_id.as_str(),
         CommandExecOutputStream::Stdout,
         "echo:world\n",
     )
     .await?;
-    assert!(
-        echoed_text.contains("echo:world\n"),
-        "expected TTY echo output, got {echoed_text:?}"
-    );
 
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
@@ -640,20 +919,17 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
                 cols: 101,
             }),
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
-    let started_text = read_command_exec_output_until_contains(
+    wait_for_command_exec_output_contains(
         &mut mcp,
         process_id.as_str(),
         CommandExecOutputStream::Stdout,
         "start:31 101\n",
     )
     .await?;
-    assert!(
-        started_text.contains("start:31 101\n"),
-        "unexpected initial size output: {started_text:?}"
-    );
 
     let resize_request_id = mcp
         .send_command_exec_resize_request(CommandExecResizeParams {
@@ -681,17 +957,13 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
         .await?;
     assert_eq!(write_response.result, serde_json::json!({}));
 
-    let resized_text = read_command_exec_output_until_contains(
+    wait_for_command_exec_output_contains(
         &mut mcp,
         process_id.as_str(),
         CommandExecOutputStream::Stdout,
         "after:45 132\n",
     )
     .await?;
-    assert!(
-        resized_text.contains("after:45 132\n"),
-        "unexpected resized output: {resized_text:?}"
-    );
 
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
@@ -744,11 +1016,13 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     )
     .await?;
 
-    let delta = read_command_exec_delta_ws(&mut ws1).await?;
-    assert_eq!(delta.process_id, "shared-process");
-    assert_eq!(delta.stream, CommandExecOutputStream::Stdout);
-    let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
-    assert!(delta_text.contains("ready"));
+    collect_command_exec_output_until(
+        CommandExecDeltaReader::Websocket(&mut ws1),
+        "shared-process",
+        "websocket ready output",
+        |output, _delta| output.stdout.contains("ready\n"),
+    )
+    .await?;
     wait_for_process_marker(&marker, /*should_exist*/ true).await?;
 
     send_request(
@@ -796,31 +1070,98 @@ async fn read_command_exec_delta(
     decode_delta_notification(notification)
 }
 
-async fn read_command_exec_output_until_contains(
+async fn wait_for_command_exec_output_contains(
     mcp: &mut McpProcess,
     process_id: &str,
     stream: CommandExecOutputStream,
     expected: &str,
-) -> Result<String> {
+) -> Result<()> {
+    let stream_name = match stream {
+        CommandExecOutputStream::Stdout => "stdout",
+        CommandExecOutputStream::Stderr => "stderr",
+    };
+    collect_command_exec_output_until(
+        CommandExecDeltaReader::Mcp(mcp),
+        process_id,
+        format!("{stream_name} containing {expected:?}"),
+        |output, _delta| match stream {
+            CommandExecOutputStream::Stdout => output.stdout.contains(expected),
+            CommandExecOutputStream::Stderr => output.stderr.contains(expected),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn wait_for_command_exec_outputs_contains(
+    mcp: &mut McpProcess,
+    process_id: &str,
+    stdout_expected: &str,
+    stderr_expected: &str,
+) -> Result<()> {
+    collect_command_exec_output_until(
+        CommandExecDeltaReader::Mcp(mcp),
+        process_id,
+        format!("stdout containing {stdout_expected:?} and stderr containing {stderr_expected:?}"),
+        |output, _delta| {
+            output.stdout.contains(stdout_expected) && output.stderr.contains(stderr_expected)
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+enum CommandExecDeltaReader<'a> {
+    Mcp(&'a mut McpProcess),
+    Websocket(&'a mut super::connection_handling_websocket::WsClient),
+}
+
+#[derive(Default)]
+struct CollectedCommandExecOutput {
+    stdout: String,
+    stderr: String,
+}
+
+async fn collect_command_exec_output_until(
+    mut reader: CommandExecDeltaReader<'_>,
+    process_id: &str,
+    waiting_for: impl Into<String>,
+    mut should_stop: impl FnMut(
+        &CollectedCommandExecOutput,
+        &CommandExecOutputDeltaNotification,
+    ) -> bool,
+) -> Result<CollectedCommandExecOutput> {
+    let waiting_for = waiting_for.into();
     let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
-    let mut collected = String::new();
+    let mut output = CollectedCommandExecOutput::default();
 
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let delta = timeout(remaining, read_command_exec_delta(mcp))
-            .await
-            .with_context(|| {
-                format!(
-                    "timed out waiting for {expected:?} in command/exec output for {process_id}; collected {collected:?}"
-                )
-            })??;
+        let delta = timeout(remaining, async {
+            match &mut reader {
+                CommandExecDeltaReader::Mcp(mcp) => read_command_exec_delta(mcp).await,
+                CommandExecDeltaReader::Websocket(stream) => {
+                    read_command_exec_delta_ws(stream).await
+                }
+            }
+        })
+        .await
+        .with_context(|| {
+            format!(
+                "timed out waiting for {waiting_for} in command/exec output for {process_id}; collected stdout={:?}, stderr={:?}",
+                output.stdout, output.stderr
+            )
+        })??;
         assert_eq!(delta.process_id, process_id);
-        assert_eq!(delta.stream, stream);
 
         let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
-        collected.push_str(&delta_text.replace('\r', ""));
-        if collected.contains(expected) {
-            return Ok(collected);
+        let delta_text = delta_text.replace('\r', "");
+        match delta.stream {
+            CommandExecOutputStream::Stdout => output.stdout.push_str(&delta_text),
+            CommandExecOutputStream::Stderr => output.stderr.push_str(&delta_text),
+        }
+        if should_stop(&output, &delta) {
+            return Ok(output);
         }
     }
 }
@@ -846,6 +1187,43 @@ fn decode_delta_notification(
         .params
         .context("command/exec/outputDelta notification should include params")?;
     serde_json::from_value(params).context("deserialize command/exec/outputDelta notification")
+}
+
+fn insert_networked_permission_profile_config(
+    codex_home: &Path,
+    default_permissions: Option<&str>,
+) -> Result<()> {
+    let default_permissions = default_permissions
+        .map(|default_permissions| format!("default_permissions = \"{default_permissions}\"\n\n"))
+        .unwrap_or_default();
+    let inserted_config = format!(
+        r#"{default_permissions}[features]
+network_proxy = true
+
+[permissions.networked.filesystem]
+":root" = "read"
+
+[permissions.networked.network]
+enabled = true
+proxy_url = "http://127.0.0.1:0"
+enable_socks5 = false
+
+"#
+    );
+    insert_command_exec_config(codex_home, &inserted_config)?;
+    Ok(())
+}
+
+fn insert_command_exec_config(codex_home: &Path, inserted_config: &str) -> Result<()> {
+    let config_path = codex_home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    let marker = "\n[model_providers.mock_provider]\n";
+    let (prefix, suffix) = config
+        .split_once(marker)
+        .context("test config should include mock provider table")?;
+    let config = format!("{prefix}\n{inserted_config}{marker}{suffix}");
+    std::fs::write(config_path, config)?;
+    Ok(())
 }
 
 async fn read_initialize_response(

@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_file_system::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::join_all;
 use schemars::JsonSchema;
@@ -37,8 +38,26 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     find_ancestor_git_entry(base).map(|(repo_root, _)| repo_root)
 }
 
+/// Return the repository root for `cwd` using the provided filesystem.
+///
+/// This mirrors [`get_git_repo_root`] for local paths, but works when `cwd`
+/// only exists inside a selected remote environment.
+pub async fn get_git_repo_root_with_fs(
+    fs: &dyn ExecutorFileSystem,
+    cwd: &AbsolutePathBuf,
+) -> Option<AbsolutePathBuf> {
+    let base = match fs.get_metadata(cwd, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_directory => cwd.clone(),
+        _ => cwd.parent()?,
+    };
+    find_ancestor_git_entry_with_fs(fs, &base)
+        .await
+        .map(|(repo_root, _)| repo_root)
+}
+
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
+const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct GitInfo {
@@ -157,6 +176,108 @@ pub async fn get_head_commit_hash(cwd: &Path) -> Option<GitSha> {
     }
 }
 
+pub fn canonicalize_git_remote_url(url: &str) -> Option<String> {
+    let url = trim_git_suffix(url.trim().trim_end_matches('/'));
+    if url.is_empty() {
+        return None;
+    }
+
+    if let Some((scheme, rest)) = url.split_once("://") {
+        return canonicalize_git_url_like_remote(scheme, rest);
+    }
+
+    if let Some((host_part, path)) = parse_scp_like_remote(url) {
+        return canonicalize_git_remote_host_path(host_part, path, /*default_port*/ None);
+    }
+
+    let (host_part, path) = url.split_once('/')?;
+    canonicalize_git_remote_host_path(host_part, path, /*default_port*/ None)
+}
+
+fn canonicalize_git_url_like_remote(scheme: &str, rest: &str) -> Option<String> {
+    let default_port = match scheme {
+        "git" => Some("9418"),
+        "http" => Some("80"),
+        "https" => Some("443"),
+        "ssh" => Some("22"),
+        _ => return None,
+    };
+
+    let rest = rest
+        .find(['?', '#'])
+        .map_or(rest, |suffix_index| &rest[..suffix_index]);
+    let (host_part, path) = rest.split_once('/')?;
+    canonicalize_git_remote_host_path(host_part, path, default_port)
+}
+
+fn parse_scp_like_remote(remote: &str) -> Option<(&str, &str)> {
+    if remote.contains('/')
+        && remote
+            .find('/')
+            .is_some_and(|slash| remote.find(':').is_none_or(|colon| slash < colon))
+    {
+        return None;
+    }
+
+    let (host_part, path) = remote.split_once(':')?;
+    if host_part.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some((host_part, path))
+}
+
+fn canonicalize_git_remote_host_path(
+    host_part: &str,
+    path: &str,
+    default_port: Option<&str>,
+) -> Option<String> {
+    let host = normalize_remote_host(
+        host_part
+            .rsplit_once('@')
+            .map_or(host_part, |(_, host)| host)
+            .trim()
+            .trim_end_matches('/'),
+        default_port,
+    );
+    if host.is_empty() {
+        return None;
+    }
+
+    let path = trim_git_suffix(path.trim().trim_matches('/'));
+    let components = path
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    let [owner, repo, ..] = components.as_slice() else {
+        return None;
+    };
+    if matches!((*owner, *repo), ("." | "..", _) | (_, "." | "..")) {
+        return None;
+    }
+    let path = components.join("/");
+
+    if host == "github.com" {
+        Some(format!("{host}/{}", path.to_ascii_lowercase()))
+    } else {
+        Some(format!("{host}/{path}"))
+    }
+}
+
+fn normalize_remote_host(host: &str, default_port: Option<&str>) -> String {
+    let host = host.to_ascii_lowercase();
+    if let Some(default_port) = default_port
+        && let Some((host_without_port, port)) = host.rsplit_once(':')
+        && port == default_port
+    {
+        return host_without_port.to_string();
+    }
+    host
+}
+
+fn trim_git_suffix(value: &str) -> &str {
+    value.strip_suffix(".git").unwrap_or(value)
+}
+
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
     let output = run_git_command_with_timeout(&["status", "--porcelain"], cwd).await?;
     if !output.status.success() {
@@ -272,6 +393,9 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
     let mut command = Command::new("git");
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Keep internal Git helper commands independent of configured hook directories.
+        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
+        .args(["-c", "core.fsmonitor=false"])
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
@@ -618,32 +742,35 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
 /// `[get_git_repo_root]`, but resolves to the root of the main
 /// repository. Handles worktrees via filesystem inspection without invoking
 /// the `git` executable.
-pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
-    let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
-    let (repo_root, dot_git) = find_ancestor_git_entry(base)?;
-    if dot_git.is_dir() {
-        return Some(canonicalize_or_raw(repo_root));
+pub async fn resolve_root_git_project_for_trust(
+    fs: &dyn ExecutorFileSystem,
+    cwd: &AbsolutePathBuf,
+) -> Option<AbsolutePathBuf> {
+    let repo_root = get_git_repo_root_with_fs(fs, cwd).await?;
+    let dot_git = repo_root.join(".git");
+    if fs
+        .get_metadata(&dot_git, /*sandbox*/ None)
+        .await
+        .ok()?
+        .is_directory
+    {
+        return Some(repo_root);
     }
 
-    let git_dir_s = std::fs::read_to_string(&dot_git).ok()?;
+    let git_dir_s = fs.read_file_text(&dot_git, /*sandbox*/ None).await.ok()?;
     let git_dir_rel = git_dir_s.trim().strip_prefix("gitdir:")?.trim();
     if git_dir_rel.is_empty() {
         return None;
     }
 
-    let git_dir_path = canonicalize_or_raw(
-        AbsolutePathBuf::resolve_path_against_base(git_dir_rel, &repo_root)
-            .ok()?
-            .into_path_buf(),
-    );
+    let git_dir_path = AbsolutePathBuf::resolve_path_against_base(git_dir_rel, repo_root.as_path());
     let worktrees_dir = git_dir_path.parent()?;
-    if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
+    if worktrees_dir.as_path().file_name() != Some(OsStr::new("worktrees")) {
         return None;
     }
 
     let common_dir = worktrees_dir.parent()?;
-    let main_repo_root = common_dir.parent()?;
-    Some(canonicalize_or_raw(main_repo_root.to_path_buf()))
+    common_dir.parent()
 }
 
 fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
@@ -665,8 +792,17 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-fn canonicalize_or_raw(path: PathBuf) -> PathBuf {
-    std::fs::canonicalize(&path).unwrap_or(path)
+async fn find_ancestor_git_entry_with_fs(
+    fs: &dyn ExecutorFileSystem,
+    base_dir: &AbsolutePathBuf,
+) -> Option<(AbsolutePathBuf, AbsolutePathBuf)> {
+    for dir in base_dir.ancestors() {
+        let dot_git = dir.join(".git");
+        if fs.get_metadata(&dot_git, /*sandbox*/ None).await.is_ok() {
+            return Some((dir, dot_git));
+        }
+    }
+    None
 }
 
 /// Returns a list of local git branches.
@@ -707,4 +843,47 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|name| !name.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn canonicalize_git_remote_url_normalizes_github_variants() {
+        for remote in [
+            "git@github.com:OpenAI/Codex.git",
+            "ssh://git@github.com/openai/codex.git",
+            "ssh://git@github.com:22/OpenAI/Codex.git",
+            "https://github.com/openai/codex.git",
+            "https://github.com:443/openai/codex.git",
+            "https://token@github.com/openai/codex/",
+            "github.com/OpenAI/Codex.git",
+        ] {
+            assert_eq!(
+                canonicalize_git_remote_url(remote),
+                Some("github.com/openai/codex".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn canonicalize_git_remote_url_handles_ghe_without_lowercasing_path() {
+        assert_eq!(
+            canonicalize_git_remote_url("git@ghe.company.com:Org/Repo.git"),
+            Some("ghe.company.com/Org/Repo".to_string())
+        );
+        assert_eq!(
+            canonicalize_git_remote_url("ssh://git@ghe.company.com:2222/Org/Repo.git"),
+            Some("ghe.company.com:2222/Org/Repo".to_string())
+        );
+    }
+
+    #[test]
+    fn canonicalize_git_remote_url_rejects_non_repository_values() {
+        for remote in ["", "file:///tmp/repo", "github.com/openai", "/tmp/repo"] {
+            assert_eq!(canonicalize_git_remote_url(remote), None);
+        }
+    }
 }

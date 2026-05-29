@@ -1,10 +1,10 @@
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
+use codex_otel::Result;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-use codex_otel::metrics::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Event as StreamEvent;
@@ -44,8 +44,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         /*success*/ true,
         "ok",
         &[],
-        /*mcp_server*/ None,
-        /*mcp_server_origin*/ None,
+        /*extra_trace_fields*/ &[],
     );
     manager.record_api_request(
         /*attempt*/ 1,

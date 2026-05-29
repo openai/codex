@@ -3,14 +3,13 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use codex_otel::metrics::names::TURN_TTFM_DURATION_METRIC;
-use codex_otel::metrics::names::TURN_TTFT_DURATION_METRIC;
+use codex_otel::TURN_TTFM_DURATION_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
 
 use crate::ResponseEvent;
-use crate::codex::TurnContext;
+use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 
 pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &ResponseEvent) {
@@ -21,9 +20,7 @@ pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &
     else {
         return;
     };
-    turn_context
-        .session_telemetry
-        .record_duration(TURN_TTFT_DURATION_METRIC, duration, &[]);
+    turn_context.session_telemetry.record_turn_ttft(duration);
 }
 
 pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &TurnItem) {
@@ -53,12 +50,14 @@ struct TurnTimingStateInner {
 }
 
 impl TurnTimingState {
-    pub(crate) async fn mark_turn_started(&self, started_at: Instant) {
+    pub(crate) async fn mark_turn_started(&self, started_at: Instant) -> i64 {
+        let started_at_unix_ms = now_unix_timestamp_ms();
         let mut state = self.state.lock().await;
         state.started_at = Some(started_at);
-        state.started_at_unix_secs = Some(now_unix_timestamp_secs());
+        state.started_at_unix_secs = Some(started_at_unix_ms / 1000);
         state.first_token_at = None;
         state.first_message_at = None;
+        started_at_unix_ms
     }
 
     pub(crate) async fn started_at_unix_secs(&self) -> Option<i64> {
@@ -72,6 +71,13 @@ impl TurnTimingState {
             .started_at
             .map(|started_at| i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX));
         (completed_at, duration_ms)
+    }
+
+    pub(crate) async fn time_to_first_token_ms(&self) -> Option<i64> {
+        let state = self.state.lock().await;
+        state
+            .time_to_first_token()
+            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
     }
 
     pub(crate) async fn record_ttft_for_response_event(
@@ -95,21 +101,28 @@ impl TurnTimingState {
 }
 
 fn now_unix_timestamp_secs() -> i64 {
+    now_unix_timestamp_ms() / 1000
+}
+
+pub(crate) fn now_unix_timestamp_ms() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 impl TurnTimingStateInner {
+    fn time_to_first_token(&self) -> Option<Duration> {
+        Some(self.first_token_at?.duration_since(self.started_at?))
+    }
+
     fn record_turn_ttft(&mut self) -> Option<Duration> {
         if self.first_token_at.is_some() {
             return None;
         }
-        let started_at = self.started_at?;
-        let first_token_at = Instant::now();
-        self.first_token_at = Some(first_token_at);
-        Some(first_token_at.duration_since(started_at))
+        self.started_at?;
+        self.first_token_at = Some(Instant::now());
+        self.time_to_first_token()
     }
 
     fn record_turn_ttfm(&mut self) -> Option<Duration> {
@@ -133,7 +146,9 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
         | ResponseEvent::ReasoningContentDelta { .. } => true,
         ResponseEvent::Created
         | ResponseEvent::ServerModel(_)
+        | ResponseEvent::ModelVerifications(_)
         | ResponseEvent::ServerReasoningIncluded(_)
+        | ResponseEvent::ToolCallInputDelta { .. }
         | ResponseEvent::Completed { .. }
         | ResponseEvent::ReasoningSummaryPartAdded { .. }
         | ResponseEvent::RateLimits(_)
@@ -168,8 +183,9 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
         | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::GhostSnapshot { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. } => true,
+        ResponseItem::CompactionTrigger => false,
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }

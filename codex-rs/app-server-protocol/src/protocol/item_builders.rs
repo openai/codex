@@ -1,9 +1,8 @@
-//! Shared builders for synthetic [`ThreadItem`] values emitted by the app-server layer.
+//! Shared builders for app-server [`ThreadItem`] values derived from compatibility events.
 //!
-//! These items do not come from first-class core `ItemStarted` / `ItemCompleted` events.
-//! Instead, the app-server synthesizes them so clients can render a coherent lifecycle for
-//! approvals and other pre-execution flows before the underlying tool has started or when the
-//! tool never starts at all.
+//! Most live tool items now come from first-class core `ItemStarted` / `ItemCompleted` events.
+//! These builders remain for approval flows, rebuilt legacy history, and other pre-execution
+//! paths where the underlying tool has not started or never starts at all.
 //!
 //! Keeping these builders in one place is useful for two reasons:
 //! - Live notifications and rebuilt `thread/read` history both need to construct the same
@@ -11,6 +10,7 @@
 //! - The projection is presentation-specific. Core protocol events stay generic, while the
 //!   app-server protocol decides how to surface those events as `ThreadItem`s for clients.
 use crate::protocol::common::ServerNotification;
+use crate::protocol::v2::AutoReviewDecisionSource;
 use crate::protocol::v2::CommandAction;
 use crate::protocol::v2::CommandExecutionSource;
 use crate::protocol::v2::CommandExecutionStatus;
@@ -77,7 +77,7 @@ pub fn build_command_execution_approval_request_item(
             .parsed_cmd
             .iter()
             .cloned()
-            .map(CommandAction::from)
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -97,7 +97,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
             .parsed_cmd
             .iter()
             .cloned()
-            .map(CommandAction::from)
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -124,7 +124,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
             .parsed_cmd
             .iter()
             .cloned()
-            .map(CommandAction::from)
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
             .collect(),
         aggregated_output,
         exit_code: Some(payload.exit_code),
@@ -142,12 +142,13 @@ pub fn build_item_from_guardian_event(
 ) -> Option<ThreadItem> {
     match &assessment.action {
         GuardianAssessmentAction::Command { command, cwd, .. } => {
+            let id = assessment.target_item_id.as_ref()?;
             let command = command.clone();
             let command_actions = vec![CommandAction::Unknown {
                 command: command.clone(),
             }];
             Some(ThreadItem::CommandExecution {
-                id: assessment.id.clone(),
+                id: id.clone(),
                 command,
                 cwd: cwd.clone(),
                 process_id: None,
@@ -162,6 +163,7 @@ pub fn build_item_from_guardian_event(
         GuardianAssessmentAction::Execve {
             program, argv, cwd, ..
         } => {
+            let id = assessment.target_item_id.as_ref()?;
             let argv = if argv.is_empty() {
                 vec![program.clone()]
             } else {
@@ -176,10 +178,13 @@ pub fn build_item_from_guardian_event(
                     command: command.clone(),
                 }]
             } else {
-                parsed_cmd.into_iter().map(CommandAction::from).collect()
+                parsed_cmd
+                    .into_iter()
+                    .map(|parsed| CommandAction::from_core_with_cwd(parsed, cwd))
+                    .collect()
             };
             Some(ThreadItem::CommandExecution {
-                id: assessment.id.clone(),
+                id: id.clone(),
                 command,
                 cwd: cwd.clone(),
                 process_id: None,
@@ -193,7 +198,8 @@ pub fn build_item_from_guardian_event(
         }
         GuardianAssessmentAction::ApplyPatch { .. }
         | GuardianAssessmentAction::NetworkAccess { .. }
-        | GuardianAssessmentAction::McpToolCall { .. } => None,
+        | GuardianAssessmentAction::McpToolCall { .. }
+        | GuardianAssessmentAction::RequestPermissions { .. } => None,
     }
 }
 
@@ -202,9 +208,6 @@ pub fn guardian_auto_approval_review_notification(
     event_turn_id: &str,
     assessment: &GuardianAssessmentEvent,
 ) -> ServerNotification {
-    // TODO(ccunningham): Attach guardian review state to the reviewed tool
-    // item's lifecycle instead of sending standalone review notifications so
-    // the app-server API can persist and replay review state via `thread/read`.
     let turn_id = if assessment.turn_id.is_empty() {
         event_turn_id.to_string()
     } else {
@@ -221,12 +224,15 @@ pub fn guardian_auto_approval_review_notification(
             codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
                 GuardianApprovalReviewStatus::Denied
             }
+            codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                GuardianApprovalReviewStatus::TimedOut
+            }
             codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
                 GuardianApprovalReviewStatus::Aborted
             }
         },
-        risk_score: assessment.risk_score,
         risk_level: assessment.risk_level.map(Into::into),
+        user_authorization: assessment.user_authorization.map(Into::into),
         rationale: assessment.rationale.clone(),
     };
     let action = assessment.action.clone().into();
@@ -236,7 +242,9 @@ pub fn guardian_auto_approval_review_notification(
                 ItemGuardianApprovalReviewStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id,
-                    target_item_id: assessment.id.clone(),
+                    review_id: assessment.id.clone(),
+                    started_at_ms: assessment.started_at_ms,
+                    target_item_id: assessment.target_item_id.clone(),
                     review,
                     action,
                 },
@@ -244,12 +252,22 @@ pub fn guardian_auto_approval_review_notification(
         }
         codex_protocol::protocol::GuardianAssessmentStatus::Approved
         | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+        | codex_protocol::protocol::GuardianAssessmentStatus::TimedOut
         | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
             ServerNotification::ItemGuardianApprovalReviewCompleted(
                 ItemGuardianApprovalReviewCompletedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id,
-                    target_item_id: assessment.id.clone(),
+                    review_id: assessment.id.clone(),
+                    started_at_ms: assessment.started_at_ms,
+                    completed_at_ms: assessment
+                        .completed_at_ms
+                        .unwrap_or(assessment.started_at_ms),
+                    target_item_id: assessment.target_item_id.clone(),
+                    decision_source: assessment
+                        .decision_source
+                        .map(AutoReviewDecisionSource::from)
+                        .unwrap_or(AutoReviewDecisionSource::Agent),
                     review,
                     action,
                 },

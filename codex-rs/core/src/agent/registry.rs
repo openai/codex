@@ -220,7 +220,7 @@ impl AgentRegistry {
             } else {
                 active_agents.used_agent_nicknames.clear();
                 active_agents.nickname_reset_count += 1;
-                if let Some(metrics) = codex_otel::metrics::global() {
+                if let Some(metrics) = codex_otel::global() {
                     let _ = metrics.counter(
                         "codex.multi_agent.nickname_pool_reset",
                         /*inc*/ 1,

@@ -1,5 +1,6 @@
 use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolName;
 use crate::parse_dynamic_tool;
 use crate::parse_mcp_tool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -38,7 +39,8 @@ pub struct ResponsesApiTool {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]
-pub enum ToolSearchOutputTool {
+#[allow(clippy::large_enum_variant)]
+pub enum LoadableToolSpec {
     #[allow(dead_code)]
     #[serde(rename = "function")]
     Function(ResponsesApiTool),
@@ -51,6 +53,10 @@ pub struct ResponsesApiNamespace {
     pub name: String,
     pub description: String,
     pub tools: Vec<ResponsesApiNamespaceTool>,
+}
+
+pub fn default_namespace_description(namespace_name: &str) -> String {
+    format!("Tools in the {namespace_name} namespace.")
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -68,21 +74,53 @@ pub fn dynamic_tool_to_responses_api_tool(
     )?))
 }
 
+pub fn coalesce_loadable_tool_specs(
+    specs: impl IntoIterator<Item = LoadableToolSpec>,
+) -> Vec<LoadableToolSpec> {
+    let mut coalesced_specs = Vec::new();
+    for spec in specs {
+        match spec {
+            LoadableToolSpec::Function(tool) => {
+                coalesced_specs.push(LoadableToolSpec::Function(tool));
+            }
+            LoadableToolSpec::Namespace(mut namespace) => {
+                if let Some(existing_namespace) =
+                    coalesced_specs.iter_mut().find_map(|spec| match spec {
+                        LoadableToolSpec::Namespace(existing_namespace)
+                            if existing_namespace.name == namespace.name =>
+                        {
+                            Some(existing_namespace)
+                        }
+                        LoadableToolSpec::Function(_) | LoadableToolSpec::Namespace(_) => None,
+                    })
+                {
+                    existing_namespace.tools.append(&mut namespace.tools);
+                } else {
+                    coalesced_specs.push(LoadableToolSpec::Namespace(namespace));
+                }
+            }
+        }
+    }
+    coalesced_specs
+}
+
 pub fn mcp_tool_to_responses_api_tool(
-    name: String,
+    tool_name: &ToolName,
     tool: &rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?.renamed(name),
+        parse_mcp_tool(tool)?.renamed(tool_name.name.clone()),
     ))
 }
 
 pub fn mcp_tool_to_deferred_responses_api_tool(
-    name: String,
+    tool_name: &ToolName,
     tool: &rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?.renamed(name).into_deferred(),
+        parse_mcp_tool(tool)?
+            .renamed(tool_name.name.clone())
+            .into_deferred(),
     ))
 }
 

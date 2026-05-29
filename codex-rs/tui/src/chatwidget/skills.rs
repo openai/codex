@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
@@ -12,21 +10,26 @@ use crate::bottom_pane::SkillsToggleView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
-use codex_chatgpt::connectors::AppInfo;
-use codex_core::connectors::connector_mention_slug;
-use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
-use codex_core::skills::model::SkillDependencies;
-use codex_core::skills::model::SkillInterface;
-use codex_core::skills::model::SkillMetadata;
-use codex_core::skills::model::SkillToolDependency;
+use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_app_server_protocol::SkillsListEntry;
+use codex_app_server_protocol::SkillsListResponse;
+use codex_core_skills::model::SkillDependencies;
+use codex_core_skills::model::SkillInterface;
+use codex_core_skills::model::SkillMetadata;
+use codex_core_skills::model::SkillToolDependency;
+use codex_features::Feature;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::ListSkillsResponseEvent;
-use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_protocol::protocol::SkillsListEntry;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
-        self.insert_str("$");
+        if self.config.features.enabled(Feature::MentionsV2) {
+            self.insert_str("@");
+        } else {
+            self.insert_str("$");
+        }
     }
 
     pub(crate) fn open_skills_menu(&mut self) {
@@ -68,37 +71,40 @@ impl ChatWidget {
 
         let mut initial_state = HashMap::new();
         for skill in &self.skills_all {
-            initial_state.insert(normalize_skill_config_path(&skill.path), skill.enabled);
+            initial_state.insert(skill.path.clone(), skill.enabled);
         }
         self.skills_initial_state = Some(initial_state);
 
         let items: Vec<SkillsToggleItem> = self
             .skills_all
             .iter()
-            .map(|skill| {
-                let core_skill = protocol_skill_to_core(skill);
-                let display_name = skill_display_name(&core_skill).to_string();
+            .filter_map(|skill| {
+                let core_skill = protocol_skill_to_core(skill)?;
+                let display_name = skill_display_name(&core_skill);
                 let description = skill_description(&core_skill).to_string();
                 let name = core_skill.name.clone();
                 let path = core_skill.path_to_skills_md;
-                SkillsToggleItem {
+                Some(SkillsToggleItem {
                     name: display_name,
                     skill_name: name,
                     description,
                     enabled: skill.enabled,
                     path,
-                }
+                })
             })
             .collect();
 
-        let view = SkillsToggleView::new(items, self.app_event_tx.clone());
+        let view = SkillsToggleView::new(
+            items,
+            self.app_event_tx.clone(),
+            self.bottom_pane.list_keymap(),
+        );
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    pub(crate) fn update_skill_enabled(&mut self, path: PathBuf, enabled: bool) {
-        let target = normalize_skill_config_path(&path);
+    pub(crate) fn update_skill_enabled(&mut self, path: AbsolutePathBuf, enabled: bool) {
         for skill in &mut self.skills_all {
-            if normalize_skill_config_path(&skill.path) == target {
+            if skill.path == path {
                 skill.enabled = enabled;
             }
         }
@@ -111,7 +117,7 @@ impl ChatWidget {
         };
         let mut current_state = HashMap::new();
         for skill in &self.skills_all {
-            current_state.insert(normalize_skill_config_path(&skill.path), skill.enabled);
+            current_state.insert(skill.path.clone(), skill.enabled);
         }
 
         let mut enabled_count = 0;
@@ -138,8 +144,8 @@ impl ChatWidget {
         );
     }
 
-    pub(crate) fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
+    pub(crate) fn set_skills_from_response(&mut self, response: &SkillsListResponse) {
+        let skills = skills_for_cwd(&self.config.cwd, &response.data);
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
     }
@@ -161,7 +167,11 @@ impl ChatWidget {
             }
 
             // Best effort only: annotate exact SKILL.md path matches from the loaded skills list.
-            if let Some(skill) = self.skills_all.iter().find(|skill| skill.path == *path) {
+            if let Some(skill) = self
+                .skills_all
+                .iter()
+                .find(|skill| skill.path.as_path() == path)
+            {
                 *name = format!("{name} ({} skill)", skill.name);
             }
         }
@@ -170,10 +180,13 @@ impl ChatWidget {
     }
 }
 
-fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<ProtocolSkillMetadata> {
+fn skills_for_cwd(
+    cwd: &AbsolutePathBuf,
+    skills_entries: &[SkillsListEntry],
+) -> Vec<ProtocolSkillMetadata> {
     skills_entries
         .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
+        .find(|entry| entry.cwd.as_path() == cwd.as_path())
         .map(|entry| entry.skills.clone())
         .unwrap_or_default()
 }
@@ -182,12 +195,23 @@ fn enabled_skills_for_mentions(skills: &[ProtocolSkillMetadata]) -> Vec<SkillMet
     skills
         .iter()
         .filter(|skill| skill.enabled)
-        .map(protocol_skill_to_core)
+        .filter_map(protocol_skill_to_core)
         .collect()
 }
 
-fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
-    SkillMetadata {
+fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata> {
+    let scope = serde_json::to_value(skill.scope)
+        .and_then(serde_json::from_value)
+        .inspect_err(|err| {
+            tracing::warn!(
+                skill_name = %skill.name,
+                %err,
+                "Failed to map app-server skill scope"
+            );
+        })
+        .ok()?;
+
+    Some(SkillMetadata {
         name: skill.name.clone(),
         description: skill.description.clone(),
         short_description: skill.short_description.clone(),
@@ -218,12 +242,9 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
             }),
         policy: None,
         path_to_skills_md: skill.path.clone(),
-        scope: skill.scope,
-    }
-}
-
-fn normalize_skill_config_path(path: &Path) -> PathBuf {
-    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        scope,
+        plugin_id: None,
+    })
 }
 
 pub(crate) fn collect_tool_mentions(
@@ -294,13 +315,13 @@ pub(crate) fn find_app_mentions(
     }
 
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
-    for app in apps.iter().filter(|app| app.is_enabled) {
-        let slug = connector_mention_slug(app);
+    for app in apps.iter().filter(|app| is_app_mentionable(app)) {
+        let slug = codex_connectors::metadata::connector_mention_slug(app);
         *slug_counts.entry(slug).or_insert(0) += 1;
     }
 
-    for app in apps.iter().filter(|app| app.is_enabled) {
-        let slug = connector_mention_slug(app);
+    for app in apps.iter().filter(|app| is_app_mentionable(app)) {
+        let slug = codex_connectors::metadata::connector_mention_slug(app);
         let slug_count = slug_counts.get(&slug).copied().unwrap_or(0);
         if mentions.names.contains(&slug)
             && !explicit_names.contains(&slug)
@@ -312,9 +333,13 @@ pub(crate) fn find_app_mentions(
     }
 
     apps.iter()
-        .filter(|app| app.is_enabled && selected_ids.contains(&app.id))
+        .filter(|app| is_app_mentionable(app) && selected_ids.contains(&app.id))
         .cloned()
         .collect()
+}
+
+pub(crate) fn is_app_mentionable(app: &AppInfo) -> bool {
+    app.is_accessible && app.is_enabled
 }
 
 pub(crate) struct ToolMentions {
@@ -475,4 +500,75 @@ fn normalize_skill_path(path: &str) -> &str {
 fn app_id_from_path(path: &str) -> Option<&str> {
     path.strip_prefix("app://")
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn app(id: &str, name: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: true,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn find_app_mentions_requires_accessible_enabled_apps_for_slugs() {
+        let apps = vec![
+            app("google_drive", "Google Drive"),
+            AppInfo {
+                is_accessible: false,
+                ..app("arabica_uae", "% Arabica UAE")
+            },
+            AppInfo {
+                is_enabled: false,
+                ..app("linear", "Linear")
+            },
+        ];
+        let mentions = collect_tool_mentions("$google-drive $arabica-uae $linear", &HashMap::new());
+
+        assert_eq!(
+            find_app_mentions(&mentions, &apps, &HashSet::new()),
+            vec![apps[0].clone()]
+        );
+    }
+
+    #[test]
+    fn find_app_mentions_requires_accessible_enabled_apps_for_bound_paths() {
+        let apps = vec![
+            app("google_drive", "Google Drive"),
+            AppInfo {
+                is_accessible: false,
+                ..app("arabica_uae", "% Arabica UAE")
+            },
+            AppInfo {
+                is_enabled: false,
+                ..app("linear", "Linear")
+            },
+        ];
+        let mention_paths = HashMap::from([
+            ("google-drive".to_string(), "app://google_drive".to_string()),
+            ("arabica-uae".to_string(), "app://arabica_uae".to_string()),
+            ("linear".to_string(), "app://linear".to_string()),
+        ]);
+        let mentions = collect_tool_mentions("$google-drive $arabica-uae $linear", &mention_paths);
+
+        assert_eq!(
+            find_app_mentions(&mentions, &apps, &HashSet::new()),
+            vec![apps[0].clone()]
+        );
+    }
 }

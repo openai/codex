@@ -5,7 +5,8 @@
 //!
 //! The key contract is that time-sensitive values are interpreted relative to a caller-provided
 //! capture timestamp so stale detection and reset labels remain coherent for a given draw cycle.
-use crate::chatwidget::get_limits_duration;
+use crate::chatwidget::fallback_limit_label;
+use crate::chatwidget::limit_label_for_window;
 use crate::text_formatting::capitalize_first;
 
 use super::helpers::format_reset_timestamp;
@@ -13,9 +14,9 @@ use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::Utc;
-use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
+use codex_app_server_protocol::CreditsSnapshot as CoreCreditsSnapshot;
+use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::RateLimitWindow;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
@@ -23,7 +24,7 @@ const STATUS_LIMIT_BAR_EMPTY: &str = "░";
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusRateLimitRow {
-    /// Human-readable row label, such as `"5h limit"` or `"Credits"`.
+    /// Human-readable row label, such as `"5h limit"`, `"Monthly limit"`, or `"Credits"`.
     pub label: String,
     /// Value payload for the row.
     pub value: StatusRateLimitValue,
@@ -50,6 +51,8 @@ pub(crate) enum StatusRateLimitData {
     Available(Vec<StatusRateLimitRow>),
     /// Snapshot data exists but is older than the staleness threshold.
     Stale(Vec<StatusRateLimitRow>),
+    /// The refresh completed, but the response did not include displayable usage data.
+    Unavailable,
     /// No snapshot data is currently available.
     Missing,
 }
@@ -77,9 +80,9 @@ impl RateLimitWindowDisplay {
         let resets_at = resets_at_utc.map(|dt| format_reset_timestamp(dt, captured_at));
 
         Self {
-            used_percent: window.used_percent,
+            used_percent: f64::from(window.used_percent),
             resets_at,
-            window_minutes: window.window_minutes,
+            window_minutes: window.window_duration_mins,
         }
     }
 }
@@ -90,9 +93,9 @@ pub(crate) struct RateLimitSnapshotDisplay {
     pub limit_name: String,
     /// Local timestamp representing when this display snapshot was captured.
     pub captured_at: DateTime<Local>,
-    /// Primary usage window (typically short duration).
+    /// Primary usage window.
     pub primary: Option<RateLimitWindowDisplay>,
-    /// Secondary usage window (typically weekly).
+    /// Secondary usage window.
     pub secondary: Option<RateLimitWindowDisplay>,
     /// Optional credits metadata when available.
     pub credits: Option<CreditsSnapshotDisplay>,
@@ -186,21 +189,13 @@ pub(crate) fn compose_rate_limit_data_many(
             .primary
             .as_ref()
             .map(|window| {
-                window
-                    .window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string())
+                limit_label_for_window(window.window_minutes, /*is_secondary*/ false)
             })
             .map(|label| capitalize_first(&label));
         let secondary_label = snapshot
             .secondary
             .as_ref()
-            .map(|window| {
-                window
-                    .window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string())
-            })
+            .map(|window| limit_label_for_window(window.window_minutes, /*is_secondary*/ true))
             .map(|label| capitalize_first(&label));
         let window_count =
             usize::from(snapshot.primary.is_some()) + usize::from(snapshot.secondary.is_some());
@@ -218,12 +213,16 @@ pub(crate) fn compose_rate_limit_data_many(
                 format!(
                     "{} {} limit",
                     limit_bucket_label,
-                    primary_label.clone().unwrap_or_else(|| "5h".to_string())
+                    primary_label.clone().unwrap_or_else(|| capitalize_first(
+                        fallback_limit_label(/*is_secondary*/ false)
+                    ))
                 )
             } else {
                 format!(
                     "{} limit",
-                    primary_label.clone().unwrap_or_else(|| "5h".to_string())
+                    primary_label.clone().unwrap_or_else(|| capitalize_first(
+                        fallback_limit_label(/*is_secondary*/ false)
+                    ))
                 )
             };
             rows.push(StatusRateLimitRow {
@@ -240,16 +239,16 @@ pub(crate) fn compose_rate_limit_data_many(
                 format!(
                     "{} {} limit",
                     limit_bucket_label,
-                    secondary_label
-                        .clone()
-                        .unwrap_or_else(|| "weekly".to_string())
+                    secondary_label.clone().unwrap_or_else(|| capitalize_first(
+                        fallback_limit_label(/*is_secondary*/ true)
+                    ))
                 )
             } else {
                 format!(
                     "{} limit",
-                    secondary_label
-                        .clone()
-                        .unwrap_or_else(|| "weekly".to_string())
+                    secondary_label.clone().unwrap_or_else(|| capitalize_first(
+                        fallback_limit_label(/*is_secondary*/ true)
+                    ))
                 )
             };
             rows.push(StatusRateLimitRow {
@@ -269,7 +268,7 @@ pub(crate) fn compose_rate_limit_data_many(
     }
 
     if rows.is_empty() {
-        StatusRateLimitData::Available(vec![])
+        StatusRateLimitData::Unavailable
     } else if stale {
         StatusRateLimitData::Stale(rows)
     } else {
@@ -418,7 +417,7 @@ mod tests {
             secondary: Some(RateLimitWindowDisplay {
                 used_percent: 40.0,
                 resets_at: Some("later".to_string()),
-                window_minutes: None,
+                window_minutes: Some(2 * 60),
             }),
             credits: None,
         };
@@ -432,8 +431,8 @@ mod tests {
             labels,
             vec![
                 "codex-other limit".to_string(),
-                "1h limit".to_string(),
-                "Weekly limit".to_string(),
+                "Usage limit".to_string(),
+                "Secondary usage limit".to_string(),
             ]
         );
     }

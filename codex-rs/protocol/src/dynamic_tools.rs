@@ -8,6 +8,8 @@ use ts_rs::TS;
 #[derive(Debug, Clone, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicToolSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
@@ -20,6 +22,10 @@ pub struct DynamicToolSpec {
 pub struct DynamicToolCallRequest {
     pub call_id: String,
     pub turn_id: String,
+    #[serde(default)]
+    pub started_at_ms: i64,
+    #[serde(default)]
+    pub namespace: Option<String>,
     pub tool: String,
     pub arguments: JsonValue,
 }
@@ -44,6 +50,7 @@ pub enum DynamicToolCallOutputContentItem {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DynamicToolSpecDe {
+    namespace: Option<String>,
     name: String,
     description: String,
     input_schema: JsonValue,
@@ -57,6 +64,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
         D: Deserializer<'de>,
     {
         let DynamicToolSpecDe {
+            namespace,
             name,
             description,
             input_schema,
@@ -65,6 +73,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
         } = DynamicToolSpecDe::deserialize(deserializer)?;
 
         Ok(Self {
+            namespace,
             name,
             description,
             input_schema,
@@ -99,6 +108,7 @@ mod tests {
         assert_eq!(
             actual,
             DynamicToolSpec {
+                namespace: None,
                 name: "lookup_ticket".to_string(),
                 description: "Fetch a ticket".to_string(),
                 input_schema: json!({

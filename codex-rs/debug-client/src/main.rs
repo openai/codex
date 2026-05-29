@@ -4,8 +4,10 @@ mod output;
 mod reader;
 mod state;
 
+use std::fs::File;
 use std::io;
 use std::io::BufRead;
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use anyhow::Context;
@@ -50,6 +52,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     final_only: bool,
 
+    /// Write raw server JSONL to this file instead of stdout.
+    #[arg(long, value_name = "PATH")]
+    output_file: Option<PathBuf>,
+
     /// Optional model override when starting/resuming a thread.
     #[arg(long)]
     model: Option<String>,
@@ -65,7 +71,18 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let output = Output::new();
+    let jsonl_file = cli
+        .output_file
+        .as_ref()
+        .map(File::create)
+        .transpose()
+        .with_context(|| {
+            let Some(path) = cli.output_file.as_ref() else {
+                return "open output file".to_string();
+            };
+            format!("open output file {}", path.display())
+        })?;
+    let output = Output::new(jsonl_file);
     let approval_policy = parse_approval_policy(&cli.approval_policy)?;
 
     let mut client = AppServerClient::spawn(

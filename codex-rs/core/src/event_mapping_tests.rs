@@ -1,10 +1,13 @@
 use super::parse_turn_item;
+use crate::context::ContextualUserFragment;
+use crate::context::GoalContext;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -26,12 +29,13 @@ fn parses_user_message_with_text_and_two_images() {
             },
             ContentItem::InputImage {
                 image_url: img1.clone(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputImage {
                 image_url: img2.clone(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
-        end_turn: None,
         phase: None,
     };
 
@@ -44,8 +48,14 @@ fn parses_user_message_with_text_and_two_images() {
                     text: "Hello world".to_string(),
                     text_elements: Vec::new(),
                 },
-                UserInput::Image { image_url: img1 },
-                UserInput::Image { image_url: img2 },
+                UserInput::Image {
+                    image_url: img1,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                },
+                UserInput::Image {
+                    image_url: img2,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                },
             ];
             assert_eq!(user.content, expected_content);
         }
@@ -66,6 +76,7 @@ fn skips_local_image_label_text() {
             ContentItem::InputText { text: label },
             ContentItem::InputImage {
                 image_url: image_url.clone(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputText {
                 text: "</image>".to_string(),
@@ -74,7 +85,6 @@ fn skips_local_image_label_text() {
                 text: user_text.clone(),
             },
         ],
-        end_turn: None,
         phase: None,
     };
 
@@ -83,7 +93,10 @@ fn skips_local_image_label_text() {
     match turn_item {
         TurnItem::UserMessage(user) => {
             let expected_content = vec![
-                UserInput::Image { image_url },
+                UserInput::Image {
+                    image_url,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                },
                 UserInput::Text {
                     text: user_text,
                     text_elements: Vec::new(),
@@ -104,7 +117,6 @@ fn parses_assistant_message_input_text_for_backward_compatibility() {
             text: "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue"
                 .to_string(),
         }],
-        end_turn: None,
         phase: None,
     };
 
@@ -145,6 +157,7 @@ fn skips_unnamed_image_label_text() {
             ContentItem::InputText { text: label },
             ContentItem::InputImage {
                 image_url: image_url.clone(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputText {
                 text: codex_protocol::models::image_close_tag_text(),
@@ -153,7 +166,6 @@ fn skips_unnamed_image_label_text() {
                 text: user_text.clone(),
             },
         ],
-        end_turn: None,
         phase: None,
     };
 
@@ -162,7 +174,10 @@ fn skips_unnamed_image_label_text() {
     match turn_item {
         TurnItem::UserMessage(user) => {
             let expected_content = vec![
-                UserInput::Image { image_url },
+                UserInput::Image {
+                    image_url,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                },
                 UserInput::Text {
                     text: user_text,
                     text_elements: Vec::new(),
@@ -183,7 +198,6 @@ fn skips_user_instructions_and_env() {
                 content: vec![ContentItem::InputText {
                     text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
-                end_turn: None,
             phase: None,
             },
             ResponseItem::Message {
@@ -192,7 +206,6 @@ fn skips_user_instructions_and_env() {
                 content: vec![ContentItem::InputText {
                     text: "<environment_context>test_text</environment_context>".to_string(),
                 }],
-                end_turn: None,
             phase: None,
             },
             ResponseItem::Message {
@@ -201,7 +214,6 @@ fn skips_user_instructions_and_env() {
                 content: vec![ContentItem::InputText {
                     text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
-                end_turn: None,
             phase: None,
             },
             ResponseItem::Message {
@@ -211,7 +223,6 @@ fn skips_user_instructions_and_env() {
                     text: "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
                         .to_string(),
                 }],
-                end_turn: None,
             phase: None,
             },
             ResponseItem::Message {
@@ -220,7 +231,6 @@ fn skips_user_instructions_and_env() {
                 content: vec![ContentItem::InputText {
                     text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
                 }],
-                end_turn: None,
             phase: None,
             },
             ResponseItem::Message {
@@ -236,7 +246,6 @@ fn skips_user_instructions_and_env() {
                                 .to_string(),
                     },
                 ],
-                end_turn: None,
                 phase: None,
             },
         ];
@@ -287,7 +296,6 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
                         .to_string(),
             },
         ],
-        end_turn: None,
         phase: None,
     };
 
@@ -309,6 +317,20 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
 }
 
 #[test]
+fn goal_context_does_not_parse_as_visible_turn_item() {
+    let item = ResponseItem::Message {
+        id: Some("msg-1".to_string()),
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: GoalContext::new("Continue working toward the active thread goal.").render(),
+        }],
+        phase: None,
+    };
+
+    assert!(parse_turn_item(&item).is_none());
+}
+
+#[test]
 fn parses_agent_message() {
     let item = ResponseItem::Message {
         id: Some("msg-1".to_string()),
@@ -316,7 +338,6 @@ fn parses_agent_message() {
         content: vec![ContentItem::OutputText {
             text: "Hello from Codex".to_string(),
         }],
-        end_turn: None,
         phase: None,
     };
 

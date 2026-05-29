@@ -5,7 +5,7 @@ use ratatui::text::Line;
 #[test]
 fn live_001_commit_on_overflow() {
     let backend = VT100Backend::new(/*width*/ 20, /*height*/ 6);
-    let mut term = match codex_tui::custom_terminal::Terminal::with_options(backend) {
+    let mut term = match codex_tui::Terminal::with_options(backend) {
         Ok(t) => t,
         Err(e) => panic!("failed to construct terminal: {e}"),
     };
@@ -15,7 +15,7 @@ fn live_001_commit_on_overflow() {
     term.set_viewport_area(area);
 
     // Build 5 explicit rows at width 20.
-    let mut rb = codex_tui::live_wrap::RowBuilder::new(/*target_width*/ 20);
+    let mut rb = codex_tui::RowBuilder::new(/*target_width*/ 20);
     rb.push_fragment("one\n");
     rb.push_fragment("two\n");
     rb.push_fragment("three\n");
@@ -26,7 +26,7 @@ fn live_001_commit_on_overflow() {
     let commit_rows = rb.drain_commit_ready(/*max_keep*/ 3);
     let lines: Vec<Line<'static>> = commit_rows.into_iter().map(|r| r.text.into()).collect();
 
-    codex_tui::insert_history::insert_history_lines(&mut term, lines)
+    codex_tui::insert_history_lines(&mut term, lines)
         .expect("Failed to insert history lines in test");
 
     let screen = term.backend().vt100().screen();

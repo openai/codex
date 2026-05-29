@@ -9,11 +9,17 @@ doctest = false
 name = "codex_code_mode"
 path = "src/lib.rs"
 
+[features]
+sandbox = ["v8/v8_enable_sandbox"]
+
 [lints]
 workspace = true
 
 [dependencies]
+async-channel = { workspace = true }
 async-trait = { workspace = true }
+codex-protocol = { workspace = true }
+deno_core_icudata = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

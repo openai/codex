@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 fn run_apply_patch_in_dir(dir: &Path, patch: &str) -> anyhow::Result<assert_cmd::assert::Assert> {
@@ -16,9 +17,14 @@ fn apply_patch_command(dir: &Path) -> anyhow::Result<Command> {
     Ok(cmd)
 }
 
+fn resolved_under(root: &Path, path: &str) -> anyhow::Result<PathBuf> {
+    Ok(root.canonicalize()?.join(path))
+}
+
 #[test]
 fn test_apply_patch_cli_applies_multiple_operations() -> anyhow::Result<()> {
     let tmp = tempdir()?;
+    let add_path = tmp.path().join("nested/new.txt");
     let modify_path = tmp.path().join("modify.txt");
     let delete_path = tmp.path().join("delete.txt");
 
@@ -31,10 +37,7 @@ fn test_apply_patch_cli_applies_multiple_operations() -> anyhow::Result<()> {
         "Success. Updated the following files:\nA nested/new.txt\nM modify.txt\nD delete.txt\n",
     );
 
-    assert_eq!(
-        fs::read_to_string(tmp.path().join("nested/new.txt"))?,
-        "created\n"
-    );
+    assert_eq!(fs::read_to_string(add_path)?, "created\n");
     assert_eq!(fs::read_to_string(&modify_path)?, "line1\nchanged\n");
     assert!(!delete_path.exists());
 
@@ -98,13 +101,17 @@ fn test_apply_patch_cli_rejects_empty_patch() -> anyhow::Result<()> {
 fn test_apply_patch_cli_reports_missing_context() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let target_path = tmp.path().join("modify.txt");
+    let expected_target_path = resolved_under(tmp.path(), "modify.txt")?;
     fs::write(&target_path, "line1\nline2\n")?;
 
     apply_patch_command(tmp.path())?
         .arg("*** Begin Patch\n*** Update File: modify.txt\n@@\n-missing\n+changed\n*** End Patch")
         .assert()
         .failure()
-        .stderr("Failed to find expected lines in modify.txt:\nmissing\n");
+        .stderr(format!(
+            "Failed to find expected lines in {}:\nmissing\n",
+            expected_target_path.display()
+        ));
     assert_eq!(fs::read_to_string(&target_path)?, "line1\nline2\n");
 
     Ok(())
@@ -113,12 +120,16 @@ fn test_apply_patch_cli_reports_missing_context() -> anyhow::Result<()> {
 #[test]
 fn test_apply_patch_cli_rejects_missing_file_delete() -> anyhow::Result<()> {
     let tmp = tempdir()?;
+    let missing_path = resolved_under(tmp.path(), "missing.txt")?;
 
     apply_patch_command(tmp.path())?
         .arg("*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch")
         .assert()
         .failure()
-        .stderr("Failed to delete file missing.txt\n");
+        .stderr(format!(
+            "Failed to delete file {}\n",
+            missing_path.display()
+        ));
 
     Ok(())
 }
@@ -139,14 +150,16 @@ fn test_apply_patch_cli_rejects_empty_update_hunk() -> anyhow::Result<()> {
 #[test]
 fn test_apply_patch_cli_requires_existing_file_for_update() -> anyhow::Result<()> {
     let tmp = tempdir()?;
+    let missing_path = resolved_under(tmp.path(), "missing.txt")?;
 
     apply_patch_command(tmp.path())?
         .arg("*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch")
         .assert()
         .failure()
-        .stderr(
-            "Failed to read file to update missing.txt: No such file or directory (os error 2)\n",
-        );
+        .stderr(format!(
+            "Failed to read file to update {}: No such file or directory (os error 2)\n",
+            missing_path.display()
+        ));
 
     Ok(())
 }
@@ -195,13 +208,18 @@ fn test_apply_patch_cli_add_overwrites_existing_file() -> anyhow::Result<()> {
 #[test]
 fn test_apply_patch_cli_delete_directory_fails() -> anyhow::Result<()> {
     let tmp = tempdir()?;
-    fs::create_dir(tmp.path().join("dir"))?;
+    let dir = tmp.path().join("dir");
+    let expected_dir = resolved_under(tmp.path(), "dir")?;
+    fs::create_dir(&dir)?;
 
     apply_patch_command(tmp.path())?
         .arg("*** Begin Patch\n*** Delete File: dir\n*** End Patch")
         .assert()
         .failure()
-        .stderr("Failed to delete file dir\n");
+        .stderr(format!(
+            "Failed to delete file {}\n",
+            expected_dir.display()
+        ));
 
     Ok(())
 }
@@ -243,13 +261,17 @@ fn test_apply_patch_cli_updates_file_appends_trailing_newline() -> anyhow::Resul
 fn test_apply_patch_cli_failure_after_partial_success_leaves_changes() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let new_file = tmp.path().join("created.txt");
+    let missing_file = resolved_under(tmp.path(), "missing.txt")?;
 
     apply_patch_command(tmp.path())?
         .arg("*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch")
         .assert()
         .failure()
         .stdout("")
-        .stderr("Failed to read file to update missing.txt: No such file or directory (os error 2)\n");
+        .stderr(format!(
+            "Failed to read file to update {}: No such file or directory (os error 2)\n",
+            missing_file.display()
+        ));
 
     assert_eq!(fs::read_to_string(&new_file)?, "hello\n");
 

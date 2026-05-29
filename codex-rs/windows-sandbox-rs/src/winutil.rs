@@ -3,18 +3,18 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::CopySid;
 use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::SID_NAME_USE;
-use windows_sys::Win32::System::Diagnostics::Debug::FormatMessageW;
 use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER;
 use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_FROM_SYSTEM;
 use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_IGNORE_INSERTS;
-use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+use windows_sys::Win32::System::Diagnostics::Debug::FormatMessageW;
 
 pub fn to_wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {
     let mut v: Vec<u16> = s.as_ref().encode_wide().collect();
@@ -64,6 +64,15 @@ pub fn quote_windows_arg(arg: &str) -> String {
     quoted
 }
 
+/// Build a Windows command line for CreateProcess-style APIs.
+#[cfg(target_os = "windows")]
+pub fn argv_to_command_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|arg| quote_windows_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // Produce a readable description for a Win32 error code.
 pub fn format_last_error(err: i32) -> String {
     unsafe {
@@ -98,7 +107,10 @@ pub fn string_from_sid_bytes(sid: &[u8]) -> Result<String, String> {
         let mut str_ptr: *mut u16 = std::ptr::null_mut();
         let ok = ConvertSidToStringSidW(sid.as_ptr() as *mut std::ffi::c_void, &mut str_ptr);
         if ok == 0 || str_ptr.is_null() {
-            return Err(format!("ConvertSidToStringSidW failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "ConvertSidToStringSidW failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         let mut len = 0;
         while *str_ptr.add(len) != 0 {
@@ -149,7 +161,9 @@ pub fn resolve_sid(name: &str) -> Result<Vec<u8>> {
             domain.resize(domain_len as usize, 0);
             continue;
         }
-        return Err(anyhow::anyhow!("LookupAccountNameW failed for {name}: {err}"));
+        return Err(anyhow::anyhow!(
+            "LookupAccountNameW failed for {name}: {err}"
+        ));
     }
 }
 
@@ -189,4 +203,39 @@ fn sid_bytes_from_string(sid_str: &str) -> Result<Vec<u8>> {
         return Err(anyhow::anyhow!("CopySid failed for {sid_str}"));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::argv_to_command_line;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn argv_to_command_line_quotes_each_argument_independently() {
+        let argv = vec![
+            "cmd.exe".to_string(),
+            "/c".to_string(),
+            "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -EncodedCommand abc=="
+                .to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "cmd.exe /c \"\\\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\\\" -NoProfile -EncodedCommand abc==\""
+        );
+    }
+
+    #[test]
+    fn argv_to_command_line_quotes_regular_program_args() {
+        let argv = vec![
+            "pwsh.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output \"hello world\"".to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
+        );
+    }
 }

@@ -5,17 +5,17 @@
 /**
  * Final buffered result for `command/exec`.
  */
-export type CommandExecResponse = { 
+export type CommandExecResponse = {
 /**
  * Process exit code.
  */
-exitCode: number, 
+exitCode: number,
 /**
  * Buffered stdout capture.
  *
  * Empty when stdout was streamed via `command/exec/outputDelta`.
  */
-stdout: string, 
+stdout: string,
 /**
  * Buffered stderr capture.
  *

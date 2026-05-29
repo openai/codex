@@ -1,8 +1,5 @@
 #![cfg(target_os = "macos")]
 
-use std::collections::HashMap;
-use std::string::ToString;
-
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
@@ -11,11 +8,11 @@ use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::Result;
 use codex_protocol::exec_output::ExecToolCallOutput;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
+use core_test_support::PathExt;
+use std::collections::HashMap;
 use tempfile::TempDir;
 
 fn skip_test() -> bool {
@@ -28,14 +25,19 @@ fn skip_test() -> bool {
 }
 
 #[expect(clippy::expect_used)]
-async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
+async fn run_test_cmd<I, S>(tmp: TempDir, command: I) -> Result<ExecToolCallOutput>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     let sandbox_type = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
         .expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
+    let cwd = tmp.path().abs();
 
     let params = ExecParams {
-        command: cmd.iter().map(ToString::to_string).collect(),
-        cwd: tmp.path().to_path_buf(),
+        command: command.into_iter().map(Into::into).collect(),
+        cwd: cwd.clone(),
         expiration: 1000.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
@@ -47,14 +49,11 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         arg0: None,
     };
 
-    let policy = SandboxPolicy::new_read_only_policy();
-
     process_exec_tool_call(
         params,
-        &policy,
-        &FileSystemSandboxPolicy::from(&policy),
-        NetworkSandboxPolicy::from(&policy),
-        tmp.path(),
+        &PermissionProfile::read_only(),
+        &cwd,
+        std::slice::from_ref(&cwd),
         &None,
         /*use_legacy_landlock*/ false,
         /*stdout_stream*/ None,
@@ -127,6 +126,37 @@ async fn exit_command_not_found_is_ok() {
     run_test_cmd(tmp, cmd).await.unwrap();
 }
 
+#[tokio::test]
+async fn openpty_works_under_real_exec_seatbelt_path() {
+    if skip_test() {
+        return;
+    }
+
+    let python = match which::which("python3") {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python3 not found in PATH, skipping test.");
+            return;
+        }
+    };
+
+    let tmp = TempDir::new().expect("should be able to create temp dir");
+    let cmd = vec![
+        python.to_string_lossy().into_owned(),
+        "-c".to_string(),
+        r#"import os
+
+master, slave = os.openpty()
+os.write(slave, b"ping")
+assert os.read(master, 4) == b"ping""#
+            .to_string(),
+    ];
+
+    let output = run_test_cmd(tmp, cmd).await.unwrap();
+    assert_eq!(output.stdout.text, "");
+    assert_eq!(output.stderr.text, "");
+}
+
 /// Writing a file fails and should be considered a sandbox error
 #[tokio::test]
 async fn write_file_fails_as_sandbox_error() {
@@ -137,7 +167,7 @@ async fn write_file_fails_as_sandbox_error() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let path = tmp.path().join("test.txt");
     let cmd = vec![
-        "/user/bin/touch",
+        "/usr/bin/touch",
         path.to_str().expect("should be able to get path"),
     ];
 

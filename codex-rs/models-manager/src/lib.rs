@@ -1,15 +1,12 @@
-pub mod cache;
+pub(crate) mod cache;
 pub mod collaboration_mode_presets;
-pub mod config;
+pub(crate) mod config;
 pub mod manager;
 pub mod model_info;
 pub mod model_presets;
+pub mod test_support;
 
 pub use codex_app_server_protocol::AuthMode;
-pub use codex_login::AuthManager;
-pub use codex_login::CodexAuth;
-pub use codex_model_provider_info::ModelProviderInfo;
-pub use codex_model_provider_info::WireApi;
 pub use config::ModelsManagerConfig;
 
 /// Load the bundled model catalog shipped with `codex-models-manager`.

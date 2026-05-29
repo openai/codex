@@ -1,10 +1,38 @@
 # Containerized Development
 
-We provide the following options to facilitate Codex development in a container. This is particularly useful for verifying the Linux build when working on a macOS host.
+We provide two container paths:
+
+- `devcontainer.json` keeps the existing Codex contributor setup for working on this repository.
+- `devcontainer.secure.json` adds a customer-oriented profile with stricter outbound network controls.
+
+## Codex contributor profile
+
+Use `devcontainer.json` when you are developing Codex itself. This is the same lightweight arm64 container that already exists in the repo.
+
+## Secure customer profile
+
+Use `devcontainer.secure.json` when you want a stricter runtime profile for running Codex inside a project container:
+
+- installs the Codex CLI plus common build tools
+- installs bubblewrap in setuid mode for Codex's Linux sandbox
+- disables Docker's outer seccomp and AppArmor profiles so bubblewrap can construct Codex's inner sandbox
+- enables firewall startup with an allowlist-driven outbound policy
+- blocks IPv6 by default so the allowlist cannot be bypassed over AAAA routes
+- requires `NET_ADMIN` and `NET_RAW` so the firewall can be installed at startup
+
+This profile keeps the stricter networking isolated to the customer path instead of changing the default Codex contributor container.
+
+Start it from the CLI with:
+
+```bash
+devcontainer up --workspace-folder . --config .devcontainer/devcontainer.secure.json
+```
+
+In VS Code, choose **Dev Containers: Open Folder in Container...** and select `.devcontainer/devcontainer.secure.json`.
 
 ## Docker
 
-To build the Docker image locally for x64 and then run it with the repo mounted under `/workspace`:
+To build the contributor image locally for x64 and then run it with the repo mounted under `/workspace`:
 
 ```shell
 CODEX_DOCKER_IMAGE_NAME=codex-linux-dev
@@ -14,17 +42,8 @@ docker run --platform=linux/amd64 --rm -it -e CARGO_TARGET_DIR=/workspace/codex-
 
 Note that `/workspace/target` will contain the binaries built for your host platform, so we include `-e CARGO_TARGET_DIR=/workspace/codex-rs/target-amd64` in the `docker run` command so that the binaries built inside your container are written to a separate directory.
 
-For arm64, specify `--platform=linux/amd64` instead for both `docker build` and `docker run`.
+For arm64, specify `--platform=linux/arm64` instead for both `docker build` and `docker run`.
 
-Currently, the `Dockerfile` works for both x64 and arm64 Linux, though you need to run `rustup target add x86_64-unknown-linux-musl` yourself to install the musl toolchain for x64.
+Currently, the contributor `Dockerfile` works for both x64 and arm64 Linux, though you need to run `rustup target add x86_64-unknown-linux-musl` yourself to install the musl toolchain for x64.
 
-## VS Code
-
-VS Code recognizes the `devcontainer.json` file and gives you the option to develop Codex in a container. Currently, `devcontainer.json` builds and runs the `arm64` flavor of the container.
-
-From the integrated terminal in VS Code, you can build either flavor of the `arm64` build (GNU or musl):
-
-```shell
-cargo build --target aarch64-unknown-linux-musl
-cargo build --target aarch64-unknown-linux-gnu
-```
+The secure profile's capability, seccomp, and AppArmor options are required when you want Codex's bubblewrap sandbox to run inside Docker as the non-root devcontainer user. Without them, Docker's default runtime profile can block bubblewrap's namespace setup before Codex's own seccomp filter is installed. This keeps the Docker relaxation explicit in the profile that is meant to run Codex inside a project container, while the default contributor profile stays lightweight.

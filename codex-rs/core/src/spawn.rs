@@ -1,4 +1,5 @@
 use codex_network_proxy::NetworkProxy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -40,7 +41,7 @@ pub(crate) struct SpawnChildRequest<'a> {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub arg0: Option<&'a str>,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub network_sandbox_policy: NetworkSandboxPolicy,
     pub network: Option<&'a NetworkProxy>,
     pub stdio_policy: StdioPolicy,

@@ -1,16 +1,19 @@
 use std::collections::HashMap;
 
-pub fn format_env_display(env: Option<&HashMap<String, String>>, env_vars: &[String]) -> String {
+pub fn format_env_display<S: AsRef<str>>(
+    env: Option<&HashMap<String, String>>,
+    env_vars: &[S],
+) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     if let Some(map) = env {
         let mut pairs: Vec<_> = map.iter().collect();
-        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        pairs.sort_by_key(|(key, _)| *key);
         parts.extend(pairs.into_iter().map(|(key, _)| format!("{key}=*****")));
     }
 
     if !env_vars.is_empty() {
-        parts.extend(env_vars.iter().map(|var| format!("{var}=*****")));
+        parts.extend(env_vars.iter().map(|var| format!("{}=*****", var.as_ref())));
     }
 
     if parts.is_empty() {
@@ -26,10 +29,11 @@ mod tests {
 
     #[test]
     fn returns_dash_when_empty() {
-        assert_eq!(format_env_display(/*env*/ None, &[]), "-");
+        let empty_vars: &[String] = &[];
+        assert_eq!(format_env_display(/*env*/ None, empty_vars), "-");
 
         let empty_map = HashMap::new();
-        assert_eq!(format_env_display(Some(&empty_map), &[]), "-");
+        assert_eq!(format_env_display(Some(&empty_map), empty_vars), "-");
     }
 
     #[test]
@@ -38,7 +42,10 @@ mod tests {
         env.insert("B".to_string(), "two".to_string());
         env.insert("A".to_string(), "one".to_string());
 
-        assert_eq!(format_env_display(Some(&env), &[]), "A=*****, B=*****");
+        assert_eq!(
+            format_env_display(Some(&env), &[] as &[String]),
+            "A=*****, B=*****"
+        );
     }
 
     #[test]

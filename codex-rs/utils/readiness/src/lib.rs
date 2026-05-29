@@ -277,17 +277,36 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_returns_error_when_lock_is_held() {
-        let flag = ReadinessFlag::new();
-        let _guard = flag
-            .tokens
-            .try_lock()
-            .expect("initial lock acquisition should succeed");
+        let flag = Arc::new(ReadinessFlag::new());
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let lock_thread = {
+            let flag = Arc::clone(&flag);
+            std::thread::spawn(move || {
+                let _guard = flag.tokens.blocking_lock();
+                locked_tx
+                    .send(())
+                    .expect("test should receive lock acquisition notification");
+                release_rx
+                    .recv()
+                    .expect("test should release held readiness lock");
+            })
+        };
+        locked_rx
+            .recv()
+            .expect("test should observe held readiness lock");
 
         let err = flag
             .subscribe()
             .await
             .expect_err("contended subscribe should report a lock failure");
         assert_matches!(err, ReadinessError::TokenLockFailed);
+        release_tx
+            .send(())
+            .expect("test should release readiness lock thread");
+        lock_thread
+            .join()
+            .expect("readiness lock thread should not panic");
     }
 
     #[tokio::test]

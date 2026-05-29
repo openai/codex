@@ -8,16 +8,6 @@
       ],
       "type": "string"
     },
-    "HookEventNameWire": {
-      "enum": [
-        "PreToolUse",
-        "PostToolUse",
-        "SessionStart",
-        "UserPromptSubmit",
-        "Stop"
-      ],
-      "type": "string"
-    },
     "UserPromptSubmitHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
@@ -26,7 +16,8 @@
           "type": "string"
         },
         "hookEventName": {
-          "$ref": "#/definitions/HookEventNameWire"
+          "const": "UserPromptSubmit",
+          "type": "string"
         }
       },
       "required": [

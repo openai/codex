@@ -1,21 +1,37 @@
-use codex_app_server_protocol::FsCopyParams;
-use codex_app_server_protocol::FsCopyResponse;
-use codex_app_server_protocol::FsCreateDirectoryParams;
-use codex_app_server_protocol::FsCreateDirectoryResponse;
-use codex_app_server_protocol::FsGetMetadataParams;
-use codex_app_server_protocol::FsGetMetadataResponse;
-use codex_app_server_protocol::FsReadDirectoryParams;
-use codex_app_server_protocol::FsReadDirectoryResponse;
-use codex_app_server_protocol::FsReadFileParams;
-use codex_app_server_protocol::FsReadFileResponse;
-use codex_app_server_protocol::FsRemoveParams;
-use codex_app_server_protocol::FsRemoveResponse;
-use codex_app_server_protocol::FsWriteFileParams;
-use codex_app_server_protocol::FsWriteFileResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use serde_json::to_value;
+use std::collections::HashSet;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+
+use crate::ExecServerRuntimePaths;
+use crate::client::http_client::PendingReqwestHttpBodyStream;
+use crate::client::http_client::ReqwestHttpRequestRunner;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FsCopyParams;
+use crate::protocol::FsCopyResponse;
+use crate::protocol::FsCreateDirectoryParams;
+use crate::protocol::FsCreateDirectoryResponse;
+use crate::protocol::FsGetMetadataParams;
+use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsReadDirectoryParams;
+use crate::protocol::FsReadDirectoryResponse;
+use crate::protocol::FsReadFileParams;
+use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsRemoveParams;
+use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsWriteFileParams;
+use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HttpRequestParams;
+use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -24,65 +40,179 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::internal_error;
+use crate::rpc::invalid_params;
+use crate::rpc::invalid_request;
 use crate::server::file_system_handler::FileSystemHandler;
-use crate::server::process_handler::ProcessHandler;
+use crate::server::session_registry::SessionHandle;
+use crate::server::session_registry::SessionRegistry;
 
-#[derive(Clone)]
 pub(crate) struct ExecServerHandler {
-    process: ProcessHandler,
+    session_registry: Arc<SessionRegistry>,
+    notifications: RpcNotificationSender,
+    session: StdMutex<Option<SessionHandle>>,
+    active_body_stream_ids: Mutex<HashSet<String>>,
+    background_task_shutdown: CancellationToken,
+    background_tasks: TaskTracker,
     file_system: FileSystemHandler,
+    initialize_requested: AtomicBool,
+    initialized: AtomicBool,
 }
 
 impl ExecServerHandler {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn new(
+        session_registry: Arc<SessionRegistry>,
+        notifications: RpcNotificationSender,
+        runtime_paths: ExecServerRuntimePaths,
+    ) -> Self {
         Self {
-            process: ProcessHandler::new(notifications),
-            file_system: FileSystemHandler::default(),
+            session_registry,
+            notifications,
+            session: StdMutex::new(None),
+            active_body_stream_ids: Mutex::new(HashSet::new()),
+            background_task_shutdown: CancellationToken::new(),
+            background_tasks: TaskTracker::new(),
+            file_system: FileSystemHandler::new(runtime_paths),
+            initialize_requested: AtomicBool::new(false),
+            initialized: AtomicBool::new(false),
         }
     }
 
     pub(crate) async fn shutdown(&self) {
-        self.process.shutdown().await;
+        self.background_task_shutdown.cancel();
+        self.background_tasks.close();
+        self.background_tasks.wait().await;
+        if let Some(session) = self.session() {
+            session.detach().await;
+        }
     }
 
-    pub(crate) fn initialize(&self) -> Result<InitializeResponse, JSONRPCErrorError> {
-        self.process.initialize()
+    pub(crate) fn is_session_attached(&self) -> bool {
+        self.session()
+            .is_none_or(|session| session.is_session_attached())
+    }
+
+    pub(crate) async fn initialize(
+        &self,
+        params: InitializeParams,
+    ) -> Result<InitializeResponse, JSONRPCErrorError> {
+        if self.initialize_requested.swap(true, Ordering::SeqCst) {
+            return Err(invalid_request(
+                "initialize may only be sent once per connection".to_string(),
+            ));
+        }
+
+        let session = match self
+            .session_registry
+            .attach(params.resume_session_id.clone(), self.notifications.clone())
+            .await
+        {
+            Ok(session) => session,
+            Err(error) => {
+                self.initialize_requested.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+        };
+        let session_id = session.session_id().to_string();
+        tracing::debug!(
+            session_id,
+            connection_id = %session.connection_id(),
+            "exec-server session attached"
+        );
+        *self
+            .session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(session);
+        Ok(InitializeResponse { session_id })
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {
-        self.process.initialized()
+        if !self.initialize_requested.load(Ordering::SeqCst) {
+            return Err("received `initialized` notification before `initialize`".into());
+        }
+        self.require_session_attached()
+            .map_err(|error| error.message)?;
+        self.initialized.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
-        self.process.exec(params).await
+        let session = self.require_initialized_for("exec")?;
+        session.process().exec(params).await
     }
 
     pub(crate) async fn exec_read(
         &self,
         params: ReadParams,
     ) -> Result<ReadResponse, JSONRPCErrorError> {
-        self.process.exec_read(params).await
+        let session = self.require_initialized_for("exec")?;
+        let response = session.process().exec_read(params).await?;
+        self.require_session_attached()?;
+        Ok(response)
     }
 
     pub(crate) async fn exec_write(
         &self,
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
-        self.process.exec_write(params).await
+        let session = self.require_initialized_for("exec")?;
+        session.process().exec_write(params).await
     }
 
     pub(crate) async fn terminate(
         &self,
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
-        self.process.terminate(params).await
+        let session = self.require_initialized_for("exec")?;
+        session.process().terminate(params).await
+    }
+
+    pub(crate) async fn http_request(
+        self: &Arc<Self>,
+        request_id: RequestId,
+        params: HttpRequestParams,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.require_initialized_for("http")?;
+        let stream_response = params.stream_response;
+        let http_request_id = params.request_id.clone();
+        if stream_response {
+            self.reserve_http_body_stream(&http_request_id).await?;
+        }
+        let response = ReqwestHttpRequestRunner::new(params.timeout_ms)?
+            .run(params)
+            .await;
+        if response.is_err() && stream_response {
+            self.release_http_body_stream(&http_request_id).await;
+        }
+        let (response, mut pending_stream) = response?;
+        let result = match to_value(response) {
+            Ok(result) => result,
+            Err(err) => {
+                if let Some(pending_stream) = pending_stream.take() {
+                    self.release_http_body_stream(&pending_stream.request_id)
+                        .await;
+                }
+                return Err(internal_error(err.to_string()));
+            }
+        };
+        if let Err(error) = self.notifications.response(request_id, result).await {
+            if let Some(pending_stream) = pending_stream.take() {
+                self.release_http_body_stream(&pending_stream.request_id)
+                    .await;
+            }
+            return Err(error);
+        }
+        if let Some(pending_stream) = pending_stream {
+            self.start_http_body_stream(pending_stream).await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn fs_read_file(
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
-        self.process.require_initialized_for("filesystem")?;
+        self.require_initialized_for("filesystem")?;
         self.file_system.read_file(params).await
     }
 
@@ -90,7 +220,7 @@ impl ExecServerHandler {
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
-        self.process.require_initialized_for("filesystem")?;
+        self.require_initialized_for("filesystem")?;
         self.file_system.write_file(params).await
     }
 
@@ -98,7 +228,7 @@ impl ExecServerHandler {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
-        self.process.require_initialized_for("filesystem")?;
+        self.require_initialized_for("filesystem")?;
         self.file_system.create_directory(params).await
     }
 
@@ -106,7 +236,7 @@ impl ExecServerHandler {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
-        self.process.require_initialized_for("filesystem")?;
+        self.require_initialized_for("filesystem")?;
         self.file_system.get_metadata(params).await
     }
 
@@ -114,7 +244,7 @@ impl ExecServerHandler {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
-        self.process.require_initialized_for("filesystem")?;
+        self.require_initialized_for("filesystem")?;
         self.file_system.read_directory(params).await
     }
 
@@ -122,7 +252,7 @@ impl ExecServerHandler {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
-        self.process.require_initialized_for("filesystem")?;
+        self.require_initialized_for("filesystem")?;
         self.file_system.remove(params).await
     }
 
@@ -130,8 +260,86 @@ impl ExecServerHandler {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
-        self.process.require_initialized_for("filesystem")?;
+        self.require_initialized_for("filesystem")?;
         self.file_system.copy(params).await
+    }
+
+    fn require_initialized_for(
+        &self,
+        method_family: &str,
+    ) -> Result<SessionHandle, JSONRPCErrorError> {
+        if !self.initialize_requested.load(Ordering::SeqCst) {
+            return Err(invalid_request(format!(
+                "client must call initialize before using {method_family} methods"
+            )));
+        }
+        let session = self.require_session_attached()?;
+        if !self.initialized.load(Ordering::SeqCst) {
+            return Err(invalid_request(format!(
+                "client must send initialized before using {method_family} methods"
+            )));
+        }
+        Ok(session)
+    }
+
+    fn require_session_attached(&self) -> Result<SessionHandle, JSONRPCErrorError> {
+        let Some(session) = self.session() else {
+            return Err(invalid_request(
+                "client must call initialize before using methods".to_string(),
+            ));
+        };
+        if session.is_session_attached() {
+            return Ok(session);
+        }
+
+        Err(invalid_request(
+            "session has been resumed by another connection".to_string(),
+        ))
+    }
+
+    fn session(&self) -> Option<SessionHandle> {
+        self.session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    async fn start_http_body_stream(
+        self: &Arc<Self>,
+        pending_stream: PendingReqwestHttpBodyStream,
+    ) {
+        let request_id = pending_stream.request_id.clone();
+        if self.background_task_shutdown.is_cancelled() {
+            self.release_http_body_stream(&request_id).await;
+            return;
+        }
+        let finished_request_id = request_id.clone();
+        let handler = Arc::clone(self);
+        let notifications = self.notifications.clone();
+        let shutdown = self.background_task_shutdown.clone();
+        self.background_tasks.spawn(async move {
+            tokio::select! {
+                _ = shutdown.cancelled() => {}
+                _ = ReqwestHttpRequestRunner::stream_body(pending_stream, notifications) => {}
+            }
+            handler.release_http_body_stream(&finished_request_id).await;
+        });
+    }
+
+    async fn release_http_body_stream(&self, request_id: &str) {
+        let mut active_body_stream_ids = self.active_body_stream_ids.lock().await;
+        active_body_stream_ids.remove(request_id);
+    }
+
+    async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), JSONRPCErrorError> {
+        let mut active_body_stream_ids = self.active_body_stream_ids.lock().await;
+        if active_body_stream_ids.contains(request_id) {
+            return Err(invalid_params(format!(
+                "http/request streamResponse requestId `{request_id}` is already active"
+            )));
+        }
+        active_body_stream_ids.insert(request_id.to_string());
+        Ok(())
     }
 }
 

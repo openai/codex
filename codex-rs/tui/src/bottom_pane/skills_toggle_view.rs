@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -15,6 +14,10 @@ use ratatui::widgets::Widget;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
+use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::is_plain_text_key_event;
+use crate::keymap::ListKeymap;
+use crate::keymap::primary_binding;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
@@ -38,7 +41,7 @@ pub(crate) struct SkillsToggleItem {
     pub skill_name: String,
     pub description: String,
     pub enabled: bool,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
 }
 
 pub(crate) struct SkillsToggleView {
@@ -50,10 +53,15 @@ pub(crate) struct SkillsToggleView {
     footer_hint: Line<'static>,
     search_query: String,
     filtered_indices: Vec<usize>,
+    keymap: ListKeymap,
 }
 
 impl SkillsToggleView {
-    pub(crate) fn new(items: Vec<SkillsToggleItem>, app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn new(
+        items: Vec<SkillsToggleItem>,
+        app_event_tx: AppEventSender,
+        keymap: ListKeymap,
+    ) -> Self {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Enable/Disable Skills".bold()));
         header.push(Line::from(
@@ -66,9 +74,10 @@ impl SkillsToggleView {
             complete: false,
             app_event_tx,
             header: Box::new(header),
-            footer_hint: skills_toggle_hint_line(),
+            footer_hint: skills_toggle_hint_line(&keymap),
             search_query: String::new(),
             filtered_indices: Vec::new(),
+            keymap,
         };
         view.apply_filter();
         view
@@ -162,6 +171,30 @@ impl SkillsToggleView {
         self.state.ensure_visible(len, visible);
     }
 
+    fn page_up(&mut self) {
+        let len = self.visible_len();
+        let visible = Self::max_visible_rows(len);
+        self.state.page_up_clamped(len, visible);
+    }
+
+    fn page_down(&mut self) {
+        let len = self.visible_len();
+        let visible = Self::max_visible_rows(len);
+        self.state.page_down_clamped(len, visible);
+    }
+
+    fn jump_top(&mut self) {
+        let len = self.visible_len();
+        let visible = Self::max_visible_rows(len);
+        self.state.jump_top(len, visible);
+    }
+
+    fn jump_bottom(&mut self) {
+        let len = self.visible_len();
+        let visible = Self::max_visible_rows(len);
+        self.state.jump_bottom(len, visible);
+    }
+
     fn toggle_selected(&mut self) {
         let Some(idx) = self.state.selected_idx else {
             return;
@@ -201,34 +234,29 @@ impl SkillsToggleView {
 
 impl BottomPaneView for SkillsToggleView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // Printable characters always feed search. Movement aliases such as
+        // plain j/k only apply through non-text events or modified bindings.
+        let allow_plain_char_navigation = !is_plain_text_key_event(key_event);
+
         match key_event {
-            KeyEvent {
-                code: KeyCode::Up, ..
+            _ if allow_plain_char_navigation && self.keymap.move_up.is_pressed(key_event) => {
+                self.move_up()
             }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
+            _ if allow_plain_char_navigation && self.keymap.move_down.is_pressed(key_event) => {
+                self.move_down()
             }
-            | KeyEvent {
-                code: KeyCode::Char('\u{0010}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } /* ^P */ => self.move_up(),
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
+            _ if allow_plain_char_navigation && self.keymap.page_up.is_pressed(key_event) => {
+                self.page_up()
             }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
+            _ if allow_plain_char_navigation && self.keymap.page_down.is_pressed(key_event) => {
+                self.page_down()
             }
-            | KeyEvent {
-                code: KeyCode::Char('\u{000e}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } /* ^N */ => self.move_down(),
+            _ if allow_plain_char_navigation && self.keymap.jump_top.is_pressed(key_event) => {
+                self.jump_top()
+            }
+            _ if allow_plain_char_navigation && self.keymap.jump_bottom.is_pressed(key_event) => {
+                self.jump_bottom()
+            }
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -240,15 +268,9 @@ impl BottomPaneView for SkillsToggleView {
                 code: KeyCode::Char(' '),
                 modifiers: KeyModifiers::NONE,
                 ..
-            }
-            | KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
             } => self.toggle_selected(),
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
+            _ if self.keymap.accept.is_pressed(key_event) => self.toggle_selected(),
+            _ if self.keymap.cancel.is_pressed(key_event) => {
                 self.on_ctrl_c();
             }
             KeyEvent {
@@ -365,22 +387,45 @@ impl Renderable for SkillsToggleView {
     }
 }
 
-fn skills_toggle_hint_line() -> Line<'static> {
-    Line::from(vec![
-        "Press ".into(),
-        key_hint::plain(KeyCode::Char(' ')).into(),
-        " or ".into(),
-        key_hint::plain(KeyCode::Enter).into(),
-        " to toggle; ".into(),
-        key_hint::plain(KeyCode::Esc).into(),
-        " to close".into(),
-    ])
+fn skills_toggle_hint_line(keymap: &ListKeymap) -> Line<'static> {
+    let space = key_hint::plain(KeyCode::Char(' '));
+    let accept = primary_binding(&keymap.accept).filter(|binding| *binding != space);
+    let cancel = primary_binding(&keymap.cancel);
+
+    match (accept, cancel) {
+        (Some(accept), Some(cancel)) => Line::from(vec![
+            "Press ".into(),
+            space.into(),
+            " or ".into(),
+            accept.into(),
+            " to toggle; ".into(),
+            cancel.into(),
+            " to close".into(),
+        ]),
+        (Some(accept), None) => Line::from(vec![
+            "Press ".into(),
+            space.into(),
+            " or ".into(),
+            accept.into(),
+            " to toggle".into(),
+        ]),
+        (None, Some(cancel)) => Line::from(vec![
+            "Press ".into(),
+            space.into(),
+            " to toggle; ".into(),
+            cancel.into(),
+            " to close".into(),
+        ]),
+        (None, None) => Line::from(vec!["Press ".into(), space.into(), " to toggle".into()]),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::test_support::PathBufExt;
+    use crate::test_support::test_path_buf;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -418,17 +463,33 @@ mod tests {
                 skill_name: "repo_scout".to_string(),
                 description: "Summarize the repo layout".to_string(),
                 enabled: true,
-                path: PathBuf::from("/tmp/skills/repo_scout.toml"),
+                path: test_path_buf("/tmp/skills/repo_scout.toml").abs(),
             },
             SkillsToggleItem {
                 name: "Changelog Writer".to_string(),
                 skill_name: "changelog_writer".to_string(),
                 description: "Draft release notes".to_string(),
                 enabled: false,
-                path: PathBuf::from("/tmp/skills/changelog_writer.toml"),
+                path: test_path_buf("/tmp/skills/changelog_writer.toml").abs(),
             },
         ];
-        let view = SkillsToggleView::new(items, tx);
+        let view = SkillsToggleView::new(items, tx, crate::keymap::RuntimeKeymap::defaults().list);
         assert_snapshot!("skills_toggle_basic", render_lines(&view, /*width*/ 72));
+    }
+
+    #[test]
+    fn footer_hint_uses_list_keymap_accept_and_cancel() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        keymap.accept = vec![key_hint::ctrl(KeyCode::Char('t'))];
+        keymap.cancel = vec![key_hint::ctrl(KeyCode::Char('x'))];
+        let view = SkillsToggleView::new(Vec::new(), tx, keymap);
+        let rendered = render_lines(&view, /*width*/ 72);
+
+        assert!(rendered.contains("ctrl + t"));
+        assert!(rendered.contains("ctrl + x"));
+        assert!(!rendered.contains("enter"));
+        assert!(!rendered.contains("esc"));
     }
 }

@@ -14,6 +14,7 @@ use toml_edit::value;
 use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
 use crate::McpServerConfig;
+use crate::McpServerEnvVar;
 use crate::McpServerTransportConfig;
 
 pub async fn load_global_mcp_servers(
@@ -142,7 +143,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
                 entry["env"] = table_from_pairs(env.iter());
             }
             if !env_vars.is_empty() {
-                entry["env_vars"] = array_from_strings(env_vars);
+                entry["env_vars"] = array_from_env_vars(env_vars);
             }
             if let Some(cwd) = cwd {
                 entry["cwd"] = value(cwd.to_string_lossy().to_string());
@@ -174,14 +175,27 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     if !config.enabled {
         entry["enabled"] = value(false);
     }
+    if !config.is_local_environment() {
+        entry["environment_id"] = value(config.environment_id.clone());
+    }
     if config.required {
         entry["required"] = value(true);
+    }
+    if config.supports_parallel_tool_calls {
+        entry["supports_parallel_tool_calls"] = value(true);
     }
     if let Some(timeout) = config.startup_timeout_sec {
         entry["startup_timeout_sec"] = value(timeout.as_secs_f64());
     }
     if let Some(timeout) = config.tool_timeout_sec {
         entry["tool_timeout_sec"] = value(timeout.as_secs_f64());
+    }
+    if let Some(approval_mode) = config.default_tools_approval_mode {
+        entry["default_tools_approval_mode"] = value(match approval_mode {
+            AppToolApproval::Auto => "auto",
+            AppToolApproval::Prompt => "prompt",
+            AppToolApproval::Approve => "approve",
+        });
     }
     if let Some(enabled_tools) = &config.enabled_tools
         && !enabled_tools.is_empty()
@@ -198,6 +212,15 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     {
         entry["scopes"] = array_from_strings(scopes);
     }
+    if let Some(oauth) = &config.oauth
+        && let Some(client_id) = &oauth.client_id
+        && !client_id.is_empty()
+    {
+        let mut oauth_table = TomlTable::new();
+        oauth_table.set_implicit(false);
+        oauth_table["client_id"] = value(client_id.clone());
+        entry["oauth"] = TomlItem::Table(oauth_table);
+    }
     if let Some(resource) = &config.oauth_resource
         && !resource.is_empty()
     {
@@ -207,7 +230,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         let mut tools = TomlTable::new();
         tools.set_implicit(false);
         let mut tool_entries: Vec<_> = config.tools.iter().collect();
-        tool_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        tool_entries.sort_by_key(|(name, _)| *name);
         for (name, tool_config) in tool_entries {
             let mut tool_entry = TomlTable::new();
             tool_entry.set_implicit(false);
@@ -234,12 +257,30 @@ fn array_from_strings(values: &[String]) -> TomlItem {
     TomlItem::Value(array.into())
 }
 
+fn array_from_env_vars(env_vars: &[McpServerEnvVar]) -> TomlItem {
+    let mut array = toml_edit::Array::new();
+    for env_var in env_vars {
+        match env_var {
+            McpServerEnvVar::Name(name) => array.push(name.clone()),
+            McpServerEnvVar::Config { name, source } => {
+                let mut table = toml_edit::InlineTable::new();
+                table.insert("name", name.clone().into());
+                if let Some(source) = source {
+                    table.insert("source", source.clone().into());
+                }
+                array.push(table);
+            }
+        }
+    }
+    TomlItem::Value(array.into())
+}
+
 fn table_from_pairs<'a, I>(pairs: I) -> TomlItem
 where
     I: IntoIterator<Item = (&'a String, &'a String)>,
 {
     let mut entries: Vec<_> = pairs.into_iter().collect();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    entries.sort_by_key(|(key, _)| *key);
     let mut table = TomlTable::new();
     table.set_implicit(false);
     for (key, value_str) in entries {

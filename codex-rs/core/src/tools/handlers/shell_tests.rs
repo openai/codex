@@ -2,20 +2,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::models::ShellCommandToolCallParams;
+use core_test_support::PathBufExt;
+use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 
-use crate::codex::make_session_and_context;
 use crate::exec_env::create_env;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::tests::make_session_and_context;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellCommandHandler;
-use crate::tools::handlers::ShellHandler;
-use crate::tools::registry::ToolHandler;
+use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::CoreToolRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_shell_command::powershell::try_find_powershell_executable_blocking;
@@ -85,6 +88,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let expected_command = session
         .user_shell()
         .derive_exec_args(&command, /*use_login_shell*/ true);
+    #[allow(deprecated)]
     let expected_cwd = turn_context.resolve_path(workdir.clone());
     let expected_env = create_env(
         &turn_context.shell_environment_policy,
@@ -125,8 +129,8 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
 #[test]
 fn shell_command_handler_respects_explicit_login_flag() {
     let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
-        path: PathBuf::from("/tmp/snapshot.sh"),
-        cwd: PathBuf::from("/tmp"),
+        path: test_path_buf("/tmp/snapshot.sh").abs(),
+        cwd: test_path_buf("/tmp").abs(),
     })));
     let shell = Shell {
         shell_type: ShellType::Bash,
@@ -200,69 +204,33 @@ fn shell_command_handler_rejects_login_when_disallowed() {
 }
 
 #[tokio::test]
-async fn shell_pre_tool_use_payload_uses_joined_command() {
-    let payload = ToolPayload::LocalShell {
-        params: codex_protocol::models::ShellToolCallParams {
-            command: vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "printf hi".to_string(),
-            ],
-            workdir: None,
-            timeout_ms: None,
-            sandbox_permissions: None,
-            prefix_rule: None,
-            additional_permissions: None,
-            justification: None,
-        },
-    };
-    let (session, turn) = make_session_and_context().await;
-    let handler = ShellHandler;
-
-    assert_eq!(
-        handler.pre_tool_use_payload(&ToolInvocation {
-            session: session.into(),
-            turn: turn.into(),
-            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-            call_id: "call-41".to_string(),
-            tool_name: "shell".to_string(),
-            tool_namespace: None,
-            payload,
-        }),
-        Some(crate::tools::registry::PreToolUsePayload {
-            command: "bash -lc 'printf hi'".to_string(),
-        })
-    );
-}
-
-#[tokio::test]
 async fn shell_command_pre_tool_use_payload_uses_raw_command() {
     let payload = ToolPayload::Function {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = ShellCommandHandler {
-        backend: super::ShellCommandBackend::Classic,
-    };
+    let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-42".to_string(),
-            tool_name: "shell_command".to_string(),
-            tool_namespace: None,
+            tool_name: codex_tools::ToolName::plain("shell_command"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
-            command: "printf shell command".to_string(),
+            tool_name: HookToolName::bash(),
+            tool_input: json!({ "command": "printf shell command" }),
         })
     );
 }
 
-#[test]
-fn build_post_tool_use_payload_uses_tool_output_wire_value() {
+#[tokio::test]
+async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let payload = ToolPayload::Function {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
@@ -271,14 +239,24 @@ fn build_post_tool_use_payload_uses_tool_output_wire_value() {
         success: Some(true),
         post_tool_use_response: Some(json!("shell output")),
     };
-    let handler = ShellCommandHandler {
-        backend: super::ShellCommandBackend::Classic,
+    let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
+    let (session, turn) = make_session_and_context().await;
+    let invocation = ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-42".to_string(),
+        tool_name: codex_tools::ToolName::plain("shell_command"),
+        source: ToolCallSource::Direct,
+        payload,
     };
-
     assert_eq!(
-        handler.post_tool_use_payload("call-42", &payload, &output),
+        handler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
-            command: "printf shell command".to_string(),
+            tool_name: HookToolName::bash(),
+            tool_use_id: "call-42".to_string(),
+            tool_input: json!({ "command": "printf shell command" }),
             tool_response: json!("shell output"),
         })
     );

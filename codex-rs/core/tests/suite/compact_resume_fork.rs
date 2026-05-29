@@ -30,6 +30,7 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -58,29 +59,6 @@ fn json_fragment(text: &str) -> String {
         .expect("serialize text to JSON")
         .trim_matches('"')
         .to_string()
-}
-
-fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
-    items
-        .iter()
-        .filter(|item| !is_ghost_snapshot_message(item))
-        .cloned()
-        .collect()
-}
-
-fn is_ghost_snapshot_message(item: &Value) -> bool {
-    if item.get("type").and_then(Value::as_str) != Some("message") {
-        return false;
-    }
-    if item.get("role").and_then(Value::as_str) != Some("user") {
-        return false;
-    }
-    item.get("content")
-        .and_then(Value::as_array)
-        .and_then(|content| content.first())
-        .and_then(|entry| entry.get("text"))
-        .and_then(Value::as_str)
-        .is_some_and(|text| text.trim_start().starts_with("<ghost_snapshot>"))
 }
 
 fn normalize_line_endings_str(text: &str) -> String {
@@ -158,7 +136,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     // 1. Arrange mocked SSE responses for the initial compact/resume/fork flow.
     let server = MockServer::start().await;
     let request_log = mount_initial_flow(&server).await;
-    let expected_model = "gpt-5.1-codex";
+    let expected_model = "gpt-5.4";
     // 2. Start a new conversation and drive it through the compact/resume/fork steps.
     let (_home, config, manager, base) =
         start_test_conversation(&server, Some(expected_model)).await;
@@ -172,6 +150,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects base path {base_path:?} to exist",
     );
 
+    shutdown_conversation(&base).await;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed);
@@ -327,6 +306,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         "second compact test expects base path {base_path:?} to exist",
     );
 
+    shutdown_conversation(&base).await;
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed);
@@ -346,6 +326,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         "second compact test expects forked path {forked_path:?} to exist",
     );
 
+    shutdown_conversation(&forked).await;
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
@@ -366,15 +347,13 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     let resume_input_array = input_after_resume
         .as_array()
         .expect("input after resume should be an array");
-    let compact_filtered = filter_out_ghost_snapshot_entries(compact_input_array);
-    let resume_filtered = filter_out_ghost_snapshot_entries(resume_input_array);
     assert!(
-        compact_filtered.len() <= resume_filtered.len(),
+        compact_input_array.len() <= resume_input_array.len(),
         "after-resume input should have at least as many items as after-compact"
     );
     assert_eq!(
-        compact_filtered.as_slice(),
-        &resume_filtered[..compact_filtered.len()]
+        compact_input_array.as_slice(),
+        &resume_input_array[..compact_input_array.len()]
     );
     let first_request_user_texts = json_message_input_texts(&requests[0], "user");
     let first_turn_user_index = first_request_user_texts
@@ -529,7 +508,7 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-/// Scenario: rolling back a turn that introduced persistent pre-turn context
+/// Scenario: rolling back a turn that introduced persistent pre-thread settings
 /// diffs should trim those context updates so the next request includes them
 /// only once.
 async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
@@ -538,7 +517,7 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
         return Ok(());
     }
 
-    const MODEL: &str = "gpt-5.1-codex";
+    const MODEL: &str = "gpt-5.4";
     const TURN_ONE_USER: &str = "turn 1 user";
     const TURN_TWO_USER: &str = "turn 2 user";
     const FOLLOWUP_USER: &str = "follow-up user";
@@ -557,7 +536,7 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
                 ev_assistant_message("m2", "turn 2 assistant"),
                 ev_completed("r2"),
             ]),
-            sse(vec![ev_completed("r3")]),
+            sse(vec![ev_response_created("r3"), ev_completed("r3")]),
         ],
     )
     .await;
@@ -567,19 +546,12 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
 
     user_turn(&conversation, TURN_ONE_USER).await;
 
-    let override_cwd = config.cwd.join(PRETURN_CONTEXT_DIFF_CWD)?;
+    let override_cwd = config.cwd.join(PRETURN_CONTEXT_DIFF_CWD);
     std::fs::create_dir_all(&override_cwd)?;
-    conversation
-        .submit(Op::OverrideTurnContext {
+    core_test_support::submit_thread_settings(
+        &conversation,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(override_cwd.to_path_buf()),
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
                 settings: Settings {
@@ -588,9 +560,10 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
                     developer_instructions: Some(ROLLED_BACK_DEV_INSTRUCTIONS.to_string()),
                 },
             }),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     user_turn(&conversation, TURN_TWO_USER).await;
 
@@ -665,10 +638,8 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
 
 fn normalize_line_endings(value: &mut Value) {
     match value {
-        Value::String(text) => {
-            if text.contains('\r') {
-                *text = text.replace("\r\n", "\n").replace('\r', "\n");
-            }
+        Value::String(text) if text.contains('\r') => {
+            *text = text.replace("\r\n", "\n").replace('\r', "\n");
         }
         Value::Array(items) => {
             for item in items {
@@ -803,11 +774,15 @@ async fn start_test_conversation(
 async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
     conversation
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: text.into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .expect("submit user turn");
@@ -835,6 +810,13 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
 
 fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
     conversation.rollout_path().expect("rollout path")
+}
+
+async fn shutdown_conversation(conversation: &Arc<CodexThread>) {
+    conversation
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown conversation");
 }
 
 async fn resume_conversation(
@@ -867,6 +849,7 @@ async fn fork_thread(
         nth_user_message,
         config.clone(),
         path,
+        /*thread_source*/ None,
         /*persist_extended_history*/ false,
         /*parent_trace*/ None,
     ))

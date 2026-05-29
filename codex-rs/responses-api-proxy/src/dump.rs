@@ -231,6 +231,12 @@ mod tests {
             Header::from_bytes(&b"Cookie"[..], &b"user-session=secret"[..]).expect("cookie header"),
             Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
                 .expect("content-type header"),
+            Header::from_bytes(&b"x-codex-window-id"[..], &b"thread-1:0"[..])
+                .expect("window id header"),
+            Header::from_bytes(&b"x-codex-parent-thread-id"[..], &b"parent-thread-1"[..])
+                .expect("parent thread id header"),
+            Header::from_bytes(&b"x-openai-subagent"[..], &b"collab_spawn"[..])
+                .expect("subagent header"),
         ];
 
         let exchange_dump = dumper
@@ -262,6 +268,18 @@ mod tests {
                     {
                         "name": "Content-Type",
                         "value": "application/json"
+                    },
+                    {
+                        "name": "x-codex-window-id",
+                        "value": "thread-1:0"
+                    },
+                    {
+                        "name": "x-codex-parent-thread-id",
+                        "value": "parent-thread-1"
+                    },
+                    {
+                        "name": "x-openai-subagent",
+                        "value": "collab_spawn"
                     }
                 ],
                 "body": {

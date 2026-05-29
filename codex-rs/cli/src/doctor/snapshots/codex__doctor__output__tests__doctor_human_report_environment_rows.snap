@@ -1,0 +1,50 @@
+---
+source: cli/src/doctor/output.rs
+expression: "render_human_report(&sample_report(), detailed_no_color_unicode_options())"
+---
+Codex Doctor v0.0.0
+
+Notes
+   ⚠ terminal     narrow terminal
+   ✗ auth         token expired - Run `codex login`.
+─────────────────────────────────────────────────────────────
+
+Environment
+  ✓ system       en-US
+      os                       macOS 15.0
+      OS language              en-US
+  ✓ runtime      running local build on darwin-arm64
+  ✓ install      consistent
+      managed by               npm: no · bun: no · package root —
+  ✓ search       search is OK (bundled)
+  ✓ git          git version 2.54.0
+      selected git             /usr/bin/git
+      version                  git version 2.54.0
+      repo detected            true
+  ⚠ terminal     narrow terminal
+  ✓ title        default · project codex
+      title source             default
+      title items              activity, project-name
+      project value            codex
+  ✓ state        state paths inspectable
+
+Configuration
+  ✗ auth         token expired — Run `codex login`.
+      OPENAI_API_KEY           present
+
+Updates
+  ✓ updates      update configuration is locally consistent
+
+Connectivity
+  ✓ network      network environment readable
+  ✓ websocket    Responses WebSocket handshake succeeded
+  ✓ reachability active provider endpoints are reachable over HTTP
+
+Background Server
+  ✓ app-server   background server is not running
+
+─────────────────────────────────────────────────────────────
+12 ok · 2 notes · 1 warn · 1 fail failed
+
+--summary compact output           --all expand truncated lists
+--json redacted report

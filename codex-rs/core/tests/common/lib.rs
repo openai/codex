@@ -8,17 +8,23 @@ use ctor::ctor;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigRequirementsToml;
+use codex_config::LoaderOverrides;
+use codex_config::NetworkRequirementsToml;
 use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
+pub use codex_utils_absolute_path::test_support::PathBufExt;
+pub use codex_utils_absolute_path::test_support::PathExt;
 use regex_lite::Regex;
-use std::path::Path;
 use std::path::PathBuf;
 
 pub mod apps_test_server;
 pub mod context_snapshot;
+pub mod hooks;
 pub mod process;
 pub mod responses;
 pub mod streaming_sse;
@@ -105,26 +111,6 @@ pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
     test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
 }
 
-pub trait PathExt {
-    fn abs(&self) -> AbsolutePathBuf;
-}
-
-impl PathExt for Path {
-    fn abs(&self) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(self.to_path_buf()).expect("path should already be absolute")
-    }
-}
-
-pub trait PathBufExt {
-    fn abs(&self) -> AbsolutePathBuf;
-}
-
-impl PathBufExt for PathBuf {
-    fn abs(&self) -> AbsolutePathBuf {
-        self.as_path().abs()
-    }
-}
-
 pub trait TempDirExt {
     fn abs(&self) -> AbsolutePathBuf;
 }
@@ -183,12 +169,40 @@ pub fn fetch_dotslash_file(
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
+    load_default_config_for_test_with_cloud_requirements(
+        codex_home,
+        CloudRequirementsLoader::default(),
+    )
+    .await
+}
+
+/// Returns a default `Config` with test-provided cloud requirements applied
+/// during config construction.
+pub async fn load_default_config_for_test_with_cloud_requirements(
+    codex_home: &TempDir,
+    cloud_requirements: CloudRequirementsLoader,
+) -> Config {
     ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
+        .cloud_requirements(cloud_requirements)
         .build()
         .await
         .expect("defaults for test should always succeed")
+}
+
+pub fn managed_network_requirements_loader() -> CloudRequirementsLoader {
+    CloudRequirementsLoader::new(async {
+        Ok(Some(ConfigRequirementsToml {
+            network: Some(NetworkRequirementsToml {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -223,54 +237,6 @@ pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
     codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
 }
 
-/// Builds an SSE stream body from a JSON fixture.
-///
-/// The fixture must contain an array of objects where each object represents a
-/// single SSE event with at least a `type` field matching the `event:` value.
-/// Additional fields become the JSON payload for the `data:` line. An object
-/// with only a `type` field results in an event with no `data:` section. This
-/// makes it trivial to extend the fixtures as OpenAI adds new event kinds or
-/// fields.
-pub fn load_sse_fixture(path: impl AsRef<std::path::Path>) -> String {
-    let events: Vec<serde_json::Value> =
-        serde_json::from_reader(std::fs::File::open(path).expect("read fixture"))
-            .expect("parse JSON fixture");
-    events
-        .into_iter()
-        .map(|e| {
-            let kind = e
-                .get("type")
-                .and_then(|v| v.as_str())
-                .expect("fixture event missing type");
-            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
-                format!("event: {kind}\n\n")
-            } else {
-                format!("event: {kind}\ndata: {e}\n\n")
-            }
-        })
-        .collect()
-}
-
-pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
-    let replaced = raw.replace("__ID__", id);
-    let events: Vec<serde_json::Value> =
-        serde_json::from_str(&replaced).expect("parse JSON fixture");
-    events
-        .into_iter()
-        .map(|e| {
-            let kind = e
-                .get("type")
-                .and_then(|v| v.as_str())
-                .expect("fixture event missing type");
-            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
-                format!("event: {kind}\n\n")
-            } else {
-                format!("event: {kind}\ndata: {e}\n\n")
-            }
-        })
-        .collect()
-}
-
 pub async fn wait_for_event<F>(
     codex: &CodexThread,
     predicate: F,
@@ -280,6 +246,31 @@ where
 {
     use tokio::time::Duration;
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
+}
+
+pub async fn submit_thread_settings(
+    codex: &CodexThread,
+    thread_settings: codex_protocol::protocol::ThreadSettingsOverrides,
+) -> anyhow::Result<()> {
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::Op;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    let submission_id = codex.submit(Op::ThreadSettings { thread_settings }).await?;
+    loop {
+        let ev = timeout(Duration::from_secs(10), codex.next_event())
+            .await
+            .expect("timeout waiting for thread settings update")
+            .expect("stream ended unexpectedly");
+        if ev.id == submission_id {
+            match ev.msg {
+                EventMsg::ThreadSettingsApplied(_) => return Ok(()),
+                EventMsg::Error(err) => panic!("thread settings update failed: {}", err.message),
+                other => panic!("unexpected thread settings update event: {other:?}"),
+            }
+        }
+    }
 }
 
 pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
@@ -321,6 +312,10 @@ pub fn sandbox_network_env_var() -> &'static str {
 }
 
 const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
+
+pub fn remote_env_env_var() -> &'static str {
+    REMOTE_ENV_ENV_VAR
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteEnvConfig {
@@ -550,6 +545,30 @@ macro_rules! skip_if_no_network {
         if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
             println!(
                 "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            );
+            return $return_value;
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_remote {
+    ($reason:expr $(,)?) => {{
+        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
+            eprintln!(
+                "Skipping test under {}: {}",
+                $crate::remote_env_env_var(),
+                $reason
+            );
+            return;
+        }
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
+            eprintln!(
+                "Skipping test under {}: {}",
+                $crate::remote_env_env_var(),
+                $reason
             );
             return $return_value;
         }

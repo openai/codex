@@ -1,0 +1,122 @@
+use async_trait::async_trait;
+use codex_protocol::ThreadId;
+use std::any::Any;
+
+use crate::AppendThreadItemsParams;
+use crate::ArchiveThreadParams;
+use crate::CreateThreadParams;
+use crate::ItemPage;
+use crate::ListItemsParams;
+use crate::ListThreadsParams;
+use crate::ListTurnsParams;
+use crate::LoadThreadHistoryParams;
+use crate::ReadThreadByRolloutPathParams;
+use crate::ReadThreadParams;
+use crate::ResumeThreadParams;
+use crate::SearchThreadsParams;
+use crate::StoredThread;
+use crate::StoredThreadHistory;
+use crate::ThreadPage;
+use crate::ThreadSearchPage;
+use crate::ThreadStoreError;
+use crate::ThreadStoreResult;
+use crate::TurnPage;
+use crate::UpdateThreadMetadataParams;
+
+/// Storage-neutral thread persistence boundary.
+#[async_trait]
+pub trait ThreadStore: Any + Send + Sync {
+    /// Return this store as [`Any`] for implementation-owned escape hatches.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Creates a new live thread.
+    async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()>;
+
+    /// Reopens an existing thread for live appends.
+    async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()>;
+
+    /// Appends canonical rollout items to a live thread.
+    ///
+    /// This is the raw history API. It does not infer metadata from item contents. Callers that
+    /// need metadata updates should call [`ThreadStore::update_thread_metadata`] with explicit
+    /// metadata facts prepared above the store.
+    async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()>;
+
+    /// Materializes the thread if persistence is lazy, then persists all queued items.
+    async fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Flushes all queued items and returns once they are durable/readable.
+    async fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Flushes pending items and closes the live thread writer.
+    async fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Discards the live thread writer without forcing pending in-memory items to become durable.
+    ///
+    /// Core calls this when session initialization fails after a live writer has been created.
+    /// Implementations should release any live writer resources for the thread while preserving
+    /// already-durable thread data.
+    async fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Loads persisted history for resume, fork, rollback, and memory jobs.
+    async fn load_history(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreResult<StoredThreadHistory>;
+
+    /// Reads a thread summary and optionally its persisted history.
+    async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread>;
+
+    /// Reads a rollout-backed thread by path when the store supports path-addressed lookups.
+    ///
+    /// Deprecated: new callers should use [`ThreadStore::read_thread`] instead.
+    async fn read_thread_by_rollout_path(
+        &self,
+        params: ReadThreadByRolloutPathParams,
+    ) -> ThreadStoreResult<StoredThread>;
+
+    /// Lists stored threads matching the supplied filters.
+    async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage>;
+
+    /// Searches stored threads and returns search-only preview metadata.
+    async fn search_threads(
+        &self,
+        _params: SearchThreadsParams,
+    ) -> ThreadStoreResult<ThreadSearchPage> {
+        Err(ThreadStoreError::Unsupported {
+            operation: "thread/search",
+        })
+    }
+
+    /// Lists turns within a stored thread.
+    async fn list_turns(&self, _params: ListTurnsParams) -> ThreadStoreResult<TurnPage> {
+        Err(ThreadStoreError::Unsupported {
+            operation: "list_turns",
+        })
+    }
+
+    /// Lists persisted items within a stored turn.
+    async fn list_items(&self, _params: ListItemsParams) -> ThreadStoreResult<ItemPage> {
+        Err(ThreadStoreError::Unsupported {
+            operation: "list_items",
+        })
+    }
+
+    /// Applies a literal metadata patch and returns the updated thread.
+    ///
+    /// Implementations should apply the supplied fields directly. Policy such as deciding whether
+    /// an append-derived preview should be emitted belongs above the store.
+    async fn update_thread_metadata(
+        &self,
+        params: UpdateThreadMetadataParams,
+    ) -> ThreadStoreResult<StoredThread>;
+
+    /// Archives a thread.
+    async fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreResult<()>;
+
+    /// Unarchives a thread and returns its updated metadata.
+    async fn unarchive_thread(
+        &self,
+        params: ArchiveThreadParams,
+    ) -> ThreadStoreResult<StoredThread>;
+}

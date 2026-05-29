@@ -8,6 +8,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
 use crate::engine::CommandShell;
@@ -17,20 +18,48 @@ use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::NullableString;
 use crate::schema::StopCommandInput;
+use crate::schema::SubagentStopCommandInput;
 
 #[derive(Debug, Clone)]
 pub struct StopRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
     pub stop_hook_active: bool,
     pub last_assistant_message: Option<String>,
+    pub target: StopHookTarget,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub enum StopHookTarget {
+    Stop,
+    SubagentStop {
+        agent_id: String,
+        agent_type: String,
+        agent_transcript_path: Option<PathBuf>,
+    },
+}
+
+impl StopHookTarget {
+    fn event_name(&self) -> HookEventName {
+        match self {
+            Self::Stop => HookEventName::Stop,
+            Self::SubagentStop { .. } => HookEventName::SubagentStop,
+        }
+    }
+
+    fn matcher_input(&self) -> Option<&str> {
+        match self {
+            Self::Stop => None,
+            Self::SubagentStop { agent_type, .. } => Some(agent_type.as_str()),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct StopOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_stop: bool,
@@ -51,12 +80,16 @@ struct StopHandlerData {
 
 pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
-    _request: &StopRequest,
+    request: &StopRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(handlers, HookEventName::Stop, /*matcher_input*/ None)
-        .into_iter()
-        .map(|handler| dispatcher::running_summary(&handler))
-        .collect()
+    dispatcher::select_handlers(
+        handlers,
+        request.target.event_name(),
+        request.target.matcher_input(),
+    )
+    .into_iter()
+    .map(|handler| dispatcher::running_summary(&handler))
+    .collect()
 }
 
 pub(crate) async fn run(
@@ -64,8 +97,11 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: StopRequest,
 ) -> StopOutcome {
-    let matched =
-        dispatcher::select_handlers(handlers, HookEventName::Stop, /*matcher_input*/ None);
+    let matched = dispatcher::select_handlers(
+        handlers,
+        request.target.event_name(),
+        request.target.matcher_input(),
+    );
     if matched.is_empty() {
         return StopOutcome {
             hook_events: Vec::new(),
@@ -77,24 +113,67 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&StopCommandInput {
-        session_id: request.session_id.to_string(),
-        turn_id: request.turn_id.clone(),
-        transcript_path: NullableString::from_path(request.transcript_path.clone()),
-        cwd: request.cwd.display().to_string(),
-        hook_event_name: "Stop".to_string(),
-        model: request.model.clone(),
-        permission_mode: request.permission_mode.clone(),
-        stop_hook_active: request.stop_hook_active,
-        last_assistant_message: NullableString::from_string(request.last_assistant_message.clone()),
-    }) {
-        Ok(input_json) => input_json,
-        Err(error) => {
-            return serialization_failure_outcome(common::serialization_failure_hook_events(
-                matched,
-                Some(request.turn_id),
-                format!("failed to serialize stop hook input: {error}"),
-            ));
+    let input_json = match request.target {
+        StopHookTarget::Stop => {
+            let input = StopCommandInput {
+                session_id: request.session_id.to_string(),
+                turn_id: request.turn_id.clone(),
+                transcript_path: NullableString::from_path(request.transcript_path.clone()),
+                cwd: request.cwd.display().to_string(),
+                hook_event_name: "Stop".to_string(),
+                model: request.model.clone(),
+                permission_mode: request.permission_mode.clone(),
+                stop_hook_active: request.stop_hook_active,
+                last_assistant_message: NullableString::from_string(
+                    request.last_assistant_message.clone(),
+                ),
+            };
+            match serde_json::to_string(&input) {
+                Ok(input_json) => input_json,
+                Err(error) => {
+                    return serialization_failure_outcome(
+                        common::serialization_failure_hook_events(
+                            matched,
+                            Some(request.turn_id),
+                            format!("failed to serialize stop hook input: {error}"),
+                        ),
+                    );
+                }
+            }
+        }
+        StopHookTarget::SubagentStop {
+            agent_id,
+            agent_type,
+            agent_transcript_path,
+        } => {
+            let input = SubagentStopCommandInput {
+                session_id: request.session_id.to_string(),
+                turn_id: request.turn_id.clone(),
+                transcript_path: NullableString::from_path(request.transcript_path.clone()),
+                agent_transcript_path: NullableString::from_path(agent_transcript_path),
+                cwd: request.cwd.display().to_string(),
+                hook_event_name: "SubagentStop".to_string(),
+                model: request.model.clone(),
+                permission_mode: request.permission_mode.clone(),
+                stop_hook_active: request.stop_hook_active,
+                agent_id,
+                agent_type,
+                last_assistant_message: NullableString::from_string(
+                    request.last_assistant_message.clone(),
+                ),
+            };
+            match serde_json::to_string(&input) {
+                Ok(input_json) => input_json,
+                Err(error) => {
+                    return serialization_failure_outcome(
+                        common::serialization_failure_hook_events(
+                            matched,
+                            Some(request.turn_id),
+                            format!("failed to serialize subagent stop hook input: {error}"),
+                        ),
+                    );
+                }
+            }
         }
     };
 
@@ -132,6 +211,12 @@ fn parse_completed(
     let mut should_block = false;
     let mut block_reason = None;
     let mut continuation_prompt = None;
+    let hook_event_name = match handler.event_name {
+        HookEventName::Stop | HookEventName::SubagentStop => handler.event_name,
+        event_name => {
+            panic!("expected stop hook event, got {event_name:?}");
+        }
+    };
 
     match run_result.error.as_deref() {
         Some(error) => {
@@ -145,7 +230,13 @@ fn parse_completed(
             Some(0) => {
                 let trimmed_stdout = run_result.stdout.trim();
                 if trimmed_stdout.is_empty() {
-                } else if let Some(parsed) = output_parser::parse_stop(&run_result.stdout) {
+                } else if let Some(parsed) = match hook_event_name {
+                    HookEventName::Stop => output_parser::parse_stop(&run_result.stdout),
+                    HookEventName::SubagentStop => {
+                        output_parser::parse_subagent_stop(&run_result.stdout)
+                    }
+                    _ => unreachable!("validated stop hook event"),
+                } {
                     if let Some(system_message) = parsed.universal.system_message {
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Warning,
@@ -185,9 +276,12 @@ fn parse_completed(
                             status = HookRunStatus::Failed;
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Error,
-                                text:
-                                    "Stop hook returned decision:block without a non-empty reason"
-                                        .to_string(),
+                                text: match hook_event_name {
+                                    HookEventName::Stop => "Stop hook returned decision:block without a non-empty reason",
+                                    HookEventName::SubagentStop => "SubagentStop hook returned decision:block without a non-empty reason",
+                                    _ => unreachable!("validated stop hook event"),
+                                }
+                                .to_string(),
                             });
                         }
                     }
@@ -195,7 +289,14 @@ fn parse_completed(
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
-                        text: "hook returned invalid stop hook JSON output".to_string(),
+                        text: match hook_event_name {
+                            HookEventName::Stop => "hook returned invalid stop hook JSON output",
+                            HookEventName::SubagentStop => {
+                                "hook returned invalid subagent stop hook JSON output"
+                            }
+                            _ => unreachable!("validated stop hook event"),
+                        }
+                        .to_string(),
                     });
                 }
             }
@@ -213,9 +314,16 @@ fn parse_completed(
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
-                        text:
-                            "Stop hook exited with code 2 but did not write a continuation prompt to stderr"
-                                .to_string(),
+                        text: match hook_event_name {
+                            HookEventName::Stop => {
+                                "Stop hook exited with code 2 but did not write a continuation prompt to stderr"
+                            }
+                            HookEventName::SubagentStop => {
+                                "SubagentStop hook exited with code 2 but did not write a continuation prompt to stderr"
+                            }
+                            _ => unreachable!("validated stop hook event"),
+                        }
+                        .to_string(),
                     });
                 }
             }
@@ -258,6 +366,7 @@ fn parse_completed(
             block_reason,
             continuation_fragments,
         },
+        completion_order: 0,
     }
 }
 
@@ -310,12 +419,12 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> StopOu
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
     use codex_protocol::items::HookPromptFragment;
@@ -526,8 +635,10 @@ mod tests {
             command: "echo hook".to_string(),
             timeout_sec: 600,
             status_message: None,
-            source_path: PathBuf::from("/tmp/hooks.json"),
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
+            env: std::collections::HashMap::new(),
         }
     }
 

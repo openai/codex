@@ -1,12 +1,15 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 767
 expression: popup
 ---
   Plugins
   Browse plugins from available marketplaces.
   Installed 0 of 3 available plugins.
 
-  sla
-› Slack  Available   Press Enter to view plugin details.
+  [All Plugins]  Installed (0)  OpenAI Curated  Add Marketplace
 
-  Press esc to close.
+  sla
+› [-] Slack      Available   Press Enter to install or view plugin details.
+
+  space enable/disable · ←/→ select marketplace · enter view details · esc close

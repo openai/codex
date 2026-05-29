@@ -21,7 +21,10 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_core::find_thread_name_by_id;
+use codex_protocol::ThreadId;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
@@ -77,6 +80,7 @@ async fn thread_name_updated_broadcasts_for_loaded_threads() -> Result<()> {
         let ws2_notification =
             read_notification_for_method(&mut ws2, "thread/name/updated").await?;
         assert_thread_name_updated(ws2_notification, &conversation_id, renamed)?;
+        assert_legacy_thread_name(codex_home.path(), &conversation_id, renamed).await?;
 
         assert_no_message(&mut ws1, Duration::from_millis(250)).await?;
         assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
@@ -128,6 +132,7 @@ async fn thread_name_updated_broadcasts_for_not_loaded_threads() -> Result<()> {
         let ws2_notification =
             read_notification_for_method(&mut ws2, "thread/name/updated").await?;
         assert_thread_name_updated(ws2_notification, &conversation_id, renamed)?;
+        assert_legacy_thread_name(codex_home.path(), &conversation_id, renamed).await?;
 
         assert_no_message(&mut ws1, Duration::from_millis(250)).await?;
         assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
@@ -172,5 +177,20 @@ fn assert_thread_name_updated(
         serde_json::from_value(notification.params.context("thread/name/updated params")?)?;
     assert_eq!(notification.thread_id, thread_id);
     assert_eq!(notification.thread_name.as_deref(), Some(thread_name));
+    Ok(())
+}
+
+async fn assert_legacy_thread_name(
+    codex_home: &Path,
+    conversation_id: &str,
+    expected_name: &str,
+) -> Result<()> {
+    let thread_id = ThreadId::from_string(conversation_id)?;
+    assert_eq!(
+        find_thread_name_by_id(codex_home, &thread_id)
+            .await?
+            .as_deref(),
+        Some(expected_name)
+    );
     Ok(())
 }

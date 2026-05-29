@@ -1,6 +1,6 @@
 use base64::Engine;
+use codex_api::ApiError;
 use codex_api::TransportError;
-use codex_api::error::ApiError;
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
@@ -81,6 +81,7 @@ pub fn telemetry_api_error_message(error: &ApiError) -> String {
         ApiError::Retryable { .. } => "retryable error".to_string(),
         ApiError::RateLimit(_) => "rate limit".to_string(),
         ApiError::InvalidRequest { .. } => "invalid request".to_string(),
+        ApiError::CyberPolicy { .. } => "cyber policy".to_string(),
         ApiError::ServerOverloaded => "server overloaded".to_string(),
     }
 }
@@ -91,8 +92,8 @@ mod tests {
     use super::extract_response_debug_context;
     use super::telemetry_api_error_message;
     use super::telemetry_transport_error_message;
+    use codex_api::ApiError;
     use codex_api::TransportError;
-    use codex_api::error::ApiError;
     use http::HeaderMap;
     use http::HeaderValue;
     use http::StatusCode;

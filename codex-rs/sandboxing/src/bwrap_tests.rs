@@ -2,34 +2,115 @@ use super::*;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::tempdir;
 
 #[test]
 fn system_bwrap_warning_reports_missing_system_bwrap() {
-    let warning = system_bwrap_warning_for_lookup(/*system_bwrap_path*/ None)
-        .expect("missing system bwrap should emit a warning");
-
-    assert!(warning.contains("could not find system bubblewrap"));
+    assert_eq!(
+        system_bwrap_warning_for_path(/*system_bwrap_path*/ None),
+        Some(MISSING_BWRAP_WARNING.to_string())
+    );
 }
 
 #[test]
-fn system_bwrap_warning_skips_too_old_system_bwrap() {
+fn system_bwrap_warning_reports_user_namespace_failures() {
+    for failure in USER_NAMESPACE_FAILURES {
+        let fake_bwrap = write_fake_bwrap(&format!(
+            r#"#!/bin/sh
+echo '{failure}' >&2
+exit 1
+"#
+        ));
+        let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+
+        assert_eq!(
+            system_bwrap_warning_for_path(Some(fake_bwrap_path)),
+            Some(USER_NAMESPACE_WARNING.to_string()),
+            "{failure}",
+        );
+    }
+}
+
+#[test]
+fn system_bwrap_warning_skips_unrelated_bwrap_failures() {
     let fake_bwrap = write_fake_bwrap(
         r#"#!/bin/sh
-if [ "$1" = "--help" ]; then
-  echo 'usage: bwrap [OPTION...] COMMAND'
-  exit 0
-fi
+echo 'bwrap: Unknown option --argv0' >&2
 exit 1
 "#,
     );
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
 
-    assert_eq!(
-        system_bwrap_warning_for_lookup(Some(fake_bwrap_path.to_path_buf())),
-        None,
-        "Do not warn even if bwrap does not support `--argv0`",
+    assert_eq!(system_bwrap_warning_for_path(Some(fake_bwrap_path)), None);
+}
+
+#[test]
+fn system_bwrap_probe_times_out_without_reporting_a_warning() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+sleep 1
+exit 0
+"#,
     );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+    let started_at = Instant::now();
+
+    assert!(system_bwrap_has_user_namespace_access(
+        fake_bwrap_path,
+        Duration::from_millis(10),
+    ));
+    assert!(started_at.elapsed() < Duration::from_millis(500));
+}
+
+#[test]
+fn system_bwrap_probe_does_not_wait_for_descendants_holding_stderr_open() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+echo 'No permissions to create a new namespace' >&2
+sleep 1 &
+exit 1
+"#,
+    );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+    let started_at = Instant::now();
+
+    assert!(!system_bwrap_has_user_namespace_access(
+        fake_bwrap_path,
+        Duration::from_millis(100),
+    ));
+    assert!(started_at.elapsed() < Duration::from_millis(500));
+}
+
+#[test]
+fn detects_wsl1_proc_version_formats() {
+    assert!(proc_version_indicates_wsl1(
+        "Linux version 4.4.0-22621-Microsoft"
+    ));
+    assert!(proc_version_indicates_wsl1(
+        "Linux version 5.15.0-microsoft-standard-WSL1"
+    ));
+    assert!(proc_version_indicates_wsl1(
+        "Linux version 5.15.0-wsl-microsoft-standard-WSL1"
+    ));
+}
+
+#[test]
+fn does_not_treat_wsl2_or_native_linux_as_wsl1() {
+    assert!(!proc_version_indicates_wsl1(
+        "Linux version 6.6.87.2-microsoft-standard-WSL2"
+    ));
+    assert!(!proc_version_indicates_wsl1(
+        "Linux version 6.6.87.2-wsl-microsoft-standard-WSL2"
+    ));
+    assert!(!proc_version_indicates_wsl1(
+        "Linux version 4.19.104-microsoft-standard"
+    ));
+    assert!(!proc_version_indicates_wsl1(
+        "Linux version 6.6.87.2-microsoft-standard-WSL3"
+    ));
+    assert!(!proc_version_indicates_wsl1("Linux version 6.8.0"));
 }
 
 #[test]
@@ -68,6 +149,20 @@ fn skips_workspace_local_bwrap_in_joined_search_path() {
     );
 }
 
+#[test]
+fn root_cwd_does_not_hide_system_bwrap_candidates() {
+    let temp_dir = tempdir().expect("temp dir");
+    let bin_dir = temp_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let expected_bwrap = write_named_fake_bwrap_in(&bin_dir);
+    let search_path = std::env::join_paths([bin_dir]).expect("join search path");
+
+    assert_eq!(
+        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), Path::new("/")),
+        Some(expected_bwrap)
+    );
+}
+
 fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
     write_fake_bwrap_in(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -102,5 +197,5 @@ fn write_named_fake_bwrap_in(dir: &Path) -> PathBuf {
     fs::write(&path, "#!/bin/sh\n").expect("write fake bwrap");
     let permissions = fs::Permissions::from_mode(0o755);
     fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
-    path
+    fs::canonicalize(path).expect("canonicalize fake bwrap")
 }

@@ -6,7 +6,8 @@
 //!      key. These override or extend the defaults at runtime.
 
 use codex_api::Provider as ApiProvider;
-use codex_api::provider::RetryConfig as ApiRetryConfig;
+use codex_api::RetryConfig as ApiRetryConfig;
+use codex_api::is_azure_responses_provider;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::CodexErr;
@@ -33,6 +34,15 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
+pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
+pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
+pub const AMAZON_BEDROCK_GPT_5_4_MODEL_ID: &str = "openai.gpt-5.4";
+pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str =
+    "https://bedrock-mantle.us-east-1.api.aws/openai/v1";
+const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER: &str = "x-amzn-mantle-client-agent";
+const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE: &str = "codex";
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
@@ -70,10 +80,11 @@ impl<'de> Deserialize<'de> for WireApi {
 }
 
 /// Serializable representation of a provider definition.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelProviderInfo {
     /// Friendly display name.
+    #[serde(default)]
     pub name: String,
     /// Base URL for the provider's OpenAI-compatible API.
     pub base_url: Option<String>,
@@ -89,6 +100,8 @@ pub struct ModelProviderInfo {
     pub experimental_bearer_token: Option<String>,
     /// Command-backed bearer-token configuration for this provider.
     pub auth: Option<ModelProviderAuthInfo>,
+    /// AWS SigV4 auth configuration for this provider.
+    pub aws: Option<ModelProviderAwsAuthInfo>,
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
@@ -123,8 +136,48 @@ pub struct ModelProviderInfo {
     pub supports_websockets: bool,
 }
 
+/// AWS SigV4 auth configuration for a model provider.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelProviderAwsAuthInfo {
+    /// AWS profile name to use. When unset, the AWS SDK default chain decides.
+    pub profile: Option<String>,
+    /// AWS region to use for provider-specific endpoints.
+    pub region: Option<String>,
+}
+
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.aws.is_some() {
+            if self.supports_websockets {
+                // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
+                // upgrade requests before allowing AWS-authenticated providers
+                // to enable Responses-over-WebSocket.
+                return Err("provider aws cannot be combined with supports_websockets".to_string());
+            }
+
+            let mut conflicts = Vec::new();
+            if self.env_key.is_some() {
+                conflicts.push("env_key");
+            }
+            if self.experimental_bearer_token.is_some() {
+                conflicts.push("experimental_bearer_token");
+            }
+            if self.auth.is_some() {
+                conflicts.push("auth");
+            }
+            if self.requires_openai_auth {
+                conflicts.push("requires_openai_auth");
+            }
+
+            if !conflicts.is_empty() {
+                return Err(format!(
+                    "provider aws cannot be combined with {}",
+                    conflicts.join(", ")
+                ));
+            }
+        }
+
         let Some(auth) = self.auth.as_ref() else {
             return Ok(());
         };
@@ -182,8 +235,11 @@ impl ModelProviderInfo {
     }
 
     pub fn to_api_provider(&self, auth_mode: Option<AuthMode>) -> CodexResult<ApiProvider> {
-        let default_base_url = if matches!(auth_mode, Some(AuthMode::Chatgpt)) {
-            "https://chatgpt.com/backend-api/codex"
+        let default_base_url = if matches!(
+            auth_mode,
+            Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity)
+        ) {
+            CHATGPT_CODEX_BASE_URL
         } else {
             "https://api.openai.com/v1"
         };
@@ -268,6 +324,7 @@ impl ModelProviderInfo {
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
+            aws: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
@@ -296,8 +353,46 @@ impl ModelProviderInfo {
         }
     }
 
+    pub fn create_amazon_bedrock_provider(
+        aws: Option<ModelProviderAwsAuthInfo>,
+    ) -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: AMAZON_BEDROCK_PROVIDER_NAME.into(),
+            base_url: Some(AMAZON_BEDROCK_DEFAULT_BASE_URL.into()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: Some(aws.unwrap_or(ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+            })),
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: Some(HashMap::from([(
+                AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string(),
+                AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE.to_string(),
+            )])),
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
+    }
+
+    pub fn is_amazon_bedrock(&self) -> bool {
+        self.name == AMAZON_BEDROCK_PROVIDER_NAME
+    }
+
+    pub fn supports_remote_compaction(&self) -> bool {
+        self.is_openai() || is_azure_responses_provider(&self.name, self.base_url.as_deref())
     }
 
     pub fn has_command_auth(&self) -> bool {
@@ -317,6 +412,7 @@ pub fn built_in_model_providers(
 ) -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
     let openai_provider = P::create_openai_provider(openai_base_url);
+    let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
 
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
@@ -324,6 +420,7 @@ pub fn built_in_model_providers(
     // `model_providers` in config.toml to add their own providers.
     [
         (OPENAI_PROVIDER_ID, openai_provider),
+        (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
@@ -336,6 +433,44 @@ pub fn built_in_model_providers(
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
+}
+
+/// Merge configured providers into the built-in provider catalog.
+///
+/// Configured providers extend the built-in set. Built-in providers are not
+/// generally overridable, but the built-in Amazon Bedrock provider allows the
+/// user to set `aws.profile` and `aws.region`.
+pub fn merge_configured_model_providers(
+    mut model_providers: HashMap<String, ModelProviderInfo>,
+    configured_model_providers: HashMap<String, ModelProviderInfo>,
+) -> Result<HashMap<String, ModelProviderInfo>, String> {
+    for (key, mut provider) in configured_model_providers {
+        if key == AMAZON_BEDROCK_PROVIDER_ID {
+            let aws_override = provider.aws.take();
+            if provider != ModelProviderInfo::default() {
+                return Err(format!(
+                    "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing \
+`aws.profile` and `aws.region`; other non-default provider fields are not supported"
+                ));
+            }
+
+            if let Some(aws_override) = aws_override
+                && let Some(built_in_provider) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
+                && let Some(built_in_aws) = built_in_provider.aws.as_mut()
+            {
+                if let Some(profile) = aws_override.profile {
+                    built_in_aws.profile = Some(profile);
+                }
+                if let Some(region) = aws_override.region {
+                    built_in_aws.region = Some(region);
+                }
+            }
+        } else {
+            model_providers.entry(key).or_insert(provider);
+        }
+    }
+
+    Ok(model_providers)
 }
 
 pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> ModelProviderInfo {
@@ -365,6 +500,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api,
         query_params: None,
         http_headers: None,

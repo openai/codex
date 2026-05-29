@@ -1,20 +1,25 @@
 use super::*;
 use crate::agent::control::render_input_preview;
+use crate::tools::handlers::multi_agents_spec::create_send_input_tool_v1;
+use crate::turn_timing::now_unix_timestamp_ms;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-impl ToolHandler for Handler {
-    type Output = SendInputResult;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for Handler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "send_input")
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
+    fn spec(&self) -> ToolSpec {
+        create_send_input_tool_v1()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -45,6 +50,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentInteractionBeginEvent {
                     call_id: call_id.clone(),
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
                     prompt: prompt.clone(),
@@ -67,6 +73,7 @@ impl ToolHandler for Handler {
                 &turn,
                 CollabAgentInteractionEndEvent {
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
                     receiver_agent_nickname: receiver_agent.agent_nickname,
@@ -79,7 +86,20 @@ impl ToolHandler for Handler {
             .await;
         let submission_id = result?;
 
-        Ok(SendInputResult { submission_id })
+        Ok(boxed_tool_output(SendInputResult { submission_id }))
+    }
+}
+
+impl CoreToolRuntime for Handler {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "send_input send message existing agent subagent follow up interrupt redirect queue target",
+            self.spec(),
+        )
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
     }
 }
 

@@ -10,9 +10,10 @@
 //!
 //! Backtrack operates as a small state machine:
 //! - The first `Esc` in the main view "primes" the feature and captures a base thread id.
-//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message.
+//! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message when
+//!   there is a rewind target.
 //! - `Enter` requests a rollback from core and records a `pending_rollback` guard.
-//! - On `EventMsg::ThreadRolledBack`, we either finish an in-flight backtrack request or queue a
+//! - On rollback completion, we either finish an in-flight backtrack request or queue a
 //!   rollback trim so it runs in event order with transcript inserts.
 //!
 //! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
@@ -30,6 +31,8 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+#[cfg(test)]
+use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
@@ -41,6 +44,8 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+
+const NO_PREVIOUS_MESSAGE_TO_EDIT: &str = "No previous message to edit.";
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
@@ -141,7 +146,6 @@ impl App {
                     self.overlay_confirm_backtrack(tui);
                     Ok(true)
                 }
-                // Catchall: forward any other events to the overlay widget.
                 _ => {
                     self.overlay_forward_event(tui, event)?;
                     Ok(true)
@@ -228,7 +232,10 @@ impl App {
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
-        self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+        self.overlay = Some(Overlay::new_transcript(
+            self.transcript_cells.clone(),
+            self.keymap.pager.clone(),
+        ));
         tui.frame_requester().schedule_frame();
     }
 
@@ -238,7 +245,10 @@ impl App {
         let was_backtrack = self.backtrack.overlay_preview_active;
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);
-            tui.insert_history_lines(lines);
+            tui.insert_history_hyperlink_lines_with_wrap_policy(
+                lines,
+                self.history_line_wrap_policy(),
+            );
         }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;
@@ -252,9 +262,17 @@ impl App {
     /// Useful when switching sessions to ensure prior history remains visible.
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
         if !self.transcript_cells.is_empty() {
-            let width = tui.terminal.last_known_screen_size.width;
+            let width = self
+                .chat_widget
+                .history_wrap_width(tui.terminal.last_known_screen_size.width);
             for cell in &self.transcript_cells {
-                tui.insert_history_lines(cell.display_lines(width));
+                tui.insert_history_hyperlink_lines_with_wrap_policy(
+                    cell.display_hyperlink_lines_for_mode(
+                        width,
+                        self.chat_widget.history_render_mode(),
+                    ),
+                    self.history_line_wrap_policy(),
+                );
             }
         }
     }
@@ -264,11 +282,21 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.nth_user_message = usize::MAX;
         self.backtrack.base_id = self.chat_widget.thread_id();
-        self.chat_widget.show_esc_backtrack_hint();
+        if has_backtrack_target(&self.transcript_cells) {
+            self.chat_widget.show_esc_backtrack_hint();
+        }
     }
 
     /// Open overlay and begin backtrack preview flow (first step + highlight).
     fn open_backtrack_preview(&mut self, tui: &mut tui::Tui) {
+        if !has_backtrack_target(&self.transcript_cells) {
+            self.reset_backtrack_state();
+            self.chat_widget
+                .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         self.open_transcript_overlay(tui);
         self.backtrack.overlay_preview_active = true;
         // Composer is hidden by overlay; clear its hint.
@@ -278,6 +306,14 @@ impl App {
 
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
+        if !has_backtrack_target(&self.transcript_cells) {
+            self.close_transcript_overlay(tui);
+            self.chat_widget
+                .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
@@ -361,7 +397,7 @@ impl App {
     /// source of truth for the active cell and its cache invalidation key, and because `App` owns
     /// overlay lifecycle and frame scheduling for animations.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if let TuiEvent::Draw = &event
+        if matches!(&event, TuiEvent::Draw | TuiEvent::Resize)
             && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {
             let active_key = self.chat_widget.active_cell_transcript_key();
@@ -369,7 +405,7 @@ impl App {
             tui.draw(u16::MAX, |frame| {
                 let width = frame.area().width.max(1);
                 t.sync_live_tail(width, active_key, |w| {
-                    chat_widget.active_cell_transcript_lines(w)
+                    chat_widget.active_cell_transcript_hyperlink_lines(w)
                 });
                 t.render(frame.area(), frame.buffer);
             })?;
@@ -472,14 +508,16 @@ impl App {
         self.backtrack.pending_rollback = None;
     }
 
-    /// Apply rollback semantics for `ThreadRolledBack` events where this TUI does not have an
-    /// in-flight backtrack request (`pending_rollback` is `None`).
+    /// Apply rollback semantics for a confirmed rollback where this TUI does
+    /// not have an in-flight backtrack request (`pending_rollback` is `None`).
     ///
     /// Returns `true` when local transcript state changed.
     pub(crate) fn apply_non_pending_thread_rollback(&mut self, num_turns: u32) -> bool {
         if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
             return false;
         }
+        self.chat_widget
+            .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
         self.sync_overlay_after_transcript_trim();
         self.backtrack_render_pending = true;
         true
@@ -501,6 +539,8 @@ impl App {
             &mut self.transcript_cells,
             pending.selection.nth_user_message,
         ) {
+            self.chat_widget
+                .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }
@@ -607,6 +647,10 @@ pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) ->
     user_positions_iter(cells).count()
 }
 
+fn has_backtrack_target(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> bool {
+    user_count(cells) > 0
+}
+
 fn nth_user_position(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
     nth: usize,
@@ -636,12 +680,53 @@ fn user_positions_iter(
 }
 
 #[cfg(test)]
+fn agent_group_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
+    agent_group_positions_iter(cells).count()
+}
+
+#[cfg(test)]
+fn agent_group_positions_iter(
+    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
+) -> impl Iterator<Item = usize> + '_ {
+    let session_start_type = TypeId::of::<SessionInfoCell>();
+    let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
+
+    let start = cells
+        .iter()
+        .rposition(|cell| type_of(cell) == session_start_type)
+        .map_or(0, |idx| idx + 1);
+
+    cells
+        .iter()
+        .enumerate()
+        .skip(start)
+        .filter_map(move |(idx, cell)| {
+            let is_agent = cell.as_any().downcast_ref::<AgentMessageCell>().is_some();
+            let is_copy_source_group = is_agent && !cell.is_stream_continuation();
+            is_copy_source_group.then_some(idx)
+        })
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::sync::Arc;
+
+    fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
 
     #[test]
     fn trim_transcript_for_first_user_drops_user_and_newer_cells() {
@@ -830,5 +915,61 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(intro_text, "• intro");
+    }
+
+    #[test]
+    fn agent_group_count_ignores_context_compacted_marker() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("first")],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(crate::history_cell::new_info_event(
+                "Context compacted".to_string(),
+                /*hint*/ None,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("second")],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>,
+        ];
+
+        assert_eq!(agent_group_count(&cells), 2);
+    }
+
+    #[test]
+    fn backtrack_target_requires_user_message() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("assistant")],
+                /*is_first_line*/ true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(crate::history_cell::new_info_event(
+                "Context compacted".to_string(),
+                /*hint*/ None,
+            )) as Arc<dyn HistoryCell>,
+        ];
+
+        assert!(!has_backtrack_target(&cells));
+
+        cells.push(Arc::new(UserHistoryCell {
+            message: "hello".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>);
+
+        assert!(has_backtrack_target(&cells));
+    }
+
+    #[test]
+    fn backtrack_unavailable_info_message_snapshot() {
+        let cell = crate::history_cell::new_info_event(
+            NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(),
+            /*hint*/ None,
+        );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 }

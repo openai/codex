@@ -7,17 +7,21 @@ inputs:
   artifacts-dir:
     description: Absolute path to the directory containing built binaries to sign.
     required: true
+  binaries:
+    description: Space-delimited binary basenames to sign.
+    default: "codex codex-responses-api-proxy"
 
 runs:
   using: composite
   steps:
     - name: Install cosign
-      uses: sigstore/cosign-installer@v3.7.0
+      uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
 
     - name: Cosign Linux artifacts
       shell: bash
       env:
         ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
+        BINARIES: ${{ inputs.binaries }}
         COSIGN_EXPERIMENTAL: "1"
         COSIGN_YES: "true"
         COSIGN_OIDC_CLIENT_ID: "sigstore"
@@ -31,7 +35,7 @@ runs:
           exit 1
         fi
 
-        for binary in codex codex-responses-api-proxy; do
+        for binary in ${BINARIES}; do
           artifact="${dest}/${binary}"
           if [[ ! -f "$artifact" ]]; then
             echo "Binary $artifact not found"

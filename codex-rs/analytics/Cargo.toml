@@ -16,10 +16,12 @@ workspace = true
 codex-app-server-protocol = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
+codex-model-provider = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 os_info = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 sha1 = { workspace = true }
 tokio = { workspace = true, features = [
     "macros",
@@ -28,5 +30,5 @@ tokio = { workspace = true, features = [
 tracing = { workspace = true, features = ["log"] }
 
 [dev-dependencies]
+codex-utils-absolute-path = { workspace = true }
 pretty_assertions = { workspace = true }
-serde_json = { workspace = true }

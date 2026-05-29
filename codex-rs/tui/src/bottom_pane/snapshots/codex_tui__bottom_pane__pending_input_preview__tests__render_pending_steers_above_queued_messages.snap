@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/pending_input_preview.rs
+assertion_line: 345
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
@@ -13,7 +14,7 @@ Buffer {
         "• Messages to be submitted at end of turn           ",
         "  ↳ Rejected steer that will be retried.            ",
         "                                                    ",
-        "• Queued follow-up messages                         ",
+        "• Queued follow-up inputs                           ",
         "  ↳ Queued follow-up question                       ",
         "    ⌥ + ↑ edit last queued message                  ",
     ],

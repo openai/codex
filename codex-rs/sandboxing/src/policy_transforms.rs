@@ -1,3 +1,4 @@
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -6,64 +7,71 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use dunce::canonicalize;
-use std::collections::HashSet;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EffectiveSandboxPermissions {
-    pub sandbox_policy: SandboxPolicy,
-}
-
-impl EffectiveSandboxPermissions {
-    pub fn new(
-        sandbox_policy: &SandboxPolicy,
-        additional_permissions: Option<&PermissionProfile>,
-    ) -> Self {
-        let Some(additional_permissions) = additional_permissions else {
-            return Self {
-                sandbox_policy: sandbox_policy.clone(),
-            };
-        };
-
-        Self {
-            sandbox_policy: effective_sandbox_policy(sandbox_policy, Some(additional_permissions)),
-        }
-    }
-}
+use codex_utils_absolute_path::canonicalize_preserving_symlinks;
+use std::num::NonZeroUsize;
+use std::path::Path;
+use std::path::PathBuf;
 
 pub fn normalize_additional_permissions(
-    additional_permissions: PermissionProfile,
-) -> Result<PermissionProfile, String> {
+    additional_permissions: AdditionalPermissionProfile,
+) -> Result<AdditionalPermissionProfile, String> {
     let network = additional_permissions
         .network
         .filter(|network| !network.is_empty());
-    let file_system = additional_permissions
-        .file_system
-        .map(|file_system| {
-            let read = file_system
-                .read
-                .map(|paths| normalize_permission_paths(paths, "file_system.read"));
-            let write = file_system
-                .write
-                .map(|paths| normalize_permission_paths(paths, "file_system.write"));
-            FileSystemPermissions { read, write }
-        })
-        .filter(|file_system| !file_system.is_empty());
-    Ok(PermissionProfile {
+    let file_system = match additional_permissions.file_system {
+        Some(file_system) => {
+            let mut entries = Vec::with_capacity(file_system.entries.len());
+            let glob_scan_max_depth = file_system.glob_scan_max_depth;
+            for entry in file_system.entries {
+                if matches!(&entry.path, FileSystemPath::GlobPattern { .. })
+                    && entry.access != FileSystemAccessMode::Deny
+                {
+                    return Err(
+                        "glob file system permissions only support deny-read entries".to_string(),
+                    );
+                }
+                let path = match entry.path {
+                    FileSystemPath::Path { path } => FileSystemPath::Path {
+                        path: canonicalize_preserving_symlinks(path.as_path())
+                            .ok()
+                            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+                            .unwrap_or(path),
+                    },
+                    FileSystemPath::GlobPattern { pattern } => {
+                        FileSystemPath::GlobPattern { pattern }
+                    }
+                    FileSystemPath::Special { value } => FileSystemPath::Special { value },
+                };
+                let normalized_entry = FileSystemSandboxEntry {
+                    path,
+                    access: entry.access,
+                };
+                if !entries.contains(&normalized_entry) {
+                    entries.push(normalized_entry);
+                }
+            }
+            let file_system = FileSystemPermissions {
+                entries,
+                glob_scan_max_depth,
+            };
+            (!file_system.is_empty()).then_some(file_system)
+        }
+        None => None,
+    };
+    Ok(AdditionalPermissionProfile {
         network,
         file_system,
     })
 }
 
 pub fn merge_permission_profiles(
-    base: Option<&PermissionProfile>,
-    permissions: Option<&PermissionProfile>,
-) -> Option<PermissionProfile> {
+    base: Option<&AdditionalPermissionProfile>,
+    permissions: Option<&AdditionalPermissionProfile>,
+) -> Option<AdditionalPermissionProfile> {
     let Some(permissions) = permissions else {
         return base.cloned();
     };
@@ -89,8 +97,14 @@ pub fn merge_permission_profiles(
             };
             let file_system = match (base.file_system.as_ref(), permissions.file_system.as_ref()) {
                 (Some(base), Some(permissions)) => Some(FileSystemPermissions {
-                    read: merge_permission_paths(base.read.as_ref(), permissions.read.as_ref()),
-                    write: merge_permission_paths(base.write.as_ref(), permissions.write.as_ref()),
+                    entries: merge_permission_entries(&base.entries, &permissions.entries),
+                    glob_scan_max_depth: merge_glob_scan_max_depth(
+                        &base.entries,
+                        base.glob_scan_max_depth.map(usize::from),
+                        &permissions.entries,
+                        permissions.glob_scan_max_depth.map(usize::from),
+                    )
+                    .and_then(NonZeroUsize::new),
                 })
                 .filter(|file_system| !file_system.is_empty()),
                 (Some(base), None) => Some(base.clone()),
@@ -98,7 +112,7 @@ pub fn merge_permission_profiles(
                 (None, None) => None,
             };
 
-            Some(PermissionProfile {
+            Some(AdditionalPermissionProfile {
                 network,
                 file_system,
             })
@@ -109,18 +123,55 @@ pub fn merge_permission_profiles(
 }
 
 pub fn intersect_permission_profiles(
-    requested: PermissionProfile,
-    granted: PermissionProfile,
-) -> PermissionProfile {
+    requested: AdditionalPermissionProfile,
+    granted: AdditionalPermissionProfile,
+    cwd: &Path,
+) -> AdditionalPermissionProfile {
     let file_system = requested
         .file_system
         .map(|requested_file_system| {
             let granted_file_system = granted.file_system.unwrap_or_default();
-            let read =
-                intersect_permission_paths(requested_file_system.read, granted_file_system.read);
-            let write =
-                intersect_permission_paths(requested_file_system.write, granted_file_system.write);
-            FileSystemPermissions { read, write }
+            let requested_policy =
+                FileSystemSandboxPolicy::restricted(requested_file_system.entries.clone());
+            let requested_read_deny_matcher = ReadDenyMatcher::new(&requested_policy, cwd);
+            let mut accepted_entries = Vec::new();
+            for entry in granted_file_system.entries.iter().filter(|entry| {
+                granted_file_system_entry_within_request(
+                    &requested_file_system,
+                    &requested_policy,
+                    requested_read_deny_matcher.as_ref(),
+                    entry,
+                    cwd,
+                )
+            }) {
+                let entry = materialize_cwd_dependent_entry(entry, cwd);
+                if !accepted_entries.contains(&entry) {
+                    accepted_entries.push(entry);
+                }
+            }
+            let mut entries = accepted_entries.clone();
+            let requested_retained_deny_entries = retain_constraining_deny_entries(
+                &requested_file_system.entries,
+                &accepted_entries,
+                cwd,
+                &mut entries,
+            );
+            let granted_retained_deny_entries = retain_constraining_deny_entries(
+                &granted_file_system.entries,
+                &accepted_entries,
+                cwd,
+                &mut entries,
+            );
+            FileSystemPermissions {
+                glob_scan_max_depth: merge_glob_scan_max_depth(
+                    &requested_retained_deny_entries,
+                    requested_file_system.glob_scan_max_depth.map(usize::from),
+                    &granted_retained_deny_entries,
+                    granted_file_system.glob_scan_max_depth.map(usize::from),
+                )
+                .and_then(NonZeroUsize::new),
+                entries,
+            }
         })
         .filter(|file_system| !file_system.is_empty());
     let network = match (requested.network, granted.network) {
@@ -137,133 +188,252 @@ pub fn intersect_permission_profiles(
         _ => None,
     };
 
-    PermissionProfile {
+    AdditionalPermissionProfile {
         network,
         file_system,
     }
 }
 
-fn intersect_permission_paths(
-    requested: Option<Vec<AbsolutePathBuf>>,
-    granted: Option<Vec<AbsolutePathBuf>>,
-) -> Option<Vec<AbsolutePathBuf>> {
-    requested.and_then(|requested_paths| {
-        if requested_paths.is_empty() {
-            return granted.map(|_| Vec::new());
+fn merge_glob_scan_max_depth(
+    left_entries: &[FileSystemSandboxEntry],
+    left_depth: Option<usize>,
+    right_entries: &[FileSystemSandboxEntry],
+    right_depth: Option<usize>,
+) -> Option<usize> {
+    let left_depth = effective_glob_scan_depth(left_entries, left_depth);
+    let right_depth = effective_glob_scan_depth(right_entries, right_depth);
+
+    match (left_depth, right_depth) {
+        (Some(GlobScanDepth::Unbounded), _) | (_, Some(GlobScanDepth::Unbounded)) => None,
+        (Some(GlobScanDepth::Bounded(left)), Some(GlobScanDepth::Bounded(right))) => {
+            Some(left.max(right))
         }
-
-        let granted_paths = granted.unwrap_or_default();
-        Some(
-            requested_paths
-                .into_iter()
-                .filter(|path| granted_paths.contains(path))
-                .collect::<Vec<_>>(),
-        )
-        .filter(|paths| !paths.is_empty())
-    })
-}
-
-fn normalize_permission_paths(
-    paths: Vec<AbsolutePathBuf>,
-    _permission_kind: &str,
-) -> Vec<AbsolutePathBuf> {
-    let mut out = Vec::with_capacity(paths.len());
-    let mut seen = HashSet::new();
-
-    for path in paths {
-        let canonicalized = canonicalize(path.as_path())
-            .ok()
-            .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
-            .unwrap_or(path);
-        if seen.insert(canonicalized.clone()) {
-            out.push(canonicalized);
-        }
-    }
-
-    out
-}
-
-fn merge_permission_paths(
-    base: Option<&Vec<AbsolutePathBuf>>,
-    permissions: Option<&Vec<AbsolutePathBuf>>,
-) -> Option<Vec<AbsolutePathBuf>> {
-    match (base, permissions) {
-        (Some(base), Some(permissions)) => {
-            let mut merged = Vec::with_capacity(base.len() + permissions.len());
-            let mut seen = HashSet::with_capacity(base.len() + permissions.len());
-
-            for path in base.iter().chain(permissions.iter()) {
-                if seen.insert(path.clone()) {
-                    merged.push(path.clone());
-                }
-            }
-
-            Some(merged).filter(|paths| !paths.is_empty())
-        }
-        (Some(base), None) => Some(base.clone()),
-        (None, Some(permissions)) => Some(permissions.clone()),
+        (Some(GlobScanDepth::Bounded(depth)), None)
+        | (None, Some(GlobScanDepth::Bounded(depth))) => Some(depth),
         (None, None) => None,
     }
 }
 
-fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
-    let mut out = Vec::with_capacity(paths.len());
-    let mut seen = HashSet::new();
-    for path in paths {
-        if seen.insert(path.to_path_buf()) {
-            out.push(path);
-        }
-    }
-    out
+fn effective_glob_scan_depth(
+    entries: &[FileSystemSandboxEntry],
+    depth: Option<usize>,
+) -> Option<GlobScanDepth> {
+    entries
+        .iter()
+        .any(|entry| {
+            entry.access == FileSystemAccessMode::Deny
+                && matches!(&entry.path, FileSystemPath::GlobPattern { .. })
+        })
+        .then_some(match depth {
+            Some(depth) => GlobScanDepth::Bounded(depth),
+            None => GlobScanDepth::Unbounded,
+        })
 }
 
-fn additional_permission_roots(
-    additional_permissions: &PermissionProfile,
-) -> (Vec<AbsolutePathBuf>, Vec<AbsolutePathBuf>) {
-    (
-        dedup_absolute_paths(
-            additional_permissions
-                .file_system
-                .as_ref()
-                .and_then(|file_system| file_system.read.clone())
-                .unwrap_or_default(),
-        ),
-        dedup_absolute_paths(
-            additional_permissions
-                .file_system
-                .as_ref()
-                .and_then(|file_system| file_system.write.clone())
-                .unwrap_or_default(),
-        ),
-    )
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GlobScanDepth {
+    Bounded(usize),
+    Unbounded,
+}
+
+fn granted_file_system_entry_within_request(
+    requested: &FileSystemPermissions,
+    requested_policy: &FileSystemSandboxPolicy,
+    requested_read_deny_matcher: Option<&ReadDenyMatcher>,
+    granted_entry: &FileSystemSandboxEntry,
+    cwd: &Path,
+) -> bool {
+    if !granted_entry.access.can_read() {
+        return false;
+    }
+
+    if let Some(path) = resolve_permission_path(&granted_entry.path, cwd) {
+        if requested_read_deny_matcher.is_some_and(|matcher| matcher.is_read_denied(path.as_path()))
+        {
+            return false;
+        }
+        return access_covers(
+            requested_policy.resolve_access_with_cwd(path.as_path(), cwd),
+            granted_entry.access,
+        );
+    }
+
+    requested.entries.iter().any(|requested_entry| {
+        access_covers(requested_entry.access, granted_entry.access)
+            && requested_entry.path == granted_entry.path
+    })
+}
+
+fn retain_constraining_deny_entries(
+    source_entries: &[FileSystemSandboxEntry],
+    accepted_entries: &[FileSystemSandboxEntry],
+    cwd: &Path,
+    output_entries: &mut Vec<FileSystemSandboxEntry>,
+) -> Vec<FileSystemSandboxEntry> {
+    let mut retained_entries = Vec::new();
+    for entry in source_entries
+        .iter()
+        .filter(|entry| entry.access == FileSystemAccessMode::Deny)
+    {
+        if !deny_entry_constrains_accepted_grant(entry, accepted_entries, cwd) {
+            continue;
+        }
+        let entry = materialize_cwd_dependent_entry(entry, cwd);
+        if !output_entries.contains(&entry) {
+            output_entries.push(entry.clone());
+        }
+        retained_entries.push(entry);
+    }
+    retained_entries
+}
+
+fn deny_entry_constrains_accepted_grant(
+    deny_entry: &FileSystemSandboxEntry,
+    accepted_entries: &[FileSystemSandboxEntry],
+    cwd: &Path,
+) -> bool {
+    accepted_entries
+        .iter()
+        .filter(|entry| entry.access.can_read())
+        .any(|entry| {
+            let Some(grant_path) = resolve_permission_path(&entry.path, cwd) else {
+                return false;
+            };
+            match &deny_entry.path {
+                FileSystemPath::GlobPattern { pattern } => glob_static_prefix_path(pattern, cwd)
+                    .is_some_and(|prefix| paths_overlap(prefix.as_path(), grant_path.as_path())),
+                FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => {
+                    resolve_permission_path(&deny_entry.path, cwd).is_some_and(|deny_path| {
+                        paths_overlap(deny_path.as_path(), grant_path.as_path())
+                    })
+                }
+            }
+        })
+}
+
+fn glob_static_prefix_path(pattern: &str, cwd: &Path) -> Option<AbsolutePathBuf> {
+    let resolved_pattern = AbsolutePathBuf::resolve_path_against_base(pattern, cwd);
+    let resolved_pattern = resolved_pattern.as_path().to_string_lossy();
+    let prefix = match resolved_pattern.find(['*', '?', '[', ']']) {
+        Some(0) => return None,
+        Some(index) => {
+            let prefix = &resolved_pattern[..index];
+            if prefix.ends_with(std::path::MAIN_SEPARATOR)
+                || prefix.ends_with('/')
+                || prefix.ends_with('\\')
+            {
+                Path::new(prefix)
+            } else {
+                Path::new(prefix).parent()?
+            }
+        }
+        None => Path::new(resolved_pattern.as_ref()),
+    };
+    AbsolutePathBuf::from_absolute_path(prefix).ok()
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
+}
+
+fn access_covers(requested: FileSystemAccessMode, granted: FileSystemAccessMode) -> bool {
+    match granted {
+        FileSystemAccessMode::Read => requested.can_read(),
+        FileSystemAccessMode::Write => requested.can_write(),
+        FileSystemAccessMode::Deny => false,
+    }
+}
+
+fn materialize_cwd_dependent_entry(
+    entry: &FileSystemSandboxEntry,
+    cwd: &Path,
+) -> FileSystemSandboxEntry {
+    match &entry.path {
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::ProjectRoots { .. },
+        } => resolve_permission_path(&entry.path, cwd)
+            .map(|path| FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path },
+                access: entry.access,
+            })
+            .unwrap_or_else(|| entry.clone()),
+        FileSystemPath::GlobPattern { pattern } => FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: AbsolutePathBuf::resolve_path_against_base(pattern, cwd)
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+            access: entry.access,
+        },
+        FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => entry.clone(),
+    }
+}
+
+fn resolve_permission_path(path: &FileSystemPath, cwd: &Path) -> Option<AbsolutePathBuf> {
+    match path {
+        FileSystemPath::Path { path } => Some(path.clone()),
+        FileSystemPath::GlobPattern { .. } => None,
+        FileSystemPath::Special { value } => match value {
+            FileSystemSpecialPath::Root => {
+                let root = cwd.ancestors().last()?;
+                AbsolutePathBuf::from_absolute_path(root).ok()
+            }
+            FileSystemSpecialPath::ProjectRoots { subpath } => {
+                let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok()?;
+                Some(match subpath {
+                    Some(subpath) => {
+                        AbsolutePathBuf::resolve_path_against_base(subpath, cwd.as_path())
+                    }
+                    None => cwd,
+                })
+            }
+            FileSystemSpecialPath::Tmpdir => {
+                let tmpdir = std::env::var_os("TMPDIR")?;
+                if tmpdir.is_empty() {
+                    None
+                } else {
+                    AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir)).ok()
+                }
+            }
+            FileSystemSpecialPath::SlashTmp => AbsolutePathBuf::from_absolute_path("/tmp")
+                .ok()
+                .filter(|path| path.as_path().is_dir()),
+            FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => None,
+        },
+    }
+}
+
+fn merge_permission_entries(
+    base: &[FileSystemSandboxEntry],
+    permissions: &[FileSystemSandboxEntry],
+) -> Vec<FileSystemSandboxEntry> {
+    let mut merged = Vec::with_capacity(base.len() + permissions.len());
+    for entry in base.iter().chain(permissions.iter()) {
+        if !merged.contains(entry) {
+            merged.push(entry.clone());
+        }
+    }
+    merged
 }
 
 fn merge_file_system_policy_with_additional_permissions(
     file_system_policy: &FileSystemSandboxPolicy,
-    extra_reads: Vec<AbsolutePathBuf>,
-    extra_writes: Vec<AbsolutePathBuf>,
+    additional_permissions: &FileSystemPermissions,
 ) -> FileSystemSandboxPolicy {
     match file_system_policy.kind {
         FileSystemSandboxKind::Restricted => {
             let mut merged_policy = file_system_policy.clone();
-            for path in extra_reads {
-                let entry = FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path },
-                    access: FileSystemAccessMode::Read,
-                };
-                if !merged_policy.entries.contains(&entry) {
-                    merged_policy.entries.push(entry);
+            for entry in &additional_permissions.entries {
+                if !merged_policy.entries.contains(entry) {
+                    merged_policy.entries.push(entry.clone());
                 }
             }
-            for path in extra_writes {
-                let entry = FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path },
-                    access: FileSystemAccessMode::Write,
-                };
-                if !merged_policy.entries.contains(&entry) {
-                    merged_policy.entries.push(entry);
-                }
-            }
+            merged_policy.glob_scan_max_depth = merge_glob_scan_max_depth(
+                &file_system_policy.entries,
+                file_system_policy.glob_scan_max_depth,
+                &additional_permissions.entries,
+                additional_permissions.glob_scan_max_depth.map(usize::from),
+            );
             merged_policy
         }
         FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
@@ -274,47 +444,28 @@ fn merge_file_system_policy_with_additional_permissions(
 
 pub fn effective_file_system_sandbox_policy(
     file_system_policy: &FileSystemSandboxPolicy,
-    additional_permissions: Option<&PermissionProfile>,
+    additional_permissions: Option<&AdditionalPermissionProfile>,
 ) -> FileSystemSandboxPolicy {
     let Some(additional_permissions) = additional_permissions else {
         return file_system_policy.clone();
     };
 
-    let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
-    if extra_reads.is_empty() && extra_writes.is_empty() {
+    let Some(file_system_permissions) = additional_permissions.file_system.as_ref() else {
+        return file_system_policy.clone();
+    };
+    if file_system_permissions.is_empty() {
         file_system_policy.clone()
     } else {
         merge_file_system_policy_with_additional_permissions(
             file_system_policy,
-            extra_reads,
-            extra_writes,
+            file_system_permissions,
         )
-    }
-}
-
-fn merge_read_only_access_with_additional_reads(
-    read_only_access: &ReadOnlyAccess,
-    extra_reads: Vec<AbsolutePathBuf>,
-) -> ReadOnlyAccess {
-    match read_only_access {
-        ReadOnlyAccess::FullAccess => ReadOnlyAccess::FullAccess,
-        ReadOnlyAccess::Restricted {
-            include_platform_defaults,
-            readable_roots,
-        } => {
-            let mut merged = readable_roots.clone();
-            merged.extend(extra_reads);
-            ReadOnlyAccess::Restricted {
-                include_platform_defaults: *include_platform_defaults,
-                readable_roots: dedup_absolute_paths(merged),
-            }
-        }
     }
 }
 
 fn merge_network_access(
     base_network_access: bool,
-    additional_permissions: &PermissionProfile,
+    additional_permissions: &AdditionalPermissionProfile,
 ) -> bool {
     base_network_access
         || additional_permissions
@@ -326,7 +477,7 @@ fn merge_network_access(
 
 pub fn effective_network_sandbox_policy(
     network_policy: NetworkSandboxPolicy,
-    additional_permissions: Option<&PermissionProfile>,
+    additional_permissions: Option<&AdditionalPermissionProfile>,
 ) -> NetworkSandboxPolicy {
     if additional_permissions
         .is_some_and(|permissions| merge_network_access(network_policy.is_enabled(), permissions))
@@ -339,83 +490,19 @@ pub fn effective_network_sandbox_policy(
     }
 }
 
-fn sandbox_policy_with_additional_permissions(
-    sandbox_policy: &SandboxPolicy,
-    additional_permissions: &PermissionProfile,
-) -> SandboxPolicy {
-    if additional_permissions.is_empty() {
-        return sandbox_policy.clone();
-    }
-
-    let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
-
-    match sandbox_policy {
-        SandboxPolicy::DangerFullAccess => SandboxPolicy::DangerFullAccess,
-        SandboxPolicy::ExternalSandbox { network_access } => SandboxPolicy::ExternalSandbox {
-            network_access: if merge_network_access(
-                network_access.is_enabled(),
-                additional_permissions,
-            ) {
-                NetworkAccess::Enabled
-            } else {
-                NetworkAccess::Restricted
-            },
-        },
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            read_only_access,
-            network_access,
-            exclude_tmpdir_env_var,
-            exclude_slash_tmp,
-        } => {
-            let mut merged_writes = writable_roots.clone();
-            merged_writes.extend(extra_writes);
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: dedup_absolute_paths(merged_writes),
-                read_only_access: merge_read_only_access_with_additional_reads(
-                    read_only_access,
-                    extra_reads,
-                ),
-                network_access: merge_network_access(*network_access, additional_permissions),
-                exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
-                exclude_slash_tmp: *exclude_slash_tmp,
-            }
-        }
-        SandboxPolicy::ReadOnly {
-            access,
-            network_access,
-        } => {
-            if extra_writes.is_empty() {
-                SandboxPolicy::ReadOnly {
-                    access: merge_read_only_access_with_additional_reads(access, extra_reads),
-                    network_access: merge_network_access(*network_access, additional_permissions),
-                }
-            } else {
-                // todo(dylan) - for now, this grants more access than the request. We should restrict this,
-                // but we should add a new SandboxPolicy variant to handle this. While the feature is still
-                // UnderDevelopment, it's a useful approximation of the desired behavior.
-                SandboxPolicy::WorkspaceWrite {
-                    writable_roots: dedup_absolute_paths(extra_writes),
-                    read_only_access: merge_read_only_access_with_additional_reads(
-                        access,
-                        extra_reads,
-                    ),
-                    network_access: merge_network_access(*network_access, additional_permissions),
-                    exclude_tmpdir_env_var: false,
-                    exclude_slash_tmp: false,
-                }
-            }
-        }
-    }
-}
-
-fn effective_sandbox_policy(
-    sandbox_policy: &SandboxPolicy,
-    additional_permissions: Option<&PermissionProfile>,
-) -> SandboxPolicy {
-    additional_permissions.map_or_else(
-        || sandbox_policy.clone(),
-        |permissions| sandbox_policy_with_additional_permissions(sandbox_policy, permissions),
+pub fn effective_permission_profile(
+    permission_profile: &PermissionProfile,
+    additional_permissions: Option<&AdditionalPermissionProfile>,
+) -> PermissionProfile {
+    let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
+    let effective_file_system_policy =
+        effective_file_system_sandbox_policy(&file_system_policy, additional_permissions);
+    let effective_network_policy =
+        effective_network_sandbox_policy(network_policy, additional_permissions);
+    PermissionProfile::from_runtime_permissions_with_enforcement(
+        permission_profile.enforcement(),
+        &effective_file_system_policy,
+        effective_network_policy,
     )
 }
 

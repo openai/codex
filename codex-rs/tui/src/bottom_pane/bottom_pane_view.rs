@@ -1,10 +1,18 @@
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
-use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_app_server_protocol::ToolRequestUserInputParams;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
+
+/// Reason an active bottom-pane view finished.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ViewCompletion {
+    Accepted,
+    Cancelled,
+}
 
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView: Renderable {
@@ -17,6 +25,19 @@ pub(crate) trait BottomPaneView: Renderable {
         false
     }
 
+    /// Return the completion reason once the view has finished.
+    fn completion(&self) -> Option<ViewCompletion> {
+        None
+    }
+
+    /// Return true when this view should be removed after a child view is accepted.
+    fn dismiss_after_child_accept(&self) -> bool {
+        false
+    }
+
+    /// Clear any pending child-flow cleanup marker after a child view is cancelled.
+    fn clear_dismiss_after_child_accept(&mut self) {}
+
     /// Stable identifier for views that need external refreshes while open.
     fn view_id(&self) -> Option<&'static str> {
         None
@@ -25,6 +46,12 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Actual item index for list-based views that want to preserve selection
     /// across external refreshes.
     fn selected_index(&self) -> Option<usize> {
+        None
+    }
+
+    /// Active tab id for tabbed list-based views.
+    #[allow(dead_code)]
+    fn active_tab_id(&self) -> Option<&str> {
         None
     }
 
@@ -74,8 +101,8 @@ pub(crate) trait BottomPaneView: Renderable {
     /// consumed.
     fn try_consume_user_input_request(
         &mut self,
-        request: RequestUserInputEvent,
-    ) -> Option<RequestUserInputEvent> {
+        request: ToolRequestUserInputParams,
+    ) -> Option<ToolRequestUserInputParams> {
         Some(request)
     }
 
@@ -86,5 +113,26 @@ pub(crate) trait BottomPaneView: Renderable {
         request: McpServerElicitationFormRequest,
     ) -> Option<McpServerElicitationFormRequest> {
         Some(request)
+    }
+
+    /// Dismiss a request that was resolved by another client.
+    ///
+    /// Returns `true` when the view changed state.
+    fn dismiss_app_server_request(&mut self, _request: &ResolvedAppServerRequest) -> bool {
+        false
+    }
+
+    /// Whether this view means the session is blocked waiting for the user.
+    ///
+    /// Views that return `true` surface an "Action Required" terminal title
+    /// instead of the normal working spinner so terminal tabs clearly show that
+    /// Codex needs user input.
+    fn terminal_title_requires_action(&self) -> bool {
+        false
+    }
+
+    /// Return the next time-based redraw this view needs while it is active.
+    fn next_frame_delay(&self) -> Option<std::time::Duration> {
+        None
     }
 }

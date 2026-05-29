@@ -242,6 +242,7 @@ async fn spawn_process_portable(
         exit_status,
         exit_code,
         Some(handles),
+        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {
@@ -395,6 +396,7 @@ async fn spawn_process_preserving_fds(
         exit_status,
         exit_code,
         Some(handles),
+        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {

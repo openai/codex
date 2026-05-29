@@ -37,7 +37,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     mount_sse_once(&server, body).await;
 
     let codex = test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .build(&server)
         .await
         .unwrap()
@@ -46,11 +46,15 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     // Kick off a turn that triggers the function call.
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "start sleep".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -92,7 +96,7 @@ async fn interrupt_tool_records_history_entries() {
     let response_mock = mount_sse_sequence(&server, vec![first_body, follow_up_body]).await;
 
     let fixture = test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .build(&server)
         .await
         .unwrap();
@@ -100,11 +104,15 @@ async fn interrupt_tool_records_history_entries() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "start history recording".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -118,11 +126,15 @@ async fn interrupt_tool_records_history_entries() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -190,7 +202,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
     let response_mock = mount_sse_sequence(&server, vec![first_body, follow_up_body]).await;
 
     let fixture = test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .build(&server)
         .await
         .unwrap();
@@ -198,11 +210,15 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "start interrupt marker".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -216,11 +232,15 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();

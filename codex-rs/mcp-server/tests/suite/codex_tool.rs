@@ -29,8 +29,9 @@ use mcp_test_support::create_mock_responses_server;
 use mcp_test_support::create_shell_command_sse_response;
 use mcp_test_support::format_with_current_shell;
 
-// Allow ample time on slower CI or under load to avoid flakes.
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+// Windows CI can spend tens of seconds in session startup before the first
+// mock model request is sent.
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Test that a shell command that is not on the "trusted" list triggers an
 /// elicitation request to the MCP and that sending the approval runs the
@@ -260,6 +261,11 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         .send_codex_tool_call(CodexToolCallParam {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             prompt: "please modify the test file".to_string(),
+            // This test exercises patch approval elicitation, not local sandbox setup.
+            config: Some(HashMap::from([(
+                "sandbox_mode".to_string(),
+                json!("danger-full-access"),
+            )])),
             ..Default::default()
         })
         .await?;
@@ -295,7 +301,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         Some(create_expected_patch_approval_elicitation_request_params(
             expected_changes,
             /*grant_root*/ None, // No grant_root expected
-            /*reason*/ None, // No reason expected
+            /*reason*/ None,
             codex_request_id.to_string(),
             params.codex_event_id.clone(),
             params.thread_id,

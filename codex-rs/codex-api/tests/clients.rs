@@ -5,14 +5,17 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
+use codex_api::ApiError;
+use codex_api::AuthError;
 use codex_api::AuthProvider;
+use codex_api::Compression;
 use codex_api::Provider;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
-use codex_api::requests::responses::Compression;
 use codex_client::HttpTransport;
 use codex_client::Request;
+use codex_client::RequestBody;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
@@ -90,9 +93,7 @@ impl HttpTransport for RecordingTransport {
 struct NoAuth;
 
 impl AuthProvider for NoAuth {
-    fn bearer_token(&self) -> Option<String> {
-        None
-    }
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
 #[derive(Clone)]
@@ -111,12 +112,14 @@ impl StaticAuth {
 }
 
 impl AuthProvider for StaticAuth {
-    fn bearer_token(&self) -> Option<String> {
-        Some(self.token.clone())
-    }
-
-    fn account_id(&self) -> Option<String> {
-        Some(self.account_id.clone())
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        let token = &self.token;
+        if let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}")) {
+            headers.insert(http::header::AUTHORIZATION, header);
+        }
+        if let Ok(header) = HeaderValue::from_str(&self.account_id) {
+            headers.insert("ChatGPT-Account-ID", header);
+        }
     }
 }
 
@@ -126,7 +129,7 @@ fn provider(name: &str) -> Provider {
         base_url: "https://example.com/v1".to_string(),
         query_params: None,
         headers: HeaderMap::new(),
-        retry: codex_api::provider::RetryConfig {
+        retry: codex_api::RetryConfig {
             max_attempts: 1,
             base_delay: Duration::from_millis(1),
             retry_429: false,
@@ -160,6 +163,59 @@ impl FlakyTransport {
             .state
             .lock()
             .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+    }
+}
+
+#[derive(Clone)]
+struct FailsOnceAuth {
+    attempts: Arc<Mutex<i64>>,
+    error: Arc<AuthError>,
+}
+
+impl FailsOnceAuth {
+    fn transient() -> Self {
+        Self {
+            attempts: Arc::new(Mutex::new(0)),
+            error: Arc::new(AuthError::Transient(
+                "sts temporarily unavailable".to_string(),
+            )),
+        }
+    }
+
+    fn build() -> Self {
+        Self {
+            attempts: Arc::new(Mutex::new(0)),
+            error: Arc::new(AuthError::Build("invalid auth configuration".to_string())),
+        }
+    }
+
+    fn attempts(&self) -> i64 {
+        *self
+            .attempts
+            .lock()
+            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+    }
+}
+
+#[async_trait]
+impl AuthProvider for FailsOnceAuth {
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+    async fn apply_auth(&self, request: Request) -> Result<Request, AuthError> {
+        let mut attempts = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+        *attempts += 1;
+
+        if *attempts == 1 {
+            return match self.error.as_ref() {
+                AuthError::Build(message) => Err(AuthError::Build(message.clone())),
+                AuthError::Transient(message) => Err(AuthError::Transient(message.clone())),
+            };
+        }
+
+        Ok(request)
     }
 }
 
@@ -199,7 +255,7 @@ data: {"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{
 async fn responses_client_uses_responses_path() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai"), NoAuth);
+    let client = ResponsesClient::new(transport, provider("openai"), Arc::new(NoAuth));
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
@@ -220,7 +276,7 @@ async fn responses_client_uses_responses_path() -> Result<()> {
 async fn streaming_client_adds_auth_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let auth = StaticAuth::new("secret-token", "acct-1");
+    let auth = Arc::new(StaticAuth::new("secret-token", "acct-1"));
     let client = ResponsesClient::new(transport, provider("openai"), auth);
 
     let body = serde_json::json!({ "model": "gpt-test" });
@@ -278,8 +334,9 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         service_tier: None,
         prompt_cache_key: None,
         text: None,
+        client_metadata: None,
     };
-    let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
+    let client = ResponsesClient::new(transport.clone(), provider, Arc::new(NoAuth));
 
     let _stream = client
         .stream_request(
@@ -295,10 +352,69 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 }
 
 #[tokio::test]
+async fn streaming_client_retries_on_transient_auth_error() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let auth = FailsOnceAuth::transient();
+
+    let mut provider = provider("openai");
+    provider.retry.max_attempts = 2;
+
+    let client = ResponsesClient::new(transport, provider, Arc::new(auth.clone()));
+    let body = serde_json::json!({ "model": "gpt-test" });
+    let _stream = client
+        .stream(
+            body,
+            HeaderMap::new(),
+            Compression::None,
+            /*turn_state*/ None,
+        )
+        .await?;
+
+    assert_eq!(auth.attempts(), 2);
+    assert_eq!(state.take_stream_requests().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn streaming_client_does_not_retry_auth_build_error() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let auth = FailsOnceAuth::build();
+
+    let mut provider = provider("openai");
+    provider.retry.max_attempts = 2;
+
+    let client = ResponsesClient::new(transport, provider, Arc::new(auth.clone()));
+    let body = serde_json::json!({ "model": "gpt-test" });
+    let result = client
+        .stream(
+            body,
+            HeaderMap::new(),
+            Compression::None,
+            /*turn_state*/ None,
+        )
+        .await;
+    let err = match result {
+        Ok(_) => panic!("auth build errors should fail without retry"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        ApiError::Transport(TransportError::Build(message))
+            if message == "invalid auth configuration"
+    ));
+    assert_eq!(auth.attempts(), 1);
+    assert_eq!(state.take_stream_requests().len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("azure"), NoAuth);
+    let client = ResponsesClient::new(transport, provider("azure"), Arc::new(NoAuth));
 
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),
@@ -307,7 +423,6 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
             id: Some("msg_1".into()),
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],
-            end_turn: None,
             phase: None,
         }],
         tools: Vec::new(),
@@ -320,6 +435,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
         service_tier: None,
         prompt_cache_key: None,
         text: None,
+        client_metadata: None,
     };
 
     let mut extra_headers = HeaderMap::new();
@@ -328,7 +444,8 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
         .stream_request(
             request,
             ResponsesOptions {
-                conversation_id: Some("sess_123".into()),
+                session_id: Some("sess_123".into()),
+                thread_id: Some("thread_123".into()),
                 session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
                 extra_headers,
                 compression: Compression::None,
@@ -342,8 +459,18 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let req = &requests[0];
 
     assert_eq!(
-        req.headers.get("session_id").and_then(|v| v.to_str().ok()),
+        req.headers.get("session-id").and_then(|v| v.to_str().ok()),
         Some("sess_123")
+    );
+    assert_eq!(
+        req.headers.get("thread-id").and_then(|v| v.to_str().ok()),
+        Some("thread_123")
+    );
+    assert_eq!(
+        req.headers
+            .get("x-client-request-id")
+            .and_then(|v| v.to_str().ok()),
+        Some("thread_123")
     );
     assert_eq!(
         req.headers
@@ -361,6 +488,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let input_id = req
         .body
         .as_ref()
+        .and_then(RequestBody::json)
         .and_then(|body| body.get("input"))
         .and_then(|input| input.get(0))
         .and_then(|item| item.get("id"))

@@ -5,6 +5,7 @@ use crate::ServerRequest;
 use crate::export::GENERATED_TS_HEADER;
 use crate::export::filter_experimental_ts_tree;
 use crate::export::generate_index_ts_tree;
+use crate::export::trim_trailing_line_whitespace;
 use crate::protocol::common::visit_client_response_types;
 use crate::protocol::common::visit_server_response_types;
 use anyhow::Context;
@@ -68,6 +69,9 @@ pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap
 
     filter_experimental_ts_tree(&mut files)?;
     generate_index_ts_tree(&mut files);
+    for content in files.values_mut() {
+        *content = trim_trailing_line_whitespace(content);
+    }
 
     Ok(files
         .into_iter()
@@ -192,7 +196,7 @@ fn canonicalize_json(value: &Value) -> Value {
         }
         Value::Object(map) => {
             let mut entries: Vec<_> = map.iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            entries.sort_by_key(|(key, _)| *key);
             let mut sorted = Map::with_capacity(map.len());
             for (key, child) in entries {
                 sorted.insert(key.clone(), canonicalize_json(child));

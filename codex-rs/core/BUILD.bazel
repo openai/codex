@@ -1,13 +1,5 @@
 load("//:defs.bzl", "codex_rust_crate")
 
-filegroup(
-    name = "model_availability_nux_fixtures",
-    srcs = [
-        "tests/cli_responses_fixture.sse",
-    ],
-    visibility = ["//visibility:public"],
-)
-
 codex_rust_crate(
     name = "core",
     crate_name = "codex_core",
@@ -19,9 +11,7 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ) + [
-        "//codex-rs:node-version.txt",
-    ],
+    ),
     rustc_env = {
         # Keep manifest-root path lookups inside the Bazel execroot for code
         # that relies on env!("CARGO_MANIFEST_DIR").
@@ -29,6 +19,7 @@ codex_rust_crate(
     },
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
+        "templates/realtime/backend_prompt.md",
     ],
     integration_test_timeout = "long",
     test_data_extra = [
@@ -46,12 +37,19 @@ codex_rust_crate(
         # succeeds without this workaround.
         "//:AGENTS.md",
     ],
+    test_shard_counts = {
+        "core-all-test": 16,
+        "core-unit-tests": 8,
+    },
     test_tags = ["no-sandbox"],
     unit_test_timeout = "long",
     extra_binaries = [
+        "//codex-rs/bwrap:bwrap",
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",
         "//codex-rs/rmcp-client:test_streamable_http_server",
         "//codex-rs/cli:codex",
+        "//codex-rs/windows-sandbox-rs:codex-command-runner",
+        "//codex-rs/windows-sandbox-rs:codex-windows-sandbox-setup",
     ],
 )

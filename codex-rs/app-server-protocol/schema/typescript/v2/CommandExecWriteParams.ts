@@ -6,16 +6,16 @@
  * Write stdin bytes to a running `command/exec` session, close stdin, or
  * both.
  */
-export type CommandExecWriteParams = { 
+export type CommandExecWriteParams = {
 /**
  * Client-supplied, connection-scoped `processId` from the original
  * `command/exec` request.
  */
-processId: string, 
+processId: string,
 /**
  * Optional base64-encoded stdin bytes to write.
  */
-deltaBase64?: string | null, 
+deltaBase64?: string | null,
 /**
  * Close stdin after writing `deltaBase64`, if present.
  */

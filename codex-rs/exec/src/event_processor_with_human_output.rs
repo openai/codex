@@ -11,8 +11,8 @@ use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
 use codex_model_provider_info::WireApi;
 use codex_protocol::num_format::format_with_separators;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_utils_sandbox_summary::summarize_permission_profile;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 
@@ -216,7 +216,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         session_configured_event: &SessionConfiguredEvent,
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        eprintln!("OpenAI Codex v{VERSION} (research preview)\n--------");
+        eprintln!("OpenAI Codex v{VERSION}\n--------");
         for (key, value) in config_summary_entries(config, session_configured_event) {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
@@ -292,6 +292,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
+            ServerNotification::ModelVerification(_) => CodexStatus::Running,
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.last_total_token_usage = Some(notification.token_usage);
                 CodexStatus::Running
@@ -419,6 +420,7 @@ fn config_summary_entries(
     config: &Config,
     session_configured_event: &SessionConfiguredEvent,
 ) -> Vec<(&'static str, String)> {
+    let permission_profile = config.permissions.effective_permission_profile();
     let mut entries = vec![
         ("workdir", config.cwd.display().to_string()),
         ("model", session_configured_event.model.clone()),
@@ -432,7 +434,11 @@ fn config_summary_entries(
         ),
         (
             "sandbox",
-            summarize_sandbox_policy(config.permissions.sandbox_policy.get()),
+            summarize_permission_profile(
+                &permission_profile,
+                &config.cwd,
+                config.effective_workspace_roots().as_slice(),
+            ),
         ),
     ];
     if config.model_provider.wire_api == WireApi::Responses {
@@ -456,55 +462,6 @@ fn config_summary_entries(
         session_configured_event.session_id.to_string(),
     ));
     entries
-}
-
-fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
-    match sandbox_policy {
-        SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
-        SandboxPolicy::ReadOnly { network_access, .. } => {
-            let mut summary = "read-only".to_string();
-            if *network_access {
-                summary.push_str(" (network access enabled)");
-            }
-            summary
-        }
-        SandboxPolicy::ExternalSandbox { network_access } => {
-            let mut summary = "external-sandbox".to_string();
-            if matches!(
-                network_access,
-                codex_protocol::protocol::NetworkAccess::Enabled
-            ) {
-                summary.push_str(" (network access enabled)");
-            }
-            summary
-        }
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            network_access,
-            exclude_tmpdir_env_var,
-            exclude_slash_tmp,
-            read_only_access: _,
-        } => {
-            let mut summary = "workspace-write".to_string();
-            let mut writable_entries = vec!["workdir".to_string()];
-            if !*exclude_slash_tmp {
-                writable_entries.push("/tmp".to_string());
-            }
-            if !*exclude_tmpdir_env_var {
-                writable_entries.push("$TMPDIR".to_string());
-            }
-            writable_entries.extend(
-                writable_roots
-                    .iter()
-                    .map(|path| path.to_string_lossy().to_string()),
-            );
-            summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
-            if *network_access {
-                summary.push_str(" (network access enabled)");
-            }
-            summary
-        }
-    }
 }
 
 fn reasoning_text(

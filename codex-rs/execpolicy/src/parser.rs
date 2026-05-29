@@ -1,6 +1,5 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use multimap::MultiMap;
-use shlex;
 use starlark::any::ProvidesStaticType;
 use starlark::codemap::FileSpan;
 use starlark::environment::GlobalsBuilder;

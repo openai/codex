@@ -60,9 +60,9 @@ pub(crate) fn denied_network_policy_message(blocked: &BlockedRequest) -> Option<
     let detail = match blocked.reason.as_str() {
         "denied" => "domain is explicitly denied by policy and cannot be approved from this prompt",
         "not_allowed" => "domain is not on the allowlist for the current sandbox mode",
-        "not_allowed_local" => "local/private network addresses are blocked by policy",
+        "not_allowed_local" => "local/private network addresses are blocked by the sandbox policy",
         "method_not_allowed" => "request method is blocked by the current network mode",
-        "proxy_disabled" => "managed network proxy is disabled",
+        "proxy_disabled" => "network proxy is disabled",
         _ => "request is blocked by network policy",
     };
 

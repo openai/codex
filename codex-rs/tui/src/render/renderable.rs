@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crossterm::cursor::SetCursorStyle;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -15,6 +16,9 @@ pub trait Renderable {
     fn desired_height(&self, width: u16) -> u16;
     fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
         None
+    }
+    fn cursor_style(&self, _area: Rect) -> SetCursorStyle {
+        SetCursorStyle::DefaultUserShape
     }
 }
 
@@ -42,6 +46,13 @@ impl<'a> Renderable for RenderableItem<'a> {
         match self {
             RenderableItem::Owned(child) => child.cursor_pos(area),
             RenderableItem::Borrowed(child) => child.cursor_pos(area),
+        }
+    }
+
+    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
+        match self {
+            RenderableItem::Owned(child) => child.cursor_style(area),
+            RenderableItem::Borrowed(child) => child.cursor_style(area),
         }
     }
 }
@@ -127,6 +138,18 @@ impl<R: Renderable> Renderable for Option<R> {
             0
         }
     }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.as_ref()
+            .and_then(|renderable| renderable.cursor_pos(area))
+    }
+
+    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
+        self.as_ref()
+            .map_or(SetCursorStyle::DefaultUserShape, |renderable| {
+                renderable.cursor_style(area)
+            })
+    }
 }
 
 impl<R: Renderable> Renderable for Arc<R> {
@@ -135,6 +158,12 @@ impl<R: Renderable> Renderable for Arc<R> {
     }
     fn desired_height(&self, width: u16) -> u16 {
         self.as_ref().desired_height(width)
+    }
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.as_ref().cursor_pos(area)
+    }
+    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
+        self.as_ref().cursor_style(area)
     }
 }
 
@@ -180,6 +209,19 @@ impl Renderable for ColumnRenderable<'_> {
         }
         None
     }
+
+    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
+        let mut y = area.y;
+        for child in &self.children {
+            let child_area = Rect::new(area.x, y, area.width, child.desired_height(area.width))
+                .intersection(area);
+            if !child_area.is_empty() && child.cursor_pos(child_area).is_some() {
+                return child.cursor_style(child_area);
+            }
+            y += child_area.height;
+        }
+        SetCursorStyle::DefaultUserShape
+    }
 }
 
 impl<'a> ColumnRenderable<'a> {
@@ -199,15 +241,6 @@ impl<'a> ColumnRenderable<'a> {
 
     pub fn push(&mut self, child: impl Into<Box<dyn Renderable + 'a>>) {
         self.children.push(RenderableItem::Owned(child.into()));
-    }
-
-    #[allow(dead_code)]
-    pub fn push_ref<R>(&mut self, child: &'a R)
-    where
-        R: Renderable + 'a,
-    {
-        self.children
-            .push(RenderableItem::Borrowed(child as &'a dyn Renderable));
     }
 }
 
@@ -313,6 +346,19 @@ impl<'a> Renderable for FlexRenderable<'a> {
             .zip(self.children.iter())
             .find_map(|(rect, child)| child.child.cursor_pos(rect))
     }
+
+    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
+        self.allocate(area)
+            .into_iter()
+            .zip(self.children.iter())
+            .find_map(|(rect, child)| {
+                child
+                    .child
+                    .cursor_pos(rect)
+                    .map(|_| child.child.cursor_style(rect))
+            })
+            .unwrap_or(SetCursorStyle::DefaultUserShape)
+    }
 }
 
 pub struct RowRenderable<'a> {
@@ -363,6 +409,19 @@ impl Renderable for RowRenderable<'_> {
         }
         None
     }
+
+    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
+        let mut x = area.x;
+        for (width, child) in &self.children {
+            let available_width = area.width.saturating_sub(x - area.x);
+            let child_area = Rect::new(x, area.y, (*width).min(available_width), area.height);
+            if !child_area.is_empty() && child.cursor_pos(child_area).is_some() {
+                return child.cursor_style(child_area);
+            }
+            x = x.saturating_add(*width);
+        }
+        SetCursorStyle::DefaultUserShape
+    }
 }
 
 impl<'a> RowRenderable<'a> {
@@ -373,15 +432,6 @@ impl<'a> RowRenderable<'a> {
     pub fn push(&mut self, width: u16, child: impl Into<Box<dyn Renderable>>) {
         self.children
             .push((width, RenderableItem::Owned(child.into())));
-    }
-
-    #[allow(dead_code)]
-    pub fn push_ref<R>(&mut self, width: u16, child: &'a R)
-    where
-        R: Renderable + 'a,
-    {
-        self.children
-            .push((width, RenderableItem::Borrowed(child as &'a dyn Renderable)));
     }
 }
 
@@ -402,6 +452,10 @@ impl<'a> Renderable for InsetRenderable<'a> {
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.child.cursor_pos(area.inset(self.insets))
+    }
+
+    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
+        self.child.cursor_style(area.inset(self.insets))
     }
 }
 

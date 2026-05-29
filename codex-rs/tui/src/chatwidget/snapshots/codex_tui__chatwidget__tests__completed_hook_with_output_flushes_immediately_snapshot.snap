@@ -1,0 +1,16 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "format!(\"{running_snapshot}\\n\\n{completed_snapshot}\")"
+---
+running
+live hooks:
+• Running PreToolUse hook: checking command
+history:
+<empty>
+
+completed
+live hooks:
+<empty>
+history:
+• PreToolUse hook (blocked)
+  feedback: command blocked by policy

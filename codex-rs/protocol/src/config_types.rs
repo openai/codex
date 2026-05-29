@@ -1,14 +1,40 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::InstanceType;
+use schemars::schema::Metadata;
+use schemars::schema::Schema;
+use schemars::schema::SchemaObject;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::fmt;
 use std::num::NonZeroU64;
+use std::ops::Deref;
+use std::str::FromStr;
 use std::time::Duration;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use ts_rs::TS;
+use wildmatch::WildMatchPattern;
 
 use crate::openai_models::ReasoningEffort;
+
+/// Selects which part of the active context is charged against
+/// `model_auto_compact_token_limit`.
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AutoCompactTokenLimitScope {
+    /// Count the full active context against the limit.
+    #[default]
+    Total,
+    /// Count sampled output and later growth after the carried window prefix.
+    BodyAfterPrefix,
+}
 
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
@@ -69,20 +95,170 @@ pub enum SandboxMode {
     DangerFullAccess,
 }
 
-#[derive(
-    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
-)]
-#[serde(rename_all = "snake_case")]
+/// Validated plain profile-v2 name used to select `$CODEX_HOME/<name>.config.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileV2Name(String);
+
+impl ProfileV2Name {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ProfileV2NameParseError {
+    value: String,
+}
+
+impl fmt::Display for ProfileV2NameParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid --profile value `{}`; pass a plain name such as `work`",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for ProfileV2NameParseError {}
+
+impl FromStr for ProfileV2Name {
+    type Err = ProfileV2NameParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty()
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(ProfileV2NameParseError {
+                value: value.to_string(),
+            });
+        }
+
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl Deref for ProfileV2Name {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for ProfileV2Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, TS)]
 #[strum(serialize_all = "snake_case")]
+#[ts(type = r#""user" | "auto_review" | "guardian_subagent""#)]
 /// Configures who approval requests are routed to for review. Examples
 /// include sandbox escapes, blocked network access, MCP approval prompts, and
-/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// ARC escalations. Defaults to `user`. `auto_review` uses a carefully
 /// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     #[default]
+    #[serde(rename = "user")]
     User,
-    GuardianSubagent,
+    #[serde(rename = "guardian_subagent", alias = "auto_review")]
+    #[strum(serialize = "guardian_subagent")]
+    AutoReview,
+}
+
+impl JsonSchema for ApprovalsReviewer {
+    fn schema_name() -> String {
+        "ApprovalsReviewer".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        string_enum_schema_with_description(
+            &["user", "auto_review", "guardian_subagent"],
+            "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
+        )
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellEnvironmentPolicyInherit {
+    /// "Core" environment variables for the platform. On UNIX, this would
+    /// include HOME, LOGNAME, PATH, SHELL, and USER, among others.
+    Core,
+
+    /// Inherits the full environment from the parent process.
+    #[default]
+    All,
+
+    /// Do not inherit any environment variables from the parent process.
+    None,
+}
+
+pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
+
+/// Deriving the `env` based on this policy works as follows:
+/// 1. Create an initial map based on the `inherit` policy.
+/// 2. If `ignore_default_excludes` is false, filter the map using the default
+///    exclude pattern(s), which are: `"*KEY*"`, `"*SECRET*"`, and `"*TOKEN*"`.
+/// 3. If `exclude` is not empty, filter the map using the provided patterns.
+/// 4. Insert any entries from `r#set` into the map.
+/// 5. If non-empty, filter the map using the `include_only` patterns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellEnvironmentPolicy {
+    /// Starting point when building the environment.
+    pub inherit: ShellEnvironmentPolicyInherit,
+
+    /// True to skip the check to exclude default environment variables that
+    /// contain "KEY", "SECRET", or "TOKEN" in their name. Defaults to true.
+    pub ignore_default_excludes: bool,
+
+    /// Environment variable names to exclude from the environment.
+    pub exclude: Vec<EnvironmentVariablePattern>,
+
+    /// (key, value) pairs to insert in the environment.
+    pub r#set: HashMap<String, String>,
+
+    /// Environment variable names to retain in the environment.
+    pub include_only: Vec<EnvironmentVariablePattern>,
+
+    /// If true, the shell profile will be used to run the command.
+    pub use_profile: bool,
+}
+
+impl Default for ShellEnvironmentPolicy {
+    fn default() -> Self {
+        Self {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
+            use_profile: false,
+        }
+    }
+}
+
+fn string_enum_schema_with_description(values: &[&str], description: &str) -> Schema {
+    let mut schema = SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        metadata: Some(Box::new(Metadata {
+            description: Some(description.to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    schema.enum_values = Some(
+        values
+            .iter()
+            .map(|value| Value::String((*value).to_string()))
+            .collect(),
+    );
+    Schema::Object(schema)
 }
 
 #[derive(
@@ -256,6 +432,29 @@ pub enum ServiceTier {
     Flex,
 }
 
+/// Request/config sentinel for explicit standard routing.
+///
+/// This is not a catalog service tier id. It means the user intentionally
+/// selected no service tier, so model catalog defaults should not apply.
+pub const SERVICE_TIER_DEFAULT_REQUEST_VALUE: &str = "default";
+
+impl ServiceTier {
+    pub const fn request_value(self) -> &'static str {
+        match self {
+            Self::Fast => "priority",
+            Self::Flex => "flex",
+        }
+    }
+
+    pub fn from_request_value(value: &str) -> Option<Self> {
+        match value {
+            "fast" | "priority" => Some(Self::Fast),
+            "flex" => Some(Self::Flex),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
@@ -349,22 +548,9 @@ pub enum TrustLevel {
 
 /// Controls whether the TUI uses the terminal's alternate screen buffer.
 ///
-/// **Background:** The alternate screen buffer provides a cleaner fullscreen experience
-/// without polluting the terminal's scrollback history. However, it conflicts with terminal
-/// multiplexers like Zellij that strictly follow the xterm specification, which defines
-/// that alternate screen buffers should not have scrollback.
-///
-/// **Zellij's behavior:** Zellij intentionally disables scrollback in alternate screen mode
-/// (see https://github.com/zellij-org/zellij/pull/1032) to comply with the xterm spec. This
-/// is by design and not configurable in Zellij—there is no option to enable scrollback in
-/// alternate screen mode.
-///
-/// **Solution:** This setting provides a pragmatic workaround:
-/// - `auto` (default): Automatically detect the terminal multiplexer. If running in Zellij,
-///   disable alternate screen to preserve scrollback. Enable it everywhere else.
-/// - `always`: Always use alternate screen mode (original behavior before this fix).
-/// - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback
-///   in all multiplexers.
+/// - `auto` (default): Use alternate screen mode.
+/// - `always`: Always use alternate screen mode.
+/// - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback.
 ///
 /// The CLI flag `--no-alt-screen` can override this setting at runtime.
 #[derive(
@@ -373,10 +559,10 @@ pub enum TrustLevel {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum AltScreenMode {
-    /// Auto-detect: disable alternate screen in Zellij, enable elsewhere.
+    /// Use alternate screen mode.
     #[default]
     Auto,
-    /// Always use alternate screen (original behavior).
+    /// Always use alternate screen mode.
     Always,
     /// Never use alternate screen (inline mode only).
     Never,
@@ -560,6 +746,49 @@ mod tests {
             let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
             assert_eq!(ModeKind::Default, mode);
         }
+    }
+
+    #[test]
+    fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
+        assert_eq!(ApprovalsReviewer::User.to_string(), "user");
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
+            "\"guardian_subagent\""
+        );
+
+        for value in ["user", "auto_review", "guardian_subagent"] {
+            let json = format!("\"{value}\"");
+            let reviewer: ApprovalsReviewer =
+                serde_json::from_str(&json).expect("deserialize reviewer");
+            let expected = if value == "user" {
+                ApprovalsReviewer::User
+            } else {
+                ApprovalsReviewer::AutoReview
+            };
+            assert_eq!(expected, reviewer);
+        }
+    }
+
+    #[test]
+    fn profile_v2_name_rejects_paths_and_empty_names() {
+        assert_eq!(
+            ProfileV2Name::from_str("../foo"),
+            Err(ProfileV2NameParseError {
+                value: "../foo".to_string(),
+            }),
+            "dots and slashes are disallowed to prevent reading arbitrary files"
+        );
+        assert_eq!(
+            ProfileV2Name::from_str(""),
+            Err(ProfileV2NameParseError {
+                value: String::new(),
+            }),
+            "profile name cannot be empty"
+        );
     }
 
     #[test]

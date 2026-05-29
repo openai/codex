@@ -1,12 +1,13 @@
+use super::LoadableToolSpec;
 use super::ResponsesApiNamespace;
 use super::ResponsesApiNamespaceTool;
 use super::ResponsesApiTool;
-use super::ToolSearchOutputTool;
 use super::dynamic_tool_to_responses_api_tool;
 use super::mcp_tool_to_deferred_responses_api_tool;
 use super::tool_definition_to_responses_api_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolName;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -18,14 +19,14 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
         tool_definition_to_responses_api_tool(ToolDefinition {
             name: "lookup_order".to_string(),
             description: "Look up an order".to_string(),
-            input_schema: JsonSchema::Object {
-                properties: BTreeMap::from([(
+            input_schema: JsonSchema::object(
+                BTreeMap::from([(
                     "order_id".to_string(),
-                    JsonSchema::String { description: None },
+                    JsonSchema::string(/*description*/ None),
                 )]),
-                required: Some(vec!["order_id".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                Some(vec!["order_id".to_string()]),
+                Some(false.into())
+            ),
             output_schema: Some(json!({"type": "object"})),
             defer_loading: false,
         }),
@@ -34,14 +35,14 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
             description: "Look up an order".to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([(
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
                     "order_id".to_string(),
-                    JsonSchema::String { description: None },
+                    JsonSchema::string(/*description*/ None),
                 )]),
-                required: Some(vec!["order_id".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                Some(vec!["order_id".to_string()]),
+                Some(false.into())
+            ),
             output_schema: Some(json!({"type": "object"})),
         }
     );
@@ -50,6 +51,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
 #[test]
 fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
     let tool = DynamicToolSpec {
+        namespace: None,
         name: "lookup_order".to_string(),
         description: "Look up an order".to_string(),
         input_schema: json!({
@@ -70,14 +72,14 @@ fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
             description: "Look up an order".to_string(),
             strict: false,
             defer_loading: Some(true),
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([(
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
                     "order_id".to_string(),
-                    JsonSchema::String { description: None },
+                    JsonSchema::string(/*description*/ None),
                 )]),
-                required: Some(vec!["order_id".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                Some(vec!["order_id".to_string()]),
+                Some(false.into())
+            ),
             output_schema: None,
         }
     );
@@ -85,11 +87,10 @@ fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
 
 #[test]
 fn mcp_tool_to_deferred_responses_api_tool_sets_defer_loading() {
-    let tool = rmcp::model::Tool {
-        name: "lookup_order".to_string().into(),
-        title: None,
-        description: Some("Look up an order".to_string().into()),
-        input_schema: std::sync::Arc::new(rmcp::model::object(json!({
+    let tool = rmcp::model::Tool::new(
+        "lookup_order",
+        "Look up an order",
+        std::sync::Arc::new(rmcp::model::object(json!({
             "type": "object",
             "properties": {
                 "order_id": {"type": "string"}
@@ -97,40 +98,35 @@ fn mcp_tool_to_deferred_responses_api_tool_sets_defer_loading() {
             "required": ["order_id"],
             "additionalProperties": false,
         }))),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    };
+    );
 
     assert_eq!(
         mcp_tool_to_deferred_responses_api_tool(
-            "mcp__codex_apps__lookup_order".to_string(),
+            &ToolName::namespaced("mcp__codex_apps__", "lookup_order"),
             &tool,
         )
         .expect("convert deferred tool"),
         ResponsesApiTool {
-            name: "mcp__codex_apps__lookup_order".to_string(),
+            name: "lookup_order".to_string(),
             description: "Look up an order".to_string(),
             strict: false,
             defer_loading: Some(true),
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([(
+            parameters: JsonSchema::object(
+                BTreeMap::from([(
                     "order_id".to_string(),
-                    JsonSchema::String { description: None },
+                    JsonSchema::string(/*description*/ None),
                 )]),
-                required: Some(vec!["order_id".to_string()]),
-                additional_properties: Some(false.into()),
-            },
+                Some(vec!["order_id".to_string()]),
+                Some(false.into())
+            ),
             output_schema: None,
         }
     );
 }
 
 #[test]
-fn tool_search_output_namespace_serializes_with_deferred_child_tools() {
-    let namespace = ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+fn loadable_tool_spec_namespace_serializes_with_deferred_child_tools() {
+    let namespace = LoadableToolSpec::Namespace(ResponsesApiNamespace {
         name: "mcp__codex_apps__calendar".to_string(),
         description: "Plan events".to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
@@ -138,11 +134,11 @@ fn tool_search_output_namespace_serializes_with_deferred_child_tools() {
             description: "Create a calendar event.".to_string(),
             strict: false,
             defer_loading: Some(true),
-            parameters: JsonSchema::Object {
-                properties: Default::default(),
-                required: None,
-                additional_properties: None,
-            },
+            parameters: JsonSchema::object(
+                Default::default(),
+                /*required*/ None,
+                /*additional_properties*/ None,
+            ),
             output_schema: None,
         })],
     });

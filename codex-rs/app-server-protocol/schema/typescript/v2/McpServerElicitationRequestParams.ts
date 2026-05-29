@@ -4,7 +4,7 @@
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { McpElicitationSchema } from "./McpElicitationSchema";
 
-export type McpServerElicitationRequestParams = { threadId: string, 
+export type McpServerElicitationRequestParams = { threadId: string,
 /**
  * Active Codex turn when this elicitation was observed, if app-server could correlate one.
  *

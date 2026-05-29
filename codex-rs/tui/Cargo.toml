@@ -16,6 +16,7 @@ path = "src/bin/md-events.rs"
 [lib]
 name = "codex_tui"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
@@ -29,20 +30,28 @@ codex-ansi-escape = { workspace = true }
 codex-app-server-client = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-chatgpt = { workspace = true }
+codex-install-context = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-config = { workspace = true }
-codex-core = { workspace = true }
+codex-connectors = { workspace = true }
+codex-core-plugins = { workspace = true }
+codex-core-skills = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
+codex-message-history = { workspace = true }
+codex-model-provider = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
+codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
+codex-realtime-webrtc = { workspace = true }
 codex-rollout = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
@@ -51,7 +60,10 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-elapsed = { workspace = true }
 codex-utils-fuzzy-match = { workspace = true }
+codex-utils-home-dir = { workspace = true }
 codex-utils-oss = { workspace = true }
+codex-utils-path = { workspace = true }
+codex-utils-plugins = { workspace = true }
 codex-utils-sandbox-summary = { workspace = true }
 codex-utils-sleep-inhibitor = { workspace = true }
 codex-utils-string = { workspace = true }
@@ -75,10 +87,11 @@ ratatui = { workspace = true, features = [
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["blocking", "json"] }
 rmcp = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
@@ -122,7 +135,12 @@ libc = { workspace = true }
 which = { workspace = true }
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
 ] }
 winsplit = "0.1"
 
@@ -134,10 +152,9 @@ arboard = { workspace = true }
 
 [dev-dependencies]
 codex-cli = { workspace = true }
-codex-core = { workspace = true }
 codex-mcp = { workspace = true }
+core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
-codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
@@ -146,3 +163,4 @@ rand = { workspace = true }
 serial_test = { workspace = true }
 vt100 = { workspace = true }
 uuid = { workspace = true }
+wiremock = { workspace = true }

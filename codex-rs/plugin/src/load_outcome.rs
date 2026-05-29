@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PluginSkillRoot;
 
 use crate::AppConnectorId;
 use crate::PluginCapabilitySummary;
+use crate::PluginHookSource;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -17,11 +18,13 @@ pub struct LoadedPlugin<M> {
     pub manifest_description: Option<String>,
     pub root: AbsolutePathBuf,
     pub enabled: bool,
-    pub skill_roots: Vec<PathBuf>,
-    pub disabled_skill_paths: HashSet<PathBuf>,
+    pub skill_roots: Vec<AbsolutePathBuf>,
+    pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub has_enabled_skills: bool,
     pub mcp_servers: HashMap<String, M>,
     pub apps: Vec<AppConnectorId>,
+    pub hook_sources: Vec<PluginHookSource>,
+    pub hook_load_warnings: Vec<String>,
     pub error: Option<String>,
 }
 
@@ -102,8 +105,8 @@ impl<M: Clone> PluginLoadOutcome<M> {
         }
     }
 
-    pub fn effective_skill_roots(&self) -> Vec<PathBuf> {
-        let mut skill_roots: Vec<PathBuf> = self
+    pub fn effective_skill_roots(&self) -> Vec<AbsolutePathBuf> {
+        let mut skill_roots: Vec<AbsolutePathBuf> = self
             .plugins
             .iter()
             .filter(|plugin| plugin.is_active())
@@ -111,6 +114,25 @@ impl<M: Clone> PluginLoadOutcome<M> {
             .collect();
         skill_roots.sort_unstable();
         skill_roots.dedup();
+        skill_roots
+    }
+
+    pub fn effective_plugin_skill_roots(&self) -> Vec<PluginSkillRoot> {
+        let mut skill_roots = Vec::new();
+        let mut seen_paths = HashSet::new();
+        for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
+            for path in &plugin.skill_roots {
+                if seen_paths.insert(path.clone()) {
+                    skill_roots.push(PluginSkillRoot {
+                        path: path.clone(),
+                        plugin_id: plugin.config_name.clone(),
+                        plugin_root: plugin.root.clone(),
+                    });
+                }
+            }
+        }
+
+        skill_roots.sort_unstable_by(|a, b| a.path.cmp(&b.path));
         skill_roots
     }
 
@@ -141,6 +163,22 @@ impl<M: Clone> PluginLoadOutcome<M> {
         apps
     }
 
+    pub fn effective_plugin_hook_sources(&self) -> Vec<PluginHookSource> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_sources.iter().cloned())
+            .collect()
+    }
+
+    pub fn effective_plugin_hook_warnings(&self) -> Vec<String> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .flat_map(|plugin| plugin.hook_load_warnings.iter().cloned())
+            .collect()
+    }
+
     pub fn capability_summaries(&self) -> &[PluginCapabilitySummary] {
         &self.capability_summaries
     }
@@ -153,11 +191,63 @@ impl<M: Clone> PluginLoadOutcome<M> {
 /// Implemented by [`PluginLoadOutcome`] so callers (e.g. skills) can depend on `codex-plugin`
 /// without naming the MCP config type parameter.
 pub trait EffectiveSkillRoots {
-    fn effective_skill_roots(&self) -> Vec<PathBuf>;
+    fn effective_skill_roots(&self) -> Vec<AbsolutePathBuf>;
+
+    fn effective_plugin_skill_roots(&self) -> Vec<PluginSkillRoot>;
 }
 
 impl<M: Clone> EffectiveSkillRoots for PluginLoadOutcome<M> {
-    fn effective_skill_roots(&self) -> Vec<PathBuf> {
+    fn effective_skill_roots(&self) -> Vec<AbsolutePathBuf> {
         PluginLoadOutcome::effective_skill_roots(self)
+    }
+
+    fn effective_plugin_skill_roots(&self) -> Vec<PluginSkillRoot> {
+        PluginLoadOutcome::effective_plugin_skill_roots(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_path(name: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path_checked(std::env::temp_dir().join(name))
+            .expect("absolute temp path")
+    }
+
+    fn loaded_plugin(config_name: &str, skill_roots: Vec<AbsolutePathBuf>) -> LoadedPlugin<()> {
+        LoadedPlugin {
+            config_name: config_name.to_string(),
+            manifest_name: None,
+            manifest_description: None,
+            root: test_path(config_name),
+            enabled: true,
+            skill_roots,
+            disabled_skill_paths: HashSet::new(),
+            has_enabled_skills: true,
+            mcp_servers: HashMap::new(),
+            apps: Vec::new(),
+            hook_sources: Vec::new(),
+            hook_load_warnings: Vec::new(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn effective_plugin_skill_roots_preserves_first_plugin_for_shared_root() {
+        let shared_root = test_path("shared-skills");
+        let outcome = PluginLoadOutcome::from_plugins(vec![
+            loaded_plugin("zeta@test", vec![shared_root.clone()]),
+            loaded_plugin("alpha@test", vec![shared_root.clone()]),
+        ]);
+
+        assert_eq!(
+            outcome.effective_plugin_skill_roots(),
+            vec![PluginSkillRoot {
+                path: shared_root,
+                plugin_id: "zeta@test".to_string(),
+                plugin_root: test_path("zeta@test"),
+            }]
+        );
     }
 }

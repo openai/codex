@@ -1,4 +1,4 @@
-use codex_core::config::Config;
+use crate::legacy_core::config::Config;
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use tracing::warn;

@@ -1,16 +1,15 @@
 use anyhow::Result;
 use chrono::DateTime;
-use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 /// The sort key to use when listing threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,13 +20,18 @@ pub enum SortKey {
     UpdatedAt,
 }
 
+/// Sort direction to use when listing threads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
 /// A pagination anchor used for keyset pagination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
     /// The timestamp component of the anchor.
     pub ts: DateTime<Utc>,
-    /// The UUID component of the anchor.
-    pub id: Uuid,
 }
 
 /// A single page of thread metadata results.
@@ -65,6 +69,8 @@ pub struct ThreadMetadata {
     pub updated_at: DateTime<Utc>,
     /// The session source (stringified enum).
     pub source: String,
+    /// Optional analytics source classification for this thread.
+    pub thread_source: Option<ThreadSource>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
@@ -83,6 +89,8 @@ pub struct ThreadMetadata {
     pub cli_version: String,
     /// A best-effort thread title.
     pub title: String,
+    /// Best available user-facing preview for discovery and list display.
+    pub preview: Option<String>,
     /// The sandbox policy (stringified enum).
     pub sandbox_policy: String,
     /// The approval mode (stringified enum).
@@ -114,6 +122,8 @@ pub struct ThreadMetadataBuilder {
     pub updated_at: Option<DateTime<Utc>>,
     /// The session source.
     pub source: SessionSource,
+    /// Optional analytics source classification for this thread.
+    pub thread_source: Option<ThreadSource>,
     /// Optional random unique nickname assigned to the session.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to the session.
@@ -154,6 +164,7 @@ impl ThreadMetadataBuilder {
             created_at,
             updated_at: None,
             source,
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -185,6 +196,7 @@ impl ThreadMetadataBuilder {
             created_at,
             updated_at,
             source,
+            thread_source: self.thread_source,
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
             agent_path: self
@@ -200,6 +212,7 @@ impl ThreadMetadataBuilder {
             cwd: self.cwd.clone(),
             cli_version: self.cli_version.clone().unwrap_or_default(),
             title: String::new(),
+            preview: None,
             sandbox_policy,
             approval_mode,
             tokens_used: 0,
@@ -271,6 +284,9 @@ impl ThreadMetadata {
         if self.title != other.title {
             diffs.push("title");
         }
+        if self.preview != other.preview {
+            diffs.push("preview");
+        }
         if self.sandbox_policy != other.sandbox_policy {
             diffs.push("sandbox_policy");
         }
@@ -300,7 +316,7 @@ impl ThreadMetadata {
 }
 
 fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
-    dt.with_nanosecond(0).unwrap_or(dt)
+    epoch_millis_to_datetime(datetime_to_epoch_millis(dt)).unwrap_or(dt)
 }
 
 #[derive(Debug)]
@@ -310,6 +326,7 @@ pub(crate) struct ThreadRow {
     created_at: i64,
     updated_at: i64,
     source: String,
+    thread_source: Option<String>,
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     agent_path: Option<String>,
@@ -319,6 +336,7 @@ pub(crate) struct ThreadRow {
     cwd: String,
     cli_version: String,
     title: String,
+    preview: String,
     sandbox_policy: String,
     approval_mode: String,
     tokens_used: i64,
@@ -337,6 +355,7 @@ impl ThreadRow {
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
             source: row.try_get("source")?,
+            thread_source: row.try_get("thread_source")?,
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
             agent_path: row.try_get("agent_path")?,
@@ -346,6 +365,7 @@ impl ThreadRow {
             cwd: row.try_get("cwd")?,
             cli_version: row.try_get("cli_version")?,
             title: row.try_get("title")?,
+            preview: row.try_get("preview")?,
             sandbox_policy: row.try_get("sandbox_policy")?,
             approval_mode: row.try_get("approval_mode")?,
             tokens_used: row.try_get("tokens_used")?,
@@ -368,6 +388,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             created_at,
             updated_at,
             source,
+            thread_source,
             agent_nickname,
             agent_role,
             agent_path,
@@ -377,6 +398,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             cwd,
             cli_version,
             title,
+            preview,
             sandbox_policy,
             approval_mode,
             tokens_used,
@@ -386,12 +408,17 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_branch,
             git_origin_url,
         } = row;
+        let thread_source = thread_source
+            .map(|thread_source| thread_source.parse())
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
         Ok(Self {
             id: ThreadId::try_from(id)?,
             rollout_path: PathBuf::from(rollout_path),
-            created_at: epoch_seconds_to_datetime(created_at)?,
-            updated_at: epoch_seconds_to_datetime(updated_at)?,
+            created_at: epoch_millis_to_datetime(created_at)?,
+            updated_at: epoch_millis_to_datetime(updated_at)?,
             source,
+            thread_source,
             agent_nickname,
             agent_role,
             agent_path,
@@ -402,6 +429,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             cwd: PathBuf::from(cwd),
             cli_version,
             title,
+            preview: (!preview.is_empty()).then_some(preview),
             sandbox_policy,
             approval_mode,
             tokens_used,
@@ -415,21 +443,37 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
 }
 
 pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
-    let id = Uuid::parse_str(&item.id.to_string()).ok()?;
     let ts = match sort_key {
         SortKey::CreatedAt => item.created_at,
         SortKey::UpdatedAt => item.updated_at,
     };
-    Some(Anchor { ts, id })
+    Some(Anchor { ts })
+}
+
+pub(crate) fn datetime_to_epoch_millis(dt: DateTime<Utc>) -> i64 {
+    dt.timestamp_millis()
 }
 
 pub(crate) fn datetime_to_epoch_seconds(dt: DateTime<Utc>) -> i64 {
     dt.timestamp()
 }
 
-pub(crate) fn epoch_seconds_to_datetime(secs: i64) -> Result<DateTime<Utc>> {
-    DateTime::<Utc>::from_timestamp(secs, 0)
-        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {secs}"))
+pub(crate) fn epoch_millis_to_datetime(value: i64) -> Result<DateTime<Utc>> {
+    // Values older than 2020 if interpreted as milliseconds are legacy second-precision rows.
+    // Convert them in memory so old state DBs keep ordering correctly after new writes use ms.
+    const MIN_EPOCH_MILLIS: i64 = 1_577_836_800_000;
+    let millis = if value < MIN_EPOCH_MILLIS {
+        value.saturating_mul(1000)
+    } else {
+        value
+    };
+    DateTime::<Utc>::from_timestamp_millis(millis)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp millis: {value}"))
+}
+
+pub(crate) fn epoch_seconds_to_datetime(value: i64) -> Result<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp(value, 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp seconds: {value}"))
 }
 
 /// Statistics about a backfill operation.
@@ -461,6 +505,7 @@ mod tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_100,
             source: "cli".to_string(),
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -470,6 +515,7 @@ mod tests {
             cwd: "/tmp/workspace".to_string(),
             cli_version: "0.0.0".to_string(),
             title: String::new(),
+            preview: String::new(),
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
@@ -489,6 +535,7 @@ mod tests {
             created_at: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
             updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
             source: "cli".to_string(),
+            thread_source: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -498,6 +545,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/workspace"),
             cli_version: "0.0.0".to_string(),
             title: String::new(),
+            preview: None,
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,

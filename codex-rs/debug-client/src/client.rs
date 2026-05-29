@@ -103,6 +103,7 @@ impl AppServerClient {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api: true,
+                    request_attestation: false,
                     opt_out_notification_methods: None,
                 }),
             },
@@ -178,10 +179,12 @@ impl AppServerClient {
                 cursor,
                 limit: None,
                 sort_key: None,
+                sort_direction: None,
                 model_providers: None,
                 source_kinds: None,
                 archived: None,
                 cwd: None,
+                use_state_db_only: false,
                 search_term: None,
             },
         };
@@ -195,6 +198,7 @@ impl AppServerClient {
             request_id: request_id.clone(),
             params: TurnStartParams {
                 thread_id: thread_id.to_string(),
+                client_user_message_id: None,
                 input: vec![UserInput::Text {
                     text,
                     // Debug client sends plain text with no UI markup spans.
@@ -299,8 +303,8 @@ impl AppServerClient {
             }
 
             let line = buffer.trim_end_matches(['\n', '\r']);
-            if !line.is_empty() && !self.filtered_output {
-                let _ = output.server_line(line);
+            if !line.is_empty() {
+                let _ = output.server_json_line(line, self.filtered_output);
             }
 
             let message = match serde_json::from_str::<JSONRPCMessage>(line) {
@@ -309,10 +313,8 @@ impl AppServerClient {
             };
 
             match message {
-                JSONRPCMessage::Response(response) => {
-                    if &response.id == request_id {
-                        return Ok(response);
-                    }
+                JSONRPCMessage::Response(response) if &response.id == request_id => {
+                    return Ok(response);
                 }
                 JSONRPCMessage::Request(request) => {
                     let _ = handle_server_request(request, &stdin);

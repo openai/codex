@@ -63,6 +63,60 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
 }
 
 #[tokio::test]
+async fn initialize_probe_does_not_override_originator() -> Result<()> {
+    let responses = Vec::new();
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    let message = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: "codex_app_server_daemon".to_string(),
+            title: Some("Codex App Server Daemon".to_string()),
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+
+    let JSONRPCMessage::Response(response) = message else {
+        anyhow::bail!("expected initialize response, got {message:?}");
+    };
+    let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
+
+    assert!(user_agent.starts_with("codex_cli_rs/"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn initialize_codex_backend_does_not_override_originator() -> Result<()> {
+    let responses = Vec::new();
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    let message = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: "codex-backend".to_string(),
+            title: Some("Codex Backend".to_string()),
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+
+    let JSONRPCMessage::Response(response) = message else {
+        anyhow::bail!("expected initialize response, got {message:?}");
+    };
+    let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
+
+    assert!(user_agent.starts_with("codex_cli_rs/"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
@@ -158,6 +212,7 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
             },
             Some(InitializeCapabilities {
                 experimental_api: true,
+                request_attestation: false,
                 opt_out_notification_methods: Some(vec!["thread/started".to_string()]),
             }),
         ),
@@ -251,6 +306,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),

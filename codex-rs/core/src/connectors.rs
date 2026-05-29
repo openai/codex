@@ -1,57 +1,49 @@
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::env;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Context;
 use async_channel::unbounded;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
-use codex_connectors::AllConnectorsCacheKey;
-use codex_connectors::DirectoryListResponse;
-use codex_login::token_data::TokenData;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_connectors::ConnectorDirectoryCacheContext;
+use codex_connectors::ConnectorDirectoryCacheKey;
+use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
+use codex_protocol::models::PermissionProfile;
 use codex_tools::DiscoverableTool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use tracing::warn;
 
-use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::Config;
-use crate::config_loader::AppsRequirementsToml;
 use crate::mcp::McpManager;
-use crate::plugins::AppConnectorId;
-use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
+use crate::session::INITIAL_SUBMIT_ID;
+use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_core_plugins::PluginsManager;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::default_client::create_client;
-use codex_login::default_client::is_first_party_chat_originator;
 use codex_login::default_client::originator;
-use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::mcp::ToolPluginProvenance;
-use codex_mcp::mcp::auth::compute_auth_statuses;
-use codex_mcp::mcp::with_codex_apps_mcp;
-use codex_mcp::mcp_connection_manager::McpConnectionManager;
-use codex_mcp::mcp_connection_manager::SandboxState;
-use codex_mcp::mcp_connection_manager::ToolInfo;
-use codex_mcp::mcp_connection_manager::codex_apps_tools_cache_key;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpConnectionManager;
+use codex_mcp::McpRuntimeContext;
+use codex_mcp::ToolInfo;
+use codex_mcp::ToolPluginProvenance;
+use codex_mcp::codex_apps_tools_cache_key;
+use codex_mcp::compute_auth_statuses;
+use codex_mcp::host_owned_codex_apps_enabled;
+use codex_mcp::with_codex_apps_mcp;
 
-pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
-const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppToolPolicy {
@@ -122,17 +114,22 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     auth: Option<&CodexAuth>,
     accessible_connectors: &[AppInfo],
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
-    let directory_connectors =
-        list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
-    let connector_ids = tool_suggest_connector_ids(config);
-    let discoverable_connectors = filter_tool_suggest_discoverable_connectors(
-        directory_connectors,
-        accessible_connectors,
-        &connector_ids,
-    )
-    .into_iter()
-    .map(DiscoverableTool::from);
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(config)?
+    let connector_ids = tool_suggest_connector_ids(config).await;
+    let directory_connectors = codex_connectors::merge::merge_plugin_connectors(
+        cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await,
+        connector_ids.iter().cloned(),
+    );
+    let discoverable_connectors =
+        codex_connectors::filter::filter_tool_suggest_discoverable_connectors(
+            directory_connectors,
+            accessible_connectors,
+            &connector_ids,
+            originator().value.as_str(),
+        )
+        .into_iter()
+        .map(DiscoverableTool::from);
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(config)
+        .await?
         .into_iter()
         .map(DiscoverableTool::from);
     Ok(discoverable_connectors
@@ -144,30 +141,37 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> Option<Vec<AppInfo>> {
     let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
     if !config
         .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
     {
         return Some(Vec::new());
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    read_cached_accessible_connectors(&cache_key).map(filter_disallowed_connectors)
+    read_cached_accessible_connectors(&cache_key).map(|connectors| {
+        codex_connectors::filter::filter_disallowed_connectors(
+            connectors,
+            originator().value.as_str(),
+        )
+    })
 }
 
 pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     config: &Config,
     auth: Option<&CodexAuth>,
-    mcp_tools: &HashMap<String, ToolInfo>,
+    mcp_tools: &[ToolInfo],
 ) {
     if !config.features.enabled(Feature::Apps) {
         return;
     }
 
     let cache_key = accessible_connectors_cache_key(config, auth);
-    let accessible_connectors =
-        filter_disallowed_connectors(accessible_connectors_from_mcp_tools(mcp_tools));
+    let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
+        accessible_connectors_from_mcp_tools(mcp_tools),
+        originator().value.as_str(),
+    );
     write_cached_accessible_connectors(cache_key, &accessible_connectors);
 }
 
@@ -186,12 +190,35 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    // TODO: Wire callers that already own an EnvironmentManager into
+    // list_accessible_connectors_from_mcp_tools_with_environment_manager instead
+    // of constructing a temporary manager here.
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager =
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
+            .await?;
+    list_accessible_connectors_from_mcp_tools_with_environment_manager(
+        config,
+        force_refetch,
+        Arc::new(environment_manager),
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: Arc<EnvironmentManager>,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
     if !config
         .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
     {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
@@ -199,12 +226,15 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
-    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
+    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config).await;
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
-        let cached_connectors = filter_disallowed_connectors(cached_connectors);
+        let cached_connectors = codex_connectors::filter::filter_disallowed_connectors(
+            cached_connectors,
+            originator().value.as_str(),
+        );
         let cached_connectors = with_app_plugin_sources(cached_connectors, &tool_plugin_provenance);
         return Ok(AccessibleConnectorsStatus {
             connectors: cached_connectors,
@@ -212,8 +242,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let mcp_config = config.to_mcp_config(plugins_manager.as_ref());
+    let mcp_config = config.to_mcp_config(plugins_manager.as_ref()).await;
     let mcp_servers = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
+    let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
@@ -221,30 +252,35 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let auth_status_entries =
-        compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
+    let auth_status_entries = compute_auth_statuses(
+        mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+        auth.as_ref(),
+    )
+    .await;
 
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-        sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        use_legacy_landlock: config.features.use_legacy_landlock(),
-    };
-
-    let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+    let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
-        sandbox_state,
-        config.codex_home.clone(),
+        PermissionProfile::default(),
+        // Connector discovery is threadless. Use an actually configured env if
+        // one exists, but do not reintroduce the old hidden-local fallback.
+        McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
+        config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
+        host_owned_codex_apps_enabled,
+        mcp_config.prefix_mcp_tool_names,
+        mcp_config.client_elicitation_capability,
         ToolPluginProvenance::default(),
+        auth.as_ref(),
+        /*elicitation_reviewer*/ None,
     )
     .await;
 
@@ -282,7 +318,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
             true
         } else if tools.is_empty() {
             let timeout = cfg
-                .startup_timeout_sec
+                .configured_config()
+                .and_then(|config| config.startup_timeout_sec)
                 .unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
             let ready = mcp_connection_manager
                 .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
@@ -302,13 +339,16 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         cancel_token.cancel();
     }
 
-    let accessible_connectors =
-        filter_disallowed_connectors(accessible_connectors_from_mcp_tools(&tools));
+    let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
+        accessible_connectors_from_mcp_tools(&tools),
+        originator().value.as_str(),
+    );
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
     let accessible_connectors =
         with_app_plugin_sources(accessible_connectors, &tool_plugin_provenance);
+    mcp_connection_manager.shutdown().await;
     Ok(AccessibleConnectorsStatus {
         connectors: accessible_connectors,
         codex_apps_ready,
@@ -319,16 +359,9 @@ fn accessible_connectors_cache_key(
     config: &Config,
     auth: Option<&CodexAuth>,
 ) -> AccessibleConnectorsCacheKey {
-    let token_data: Option<TokenData> = auth.and_then(|auth| auth.get_token_data().ok());
-    let account_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.account_id.clone());
-    let chatgpt_user_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.id_token.chatgpt_user_id.clone());
-    let is_workspace_account = token_data
-        .as_ref()
-        .is_some_and(|token_data| token_data.id_token.is_workspace_account());
+    let account_id = auth.and_then(CodexAuth::get_account_id);
+    let chatgpt_user_id = auth.and_then(CodexAuth::get_chatgpt_user_id);
+    let is_workspace_account = auth.is_some_and(CodexAuth::is_workspace_account);
     AccessibleConnectorsCacheKey {
         chatgpt_base_url: config.chatgpt_base_url.clone(),
         account_id,
@@ -366,38 +399,16 @@ fn write_cached_accessible_connectors(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *cache_guard = Some(CachedAccessibleConnectors {
         key: cache_key,
-        expires_at: Instant::now() + CONNECTORS_CACHE_TTL,
+        expires_at: Instant::now() + codex_connectors::CONNECTORS_CACHE_TTL,
         connectors: connectors.to_vec(),
     });
 }
 
-fn filter_tool_suggest_discoverable_connectors(
-    directory_connectors: Vec<AppInfo>,
-    accessible_connectors: &[AppInfo],
-    discoverable_connector_ids: &HashSet<String>,
-) -> Vec<AppInfo> {
-    let accessible_connector_ids: HashSet<&str> = accessible_connectors
-        .iter()
-        .filter(|connector| connector.is_accessible)
-        .map(|connector| connector.id.as_str())
-        .collect();
-
-    let mut connectors = filter_disallowed_connectors(directory_connectors)
-        .into_iter()
-        .filter(|connector| !accessible_connector_ids.contains(connector.id.as_str()))
-        .filter(|connector| discoverable_connector_ids.contains(connector.id.as_str()))
-        .collect::<Vec<_>>();
-    connectors.sort_by(|left, right| {
-        left.name
-            .cmp(&right.name)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    connectors
-}
-
-fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
-    let mut connector_ids = PluginsManager::new(config.codex_home.clone())
-        .plugins_for_config(config)
+async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
+    let plugins_input = config.plugins_config_input();
+    let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
+        .plugins_for_config(&plugins_input)
+        .await
         .capability_summaries()
         .iter()
         .flat_map(|plugin| plugin.app_connector_ids.iter())
@@ -411,222 +422,72 @@ fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
             .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Connector)
             .map(|discoverable| discoverable.id.clone()),
     );
+    let disabled_connector_ids = config
+        .tool_suggest
+        .disabled_tools
+        .iter()
+        .filter(|disabled_tool| disabled_tool.kind == ToolSuggestDiscoverableType::Connector)
+        .map(|disabled_tool| disabled_tool.id.as_str())
+        .collect::<HashSet<_>>();
+    connector_ids.retain(|connector_id| !disabled_connector_ids.contains(connector_id.as_str()));
     connector_ids
 }
 
-async fn list_directory_connectors_for_tool_suggest_with_auth(
+async fn cached_directory_connectors_for_tool_suggest_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,
-) -> anyhow::Result<Vec<AppInfo>> {
+) -> Vec<AppInfo> {
     if !config.features.enabled(Feature::Apps) {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
-    let token_data = if let Some(auth) = auth {
-        auth.get_token_data().ok()
+    let loaded_auth;
+    let auth = if let Some(auth) = auth {
+        Some(auth)
     } else {
         let auth_manager =
-            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
-        auth_manager
-            .auth()
-            .await
-            .and_then(|auth| auth.get_token_data().ok())
+            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
+        loaded_auth = auth_manager.auth().await;
+        loaded_auth.as_ref()
     };
-    let Some(token_data) = token_data else {
-        return Ok(Vec::new());
+    let Some(auth) = auth.filter(|auth| auth.uses_codex_backend()) else {
+        return Vec::new();
     };
 
-    let account_id = match token_data.account_id.as_deref() {
+    let account_id = match auth.get_account_id() {
         Some(account_id) if !account_id.is_empty() => account_id,
-        _ => return Ok(Vec::new()),
+        _ => return Vec::new(),
     };
-    let access_token = token_data.access_token.clone();
-    let account_id = account_id.to_string();
-    let is_workspace_account = token_data.id_token.is_workspace_account();
-    let cache_key = AllConnectorsCacheKey::new(
-        config.chatgpt_base_url.clone(),
-        Some(account_id.clone()),
-        token_data.id_token.chatgpt_user_id.clone(),
-        is_workspace_account,
+    let is_workspace_account = auth.is_workspace_account();
+    let cache_context = ConnectorDirectoryCacheContext::new(
+        config.codex_home.to_path_buf(),
+        ConnectorDirectoryCacheKey::new(
+            config.chatgpt_base_url.clone(),
+            Some(account_id),
+            auth.get_chatgpt_user_id(),
+            is_workspace_account,
+        ),
     );
 
-    codex_connectors::list_all_connectors_with_options(
-        cache_key,
-        is_workspace_account,
-        /*force_refetch*/ false,
-        |path| {
-            let access_token = access_token.clone();
-            let account_id = account_id.clone();
-            async move {
-                chatgpt_get_request_with_token::<DirectoryListResponse>(
-                    config,
-                    path,
-                    access_token.as_str(),
-                    account_id.as_str(),
-                )
-                .await
-            }
-        },
-    )
-    .await
+    codex_connectors::cached_directory_connectors(&cache_context).unwrap_or_default()
 }
 
-async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
-    config: &Config,
-    path: String,
-    access_token: &str,
-    account_id: &str,
-) -> anyhow::Result<T> {
-    let client = create_client();
-    let url = format!("{}{}", config.chatgpt_base_url, path);
-    let response = client
-        .get(&url)
-        .bearer_auth(access_token)
-        .header("chatgpt-account-id", account_id)
-        .header("Content-Type", "application/json")
-        .timeout(DIRECTORY_CONNECTORS_TIMEOUT)
-        .send()
-        .await
-        .context("failed to send request")?;
-
-    if response.status().is_success() {
-        response
-            .json()
-            .await
-            .context("failed to parse JSON response")
-    } else {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("request failed with status {status}: {body}");
-    }
-}
-
-pub fn connector_display_label(connector: &AppInfo) -> String {
-    format_connector_label(&connector.name, &connector.id)
-}
-
-pub fn connector_mention_slug(connector: &AppInfo) -> String {
-    sanitize_slug(&connector_display_label(connector))
-}
-
-pub(crate) fn accessible_connectors_from_mcp_tools(
-    mcp_tools: &HashMap<String, ToolInfo>,
-) -> Vec<AppInfo> {
+pub(crate) fn accessible_connectors_from_mcp_tools(mcp_tools: &[ToolInfo]) -> Vec<AppInfo> {
     // ToolInfo already carries plugin provenance, so app-level plugin sources
     // can be derived here instead of requiring a separate enrichment pass.
-    let tools = mcp_tools.values().filter_map(|tool| {
+    let tools = mcp_tools.iter().filter_map(|tool| {
         if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
             return None;
         }
         let connector_id = tool.connector_id.as_deref()?;
-        Some((
-            connector_id.to_string(),
-            normalize_connector_value(tool.connector_name.as_deref()),
-            normalize_connector_value(tool.connector_description.as_deref()),
-            tool.plugin_display_names.clone(),
-        ))
-    });
-    collect_accessible_connectors(tools)
-}
-
-pub fn merge_connectors(
-    connectors: Vec<AppInfo>,
-    accessible_connectors: Vec<AppInfo>,
-) -> Vec<AppInfo> {
-    let mut merged: HashMap<String, AppInfo> = connectors
-        .into_iter()
-        .map(|mut connector| {
-            connector.is_accessible = false;
-            (connector.id.clone(), connector)
+        Some(codex_connectors::accessible::AccessibleConnectorTool {
+            connector_id: connector_id.to_string(),
+            connector_name: tool.connector_name.clone(),
+            connector_description: tool.namespace_description.clone(),
+            plugin_display_names: tool.plugin_display_names.clone(),
         })
-        .collect();
-
-    for mut connector in accessible_connectors {
-        connector.is_accessible = true;
-        let connector_id = connector.id.clone();
-        if let Some(existing) = merged.get_mut(&connector_id) {
-            existing.is_accessible = true;
-            if existing.name == existing.id && connector.name != connector.id {
-                existing.name = connector.name;
-            }
-            if existing.description.is_none() && connector.description.is_some() {
-                existing.description = connector.description;
-            }
-            if existing.logo_url.is_none() && connector.logo_url.is_some() {
-                existing.logo_url = connector.logo_url;
-            }
-            if existing.logo_url_dark.is_none() && connector.logo_url_dark.is_some() {
-                existing.logo_url_dark = connector.logo_url_dark;
-            }
-            if existing.distribution_channel.is_none() && connector.distribution_channel.is_some() {
-                existing.distribution_channel = connector.distribution_channel;
-            }
-            existing
-                .plugin_display_names
-                .extend(connector.plugin_display_names);
-        } else {
-            merged.insert(connector_id, connector);
-        }
-    }
-
-    let mut merged = merged.into_values().collect::<Vec<_>>();
-    for connector in &mut merged {
-        if connector.install_url.is_none() {
-            connector.install_url = Some(connector_install_url(&connector.name, &connector.id));
-        }
-        connector.plugin_display_names.sort_unstable();
-        connector.plugin_display_names.dedup();
-    }
-    merged.sort_by(|left, right| {
-        right
-            .is_accessible
-            .cmp(&left.is_accessible)
-            .then_with(|| left.name.cmp(&right.name))
-            .then_with(|| left.id.cmp(&right.id))
     });
-    merged
-}
-
-pub fn merge_plugin_apps(
-    connectors: Vec<AppInfo>,
-    plugin_apps: Vec<AppConnectorId>,
-) -> Vec<AppInfo> {
-    let mut merged = connectors;
-    let mut connector_ids = merged
-        .iter()
-        .map(|connector| connector.id.clone())
-        .collect::<HashSet<_>>();
-
-    for connector_id in plugin_apps {
-        if connector_ids.insert(connector_id.0.clone()) {
-            merged.push(plugin_app_to_app_info(connector_id));
-        }
-    }
-
-    merged.sort_by(|left, right| {
-        right
-            .is_accessible
-            .cmp(&left.is_accessible)
-            .then_with(|| left.name.cmp(&right.name))
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    merged
-}
-
-pub fn merge_plugin_apps_with_accessible(
-    plugin_apps: Vec<AppConnectorId>,
-    accessible_connectors: Vec<AppInfo>,
-) -> Vec<AppInfo> {
-    let accessible_connector_ids: HashSet<&str> = accessible_connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect();
-    let plugin_connectors = plugin_apps
-        .into_iter()
-        .filter(|connector_id| accessible_connector_ids.contains(connector_id.0.as_str()))
-        .map(plugin_app_to_app_info)
-        .collect::<Vec<_>>();
-    merge_connectors(plugin_connectors, accessible_connectors)
+    codex_connectors::accessible::collect_accessible_connectors(tools)
 }
 
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
@@ -675,12 +536,18 @@ pub(crate) fn app_tool_policy(
     annotations: Option<&ToolAnnotations>,
 ) -> AppToolPolicy {
     let apps_config = read_apps_config(config);
+    let managed_approval = managed_app_tool_approval(
+        config.config_layer_stack.requirements_toml().apps.as_ref(),
+        connector_id,
+        tool_name,
+    );
     app_tool_policy_from_apps_config(
         apps_config.as_ref(),
         connector_id,
         tool_name,
         tool_title,
         annotations,
+        managed_approval,
     )
 }
 
@@ -697,45 +564,6 @@ pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -
         tool_info.tool.annotations.as_ref(),
     )
     .enabled
-}
-
-const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
-    "asdk_app_6938a94a61d881918ef32cb999ff937c",
-    "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
-    "connector_3f8d1a79f27c4c7ba1a897ab13bf37dc",
-    "connector_68de829bf7648191acd70a907364c67c",
-    "connector_68e004f14af881919eb50893d3d9f523",
-    "connector_69272cb413a081919685ec3c88d1744e",
-];
-const FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS: &[&str] =
-    &["connector_0f9c9d4592e54d0a9a12b3f44a1e2010"];
-const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
-
-pub fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
-    filter_disallowed_connectors_for_originator(connectors, originator().value.as_str())
-}
-
-fn filter_disallowed_connectors_for_originator(
-    connectors: Vec<AppInfo>,
-    originator_value: &str,
-) -> Vec<AppInfo> {
-    connectors
-        .into_iter()
-        .filter(|connector| {
-            is_connector_id_allowed_for_originator(connector.id.as_str(), originator_value)
-        })
-        .collect()
-}
-
-fn is_connector_id_allowed_for_originator(connector_id: &str, originator_value: &str) -> bool {
-    let disallowed_connector_ids = if is_first_party_chat_originator(originator_value) {
-        FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS
-    } else {
-        DISALLOWED_CONNECTOR_IDS
-    };
-
-    !connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
-        && !disallowed_connector_ids.contains(&connector_id)
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
@@ -772,12 +600,27 @@ fn apply_requirements_apps_constraints(
     };
 
     for (app_id, requirement) in &requirements_apps_config.apps {
-        if requirement.enabled != Some(false) {
-            continue;
+        if requirement.enabled == Some(false) {
+            let app = apps_config.apps.entry(app_id.clone()).or_default();
+            app.enabled = false;
         }
-        let app = apps_config.apps.entry(app_id.clone()).or_default();
-        app.enabled = false;
     }
+}
+
+fn managed_app_tool_approval(
+    requirements_apps_config: Option<&AppsRequirementsToml>,
+    connector_id: Option<&str>,
+    tool_name: &str,
+) -> Option<AppToolApproval> {
+    let connector_id = connector_id?;
+    requirements_apps_config?
+        .apps
+        .get(connector_id)?
+        .tools
+        .as_ref()?
+        .tools
+        .get(tool_name)?
+        .approval_mode
 }
 
 fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> bool {
@@ -799,9 +642,13 @@ fn app_tool_policy_from_apps_config(
     tool_name: &str,
     tool_title: Option<&str>,
     annotations: Option<&ToolAnnotations>,
+    managed_approval: Option<AppToolApproval>,
 ) -> AppToolPolicy {
     let Some(apps_config) = apps_config else {
-        return AppToolPolicy::default();
+        return AppToolPolicy {
+            approval: managed_approval.unwrap_or(AppToolApproval::Auto),
+            ..Default::default()
+        };
     };
 
     let app = connector_id.and_then(|connector_id| apps_config.apps.get(connector_id));
@@ -812,8 +659,8 @@ fn app_tool_policy_from_apps_config(
             .get(tool_name)
             .or_else(|| tool_title.and_then(|title| tools.tools.get(title)))
     });
-    let approval = tool_config
-        .and_then(|tool| tool.approval_mode)
+    let approval = managed_approval
+        .or_else(|| tool_config.and_then(|tool| tool.approval_mode))
         .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
         .unwrap_or(AppToolApproval::Auto);
 
@@ -849,133 +696,14 @@ fn app_tool_policy_from_apps_config(
         });
     let destructive_hint = annotations
         .and_then(|annotations| annotations.destructive_hint)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let open_world_hint = annotations
         .and_then(|annotations| annotations.open_world_hint)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let enabled =
         (destructive_enabled || !destructive_hint) && (open_world_enabled || !open_world_hint);
 
     AppToolPolicy { enabled, approval }
-}
-
-fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>
-where
-    I: IntoIterator<Item = (String, Option<String>, Option<String>, Vec<String>)>,
-{
-    let mut connectors: HashMap<String, (AppInfo, BTreeSet<String>)> = HashMap::new();
-    for (connector_id, connector_name, connector_description, plugin_display_names) in tools {
-        let connector_name = connector_name.unwrap_or_else(|| connector_id.clone());
-        if let Some((existing, existing_plugin_display_names)) = connectors.get_mut(&connector_id) {
-            if existing.name == connector_id && connector_name != connector_id {
-                existing.name = connector_name;
-            }
-            if existing.description.is_none() && connector_description.is_some() {
-                existing.description = connector_description;
-            }
-            existing_plugin_display_names.extend(plugin_display_names);
-        } else {
-            connectors.insert(
-                connector_id.clone(),
-                (
-                    AppInfo {
-                        id: connector_id.clone(),
-                        name: connector_name,
-                        description: connector_description,
-                        logo_url: None,
-                        logo_url_dark: None,
-                        distribution_channel: None,
-                        branding: None,
-                        app_metadata: None,
-                        labels: None,
-                        install_url: None,
-                        is_accessible: true,
-                        is_enabled: true,
-                        plugin_display_names: Vec::new(),
-                    },
-                    plugin_display_names
-                        .into_iter()
-                        .collect::<BTreeSet<String>>(),
-                ),
-            );
-        }
-    }
-    let mut accessible: Vec<AppInfo> = connectors
-        .into_values()
-        .map(|(mut connector, plugin_display_names)| {
-            connector.plugin_display_names = plugin_display_names.into_iter().collect();
-            connector.install_url = Some(connector_install_url(&connector.name, &connector.id));
-            connector
-        })
-        .collect();
-    accessible.sort_by(|left, right| {
-        right
-            .is_accessible
-            .cmp(&left.is_accessible)
-            .then_with(|| left.name.cmp(&right.name))
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    accessible
-}
-
-fn plugin_app_to_app_info(connector_id: AppConnectorId) -> AppInfo {
-    // Leave the placeholder name as the connector id so merge_connectors() can
-    // replace it with canonical app metadata from directory fetches or
-    // connector_name values from codex_apps tool discovery.
-    let connector_id = connector_id.0;
-    let name = connector_id.clone();
-    AppInfo {
-        id: connector_id.clone(),
-        name: name.clone(),
-        description: None,
-        logo_url: None,
-        logo_url_dark: None,
-        distribution_channel: None,
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: Some(connector_install_url(&name, &connector_id)),
-        is_accessible: false,
-        is_enabled: true,
-        plugin_display_names: Vec::new(),
-    }
-}
-
-fn normalize_connector_value(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-pub fn connector_install_url(name: &str, connector_id: &str) -> String {
-    let slug = sanitize_slug(name);
-    format!("https://chatgpt.com/apps/{slug}/{connector_id}")
-}
-
-pub fn sanitize_name(name: &str) -> String {
-    sanitize_slug(name).replace("-", "_")
-}
-
-fn sanitize_slug(name: &str) -> String {
-    let mut normalized = String::with_capacity(name.len());
-    for character in name.chars() {
-        if character.is_ascii_alphanumeric() {
-            normalized.push(character.to_ascii_lowercase());
-        } else {
-            normalized.push('-');
-        }
-    }
-    let normalized = normalized.trim_matches('-');
-    if normalized.is_empty() {
-        "app".to_string()
-    } else {
-        normalized.to_string()
-    }
-}
-
-fn format_connector_label(name: &str, _id: &str) -> String {
-    name.to_string()
 }
 
 #[cfg(test)]

@@ -48,6 +48,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "collect status updates".to_string(),
                 text_elements: Vec::new(),
@@ -145,6 +146,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
             },
             Some(InitializeCapabilities {
                 experimental_api: true,
+                request_attestation: false,
                 opt_out_notification_methods: Some(vec!["thread/status/changed".to_string()]),
             }),
         ),
@@ -170,6 +172,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "run once".to_string(),
                 text_elements: Vec::new(),

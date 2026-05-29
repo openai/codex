@@ -7,7 +7,7 @@
 diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
 --- a/rust/toolchain.bzl
 +++ b/rust/toolchain.bzl
-@@ -209,6 +209,7 @@ def _generate_sysroot(
+@@ -211,6 +211,7 @@
          clippy = None,
          cargo_clippy = None,
          llvm_tools = None,
@@ -15,23 +15,22 @@ diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
          rust_std = None,
          rustfmt = None,
          linker = None):
-@@ -312,7 +313,15 @@ def _generate_sysroot(
- 
+@@ -315,6 +316,14 @@
          # Made available to support $(location) expansion in stdlib_linkflags and extra_rustc_flags.
          transitive_file_sets.append(depset(ctx.files.rust_std))
-+
+ 
 +    sysroot_exec_rust_std = None
 +    if exec_rust_std:
 +        sysroot_exec_rust_std = _symlink_sysroot_tree(ctx, name, exec_rust_std)
 +        transitive_file_sets.extend([sysroot_exec_rust_std])
- 
++
 +        # Made available to support $(location) expansion in extra_exec_rustc_flags.
 +        transitive_file_sets.append(depset(ctx.files.exec_rust_std))
 +
      # Declare a file in the root of the sysroot to make locating the sysroot easy
      sysroot_anchor = ctx.actions.declare_file("{}/rust.sysroot".format(name))
      ctx.actions.write(
-@@ -323,6 +332,7 @@ def _generate_sysroot(
+@@ -325,6 +334,7 @@
              "cargo-clippy: {}".format(cargo_clippy),
              "linker: {}".format(linker),
              "llvm_tools: {}".format(llvm_tools),
@@ -39,7 +38,7 @@ diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
              "rust_std: {}".format(rust_std),
              "rustc_lib: {}".format(rustc_lib),
              "rustc: {}".format(rustc),
-@@ -340,6 +350,7 @@ def _generate_sysroot(
+@@ -342,6 +352,7 @@
          cargo_clippy = sysroot_cargo_clippy,
          clippy = sysroot_clippy,
          linker = sysroot_linker,
@@ -47,7 +46,7 @@ diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
          rust_std = sysroot_rust_std,
          rustc = sysroot_rustc,
          rustc_lib = sysroot_rustc_lib,
-@@ -410,12 +421,14 @@ def _rust_toolchain_impl(ctx):
+@@ -412,12 +423,14 @@
          )
  
      rust_std = ctx.attr.rust_std
@@ -62,7 +61,7 @@ diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
          rust_std = rust_std,
          rustfmt = ctx.file.rustfmt,
          clippy = ctx.file.clippy_driver,
-@@ -452,7 +465,7 @@ def _rust_toolchain_impl(ctx):
+@@ -454,7 +467,7 @@
  
      expanded_stdlib_linkflags = _expand_flags(ctx, "stdlib_linkflags", rust_std[rust_common.stdlib_info].srcs, make_variables)
      expanded_extra_rustc_flags = _expand_flags(ctx, "extra_rustc_flags", rust_std[rust_common.stdlib_info].srcs, make_variables)
@@ -71,7 +70,7 @@ diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
  
      linking_context = cc_common.create_linking_context(
          linker_inputs = depset([
-@@ -793,6 +806,10 @@ rust_toolchain = rule(
+@@ -807,6 +820,10 @@
              doc = "The Rust standard library.",
              mandatory = True,
          ),
@@ -85,7 +84,7 @@ diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
 diff --git a/rust/private/repository_utils.bzl b/rust/private/repository_utils.bzl
 --- a/rust/private/repository_utils.bzl
 +++ b/rust/private/repository_utils.bzl
-@@ -341,6 +341,7 @@ rust_toolchain(
+@@ -342,6 +342,7 @@
      name = "{toolchain_name}",
      rust_doc = "//:rustdoc",
      rust_std = "//:rust_std-{target_triple}",
@@ -93,15 +92,15 @@ diff --git a/rust/private/repository_utils.bzl b/rust/private/repository_utils.b
      rustc = "//:rustc",
      linker = {linker_label},
      linker_type = {linker_type},
-@@ -384,6 +385,7 @@ def BUILD_for_rust_toolchain(
-         include_llvm_tools,
-         include_linker,
+@@ -389,6 +390,7 @@
+         include_llvm_tools = False,
+         include_linker = False,
          include_objcopy = False,
 +        exec_rust_std_label = None,
          stdlib_linkflags = None,
          extra_rustc_flags = None,
          extra_exec_rustc_flags = None,
-@@ -405,6 +407,7 @@ def BUILD_for_rust_toolchain(
+@@ -412,6 +414,7 @@
          include_llvm_tools (bool): Whether llvm-tools are present in the toolchain.
          include_linker (bool): Whether a linker is available in the toolchain.
          include_objcopy (bool): Whether rust-objcopy is available in the toolchain.
@@ -109,7 +108,7 @@ diff --git a/rust/private/repository_utils.bzl b/rust/private/repository_utils.b
          stdlib_linkflags (list, optional): Overridden flags needed for linking to rust
                                             stdlib, akin to BAZEL_LINKLIBS. Defaults to
                                             None.
-@@ -453,6 +456,7 @@ def BUILD_for_rust_toolchain(
+@@ -465,6 +468,7 @@
          staticlib_ext = system_to_staticlib_ext(target_triple.system),
          dylib_ext = system_to_dylib_ext(target_triple.system),
          allocator_library = repr(allocator_library_label),
@@ -120,7 +119,7 @@ diff --git a/rust/private/repository_utils.bzl b/rust/private/repository_utils.b
 diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 --- a/rust/private/rustc.bzl
 +++ b/rust/private/rustc.bzl
-@@ -1011,7 +1011,10 @@ def construct_arguments(
+@@ -1010,7 +1010,10 @@
      if build_metadata and not use_json_output:
          fail("build_metadata requires parse_json_output")
  
@@ -135,7 +134,7 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 diff --git a/rust/repositories.bzl b/rust/repositories.bzl
 --- a/rust/repositories.bzl
 +++ b/rust/repositories.bzl
-@@ -536,6 +536,18 @@ def _rust_toolchain_tools_repository_impl(ctx):
+@@ -574,6 +574,18 @@
      build_components.append(rust_stdlib_content)
      sha256s.update(rust_stdlib_sha256)
  
@@ -154,7 +153,7 @@ diff --git a/rust/repositories.bzl b/rust/repositories.bzl
      stdlib_linkflags = None
      if "BAZEL_RUST_STDLIB_LINKFLAGS" in ctx.os.environ:
          stdlib_linkflags = ctx.os.environ["BAZEL_RUST_STDLIB_LINKFLAGS"].split(":")
-@@ -552,6 +564,7 @@ def _rust_toolchain_tools_repository_impl(ctx):
+@@ -590,6 +602,7 @@
          include_llvm_tools = include_llvm_tools,
          include_linker = include_linker,
          include_objcopy = include_objcopy,
@@ -162,12 +161,7 @@ diff --git a/rust/repositories.bzl b/rust/repositories.bzl
          extra_rustc_flags = ctx.attr.extra_rustc_flags,
          extra_exec_rustc_flags = ctx.attr.extra_exec_rustc_flags,
          opt_level = ctx.attr.opt_level if ctx.attr.opt_level else None,
-@@ -575,8 +588,16 @@ def _rust_toolchain_tools_repository_impl(ctx):
-     if ctx.attr.dev_components:
-         rustc_dev_sha256 = load_rustc_dev_nightly(
-             ctx = ctx,
-             target_triple = target_triple,
-             version = version,
+@@ -608,6 +621,14 @@
              iso_date = iso_date,
          )
          sha256s.update(rustc_dev_sha256)
@@ -179,3 +173,6 @@ diff --git a/rust/repositories.bzl b/rust/repositories.bzl
 +                iso_date = iso_date,
 +            )
 +            sha256s.update(exec_rustc_dev_sha256)
+ 
+     ctx.file("WORKSPACE.bazel", """workspace(name = "{}")""".format(
+         ctx.name,

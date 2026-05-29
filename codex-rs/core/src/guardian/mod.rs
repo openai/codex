@@ -9,54 +9,127 @@
 //!    The guardian clones the parent config, so it inherits any managed
 //!    network proxy / allowlist that the parent turn already had.
 //! 3. Fail closed on timeout, execution failure, or malformed output.
-//! 4. Approve only low- and medium-risk actions (`risk_score < 80`).
+//! 4. Apply the guardian's explicit allow/deny outcome.
 
 mod approval_request;
+mod metrics;
 mod prompt;
 mod review;
 mod review_session;
 
 use std::time::Duration;
 
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
+use codex_protocol::protocol::GuardianAssessmentOutcome;
 use serde::Deserialize;
 use serde::Serialize;
 
 pub(crate) use approval_request::GuardianApprovalRequest;
 pub(crate) use approval_request::GuardianMcpAnnotations;
+pub(crate) use approval_request::GuardianNetworkAccessTrigger;
+#[cfg(test)]
 pub(crate) use approval_request::guardian_approval_request_to_json;
-pub(crate) use review::GUARDIAN_REJECTION_MESSAGE;
+pub(crate) use review::guardian_rejection_message;
+pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
+pub(crate) use review::new_guardian_review_id;
+#[cfg(test)]
+pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::review_approval_request;
+#[cfg(test)]
 pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
+pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;
+pub(crate) use review_session::prompt_cache_key_override_for_review_session;
 
-const GUARDIAN_PREFERRED_MODEL: &str = "gpt-5.4";
 pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";
+pub(crate) const MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN: u32 = 3;
+pub(crate) const MAX_RECENT_AUTO_REVIEW_DENIALS_PER_TURN: u32 = 10;
+pub(crate) const AUTO_REVIEW_DENIAL_WINDOW_SIZE: usize = 50;
+pub(crate) const AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX: &str =
+    "The user has manually approved a specific action that was previously `Rejected`.";
 const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
 const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
-const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
-const GUARDIAN_APPROVAL_RISK_THRESHOLD: u8 = 80;
+const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 16_000;
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const TRUNCATION_TAG: &str = "truncated";
 
-/// Evidence item returned by the guardian reviewer.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct GuardianEvidence {
-    pub(crate) message: String,
-    pub(crate) why: String,
-}
-
 /// Structured output contract that the guardian reviewer must satisfy.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct GuardianAssessment {
     pub(crate) risk_level: codex_protocol::protocol::GuardianRiskLevel,
-    pub(crate) risk_score: u8,
+    pub(crate) user_authorization: codex_protocol::protocol::GuardianUserAuthorization,
+    pub(crate) outcome: GuardianAssessmentOutcome,
     pub(crate) rationale: String,
-    pub(crate) evidence: Vec<GuardianEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GuardianRejection {
+    pub(crate) rationale: String,
+    pub(crate) source: GuardianAssessmentDecisionSource,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct GuardianRejectionCircuitBreaker {
+    turns: std::collections::HashMap<String, GuardianRejectionCircuitBreakerTurn>,
+}
+
+#[derive(Debug, Default)]
+struct GuardianRejectionCircuitBreakerTurn {
+    consecutive_denials: u32,
+    recent_denials: std::collections::VecDeque<bool>,
+    interrupt_triggered: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GuardianRejectionCircuitBreakerAction {
+    Continue,
+    InterruptTurn {
+        consecutive_denials: u32,
+        recent_denials: u32,
+    },
+}
+
+impl GuardianRejectionCircuitBreaker {
+    pub(crate) fn clear_turn(&mut self, turn_id: &str) {
+        self.turns.remove(turn_id);
+    }
+
+    pub(crate) fn record_denial(&mut self, turn_id: &str) -> GuardianRejectionCircuitBreakerAction {
+        let turn = self.turns.entry(turn_id.to_string()).or_default();
+        turn.consecutive_denials = turn.consecutive_denials.saturating_add(1);
+        Self::record_recent_review(turn, /*denied*/ true);
+        let recent_denials = turn.recent_denials.iter().filter(|denied| **denied).count() as u32;
+        if !turn.interrupt_triggered
+            && (turn.consecutive_denials >= MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN
+                || recent_denials >= MAX_RECENT_AUTO_REVIEW_DENIALS_PER_TURN)
+        {
+            turn.interrupt_triggered = true;
+            GuardianRejectionCircuitBreakerAction::InterruptTurn {
+                consecutive_denials: turn.consecutive_denials,
+                recent_denials,
+            }
+        } else {
+            GuardianRejectionCircuitBreakerAction::Continue
+        }
+    }
+
+    pub(crate) fn record_non_denial(&mut self, turn_id: &str) {
+        let turn = self.turns.entry(turn_id.to_string()).or_default();
+        turn.consecutive_denials = 0;
+        Self::record_recent_review(turn, /*denied*/ false);
+    }
+
+    fn record_recent_review(turn: &mut GuardianRejectionCircuitBreakerTurn, denied: bool) {
+        turn.recent_denials.push_back(denied);
+        if turn.recent_denials.len() > AUTO_REVIEW_DENIAL_WINDOW_SIZE {
+            turn.recent_denials.pop_front();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -66,17 +139,25 @@ use approval_request::guardian_assessment_action;
 #[cfg(test)]
 use approval_request::guardian_request_turn_id;
 #[cfg(test)]
+use prompt::GuardianPromptMode;
+#[cfg(test)]
+use prompt::GuardianTranscriptCursor;
+#[cfg(test)]
 use prompt::GuardianTranscriptEntry;
 #[cfg(test)]
 use prompt::GuardianTranscriptEntryKind;
 #[cfg(test)]
 use prompt::build_guardian_prompt_items;
 #[cfg(test)]
+use prompt::build_guardian_prompt_items_with_parent_turn;
+#[cfg(test)]
 use prompt::collect_guardian_transcript_entries;
 #[cfg(test)]
 use prompt::guardian_output_schema;
 #[cfg(test)]
 pub(crate) use prompt::guardian_policy_prompt;
+#[cfg(test)]
+pub(crate) use prompt::guardian_policy_prompt_with_config;
 #[cfg(test)]
 use prompt::guardian_truncate_text;
 #[cfg(test)]

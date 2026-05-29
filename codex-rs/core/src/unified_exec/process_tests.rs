@@ -2,6 +2,7 @@ use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
 use async_trait::async_trait;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
@@ -31,6 +32,10 @@ impl ExecProcess for MockExecProcess {
 
     fn subscribe_wake(&self) -> watch::Receiver<u64> {
         self.wake_tx.subscribe()
+    }
+
+    fn subscribe_events(&self) -> ExecProcessEventReceiver {
+        ExecProcessEventReceiver::empty()
     }
 
     async fn read(
@@ -76,7 +81,7 @@ async fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
         }),
     };
 
-    UnifiedExecProcess::from_remote_started(started, SandboxType::None)
+    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
         .await
         .expect("remote process should start")
 }
@@ -108,6 +113,20 @@ async fn remote_write_closed_stdin_marks_process_exited() {
 }
 
 #[tokio::test]
+async fn fail_and_terminate_preserves_failure_message() {
+    let process = remote_process(WriteStatus::Accepted).await;
+
+    process.fail_and_terminate("network denied".to_string());
+    process.fail_and_terminate("second failure".to_string());
+
+    assert!(process.has_exited());
+    assert_eq!(
+        process.failure_message(),
+        Some("network denied".to_string())
+    );
+}
+
+#[tokio::test]
 async fn remote_process_waits_for_early_exit_event() {
     let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {
@@ -133,7 +152,7 @@ async fn remote_process_waits_for_early_exit_event() {
         let _ = wake_tx.send(1);
     });
 
-    let process = UnifiedExecProcess::from_remote_started(started, SandboxType::None)
+    let process = UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
         .await
         .expect("remote process should observe early exit");
 

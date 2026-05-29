@@ -1,8 +1,8 @@
 use codex_git_utils::merge_base_with_head;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_template::Template;
-use std::path::Path;
 use std::sync::LazyLock;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,7 +38,7 @@ static COMMIT_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
 
 pub fn resolve_review_request(
     request: ReviewRequest,
-    cwd: &Path,
+    cwd: &AbsolutePathBuf,
 ) -> anyhow::Result<ResolvedReviewRequest> {
     let target = request.target;
     let prompt = review_prompt(&target, cwd)?;
@@ -53,7 +53,7 @@ pub fn resolve_review_request(
     })
 }
 
-pub fn review_prompt(target: &ReviewTarget, cwd: &Path) -> anyhow::Result<String> {
+pub fn review_prompt(target: &ReviewTarget, cwd: &AbsolutePathBuf) -> anyhow::Result<String> {
     match target {
         ReviewTarget::UncommittedChanges => Ok(UNCOMMITTED_PROMPT.to_string()),
         ReviewTarget::BaseBranch { branch } => {
@@ -161,7 +161,7 @@ mod tests {
                     sha: "deadbeef".to_string(),
                     title: None,
                 },
-                Path::new("."),
+                &AbsolutePathBuf::current_dir().expect("cwd"),
             )
             .expect("commit prompt should render"),
             "Review the code changes introduced by commit deadbeef. Provide prioritized, actionable findings."
@@ -176,7 +176,7 @@ mod tests {
                     sha: "deadbeef".to_string(),
                     title: Some("Fix bug".to_string()),
                 },
-                Path::new("."),
+                &AbsolutePathBuf::current_dir().expect("cwd"),
             )
             .expect("commit prompt should render"),
             "Review the code changes introduced by commit deadbeef (\"Fix bug\"). Provide prioritized, actionable findings."

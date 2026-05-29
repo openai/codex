@@ -19,6 +19,9 @@ jobs:
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 60
+    env:
+      CARGO_DYLINT_VERSION: 5.0.0
+      DYLINT_LINK_VERSION: 5.0.0
 
     strategy:
       fail-fast: false
@@ -53,9 +56,11 @@ jobs:
               labels: codex-windows-x64
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           toolchain: nightly-2025-09-18
           targets: ${{ matrix.target }}
@@ -65,8 +70,8 @@ jobs:
         shell: bash
         run: |
           install_root="${RUNNER_TEMP}/argument-comment-lint-tools"
-          cargo install --locked cargo-dylint --root "$install_root"
-          cargo install --locked dylint-link
+          cargo install --locked cargo-dylint --version "$CARGO_DYLINT_VERSION" --root "$install_root"
+          cargo install --locked dylint-link --version "$DYLINT_LINK_VERSION"
           echo "INSTALL_ROOT=$install_root" >> "$GITHUB_ENV"
 
       - name: Cargo build
@@ -97,7 +102,7 @@ jobs:
             (cd "${RUNNER_TEMP}" && tar -czf "$GITHUB_WORKSPACE/$archive_path" argument-comment-lint)
           fi
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: argument-comment-lint-${{ matrix.target }}
           path: dist/argument-comment-lint/${{ matrix.target }}/*
