@@ -350,9 +350,7 @@ pub fn build_exec_request(
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
     if let Some(network) = network.as_ref() {
-        network
-            .apply_to_env(&mut env)
-            .map_err(|err| CodexErr::Io(io::Error::other(err.to_string())))?;
+        network.apply_to_env(&mut env);
     }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -590,9 +588,7 @@ async fn exec_windows_sandbox(
         ..
     } = params;
     if let Some(network) = network.as_ref() {
-        network
-            .apply_to_env(&mut env)
-            .map_err(|err| CodexErr::Io(io::Error::other(err.to_string())))?;
+        network.apply_to_env(&mut env);
     }
 
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
@@ -936,9 +932,7 @@ async fn exec(
         justification: _,
     } = params;
     if let Some(network) = network.as_ref() {
-        network
-            .apply_to_env(&mut env)
-            .map_err(|err| CodexErr::Io(io::Error::other(err.to_string())))?;
+        network.apply_to_env(&mut env);
     }
 
     let (program, args) = command.split_first().ok_or_else(|| {

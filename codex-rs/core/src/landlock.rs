@@ -35,9 +35,6 @@ where
 {
     let mut permission_profile = permission_profile.clone();
     if let Some(network) = network {
-        network
-            .validate_child_env(&env)
-            .map_err(std::io::Error::other)?;
         let managed_mitm_ca_trust_bundle_paths = network
             .managed_mitm_ca_trust_bundle_paths()
             .into_iter()

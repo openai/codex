@@ -140,25 +140,6 @@ impl ManagedMitmCaTrustBundles {
         paths.dedup();
         paths
     }
-
-    pub(crate) fn validate_child_env(&self, env: &HashMap<String, String>) -> Result<()> {
-        for key in CUSTOM_CA_ENV_KEYS {
-            let Some(value) = env.get(key).filter(|value| !value.is_empty()) else {
-                continue;
-            };
-            let expected_value = self.path_for_env_key(key).to_string_lossy();
-            if value == expected_value.as_ref() || self.inherited_env_values.get(key) == Some(value)
-            {
-                continue;
-            }
-
-            return Err(anyhow!(
-                "managed MITM does not support command-scoped {key} overrides; configure CA trust before starting Codex"
-            ));
-        }
-
-        Ok(())
-    }
 }
 
 fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
@@ -222,6 +203,8 @@ fn managed_ca_trust_bundles_for_cert_path(
 
 fn build_default_managed_ca_trust_bundle(managed_ca_cert_path: &Path) -> Result<String> {
     let mut trust_bundle = String::new();
+    // TODO(viyatb): Keep inherited SSL_CERT_FILE/SSL_CERT_DIR out of this startup path until
+    // they can be re-applied after each child's read policy is known.
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
         rustls_native_certs::load_native_certs();
     if !errors.is_empty() {
@@ -678,35 +661,6 @@ mod tests {
 
         assert!(trust_bundle.contains("inherited ca"));
         assert!(trust_bundle.contains("managed ca"));
-    }
-
-    #[test]
-    fn managed_ca_trust_bundles_reject_command_scoped_override() {
-        let dir = tempdir().unwrap();
-        let managed_ca_cert_path = dir.path().join("ca.pem");
-        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
-        let inherited_bundle_path = dir.path().join("inherited.pem");
-        fs::write(&inherited_bundle_path, "inherited ca\n").unwrap();
-        let env = HashMap::from([(
-            "REQUESTS_CA_BUNDLE".to_string(),
-            inherited_bundle_path.display().to_string(),
-        )]);
-        let bundles =
-            managed_ca_trust_bundles_for_cert_path(&managed_ca_cert_path, &env, dir.path())
-                .unwrap();
-
-        let err = bundles
-            .validate_child_env(&HashMap::from([(
-                "REQUESTS_CA_BUNDLE".to_string(),
-                dir.path().join("command.pem").display().to_string(),
-            )]))
-            .unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("does not support command-scoped REQUESTS_CA_BUNDLE overrides"),
-            "unexpected error: {err:#}"
-        );
     }
 
     #[cfg(unix)]

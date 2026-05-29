@@ -571,13 +571,22 @@ fn apply_proxy_env_overrides(
 
     if let Some(mitm_ca_trust_bundles) = mitm_ca_trust_bundles {
         for key in crate::certs::CUSTOM_CA_ENV_KEYS {
-            env.insert(
-                key.to_string(),
-                mitm_ca_trust_bundles
-                    .path_for_env_key(key)
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+            let managed_path = mitm_ca_trust_bundles
+                .path_for_env_key(key)
+                .to_string_lossy();
+            if env
+                .get(key)
+                .filter(|value| !value.is_empty())
+                .is_some_and(|value| {
+                    value != managed_path.as_ref()
+                        && mitm_ca_trust_bundles.inherited_env_values.get(key) != Some(value)
+                })
+            {
+                // TODO(viyatb): Fold readable command-scoped CA overrides into a managed MITM
+                // bundle. For now preserve them, which can make intercepted TLS fail.
+                continue;
+            }
+            env.insert(key.to_string(), managed_path.into_owned());
         }
     }
 }
@@ -626,18 +635,10 @@ impl NetworkProxy {
             .map_or_else(Vec::new, |bundles| bundles.bundle_paths())
     }
 
-    pub fn validate_child_env(&self, env: &HashMap<String, String>) -> Result<()> {
-        if let Some(mitm_ca_trust_bundles) = self.runtime_settings().mitm_ca_trust_bundles {
-            mitm_ca_trust_bundles.validate_child_env(env)?;
-        }
-        Ok(())
-    }
-
-    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) -> Result<()> {
+    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         let runtime_settings = self.runtime_settings();
-        self.validate_child_env(env)?;
         // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
-        // managed MITM CA vars either preserve startup trust or were rejected above.
+        // managed MITM CA vars preserve startup trust unless a child overrides them.
         apply_proxy_env_overrides(
             env,
             self.http_addr,
@@ -646,7 +647,6 @@ impl NetworkProxy {
             runtime_settings.allow_local_binding,
             runtime_settings.mitm_ca_trust_bundles.as_ref(),
         );
-        Ok(())
     }
 
     pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
@@ -1122,6 +1122,36 @@ mod tests {
                 Some(&mitm_ca_trust_bundle_path.display().to_string())
             );
         }
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_preserves_command_scoped_mitm_ca_override() {
+        let command_ca_bundle_path = "/tmp/command-ca.pem".to_string();
+        let mut env = HashMap::from([(
+            "REQUESTS_CA_BUNDLE".to_string(),
+            command_ca_bundle_path.clone(),
+        )]);
+        let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
+        let mitm_ca_trust_bundles = crate::certs::ManagedMitmCaTrustBundles {
+            default_path: mitm_ca_trust_bundle_path.to_path_buf(),
+            env_paths: HashMap::new(),
+            inherited_env_values: HashMap::new(),
+        };
+
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
+            Some(&mitm_ca_trust_bundles),
+        );
+
+        assert_eq!(env.get("REQUESTS_CA_BUNDLE"), Some(&command_ca_bundle_path));
+        assert_eq!(
+            env.get("SSL_CERT_FILE"),
+            Some(&mitm_ca_trust_bundle_path.display().to_string())
+        );
     }
 
     #[test]

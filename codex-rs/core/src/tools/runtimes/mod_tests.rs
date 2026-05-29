@@ -89,7 +89,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     let dir = tempdir().expect("create temp dir");
     let cwd = dir.path().abs();
     let mut env = HashMap::from([("CUSTOM_ENV".to_string(), "kept".to_string())]);
-    proxy.apply_to_env(&mut env).expect("apply proxy env");
+    proxy.apply_to_env(&mut env);
 
     let command = vec!["/bin/echo".to_string(), "ok".to_string()];
     let command = build_sandbox_command(

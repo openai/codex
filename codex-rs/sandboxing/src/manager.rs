@@ -187,9 +187,6 @@ impl SandboxManager {
         let mut effective_permission_profile =
             effective_permission_profile(permissions, additional_permissions.as_ref());
         if let Some(network) = network {
-            network.validate_child_env(&command.env).map_err(|err| {
-                SandboxTransformError::ManagedMitmCaTrust(std::io::Error::other(err.to_string()))
-            })?;
             let managed_mitm_ca_trust_bundle_paths = network
                 .managed_mitm_ca_trust_bundle_paths()
                 .into_iter()
