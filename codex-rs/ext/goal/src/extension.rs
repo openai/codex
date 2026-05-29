@@ -30,6 +30,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
+use crate::api::GoalApi;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
 use crate::runtime::GoalRuntimeConfig;
@@ -55,6 +56,7 @@ pub struct GoalExtension<C> {
     event_emitter: GoalEventEmitter,
     metrics: GoalMetrics,
     thread_manager: Weak<ThreadManager>,
+    goal_api: Arc<GoalApi>,
     goals_enabled: Arc<dyn Fn(&C) -> bool + Send + Sync>,
 }
 
@@ -70,6 +72,7 @@ impl<C> GoalExtension<C> {
         event_sink: Arc<dyn ExtensionEventSink>,
         metrics_client: Option<MetricsClient>,
         thread_manager: Weak<ThreadManager>,
+        goal_api: Arc<GoalApi>,
         goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
@@ -77,6 +80,7 @@ impl<C> GoalExtension<C> {
             event_emitter: GoalEventEmitter::new(event_sink),
             metrics: GoalMetrics::new(metrics_client),
             thread_manager,
+            goal_api,
             goals_enabled: Arc::new(goals_enabled),
         }
     }
@@ -118,6 +122,7 @@ where
             )
         });
         runtime.set_enabled(enabled);
+        self.goal_api.register_runtime(&runtime);
     }
 
     async fn on_thread_resume(&self, input: ThreadResumeInput<'_>) {
@@ -390,6 +395,7 @@ pub fn install_with_backend<C>(
     state_dbs: Arc<codex_state::StateRuntime>,
     metrics_client: Option<MetricsClient>,
     thread_manager: Weak<ThreadManager>,
+    goal_api: Arc<GoalApi>,
     goals_enabled: impl Fn(&C) -> bool + Send + Sync + 'static,
 ) where
     C: Send + Sync + 'static,
@@ -399,6 +405,7 @@ pub fn install_with_backend<C>(
         registry.event_sink(),
         metrics_client,
         thread_manager,
+        Arc::clone(&goal_api),
         goals_enabled,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
