@@ -367,6 +367,32 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
 
     let source_link = tmp.path().join("source-link");
     symlink(&source_dir, &source_link)?;
+    let joined_nested = file_system
+        .join(
+            &absolute_path(source_link.clone()),
+            Path::new("nested/note.txt"),
+        )
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(
+        joined_nested,
+        absolute_path(source_link.join("nested").join("note.txt"))
+    );
+    let joined_parent = file_system
+        .parent(&joined_nested)
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(
+        joined_parent,
+        Some(absolute_path(source_link.join("nested")))
+    );
+    let join_error =
+        match file_system.join(&absolute_path(source_dir.clone()), Path::new("../outside")) {
+            Ok(path) => panic!(
+                "join should reject parent traversal, got {}",
+                path.display()
+            ),
+            Err(err) => err,
+        };
+    assert_eq!(join_error.kind(), std::io::ErrorKind::InvalidInput);
     let canonical_nested = file_system
         .canonicalize(&absolute_path(source_link.join("nested").join("note.txt")))
         .with_context(|| format!("mode={use_remote}"))?;

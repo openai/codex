@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::future::Future;
+use std::path::Path;
 use std::thread;
 use tokio::io;
 use tracing::trace;
@@ -15,11 +17,14 @@ use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
+use crate::client::ExecServerClient;
 use crate::client::LazyRemoteExecServerClient;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
+use crate::protocol::FsJoinParams;
+use crate::protocol::FsParentParams;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
@@ -38,31 +43,79 @@ impl RemoteFileSystem {
         trace!("remote fs new");
         Self { client }
     }
+
+    fn run_sync_remote_call<T, F, Fut>(
+        &self,
+        operation: &'static str,
+        call: F,
+    ) -> FileSystemResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(ExecServerClient) -> Fut + Send + 'static,
+        Fut: Future<Output = FileSystemResult<T>> + Send + 'static,
+    {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|err| {
+            io::Error::other(format!("remote fs {operation} requires runtime: {err}"))
+        })?;
+        let client = self.client.clone();
+        // ExecutorFileSystem exposes synchronous path operations, so remote callers have to hop
+        // through the active runtime from a helper thread to reach the JSON-RPC filesystem
+        // surface without blocking the runtime worker.
+        thread::spawn(move || {
+            runtime.block_on(async move {
+                let client = client.get().await.map_err(map_remote_error)?;
+                call(client).await
+            })
+        })
+        .join()
+        .map_err(|_| io::Error::other(format!("remote fs {operation} thread panicked")))?
+    }
 }
 
 #[async_trait]
 impl ExecutorFileSystem for RemoteFileSystem {
     fn canonicalize(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
         trace!("remote fs canonicalize");
-        let runtime = tokio::runtime::Handle::try_current().map_err(|err| {
-            io::Error::other(format!("remote fs canonicalize requires runtime: {err}"))
-        })?;
-        let client = self.client.clone();
         let path = path.clone();
-        // ExecutorFileSystem::canonicalize is synchronous, so remote callers have to hop through
-        // the active runtime from a helper thread to reach the JSON-RPC filesystem surface.
-        thread::spawn(move || {
-            runtime.block_on(async move {
-                let client = client.get().await.map_err(map_remote_error)?;
-                let response = client
-                    .fs_canonicalize(FsCanonicalizeParams { path })
-                    .await
-                    .map_err(map_remote_error)?;
-                Ok(response.path)
-            })
+        self.run_sync_remote_call("canonicalize", move |client| async move {
+            let response = client
+                .fs_canonicalize(FsCanonicalizeParams { path })
+                .await
+                .map_err(map_remote_error)?;
+            Ok(response.path)
         })
-        .join()
-        .map_err(|_| io::Error::other("remote fs canonicalize thread panicked"))?
+    }
+
+    fn join(
+        &self,
+        base_path: &AbsolutePathBuf,
+        relative_path: &Path,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        trace!("remote fs join");
+        let base_path = base_path.clone();
+        let relative_path = relative_path.to_path_buf();
+        self.run_sync_remote_call("join", move |client| async move {
+            let response = client
+                .fs_join(FsJoinParams {
+                    base_path,
+                    relative_path,
+                })
+                .await
+                .map_err(map_remote_error)?;
+            Ok(response.path)
+        })
+    }
+
+    fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+        trace!("remote fs parent");
+        let path = path.clone();
+        self.run_sync_remote_call("parent", move |client| async move {
+            let response = client
+                .fs_parent(FsParentParams { path })
+                .await
+                .map_err(map_remote_error)?;
+            Ok(response.path)
+        })
     }
 
     async fn read_file(
