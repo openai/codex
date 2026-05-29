@@ -22,7 +22,7 @@ use tracing::warn;
 
 use crate::config::Config;
 use crate::mcp::McpManager;
-use crate::plugins::list_tool_suggest_discoverable_plugins;
+use crate::plugins::list_tool_suggest_discoverable_plugins_with_connector_candidates;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
@@ -148,11 +148,16 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
         )
         .into_iter()
         .map(DiscoverableTool::from);
-    let discoverable_plugins =
-        list_tool_suggest_discoverable_plugins(config, auth, loaded_plugin_app_connector_ids)
-            .await?
-            .into_iter()
-            .map(DiscoverableTool::from);
+    let candidate_app_connector_ids = connector_ids.iter().cloned().collect::<Vec<_>>();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins_with_connector_candidates(
+        config,
+        auth,
+        loaded_plugin_app_connector_ids,
+        &candidate_app_connector_ids,
+    )
+    .await?
+    .into_iter()
+    .map(DiscoverableTool::from);
     Ok(discoverable_connectors
         .chain(discoverable_plugins)
         .collect())

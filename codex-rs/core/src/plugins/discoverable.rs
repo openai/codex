@@ -21,10 +21,26 @@ const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
     OPENAI_CURATED_MARKETPLACE_NAME,
 ];
 
+#[cfg(test)]
 pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
     auth: Option<&CodexAuth>,
     loaded_plugin_app_connector_ids: &[String],
+) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
+    list_tool_suggest_discoverable_plugins_with_connector_candidates(
+        config,
+        auth,
+        loaded_plugin_app_connector_ids,
+        &[],
+    )
+    .await
+}
+
+pub(crate) async fn list_tool_suggest_discoverable_plugins_with_connector_candidates(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    loaded_plugin_app_connector_ids: &[String],
+    candidate_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     if !config.features.enabled(Feature::Plugins) {
         return Ok(Vec::new());
@@ -59,6 +75,12 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .cloned()
         .chain(
             loaded_plugin_app_connector_ids
+                .iter()
+                .cloned()
+                .map(AppConnectorId),
+        )
+        .chain(
+            candidate_app_connector_ids
                 .iter()
                 .cloned()
                 .map(AppConnectorId),

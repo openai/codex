@@ -7,7 +7,7 @@ pub(crate) mod test_support;
 
 pub(crate) use codex_plugin::PluginCapabilitySummary;
 
-pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
+pub(crate) use discoverable::list_tool_suggest_discoverable_plugins_with_connector_candidates;
 pub(crate) use injection::build_plugin_injections;
 pub(crate) use render::render_explicit_plugin_instructions;
 

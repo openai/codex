@@ -102,15 +102,12 @@ async fn list_tool_suggest_discoverable_plugins_matches_on_resolved_template_app
     let databricks_app_id = "asdk_app_databricks_workspace";
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path(
-            "/backend-api/ps/connectors/by_template_id/templated_apps_Databricks",
-        ))
+        .and(path("/backend-api/connectors/directory/list_workspace"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(format!(r#"{{"connector_ids":["{databricks_app_id}"]}}"#)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"apps":[{{"id":"{databricks_app_id}","template_id":"templated_apps_Databricks"}}]}}"#
+        )))
         .mount(&server)
         .await;
 
@@ -131,6 +128,58 @@ async fn list_tool_suggest_discoverable_plugins_matches_on_resolved_template_app
     let discoverable_plugins = list_tool_suggest_discoverable_plugins(
         &config,
         Some(&auth),
+        &[databricks_app_id.to_string()],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        discoverable_plugins,
+        vec![DiscoverablePluginInfo {
+            id: "databricks-source@openai-curated".to_string(),
+            name: "databricks-source".to_string(),
+            description: Some(
+                "Plugin that includes skills, MCP servers, and app connectors".to_string(),
+            ),
+            has_skills: true,
+            mcp_server_names: vec!["sample-docs".to_string()],
+            app_connector_ids: vec![databricks_app_id.to_string()],
+        }]
+    );
+}
+
+#[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_matches_on_resolved_connector_candidate_apps() {
+    let databricks_app_id = "asdk_app_databricks_workspace";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/connectors/directory/list_workspace"))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"apps":[{{"id":"{databricks_app_id}","template_id":"templated_apps_Databricks"}}]}}"#
+        )))
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["databricks-source"]);
+    write_plugin_app(
+        &curated_root,
+        "databricks-source",
+        "databricks",
+        "templated_apps_Databricks",
+    );
+    write_plugins_feature_config(codex_home.path());
+
+    let mut config = load_plugins_config(codex_home.path()).await;
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins_with_connector_candidates(
+        &config,
+        Some(&auth),
+        &[],
         &[databricks_app_id.to_string()],
     )
     .await
