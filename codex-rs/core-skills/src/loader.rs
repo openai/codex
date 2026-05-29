@@ -371,6 +371,7 @@ fn repo_config_skill_roots(
             ConfigLayerStackOrdering::HighestPrecedenceFirst,
             /*include_disabled*/ true,
         )
+        .into_iter()
         .filter_map(|layer| match &layer.name {
             ConfigLayerSource::Project { .. } => layer.config_folder().map(|config_folder| {
                 SkillRoot {

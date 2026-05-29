@@ -25,7 +25,7 @@ use codex_config::SkillsConfig;
 use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::ExecutorFileSystem;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SkillsLoadInput {
     pub env_path: EnvironmentPathRef,
     /// Local absolute skill roots use this filesystem when local exec is available.
@@ -35,6 +35,18 @@ pub struct SkillsLoadInput {
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
+}
+
+impl std::fmt::Debug for SkillsLoadInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillsLoadInput")
+            .field("env_path", &self.env_path)
+            .field("has_local_file_system", &self.local_file_system.is_some())
+            .field("effective_skill_roots", &self.effective_skill_roots)
+            .field("config_layer_stack", &self.config_layer_stack)
+            .field("bundled_skills_enabled", &self.bundled_skills_enabled)
+            .finish()
+    }
 }
 
 impl SkillsLoadInput {
