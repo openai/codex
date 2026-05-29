@@ -400,7 +400,7 @@ impl MessageProcessor {
             Arc::clone(&thread_manager),
             Arc::clone(&config),
             feedback,
-            log_db,
+            log_db.clone(),
             state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
@@ -454,6 +454,7 @@ impl MessageProcessor {
             Arc::clone(&thread_list_state_permit),
             thread_goal_processor.clone(),
             state_db,
+            log_db,
             Arc::clone(&skills_watcher),
         );
         let turn_processor = TurnRequestProcessor::new(

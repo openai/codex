@@ -892,9 +892,6 @@ ON CONFLICT(id) DO UPDATE SET
             .execute(self.pool.as_ref())
             .await?;
         let rows_affected = result.rows_affected();
-        if rows_affected == 0 {
-            return Ok(0);
-        }
 
         if let Err(err) = sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
             .bind(thread_id_string.as_str())
@@ -1212,6 +1209,7 @@ mod tests {
     use crate::DirectionalThreadSpawnEdgeStatus;
     use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
+    use anyhow::Result;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::SessionMeta;
@@ -1260,31 +1258,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_thread_cleans_associated_state() {
+    async fn delete_thread_cleans_associated_state() -> Result<()> {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
-        let thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000401").expect("valid thread id");
-        let child_thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000402").expect("valid thread id");
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000401")?;
+        let child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000402")?;
         runtime
             .upsert_thread(&test_thread_metadata(
                 &codex_home,
                 thread_id,
                 codex_home.clone(),
             ))
-            .await
-            .expect("thread insert should succeed");
-        runtime
-            .upsert_thread_spawn_edge(
-                thread_id,
-                child_thread_id,
-                DirectionalThreadSpawnEdgeStatus::Closed,
-            )
-            .await
-            .expect("spawn edge insert should succeed");
+            .await?;
+        seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
         sqlx::query(
             r#"
 INSERT INTO thread_dynamic_tools (thread_id, position, name, description, input_schema)
@@ -1297,34 +1283,7 @@ VALUES (?, ?, ?, ?, ?)
         .bind("test dynamic tool")
         .bind("{}")
         .execute(runtime.pool.as_ref())
-        .await
-        .expect("dynamic tool insert should succeed");
-        runtime
-            .thread_goals()
-            .replace_thread_goal(
-                thread_id,
-                "test goal",
-                crate::ThreadGoalStatus::Active,
-                /*token_budget*/ None,
-            )
-            .await
-            .expect("goal insert should succeed");
-        runtime
-            .insert_log(&LogEntry {
-                ts: 1,
-                ts_nanos: 0,
-                level: "INFO".to_string(),
-                target: "test".to_string(),
-                message: Some("legacy log".to_string()),
-                feedback_log_body: Some("feedback log".to_string()),
-                thread_id: Some(thread_id.to_string()),
-                process_uuid: Some("process-1".to_string()),
-                module_path: None,
-                file: None,
-                line: None,
-            })
-            .await
-            .expect("log insert should succeed");
+        .await?;
         runtime
             .create_agent_job(
                 &AgentJobCreateParams {
@@ -1345,66 +1304,26 @@ VALUES (?, ?, ?, ?, ?)
                     row_json: json!({"path": "file-1"}),
                 }],
             )
-            .await
-            .expect("agent job insert should succeed");
-        runtime
-            .mark_agent_job_running("job-1")
-            .await
-            .expect("agent job should mark running");
+            .await?;
+        runtime.mark_agent_job_running("job-1").await?;
         runtime
             .mark_agent_job_item_running_with_thread("job-1", "item-1", &thread_id.to_string())
-            .await
-            .expect("agent job item should mark running");
+            .await?;
 
-        let rows = runtime
-            .delete_thread(thread_id)
-            .await
-            .expect("thread delete should succeed");
+        let rows = runtime.delete_thread(thread_id).await?;
 
         assert_eq!(rows, 1);
-        assert!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .expect("thread lookup should succeed")
-                .is_none()
-        );
+        assert!(runtime.get_thread(thread_id).await?.is_none());
         let dynamic_tool_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM thread_dynamic_tools WHERE thread_id = ?")
                 .bind(thread_id.to_string())
                 .fetch_one(runtime.pool.as_ref())
-                .await
-                .expect("dynamic tool count should be readable");
+                .await?;
         assert_eq!(dynamic_tool_count, 0);
-        let spawn_edge_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
-        )
-        .bind(thread_id.to_string())
-        .bind(thread_id.to_string())
-        .fetch_one(runtime.pool.as_ref())
-        .await
-        .expect("spawn edge count should be readable");
-        assert_eq!(spawn_edge_count, 0);
-        assert!(
-            runtime
-                .thread_goals()
-                .get_thread_goal(thread_id)
-                .await
-                .expect("goal lookup should succeed")
-                .is_none()
-        );
-        let logs = runtime
-            .query_logs(&LogQuery {
-                thread_ids: vec![thread_id.to_string()],
-                ..Default::default()
-            })
-            .await
-            .expect("log query should succeed");
-        assert_eq!(logs.len(), 0);
+        assert_thread_cleanup_state(&runtime, thread_id).await?;
         let job_item = runtime
             .get_agent_job_item("job-1", "item-1")
-            .await
-            .expect("job item lookup should succeed")
+            .await?
             .expect("job item should exist");
         assert_eq!(job_item.status, AgentJobItemStatus::Pending);
         assert_eq!(job_item.assigned_thread_id, None);
@@ -1412,6 +1331,85 @@ VALUES (?, ?, ?, ?, ?)
             job_item.last_error,
             Some("assigned thread was deleted".to_string())
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_thread_cleans_associated_state_when_thread_row_is_missing() -> Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000403")?;
+        let child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000404")?;
+        seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
+
+        let rows = runtime.delete_thread(thread_id).await?;
+
+        assert_eq!(rows, 0);
+        assert_thread_cleanup_state(&runtime, thread_id).await?;
+        Ok(())
+    }
+
+    async fn seed_thread_cleanup_state(
+        runtime: &StateRuntime,
+        thread_id: ThreadId,
+        child_thread_id: ThreadId,
+    ) -> Result<()> {
+        runtime
+            .upsert_thread_spawn_edge(
+                thread_id,
+                child_thread_id,
+                DirectionalThreadSpawnEdgeStatus::Closed,
+            )
+            .await?;
+        runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "test goal",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await?;
+        runtime
+            .insert_log(&LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "test".to_string(),
+                message: Some("legacy log".to_string()),
+                feedback_log_body: Some("feedback log".to_string()),
+                thread_id: Some(thread_id.to_string()),
+                process_uuid: Some("process-1".to_string()),
+                module_path: None,
+                file: None,
+                line: None,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn assert_thread_cleanup_state(
+        runtime: &StateRuntime,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let spawn_edge_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
+        )
+        .bind(thread_id.to_string())
+        .bind(thread_id.to_string())
+        .fetch_one(runtime.pool.as_ref())
+        .await?;
+        assert_eq!(spawn_edge_count, 0);
+        let goal = runtime.thread_goals().get_thread_goal(thread_id).await?;
+        assert!(goal.is_none());
+        let logs = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec![thread_id.to_string()],
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(logs.len(), 0);
+        Ok(())
     }
 
     #[tokio::test]

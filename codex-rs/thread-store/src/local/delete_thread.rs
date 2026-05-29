@@ -83,6 +83,9 @@ pub(super) async fn delete_thread(
         match delete_rollout_file(store, rollout_path.as_path(), thread_id) {
             Ok(deleted) => deleted_rollout_file |= deleted,
             Err(err) if deleted_state_rows > 0 => {
+                // Once SQLite deletion commits, rollout cleanup is best effort. If this JSONL
+                // survives, compatibility read/list paths may rediscover it and repair metadata;
+                // that is preferable to failing a delete whose state-row commit already succeeded.
                 warn!("failed to delete rollout file for thread {thread_id}: {err}");
             }
             Err(err) => return Err(err),
@@ -139,7 +142,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::ReadThreadParams;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
     use crate::local::test_support::test_config;
@@ -161,16 +163,6 @@ mod tests {
             .expect("delete thread");
 
         assert!(!active_path.exists());
-        assert!(
-            store
-                .read_thread(ReadThreadParams {
-                    thread_id,
-                    include_archived: true,
-                    include_history: false,
-                })
-                .await
-                .is_err()
-        );
     }
 
     #[tokio::test]

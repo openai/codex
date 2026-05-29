@@ -10,7 +10,11 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         params: ThreadDeleteParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        match self.thread_delete_inner(params).await {
+        let result = {
+            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            self.thread_delete_response(params).await
+        };
+        match result {
             Ok((response, deleted_thread_ids)) => {
                 self.outgoing
                     .send_response(request_id.clone(), response)
@@ -26,14 +30,6 @@ impl ThreadRequestProcessor {
             }
             Err(error) => Err(error),
         }
-    }
-
-    async fn thread_delete_inner(
-        &self,
-        params: ThreadDeleteParams,
-    ) -> Result<(ThreadDeleteResponse, Vec<String>), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        self.thread_delete_response(params).await
     }
 
     async fn thread_delete_response(
@@ -58,17 +54,12 @@ impl ThreadRequestProcessor {
                     }
                 }
             }
-            Err(CodexErr::ThreadNotFound(_)) if self.state_db.is_some() => {}
-            Err(CodexErr::ThreadNotFound(_)) => {
-                return Err(internal_error(format!(
-                    "cannot delete thread {thread_id}: sqlite state db is unavailable and the thread is not loaded"
-                )));
-            }
+            Err(CodexErr::ThreadNotFound(_)) => {}
             Err(err) => return Err(core_thread_write_error("delete thread", err)),
         }
 
         self.validate_root_thread_delete(thread_id).await?;
-        self.prepare_thread_for_removal(thread_id, "delete").await;
+        self.prepare_thread_for_delete(thread_id).await;
         match self
             .thread_store
             .delete_thread(StoreDeleteThreadParams { thread_id })
@@ -80,8 +71,7 @@ impl ThreadRequestProcessor {
 
         let mut deleted_thread_ids = vec![thread_id.to_string()];
         for descendant_thread_id in thread_ids.iter().skip(1).rev().copied() {
-            self.prepare_thread_for_removal(descendant_thread_id, "delete")
-                .await;
+            self.prepare_thread_for_delete(descendant_thread_id).await;
             match self
                 .thread_store
                 .delete_thread(StoreDeleteThreadParams {
@@ -108,7 +98,7 @@ impl ThreadRequestProcessor {
         thread_id: ThreadId,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await
-            && thread.rollout_path().is_none()
+            && thread.config_snapshot().await.ephemeral
         {
             return Err(invalid_request(format!(
                 "thread is not persisted and cannot be deleted: {thread_id}"
@@ -123,6 +113,13 @@ impl ThreadRequestProcessor {
             .await
             .map(|_| ())
             .map_err(thread_store_delete_error)
+    }
+
+    async fn prepare_thread_for_delete(&self, thread_id: ThreadId) {
+        self.prepare_thread_for_removal(thread_id, "delete").await;
+        if let Some(log_db) = self.log_db.as_ref() {
+            log_db.flush().await;
+        }
     }
 }
 
