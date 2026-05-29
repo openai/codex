@@ -373,7 +373,7 @@ fn local_skill_roots(
         )),
     }));
     roots.extend(extra_skill_roots.into_iter().map(|path| SkillRoot {
-        path: local_path_ref(local_file_system, path),
+        path: EnvironmentPathRef::new(Arc::clone(local_file_system), path),
         scope: SkillScope::User,
         plugin_id: None,
         plugin_root: None,

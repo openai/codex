@@ -248,18 +248,9 @@ async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
         /*bundled_skills_enabled*/ true,
     );
 
-    let skills_input = SkillsLoadInput::new(
-        cwd.path().abs(),
-        Vec::new(),
-        config_layer_stack.clone(),
-        bundled_skills_enabled_from_stack(&config_layer_stack),
-    );
+    let skills_input = local_skills_input(cwd.path().abs(), Vec::new(), config_layer_stack.clone());
     let empty_outcome = skills_manager
-        .skills_for_cwd(
-            &skills_input,
-            /*force_reload*/ false,
-            Some(Arc::clone(&LOCAL_FS)),
-        )
+        .skills_for_cwd(&skills_input, /*force_reload*/ false)
         .await;
     assert!(
         empty_outcome
@@ -279,11 +270,7 @@ async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
     skills_manager.set_extra_roots(vec![extra_skills_root.abs()]);
 
     let runtime_outcome = skills_manager
-        .skills_for_cwd(
-            &skills_input,
-            /*force_reload*/ false,
-            Some(Arc::clone(&LOCAL_FS)),
-        )
+        .skills_for_cwd(&skills_input, /*force_reload*/ false)
         .await;
     assert!(
         runtime_outcome
@@ -294,11 +281,7 @@ async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
 
     skills_manager.set_extra_roots(vec![extra_root.path().join("missing-skills").abs()]);
     let replaced_outcome = skills_manager
-        .skills_for_cwd(
-            &skills_input,
-            /*force_reload*/ false,
-            Some(Arc::clone(&LOCAL_FS)),
-        )
+        .skills_for_cwd(&skills_input, /*force_reload*/ false)
         .await;
     assert_eq!(replaced_outcome.errors, Vec::new());
     assert!(
