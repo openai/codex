@@ -130,7 +130,10 @@ pub(crate) async fn execute_user_shell_command(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
-    session.insert_shell_env_file(&mut exec_env_map);
+    session.apply_shell_env_exports(
+        &mut exec_env_map,
+        &turn_context.shell_environment_policy.r#set,
+    );
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
         for key in PROXY_ENV_KEYS {
             exec_env_map.remove(*key);
@@ -150,7 +153,6 @@ pub(crate) async fn execute_user_shell_command(
         session_shell.as_ref(),
         #[allow(deprecated)]
         &turn_context.cwd,
-        session.shell_env_file_path(),
         &turn_context.shell_environment_policy.r#set,
         &exec_env_map,
     );

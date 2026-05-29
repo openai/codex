@@ -20,17 +20,12 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::permissions::FileSystemAccessMode;
-use codex_protocol::permissions::FileSystemPath;
-use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
@@ -230,7 +225,6 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -242,79 +236,8 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
 }
 
 #[test]
-fn maybe_wrap_shell_command_sources_session_env_file_without_snapshot() {
+fn maybe_wrap_shell_command_skips_non_login_command_without_snapshot() {
     let dir = tempdir().expect("create temp dir");
-    let env_file = dir.path().join("session-env.sh");
-    std::fs::write(
-        &env_file,
-        "export FROM_SESSION_START='hook-value'\nexport CODEX_ENV_FILE='/overwritten'\n",
-    )
-    .expect("write env file");
-    let session_shell = Shell {
-        shell_type: ShellType::Bash,
-        shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-    };
-    let command = vec![
-        "/bin/bash".to_string(),
-        "-c".to_string(),
-        "printf '%s|%s' \"$FROM_SESSION_START\" \"$CODEX_ENV_FILE\"".to_string(),
-    ];
-    let env_file_value = env_file.to_string_lossy().to_string();
-    let env = HashMap::from([(CODEX_ENV_FILE_ENV_VAR.to_string(), env_file_value.clone())]);
-
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
-        &command,
-        &session_shell,
-        &dir.path().abs(),
-        Some(env_file.as_path()),
-        &HashMap::new(),
-        &env,
-    );
-    let output = Command::new(&rewritten[0])
-        .args(&rewritten[1..])
-        .env(CODEX_ENV_FILE_ENV_VAR, &env_file_value)
-        .output()
-        .expect("run rewritten command");
-
-    assert!(output.status.success(), "command failed: {output:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("hook-value|{env_file_value}")
-    );
-}
-
-#[test]
-fn populated_session_env_file_adds_runtime_read_permission() {
-    let dir = tempdir().expect("create temp dir");
-    let env_file = dir.path().join("session-env.sh");
-    std::fs::write(&env_file, "export FROM_SESSION_START='hook-value'\n").expect("write env file");
-
-    let additional_permissions = with_shell_env_file_read_permission(
-        /*additional_permissions*/ None,
-        Some(env_file.as_path()),
-    )
-    .expect("session env file should add a permission");
-
-    assert_eq!(
-        additional_permissions.file_system,
-        Some(codex_protocol::models::FileSystemPermissions {
-            entries: vec![FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: env_file.abs()
-                },
-                access: FileSystemAccessMode::Read,
-            }],
-            ..Default::default()
-        })
-    );
-}
-
-#[test]
-fn maybe_wrap_shell_command_skips_empty_session_env_file() {
-    let dir = tempdir().expect("create temp dir");
-    let env_file = dir.path().join("session-env.sh");
-    std::fs::write(&env_file, "").expect("write env file");
     let session_shell = Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
@@ -330,62 +253,11 @@ fn maybe_wrap_shell_command_skips_empty_session_env_file() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        Some(env_file.as_path()),
         &HashMap::new(),
         &HashMap::new(),
     );
 
     assert_eq!(rewritten, command);
-}
-
-#[cfg(unix)]
-#[test]
-fn maybe_wrap_shell_command_keeps_login_initialization_before_session_env_file() {
-    let dir = tempdir().expect("create temp dir");
-    let env_file = dir.path().join("session-env.sh");
-    std::fs::write(&env_file, "export FROM_SESSION_START='hook-value'\n").expect("write env file");
-    let shell_path = dir.path().join("login-shell.sh");
-    std::fs::write(
-        &shell_path,
-        "#!/bin/sh\nif [ \"$1\" = \"-lc\" ]; then\n  LOGIN_ONLY='from-login'\nfi\nscript=\"$2\"\nshift 2\neval \"$script\"\n",
-    )
-    .expect("write login shell");
-    let mut permissions = std::fs::metadata(&shell_path)
-        .expect("read login shell permissions")
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&shell_path, permissions).expect("make login shell executable");
-    let shell_path = shell_path.to_string_lossy().to_string();
-    let session_shell = Shell {
-        shell_type: ShellType::Bash,
-        shell_path: PathBuf::from(&shell_path),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-    };
-    let command = vec![
-        shell_path,
-        "-lc".to_string(),
-        "printf '%s|%s' \"$LOGIN_ONLY\" \"$FROM_SESSION_START\"".to_string(),
-    ];
-
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
-        &command,
-        &session_shell,
-        &dir.path().abs(),
-        Some(env_file.as_path()),
-        &HashMap::new(),
-        &HashMap::new(),
-    );
-    let output = Command::new(&rewritten[0])
-        .args(&rewritten[1..])
-        .output()
-        .expect("run rewritten command");
-
-    assert!(output.status.success(), "command failed: {output:?}");
-    assert_eq!(rewritten[1], "-lc");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "from-login|hook-value"
-    );
 }
 
 #[test]
@@ -409,7 +281,6 @@ fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -438,7 +309,6 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -470,7 +340,6 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -504,7 +373,6 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -540,7 +408,6 @@ fn maybe_wrap_shell_lc_with_snapshot_skips_when_cwd_mismatch() {
         &command,
         &session_shell,
         &command_cwd.abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -570,7 +437,6 @@ fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
         &command,
         &session_shell,
         &command_cwd.abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -607,7 +473,6 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_explicit_override_precedence() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &explicit_env_overrides,
         &HashMap::from([("TEST_ENV_SNAPSHOT".to_string(), "worktree".to_string())]),
     );
@@ -648,7 +513,6 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::from([("CODEX_THREAD_ID".to_string(), "nested-thread".to_string())]),
     );
@@ -691,7 +555,6 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -749,7 +612,6 @@ fn maybe_wrap_shell_lc_with_snapshot_refreshes_codex_proxy_git_ssh_command() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -795,7 +657,6 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_custom_git_ssh_command() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -842,7 +703,6 @@ fn maybe_wrap_shell_lc_with_snapshot_clears_stale_codex_git_ssh_command_without_
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -880,7 +740,6 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_user_proxy_env_when_proxy_inactive() 
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -931,7 +790,6 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_live_env_when_snapshot_proxy_activ
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::from([(
             "HTTP_PROXY".to_string(),
@@ -977,7 +835,6 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -1015,7 +872,6 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &explicit_env_overrides,
         &HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]),
     );
@@ -1064,7 +920,6 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_zsh_fork_path_prepend() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &explicit_env_overrides,
         &env,
     );
@@ -1109,7 +964,6 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &explicit_env_overrides,
         &HashMap::from([(
             "OPENAI_API_KEY".to_string(),
@@ -1158,7 +1012,6 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
         &command,
         &session_shell,
         &dir.path().abs(),
-        /*env_file*/ None,
         &explicit_env_overrides,
         &HashMap::new(),
     );

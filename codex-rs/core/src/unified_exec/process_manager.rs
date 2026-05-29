@@ -1005,7 +1005,9 @@ impl UnifiedExecProcessManager {
             context.session.conversation_id.to_string(),
         );
         if !request.environment.is_remote() {
-            context.session.insert_shell_env_file(&mut env);
+            context
+                .session
+                .apply_shell_env_exports(&mut env, &context.turn.shell_environment_policy.r#set);
         }
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {

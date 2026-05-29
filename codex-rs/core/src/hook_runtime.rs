@@ -40,6 +40,7 @@ use serde_json::Value;
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
+use crate::exec_env::create_env;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -124,6 +125,7 @@ pub(crate) async fn run_pending_session_start_hooks(
                 source: session_start_source,
             },
         };
+        let captures_shell_env = matches!(target, StartHookTarget::SessionStart { .. });
         let request = codex_hooks::SessionStartRequest {
             session_id: sess.session_id().into(),
             #[allow(deprecated)]
@@ -135,15 +137,30 @@ pub(crate) async fn run_pending_session_start_hooks(
         };
         let hooks = sess.hooks();
         let preview_runs = hooks.preview_session_start(&request);
-        if run_context_injecting_hook(
-            sess,
-            turn_context,
-            preview_runs,
-            hooks.run_session_start(request, Some(turn_context.sub_id.clone())),
-        )
-        .await
-        .record_additional_contexts(sess, turn_context)
-        .await
+        emit_hook_started_events(sess, turn_context, preview_runs).await;
+        let outcome = hooks
+            .run_session_start(request, Some(turn_context.sub_id.clone()))
+            .await;
+        if captures_shell_env {
+            let base_env = create_env(
+                &turn_context.shell_environment_policy,
+                Some(sess.conversation_id),
+            );
+            let cwd = turn_context
+                .environments
+                .primary()
+                .map(|environment| environment.cwd.as_path())
+                .unwrap_or_else(|| turn_context.config.cwd.as_path());
+            if let Err(error) = sess.capture_shell_env_exports(cwd, &base_env).await {
+                tracing::warn!("failed to capture SessionStart shell environment: {error:#}");
+            }
+        }
+        let outcome: ContextInjectingHookOutcome = outcome.into();
+        emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+        if outcome
+            .outcome
+            .record_additional_contexts(sess, turn_context)
+            .await
         {
             return true;
         }

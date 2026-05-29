@@ -24,7 +24,6 @@ use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sand
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_command_with_runtime_env;
 use crate::tools::runtimes::shell::zsh_fork_backend;
-use crate::tools::runtimes::with_shell_env_file_read_permission;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -277,18 +276,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             }
             explicit_env_overrides
         };
-        let environment_is_remote = req.environment.is_remote();
-        let shell_env_file_path = (!environment_is_remote)
-            .then(|| ctx.session.shell_env_file_path())
-            .flatten();
-        let command = if environment_is_remote {
+        let command = if req.environment.is_remote() {
             base_command.to_vec()
         } else {
             maybe_wrap_shell_command_with_runtime_env(
                 base_command,
                 session_shell.as_ref(),
                 &req.cwd,
-                shell_env_file_path,
                 &explicit_env_overrides,
                 &env,
             )
@@ -304,10 +298,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         } else {
             command
         };
-        let additional_permissions = with_shell_env_file_read_permission(
-            req.additional_permissions.clone(),
-            shell_env_file_path,
-        );
+        let additional_permissions = req.additional_permissions.clone();
 
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =

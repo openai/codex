@@ -3223,16 +3223,27 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
-    pub(crate) fn shell_env_file_path(&self) -> Option<&Path> {
-        self.services
-            .shell_env_file
-            .as_ref()
-            .map(crate::shell_env_file::ShellEnvFile::path)
+    pub(crate) async fn capture_shell_env_exports(
+        &self,
+        cwd: &Path,
+        base_env: &HashMap<String, String>,
+    ) -> anyhow::Result<()> {
+        if let Some(shell_env_file) = self.services.shell_env_file.as_ref() {
+            let shell = self.user_shell();
+            shell_env_file
+                .capture_exports(shell.as_ref(), cwd, base_env)
+                .await?;
+        }
+        Ok(())
     }
 
-    pub(crate) fn insert_shell_env_file(&self, env: &mut HashMap<String, String>) {
+    pub(crate) fn apply_shell_env_exports(
+        &self,
+        env: &mut HashMap<String, String>,
+        explicit_env_overrides: &HashMap<String, String>,
+    ) {
         if let Some(shell_env_file) = self.services.shell_env_file.as_ref() {
-            shell_env_file.insert_into_env(env);
+            shell_env_file.apply_exports(env, explicit_env_overrides);
         }
     }
 
@@ -3317,7 +3328,7 @@ async fn build_hooks_for_config(
     let plugin_hook_load_warnings = plugin_outcome.effective_plugin_hook_warnings();
     let mut command_env = HashMap::new();
     if let Some(shell_env_file) = shell_env_file {
-        shell_env_file.insert_into_env(&mut command_env);
+        shell_env_file.insert_path_into_env(&mut command_env);
     }
     Hooks::new(HooksConfig {
         legacy_notify_argv: config.notify.clone(),

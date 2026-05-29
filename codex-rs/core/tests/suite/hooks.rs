@@ -2717,7 +2717,7 @@ async fn assert_session_start_env_file_reaches_bash_surface(
 
     let server = start_mock_server().await;
     let call_id = format!("session-start-env-file-{}", surface.slug());
-    let command = "printf '%s' \"$CODEX_SESSION_START_TEST\"";
+    let command = "printf '%s|%s' \"$CODEX_SESSION_START_TEST\" \"${CODEX_ENV_FILE:+configured}\"";
     let tool_call = match surface {
         BashRewriteSurface::ExecCommand => ev_function_call(
             &call_id,
@@ -2773,6 +2773,10 @@ async fn assert_session_start_env_file_reaches_bash_surface(
         "expected hook-exported value in {surface:?} output: {output}"
     );
     assert!(
+        output.contains("from-session-start|"),
+        "expected CODEX_ENV_FILE to stay hidden from {surface:?} command: {output}"
+    );
+    assert!(
         !output.contains("leaked-to-pre-tool-use"),
         "PreToolUse should not receive CODEX_ENV_FILE: {output}"
     );
@@ -2781,17 +2785,17 @@ async fn assert_session_start_env_file_reaches_bash_surface(
 }
 
 #[tokio::test]
-async fn session_start_env_file_is_sourced_by_shell_command() -> Result<()> {
+async fn session_start_env_file_exports_reach_shell_command() -> Result<()> {
     assert_session_start_env_file_reaches_bash_surface(BashRewriteSurface::ShellCommand).await
 }
 
 #[tokio::test]
-async fn session_start_env_file_is_sourced_by_exec_command() -> Result<()> {
+async fn session_start_env_file_exports_reach_exec_command() -> Result<()> {
     assert_session_start_env_file_reaches_bash_surface(BashRewriteSurface::ExecCommand).await
 }
 
 #[tokio::test]
-async fn shell_command_exposes_codex_env_file_when_hooks_are_disabled() -> Result<()> {
+async fn shell_command_hides_codex_env_file_when_hooks_are_disabled() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_windows!(Ok(()));
 
@@ -2837,7 +2841,7 @@ async fn shell_command_exposes_codex_env_file_when_hooks_are_disabled() -> Resul
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
     assert!(
-        requests[1]
+        !requests[1]
             .function_call_output(call_id)
             .to_string()
             .contains("configured")
