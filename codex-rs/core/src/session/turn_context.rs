@@ -685,6 +685,8 @@ impl Session {
             )
         });
         let skills_outcome = if let Some(path_ref) = path_ref {
+            // Workspace/repo skill roots use the selected turn environment path above, while
+            // user/system/plugin skill roots still read from the available local filesystem.
             let local_file_system = self
                 .services
                 .environment_manager
