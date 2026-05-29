@@ -1354,6 +1354,7 @@ mod tests {
         let root = test_path_buf("/tmp/repo/.agents/skills").abs();
         let mut skill = skill_with_path("gh-fix-ci", &root.join("gh-fix-ci/SKILL.md"));
         skill.environment_id = "devbox".to_string();
+        let expected_alias_root_line = format!("- `r0` = `{}`", normalized_path(&root));
         let outcome = outcome_with_roots(vec![skill.clone()], vec![root]);
 
         let absolute = build_available_skills(
@@ -1384,10 +1385,7 @@ mod tests {
             SkillEnvironmentRender::Include,
         )
         .expect("skills should render");
-        assert_eq!(
-            plan.aliases.skill_root_lines,
-            vec![format!("- `r0` = `{}`", normalized_path(&root))]
-        );
+        assert_eq!(plan.aliases.skill_root_lines, vec![expected_alias_root_line]);
         assert_eq!(
             aliased.skill_lines,
             vec![format!(
