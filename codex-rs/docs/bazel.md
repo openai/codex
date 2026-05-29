@@ -30,28 +30,27 @@ just bazel-clippy
 just bazel-remote-test
 ```
 
-Ordinary local `bazel` and `just` invocations use the generic BuildBuddy endpoints
-configured in `.bazelrc`.
+Ordinary local `bazel` and `just` invocations run locally. BuildBuddy cache,
+build event upload, downloads, and remote execution are opt-in configurations.
 
 ## `user.bazelrc`
 
 The checked-in `.bazelrc` optionally imports `%workspace%/user.bazelrc`, and
-`.gitignore` excludes that file. You do not need a `user.bazelrc` for ordinary
-local builds, generic BuildBuddy configuration, or GitHub Actions.
+`.gitignore` excludes that file. You do not need a `user.bazelrc` for local
+builds or GitHub Actions.
 
-Create `user.bazelrc` only if you are authorized to use the OpenAI BuildBuddy
-tenant and want all direct local `bazel` commands to use it. Choose the
-non-RBE or RBE remote configuration, then add it with your key:
+Create `user.bazelrc` only if you have a BuildBuddy API key and want direct
+local `bazel` and `just` commands to use remote services. Choose the generic
+host, or `buildbuddy-openai-rbe` if you are authorized for the OpenAI host:
 
 ```bazelrc
 # Local only; this file contains a BuildBuddy credential.
-common --config=buildbuddy-openai-rbe
+common --config=buildbuddy-generic-rbe
 common --remote_header=x-buildbuddy-api-key=<your-buildbuddy-api-key>
 ```
 
-Use `buildbuddy-openai` instead of `buildbuddy-openai-rbe` if you want cache,
-build event upload, and downloads through the OpenAI host without remote
-execution.
+Use `buildbuddy-generic` or `buildbuddy-openai` without the `-rbe` suffix if
+you want cache, build event upload, and downloads without remote execution.
 
 `user.bazelrc` is ignored by Git but still contains a credential; do not commit
 or share it.
@@ -61,30 +60,32 @@ or share it.
 GitHub Actions routes Bazel traffic through
 `.github/scripts/run_bazel_with_buildbuddy.py`. Higher-level helpers such as
 `.github/scripts/run-bazel-ci.sh` and `.github/scripts/rusty_v8_bazel.py`
-delegate remote configuration selection to that wrapper.
+delegate remote configuration selection to that wrapper. The wrapper reads the
+GitHub Actions repository and event payload rather than relying on workflow
+files to duplicate tenant-selection logic.
 
 The `Cache/BES` host is also used for remote downloads.
 
 | Invocation/config | Key Required | Cache/BES | Build exec | Test exec |
 | --- | --- | --- | --- | --- |
-| `bazel ...` | No | `remote.buildbuddy.io` | Local | Local |
-| `bazel ... --config=remote` | No | `remote.buildbuddy.io` | Remote | Remote |
-| `bazel ... --config=buildbuddy-generic` | No | `remote.buildbuddy.io` | Local | Local |
-| `bazel ... --config=buildbuddy-generic-rbe` | No | `remote.buildbuddy.io` | Remote | Remote |
+| `bazel ...` | No | None | Local | Local |
+| `bazel ... --config=remote` | Yes | None | Remote | Remote |
+| `bazel ... --config=buildbuddy-generic` | Yes | `remote.buildbuddy.io` | Local | Local |
+| `bazel ... --config=buildbuddy-generic-rbe` | Yes | `remote.buildbuddy.io` | Remote | Remote |
 | `bazel ... --config=buildbuddy-openai` | Yes | `openai.buildbuddy.io` | Local | Local |
 | `bazel ... --config=buildbuddy-openai-rbe` | Yes | `openai.buildbuddy.io` | Remote | Remote |
 
-With an API key available, workflows choose the host as follows. Without a
-key, the wrapper uses the generic host.
+Without an API key, the wrapper removes remote CI configurations and runs
+locally. With a key, workflows choose the host as follows:
 
-| Run | Uses OpenAI BuildBuddy Host |
-| --- | --- |
-| Push to `main` in `openai/codex` | Yes |
-| `workflow_dispatch` in `openai/codex` | Yes |
-| Same-repository pull request in `openai/codex` | Yes |
-| Fork pull request into `openai/codex` | No |
-| Push or `workflow_dispatch` in a fork | No |
-| Pull request run in a fork repository | No |
+| Run | Key | Uses OpenAI BuildBuddy Host |
+| --- | --- | --- |
+| Push to `main` in `openai/codex` | Yes | Yes |
+| `workflow_dispatch` in `openai/codex` | Yes | Yes |
+| Same-repository pull request in `openai/codex` | Yes | Yes |
+| Fork pull request into `openai/codex` | No | No; local |
+| Push or `workflow_dispatch` in a fork with a key | Yes | No; generic host |
+| Pull request run in a fork repository with a key | Yes | No; generic host |
 
 CI configurations determine whether builds and tests execute remotely:
 
@@ -93,21 +94,22 @@ CI configurations determine whether builds and tests execute remotely:
 | `ci-linux` | `*-rbe` | Remote host | Remote host |
 | `ci-v8` | `*-rbe` | Remote host | Remote host |
 | `ci-macos` | `*-rbe` | Remote host | Local |
-| `ci-windows-cross` with key | `*-rbe` | Remote host | Local |
+| `ci-windows-cross` | `*-rbe` | Remote host | Local |
 | `ci-windows` | non-RBE | Local | Local |
-| Keyless Windows cross fallback | non-RBE | Local | Local |
+| Keyless CI fallback | none | Local | Local |
 
-To exercise the generic remote configuration locally through the wrapper:
+To exercise the generic remote configuration with your key:
 
 ```bash
-./.github/scripts/run_bazel_with_buildbuddy.py \
+BUILDBUDDY_API_KEY=... GITHUB_REPOSITORY=my-fork/codex \
+  ./.github/scripts/run_bazel_with_buildbuddy.py \
   build --config=remote //codex-rs/cli:codex
 ```
 
-The wrapper selects the OpenAI host only when GitHub Actions identifies the
-repository as `openai/codex`. An OpenAI opt-in with an API key but without
-`GITHUB_REPOSITORY` fails closed. For local OpenAI tenant access, use the
-`user.bazelrc` configuration above.
+The wrapper selects the OpenAI host only inside GitHub Actions for a trusted
+run in `openai/codex`. A missing or malformed pull request event
+payload fails closed to the generic host. For local OpenAI host access, use
+the `user.bazelrc` configuration above.
 
 ## Evolving the setup
 

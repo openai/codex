@@ -94,9 +94,7 @@ class RustyV8BazelTest(unittest.TestCase):
                 [
                     "bazel",
                     "build",
-                    "--config=ci-v8",
                     "//third_party/v8:release",
-                    "--config=buildbuddy-generic-rbe",
                 ],
                 rusty_v8_bazel.bazel_command(
                     "build",

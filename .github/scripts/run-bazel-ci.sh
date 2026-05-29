@@ -87,11 +87,14 @@ print_bazel_test_log_tails() {
   local console_log="$1"
   local testlogs_dir
 
-  # `bazel info` needs the same CI config as the failed test invocation so
-  # platform-specific output roots match. On Windows, omitting `ci-windows`
-  # would point at `local_windows-fastbuild` even when the test ran with the
-  # MSVC host platform under `local_windows_msvc-fastbuild`.
-  local -a bazel_info_args=(info "--config=${ci_config}")
+  local -a bazel_info_args=(info)
+  if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+    # `bazel info` needs the same CI config as the failed test invocation so
+    # platform-specific output roots match. On Windows, omitting `ci-windows`
+    # would point at `local_windows-fastbuild` even when the test ran with the
+    # MSVC host platform under `local_windows_msvc-fastbuild`.
+    bazel_info_args+=("--config=${ci_config}")
+  fi
 
   # Only pass flags that affect Bazel's output-root selection or repository
   # lookup. Test/build-only flags such as execution logs or remote download
@@ -377,12 +380,17 @@ fi
 bazel_console_log="$(mktemp)"
 trap 'rm -f "$bazel_console_log"' EXIT
 
-# Work around Bazel 9 remote repo contents cache / overlay materialization
-# failures seen in CI. BuildBuddy still handles remote cache/execution.
 bazel_run_args=(
   "${bazel_args[@]}"
-  "--config=${ci_config}"
 )
+if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+  echo "BuildBuddy API key is available; using remote Bazel configuration."
+  # Work around Bazel 9 remote repo contents cache / overlay materialization
+  # failures seen in CI. BuildBuddy still handles remote cache/execution.
+  bazel_run_args+=("--config=${ci_config}")
+else
+  echo "BuildBuddy API key is not available; using local Bazel configuration."
+fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")
 fi

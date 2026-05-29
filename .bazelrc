@@ -38,20 +38,16 @@ common:windows --test_env=WINDIR
 common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
 
 common --test_output=errors
-common --bes_results_url=https://app.buildbuddy.io/invocation/
-common --bes_backend=grpcs://remote.buildbuddy.io
-common --remote_cache=grpcs://remote.buildbuddy.io
 common --remote_download_toplevel
 common --nobuild_runfile_links
 common --remote_timeout=3600
 common --noexperimental_throttle_remote_action_building
 common --experimental_remote_execution_keepalive
 common --grpc_keepalive_time=30s
-common --experimental_remote_downloader=grpcs://remote.buildbuddy.io
 
-# Remote configurations selected by `.github/scripts/run_bazel_with_buildbuddy.py`.
-# The OpenAI tenant config is intentionally opt-in; fork workflows use the
-# generic BuildBuddy host even when they provide their own API key.
+# Opt-in remote configurations selected by
+# `.github/scripts/run_bazel_with_buildbuddy.py`. Plain Bazel commands do not
+# contact BuildBuddy unless a user selects one of these configurations.
 common:buildbuddy-generic --bes_backend=grpcs://remote.buildbuddy.io
 common:buildbuddy-generic --bes_results_url=https://app.buildbuddy.io/invocation/
 common:buildbuddy-generic --remote_cache=grpcs://remote.buildbuddy.io

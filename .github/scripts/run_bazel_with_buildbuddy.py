@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Mapping
 from collections.abc import Sequence
+from pathlib import Path
 
 
 OPENAI_REPOSITORY = "openai/codex"
@@ -24,26 +26,48 @@ REMOTE_EXECUTION_CONFIGS = {
 }
 
 
-def uses_openai_host(env: Mapping[str, str]) -> bool:
-    has_key = bool(env.get("BUILDBUDDY_API_KEY"))
-    opts_in = env.get("CODEX_BAZEL_USE_OPENAI_BUILDBUDDY_HOST") == "true"
-    if not has_key or not opts_in:
+# Only authenticated workflow runs executing trusted upstream code may use the
+# OpenAI BuildBuddy host. A pull request event without proof that its head is
+# in the upstream repository fails closed to the generic host.
+def is_trusted_upstream_run(env: Mapping[str, str]) -> bool:
+    if (
+        env.get("GITHUB_ACTIONS") != "true"
+        or env.get("GITHUB_REPOSITORY") != OPENAI_REPOSITORY
+    ):
+        return False
+    if env.get("GITHUB_EVENT_NAME") != "pull_request":
+        return True
+
+    event_path = env.get("GITHUB_EVENT_PATH")
+    if not event_path:
+        return False
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return False
 
-    repository = env.get("GITHUB_REPOSITORY")
-    if not repository:
-        raise RuntimeError(
-            "GITHUB_REPOSITORY must be set to select the OpenAI BuildBuddy host"
-        )
+    try:
+        return event["pull_request"]["head"]["repo"]["fork"] is False
+    except (KeyError, TypeError):
+        return False
 
-    return repository == OPENAI_REPOSITORY
+
+def uses_openai_host(env: Mapping[str, str]) -> bool:
+    return bool(env.get("BUILDBUDDY_API_KEY")) and is_trusted_upstream_run(env)
 
 
 def uses_remote_execution(args: Sequence[str]) -> bool:
-    return any(arg in REMOTE_EXECUTION_CONFIGS for arg in args)
+    try:
+        separator_idx = args.index("--")
+    except ValueError:
+        separator_idx = len(args)
+    return any(arg in REMOTE_EXECUTION_CONFIGS for arg in args[:separator_idx])
 
 
-def remote_config(args: Sequence[str], env: Mapping[str, str]) -> str:
+def remote_config(args: Sequence[str], env: Mapping[str, str]) -> str | None:
+    if not env.get("BUILDBUDDY_API_KEY"):
+        return None
+
     config = OPENAI_REMOTE_CONFIG if uses_openai_host(env) else GENERIC_REMOTE_CONFIG
     if uses_remote_execution(args):
         config += "-rbe"
@@ -53,9 +77,28 @@ def remote_config(args: Sequence[str], env: Mapping[str, str]) -> str:
 def bazel_args_with_remote_config(
     args: Sequence[str], env: Mapping[str, str]
 ) -> list[str]:
-    remote_args = [f"--config={remote_config(args, env)}"]
-    if api_key := env.get("BUILDBUDDY_API_KEY"):
-        remote_args.append(f"--remote_header=x-buildbuddy-api-key={api_key}")
+    config = remote_config(args, env)
+    if config is None:
+        # Remote CI configs require BuildBuddy credentials. Removing them
+        # preserves the local fallback used for fork pull requests.
+        try:
+            separator_idx = args.index("--")
+        except ValueError:
+            separator_idx = len(args)
+        return [
+            *(
+                arg
+                for arg in args[:separator_idx]
+                if arg not in REMOTE_EXECUTION_CONFIGS
+            ),
+            *args[separator_idx:],
+        ]
+
+    api_key = env["BUILDBUDDY_API_KEY"]
+    remote_args = [
+        f"--config={config}",
+        f"--remote_header=x-buildbuddy-api-key={api_key}",
+    ]
 
     try:
         separator_idx = args.index("--")
@@ -76,11 +119,19 @@ def bazel_command(*args: str, env: Mapping[str, str] | None = None) -> list[str]
 
 def main() -> None:
     config = remote_config(sys.argv[1:], os.environ)
-    host_description = "OpenAI tenant" if uses_openai_host(os.environ) else "generic"
-    print(
-        f"Using {host_description} BuildBuddy configuration: {config}.",
-        file=sys.stderr,
-    )
+    if config is None:
+        print(
+            "BuildBuddy key unavailable; using local Bazel configuration.",
+            file=sys.stderr,
+        )
+    else:
+        host_description = (
+            "OpenAI tenant" if uses_openai_host(os.environ) else "generic"
+        )
+        print(
+            f"Using {host_description} BuildBuddy configuration: {config}.",
+            file=sys.stderr,
+        )
 
     command = bazel_command(*sys.argv[1:])
     os.execvp(command[0], command)

@@ -73,6 +73,7 @@ def bazel_output_files(
             f"--platforms=@llvm//platforms:{platform}",
             *[f"--config={config}" for config in bazel_configs],
             "--output=files",
+            "--",
             expression,
         ),
         cwd=ROOT,
