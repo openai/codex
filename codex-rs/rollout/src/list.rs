@@ -1372,7 +1372,16 @@ async fn find_thread_path_by_id_str_in_subdir(
     )
     .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
-    let found = match results.matches.into_iter().next().map(|m| m.full_path()) {
+    let found = match results
+        .matches
+        .into_iter()
+        .map(|m| m.full_path())
+        .find(|path| {
+            path.file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| !name.ends_with(".tmp"))
+                && !compression::should_skip_compressed_sibling(path)
+        }) {
         Some(path) => Some(path),
         None => find_rollout_path_by_id_from_filenames(root.as_path(), id_str).await?,
     };

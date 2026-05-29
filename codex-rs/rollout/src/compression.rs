@@ -3,6 +3,7 @@ use std::fs::File;
 use std::fs::FileTimes;
 use std::fs::Permissions;
 use std::io;
+use std::io::BufRead;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -30,6 +31,7 @@ const TEMP_SUFFIX: &str = ".tmp";
 const COMPRESSION_LEVEL: i32 = 3;
 const MIN_ROLLOUT_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const GLOBAL_LOCK_STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
+const TEMP_FILE_STALE_AFTER: Duration = GLOBAL_LOCK_STALE_AFTER;
 const WORKER_MAX_RUNTIME: Duration = Duration::from_secs(5 * 60 * 60);
 const LOCK_FILE_NAME: &str = "rollout-compression.lock";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -103,7 +105,13 @@ pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineRead
     match open_rollout_line_reader_once(path).await {
         Ok(reader) => Ok(reader),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            open_rollout_line_reader_alternate(path).await
+            match open_rollout_line_reader_once(path).await {
+                Ok(reader) => Ok(reader),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    open_rollout_line_reader_alternate(path).await
+                }
+                Err(err) => Err(err),
+            }
         }
         Err(err) => Err(err),
     }
@@ -209,7 +217,7 @@ pub struct RolloutLineReader {
 
 enum RolloutLineReaderInner {
     Plain(tokio::io::Lines<tokio::io::BufReader<tokio::fs::File>>),
-    Memory(std::io::Lines<std::io::Cursor<String>>),
+    Blocking(Option<BlockingLineReader>),
 }
 
 impl RolloutLineReader {
@@ -217,10 +225,22 @@ impl RolloutLineReader {
     pub async fn next_line(&mut self) -> io::Result<Option<String>> {
         match &mut self.inner {
             RolloutLineReaderInner::Plain(lines) => lines.next_line().await,
-            RolloutLineReaderInner::Memory(lines) => lines.next().transpose(),
+            RolloutLineReaderInner::Blocking(slot) => {
+                let Some(mut reader) = slot.take() else {
+                    return Err(io::Error::other("compressed rollout reader is busy"));
+                };
+                let (line, reader) =
+                    tokio::task::spawn_blocking(move || (reader.next().transpose(), reader))
+                        .await
+                        .map_err(io::Error::other)?;
+                *slot = Some(reader);
+                line
+            }
         }
     }
 }
+
+type BlockingLineReader = std::io::Lines<std::io::BufReader<Box<dyn Read + Send>>>;
 
 #[derive(Default)]
 struct CompressionStats {
@@ -385,7 +405,7 @@ fn compress_rollout_if_cold_blocking(path: &Path) -> io::Result<bool> {
         std::fs::remove_file(path)?;
         Ok(true)
     })();
-    if result.is_err() {
+    if !matches!(result, Ok(true)) {
         let _ = std::fs::remove_file(temp_path.as_path());
     }
     result
@@ -524,6 +544,16 @@ async fn cleanup_stale_temps_in_root(root: &Path) -> io::Result<()> {
                     .and_then(OsStr::to_str)
                     .is_some_and(|name| name.ends_with(TEMP_SUFFIX))
             {
+                let stale = entry
+                    .metadata()
+                    .await
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                    .is_some_and(|age| age >= TEMP_FILE_STALE_AFTER);
+                if !stale {
+                    continue;
+                }
                 match tokio::fs::remove_file(path.as_path()).await {
                     Ok(()) => {}
                     Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -584,20 +614,16 @@ async fn open_rollout_line_reader_alternate(path: &Path) -> io::Result<RolloutLi
 }
 
 async fn open_compressed_reader(path: PathBuf) -> io::Result<RolloutLineReader> {
-    let text = tokio::task::spawn_blocking(move || decode_zstd_to_string(path.as_path()))
-        .await
-        .map_err(io::Error::other)??;
-    Ok(RolloutLineReader {
-        inner: RolloutLineReaderInner::Memory(std::io::BufRead::lines(io::Cursor::new(text))),
+    let reader = tokio::task::spawn_blocking(move || {
+        let input = File::open(path.as_path())?;
+        let decoder = zstd::stream::read::Decoder::new(input)?;
+        Ok::<_, io::Error>(io::BufReader::new(Box::new(decoder) as Box<dyn Read + Send>).lines())
     })
-}
-
-fn decode_zstd_to_string(path: &Path) -> io::Result<String> {
-    let input = File::open(path)?;
-    let mut decoder = zstd::stream::read::Decoder::new(input)?;
-    let mut text = String::new();
-    decoder.read_to_string(&mut text)?;
-    Ok(text)
+    .await
+    .map_err(io::Error::other)??;
+    Ok(RolloutLineReader {
+        inner: RolloutLineReaderInner::Blocking(Some(reader)),
+    })
 }
 
 fn temp_path_for(path: &Path, operation: &str) -> PathBuf {

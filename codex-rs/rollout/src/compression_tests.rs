@@ -94,6 +94,10 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
 
     let stale_temp = active_path.with_file_name("rollout-stale.jsonl.zst.tmp");
     fs::write(&stale_temp, "stale temp")?;
+    set_old_mtime(&stale_temp)?;
+
+    let fresh_temp = active_path.with_file_name("rollout-fresh.jsonl.zst.tmp");
+    fs::write(&fresh_temp, "fresh temp")?;
 
     run_rollout_compression_worker(home.path().to_path_buf()).await?;
 
@@ -104,6 +108,7 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     assert!(fresh_path.exists());
     assert!(!compressed_rollout_path(&fresh_path).exists());
     assert!(!stale_temp.exists());
+    assert!(fresh_temp.exists());
     Ok(())
 }
 
@@ -183,6 +188,23 @@ async fn find_thread_path_by_id_handles_compressed_rollout_filenames() -> anyhow
     );
     assert_eq!(
         crate::find_thread_path_by_id_str(home.path(), "not-a-uuid", None).await?,
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_thread_path_by_id_ignores_compression_temp_matches() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(9);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let temp_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid).with_file_name(format!(
+        "rollout-2025-01-03T12-00-00-{uuid}.jsonl.zst.compress.1.0.tmp"
+    ));
+    write_rollout(&temp_path, thread_id, "temporary file should not resolve")?;
+
+    assert_eq!(
+        crate::find_thread_path_by_id_str(home.path(), &uuid.to_string(), None).await?,
         None
     );
     Ok(())
