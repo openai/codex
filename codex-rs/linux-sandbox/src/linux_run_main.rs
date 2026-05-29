@@ -21,6 +21,7 @@ use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::BwrapProcessLifetime;
 use crate::bwrap::create_bwrap_command_args;
+use crate::bwrap_output_relay::BwrapOutputRelay;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
@@ -326,6 +327,7 @@ fn ensure_legacy_landlock_mode_supports_policy(
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
@@ -369,7 +371,7 @@ fn run_bwrap_with_proc_fallback(
     )
     .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
     apply_inner_command_argv0(&mut bwrap_args.args);
-    run_or_exec_bwrap(bwrap_args);
+    run_or_exec_bwrap(bwrap_args, process_lifetime);
 }
 
 fn bwrap_network_mode(
@@ -500,16 +502,23 @@ fn resolve_true_command() -> String {
     "true".to_string()
 }
 
-fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
-    if bwrap_args.synthetic_mount_targets.is_empty()
+fn run_or_exec_bwrap(
+    bwrap_args: crate::bwrap::BwrapArgs,
+    process_lifetime: BwrapProcessLifetime,
+) -> ! {
+    if process_lifetime == BwrapProcessLifetime::TerminateWithParent
+        && bwrap_args.synthetic_mount_targets.is_empty()
         && bwrap_args.protected_create_targets.is_empty()
     {
         exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
     }
-    run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args);
+    run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args, process_lifetime);
 }
 
-fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
+fn run_bwrap_in_child_with_synthetic_mount_cleanup(
+    bwrap_args: crate::bwrap::BwrapArgs,
+    process_lifetime: BwrapProcessLifetime,
+) -> ! {
     let crate::bwrap::BwrapArgs {
         args,
         preserved_files,
@@ -521,6 +530,8 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     let protected_create_registrations =
         register_protected_create_targets(&protected_create_targets);
     let exec_start_pipe = create_exec_start_pipe(!protected_create_targets.is_empty());
+    let output_relay = (process_lifetime == BwrapProcessLifetime::AllowDetachedChildren)
+        .then(BwrapOutputRelay::new);
     let parent_pid = unsafe { libc::getpid() };
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -531,6 +542,9 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     if pid == 0 {
         reset_forwarded_signal_handlers_to_default();
         setup_signal_mask.restore();
+        if let Some(output_relay) = output_relay {
+            output_relay.redirect_child_output();
+        }
         let setpgid_res = unsafe { libc::setpgid(0, 0) };
         if setpgid_res < 0 {
             let err = std::io::Error::last_os_error();
@@ -546,7 +560,10 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     let signal_forwarders = install_bwrap_signal_forwarders(pid);
     release_child_exec_start(exec_start_pipe[1]);
     setup_signal_mask.restore();
-    let status = wait_for_bwrap_child(pid);
+    let status = match output_relay {
+        Some(output_relay) => output_relay.forward_until_child_exit(pid),
+        None => wait_for_bwrap_child(pid),
+    };
     let cleanup_signal_mask = ForwardedSignalMask::block();
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
     let protected_create_monitor_violation = protected_create_monitor
