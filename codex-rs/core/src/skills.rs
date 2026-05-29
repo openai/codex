@@ -43,7 +43,25 @@ pub(crate) fn skills_load_input_from_config(
     effective_skill_roots: Vec<PluginSkillRoot>,
 ) -> SkillsLoadInput {
     SkillsLoadInput::new(
-        env_path,
+        vec![codex_core_skills::loader::SkillEnvironment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            path: env_path,
+        }],
+        local_file_system,
+        effective_skill_roots,
+        config.config_layer_stack.clone(),
+        config.bundled_skills_enabled(),
+    )
+}
+
+pub(crate) fn skills_load_input_from_environments(
+    config: &Config,
+    env_paths: Vec<codex_core_skills::loader::SkillEnvironment>,
+    local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
+    effective_skill_roots: Vec<PluginSkillRoot>,
+) -> SkillsLoadInput {
+    SkillsLoadInput::new(
+        env_paths,
         local_file_system,
         effective_skill_roots,
         config.config_layer_stack.clone(),

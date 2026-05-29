@@ -1,6 +1,5 @@
 use crate::model::SkillDependencies;
 use crate::model::SkillError;
-use crate::model::SkillFileSystemsByPath;
 use crate::model::SkillInterface;
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
@@ -152,9 +151,16 @@ impl Error for SkillParseError {}
 
 pub struct SkillRoot {
     pub path: EnvironmentPathRef,
+    pub environment_id: String,
     pub scope: SkillScope,
     pub plugin_id: Option<String>,
     pub plugin_root: Option<EnvironmentPathRef>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SkillEnvironment {
+    pub environment_id: String,
+    pub path: EnvironmentPathRef,
 }
 
 pub async fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
@@ -162,17 +168,15 @@ where
     I: IntoIterator<Item = SkillRoot>,
 {
     let mut outcome = SkillLoadOutcome::default();
-    let mut skill_roots: Vec<AbsolutePathBuf> = Vec::new();
-    let mut skill_root_by_path: HashMap<AbsolutePathBuf, AbsolutePathBuf> = HashMap::new();
-    let mut file_systems_by_skill_path: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>> =
-        HashMap::new();
+    let mut skill_roots: Vec<EnvironmentPathRef> = Vec::new();
+    let mut skill_root_by_path: HashMap<EnvironmentPathRef, EnvironmentPathRef> = HashMap::new();
     for root in roots {
         let root_path = canonicalize_for_skill_identity(root.path.path());
         let root_path_ref = root.path.with_path(root_path.clone());
-        let fs = root_path_ref.file_system();
         let skills_before_root = outcome.skills.len();
         discover_skills_under_root(
             &root_path_ref,
+            &root.environment_id,
             root.scope,
             root.plugin_id.as_deref(),
             root.plugin_root.as_ref(),
@@ -180,34 +184,29 @@ where
         )
         .await;
         for skill in &outcome.skills[skills_before_root..] {
-            if !skill_roots.contains(&root_path) {
-                skill_roots.push(root_path.clone());
+            if !skill_roots.contains(&root_path_ref) {
+                skill_roots.push(root_path_ref.clone());
             }
             skill_root_by_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| root_path.clone());
-            file_systems_by_skill_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| Arc::clone(&fs));
+                .entry(skill.source_path.clone())
+                .or_insert_with(|| root_path_ref.clone());
         }
     }
 
-    let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
+    let mut seen: HashSet<EnvironmentPathRef> = HashSet::new();
     outcome
         .skills
-        .retain(|skill| seen.insert(skill.path_to_skills_md.clone()));
-    let retained_skill_paths: HashSet<AbsolutePathBuf> = outcome
+        .retain(|skill| seen.insert(skill.source_path.clone()));
+    let retained_skill_paths: HashSet<EnvironmentPathRef> = outcome
         .skills
         .iter()
-        .map(|skill| skill.path_to_skills_md.clone())
+        .map(|skill| skill.source_path.clone())
         .collect();
     skill_root_by_path.retain(|path, _| retained_skill_paths.contains(path));
-    let used_roots: HashSet<AbsolutePathBuf> = skill_root_by_path.values().cloned().collect();
+    let used_roots: HashSet<EnvironmentPathRef> = skill_root_by_path.values().cloned().collect();
     skill_roots.retain(|root| used_roots.contains(root));
-    file_systems_by_skill_path.retain(|path, _| retained_skill_paths.contains(path));
     outcome.skill_roots = skill_roots;
     outcome.skill_root_by_path = Arc::new(skill_root_by_path);
-    outcome.file_systems_by_skill_path = SkillFileSystemsByPath::new(file_systems_by_skill_path);
 
     fn scope_rank(scope: SkillScope) -> u8 {
         // Higher-priority scopes first (matches root scan order for dedupe).
@@ -230,7 +229,7 @@ where
 }
 
 pub(crate) async fn skill_roots(
-    env_path: &EnvironmentPathRef,
+    env_paths: &[SkillEnvironment],
     local_file_system: Option<&Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     plugin_skill_roots: Vec<PluginSkillRoot>,
@@ -242,7 +241,7 @@ pub(crate) async fn skill_roots(
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     skill_roots_with_home_dir(
-        env_path,
+        env_paths,
         local_file_system,
         config_layer_stack,
         home_dir.as_ref(),
@@ -253,7 +252,7 @@ pub(crate) async fn skill_roots(
 }
 
 async fn skill_roots_with_home_dir(
-    env_path: &EnvironmentPathRef,
+    env_paths: &[SkillEnvironment],
     local_file_system: Option<&Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     home_dir: Option<&AbsolutePathBuf>,
@@ -262,7 +261,10 @@ async fn skill_roots_with_home_dir(
 ) -> Vec<SkillRoot> {
     // Assemble one precedence-ordered root list from the two authorities above, then dedupe before
     // any reads happen so downstream loading stays oblivious to local-vs-selected-env routing.
-    let mut roots = repo_config_skill_roots(env_path, config_layer_stack);
+    let mut roots = env_paths
+        .iter()
+        .flat_map(|env_path| repo_config_skill_roots(env_path, config_layer_stack))
+        .collect::<Vec<_>>();
     roots.extend(local_skill_roots(
         local_file_system,
         config_layer_stack,
@@ -270,7 +272,9 @@ async fn skill_roots_with_home_dir(
         plugin_skill_roots,
         extra_skill_roots,
     ));
-    roots.extend(repo_agents_skill_roots(env_path, config_layer_stack).await);
+    for env_path in env_paths {
+        roots.extend(repo_agents_skill_roots(env_path, config_layer_stack).await);
+    }
     dedupe_skill_roots_by_path(&mut roots);
     roots
 }
@@ -311,6 +315,7 @@ fn local_skill_roots(
                         Arc::clone(local_file_system),
                         config_folder.join(SKILLS_DIR_NAME),
                     ),
+                    environment_id: "local".to_string(),
                     scope: SkillScope::User,
                     plugin_id: None,
                     plugin_root: None,
@@ -323,6 +328,7 @@ fn local_skill_roots(
                             Arc::clone(local_file_system),
                             home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
                         ),
+                        environment_id: "local".to_string(),
                         scope: SkillScope::User,
                         plugin_id: None,
                         plugin_root: None,
@@ -336,6 +342,7 @@ fn local_skill_roots(
                         Arc::clone(local_file_system),
                         system_cache_root_dir(&config_folder),
                     ),
+                    environment_id: "local".to_string(),
                     scope: SkillScope::System,
                     plugin_id: None,
                     plugin_root: None,
@@ -349,6 +356,7 @@ fn local_skill_roots(
                         Arc::clone(local_file_system),
                         config_folder.join(SKILLS_DIR_NAME),
                     ),
+                    environment_id: "local".to_string(),
                     scope: SkillScope::Admin,
                     plugin_id: None,
                     plugin_root: None,
@@ -365,6 +373,7 @@ fn local_skill_roots(
         // Plugin discovery is currently local-only; multi-env plugin skill loading should be an
         // explicit future change rather than inheriting the selected repo environment here.
         path: EnvironmentPathRef::new(Arc::clone(local_file_system), root.path),
+        environment_id: "local".to_string(),
         scope: SkillScope::User,
         plugin_id: Some(root.plugin_id),
         plugin_root: Some(EnvironmentPathRef::new(
@@ -383,7 +392,7 @@ fn local_skill_roots(
 }
 
 fn repo_config_skill_roots(
-    env_path: &EnvironmentPathRef,
+    env_path: &SkillEnvironment,
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
     // Project config layers describe workspace-local `.codex/skills` directories. Their absolute
@@ -400,7 +409,8 @@ fn repo_config_skill_roots(
                 SkillRoot {
                     // Project and repo `.agents` roots belong to the selected environment because
                     // their absolute paths are only meaningful within that environment's cwd/repo.
-                    path: env_path.with_path(config_folder.join(SKILLS_DIR_NAME)),
+                    path: env_path.path.with_path(config_folder.join(SKILLS_DIR_NAME)),
+                    environment_id: env_path.environment_id.clone(),
                     scope: SkillScope::Repo,
                     plugin_id: None,
                     plugin_root: None,
@@ -417,20 +427,23 @@ fn repo_config_skill_roots(
 }
 
 async fn repo_agents_skill_roots(
-    env_path: &EnvironmentPathRef,
+    env_path: &SkillEnvironment,
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
     // Discover repo `.agents/skills` folders by walking from the selected environment's project
     // root to its cwd; this must never consult the local filesystem for remote workspaces.
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
-    let project_root = find_project_root(env_path, &project_root_markers).await;
-    let dirs = dirs_between_project_root_and_cwd(env_path.path(), project_root.path());
+    let project_root = find_project_root(&env_path.path, &project_root_markers).await;
+    let dirs = dirs_between_project_root_and_cwd(env_path.path.path(), project_root.path());
     let mut roots = Vec::new();
     for dir in dirs {
-        let agents_skills = env_path.with_path(dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME));
+        let agents_skills = env_path
+            .path
+            .with_path(dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME));
         match agents_skills.metadata(/*sandbox*/ None).await {
             Ok(metadata) if metadata.is_directory => roots.push(SkillRoot {
                 path: agents_skills,
+                environment_id: env_path.environment_id.clone(),
                 scope: SkillScope::Repo,
                 plugin_id: None,
                 plugin_root: None,
@@ -529,6 +542,7 @@ fn canonicalize_for_skill_identity(path: &AbsolutePathBuf) -> AbsolutePathBuf {
 
 async fn discover_skills_under_root(
     root: &EnvironmentPathRef,
+    environment_id: &str,
     scope: SkillScope,
     plugin_id: Option<&str>,
     plugin_root: Option<&EnvironmentPathRef>,
@@ -656,7 +670,15 @@ async fn discover_skills_under_root(
             }
 
             if metadata.is_file && file_name == SKILLS_FILENAME {
-                match parse_skill_file(&path, scope, plugin_id, plugin_root.as_ref()).await {
+                match parse_skill_file(
+                    &path,
+                    environment_id,
+                    scope,
+                    plugin_id,
+                    plugin_root.as_ref(),
+                )
+                .await
+                {
                     Ok(skill) => {
                         outcome.skills.push(skill);
                     }
@@ -684,6 +706,7 @@ async fn discover_skills_under_root(
 
 async fn parse_skill_file(
     skill_path: &EnvironmentPathRef,
+    environment_id: &str,
     scope: SkillScope,
     plugin_id: Option<&str>,
     plugin_root: Option<&EnvironmentPathRef>,
@@ -742,7 +765,9 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-        path_to_skills_md: resolved_path,
+        path_to_skills_md: resolved_path.clone(),
+        source_path: skill_path.with_path(resolved_path),
+        environment_id: environment_id.to_string(),
         scope,
         plugin_id: plugin_id.map(str::to_string),
     })
@@ -1135,7 +1160,10 @@ pub(crate) async fn skill_roots_from_layer_stack(
     let path_ref = EnvironmentPathRef::new(fs, cwd.clone());
     let local_file_system = path_ref.file_system();
     skill_roots_with_home_dir(
-        &path_ref,
+        &[SkillEnvironment {
+            environment_id: "local".to_string(),
+            path: path_ref,
+        }],
         Some(&local_file_system),
         config_layer_stack,
         home_dir,

@@ -2744,6 +2744,11 @@ impl Session {
             let available_skills = build_available_skills(
                 &turn_context.turn_skills.outcome,
                 default_skill_metadata_budget(turn_context.model_info.context_window),
+                if turn_context.environments.turn_environments.len() > 1 {
+                    crate::skills::render::SkillEnvironmentRender::Include
+                } else {
+                    crate::skills::render::SkillEnvironmentRender::Omit
+                },
                 SkillRenderSideEffects::ThreadStart {
                     session_telemetry: &self.services.session_telemetry,
                 },

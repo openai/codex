@@ -59,7 +59,11 @@ pub const SKILLS_HOW_TO_USE_WITH_ALIASES: &str = r###"- Discovery: The list abov
   - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
 - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###;
 
-pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[String]) -> String {
+pub fn render_available_skills_body(
+    skill_root_lines: &[String],
+    skill_lines: &[String],
+    environment_render: SkillEnvironmentRender,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push("## Skills".to_string());
     if skill_root_lines.is_empty() {
@@ -79,6 +83,9 @@ pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[
         SKILLS_HOW_TO_USE_WITH_ALIASES
     };
     lines.push(how_to_use.to_string());
+    if matches!(environment_render, SkillEnvironmentRender::Include) {
+        lines.push("- Environment selection: When a skill line includes `env`, open that skill and resolve relative paths in that environment.".to_string());
+    }
 
     format!("\n{}\n", lines.join("\n"))
 }
@@ -136,8 +143,15 @@ pub enum SkillRenderSideEffects<'a> {
 pub struct AvailableSkills {
     pub skill_root_lines: Vec<String>,
     pub skill_lines: Vec<String>,
+    pub environment_render: SkillEnvironmentRender,
     pub report: SkillRenderReport,
     pub warning_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillEnvironmentRender {
+    Omit,
+    Include,
 }
 
 pub fn default_skill_metadata_budget(context_window: Option<i64>) -> SkillMetadataBudget {
@@ -160,6 +174,7 @@ pub fn default_skill_metadata_budget(context_window: Option<i64>) -> SkillMetada
 pub fn build_available_skills(
     outcome: &SkillLoadOutcome,
     budget: SkillMetadataBudget,
+    environment_render: SkillEnvironmentRender,
     side_effects: SkillRenderSideEffects<'_>,
 ) -> Option<AvailableSkills> {
     let skills = outcome.allowed_skills_for_implicit_invocation();
@@ -174,18 +189,21 @@ pub fn build_available_skills(
         return None;
     }
 
-    let absolute_lines = ordered_absolute_skill_lines(&skills);
+    let absolute_lines = ordered_absolute_skill_lines(&skills, environment_render);
     let absolute = build_available_skills_from_lines(
         absolute_lines,
         skills.len(),
         budget,
         SkillPathAliases::default(),
+        environment_render,
     )?;
 
     let selected =
         if absolute.report.omitted_count == 0 && absolute.report.truncated_description_chars == 0 {
             absolute
-        } else if let Some(aliased) = build_aliased_available_skills(outcome, &skills, budget) {
+        } else if let Some(aliased) =
+            build_aliased_available_skills(outcome, &skills, budget, environment_render)
+        {
             if aliased_render_is_better(&aliased, &absolute, budget) {
                 aliased
             } else {
@@ -204,6 +222,7 @@ fn build_available_skills_from_lines(
     total_count: usize,
     budget: SkillMetadataBudget,
     path_aliases: SkillPathAliases,
+    environment_render: SkillEnvironmentRender,
 ) -> Option<AvailableSkills> {
     if total_count == 0 {
         return None;
@@ -244,6 +263,7 @@ fn build_available_skills_from_lines(
     let available = AvailableSkills {
         skill_root_lines: path_aliases.skill_root_lines,
         skill_lines,
+        environment_render,
         report,
         warning_message,
     };
@@ -448,6 +468,7 @@ struct SkillLine<'a> {
     name: &'a str,
     description: &'a str,
     path: String,
+    environment_id: Option<&'a str>,
 }
 
 struct RenderedSkillLine {
@@ -477,18 +498,25 @@ fn sum_description_truncation(rendered: &[RenderedSkillLine]) -> (usize, usize) 
 }
 
 impl<'a> SkillLine<'a> {
-    fn new(skill: &'a SkillMetadata) -> Self {
+    fn new(skill: &'a SkillMetadata, environment_render: SkillEnvironmentRender) -> Self {
         Self::with_path(
             skill,
             skill.path_to_skills_md.to_string_lossy().replace('\\', "/"),
+            environment_render,
         )
     }
 
-    fn with_path(skill: &'a SkillMetadata, path: String) -> Self {
+    fn with_path(
+        skill: &'a SkillMetadata,
+        path: String,
+        environment_render: SkillEnvironmentRender,
+    ) -> Self {
         Self {
             name: skill.name.as_str(),
             description: skill.description.as_str(),
             path,
+            environment_id: matches!(environment_render, SkillEnvironmentRender::Include)
+                .then_some(skill.environment_id.as_str()),
         }
     }
 
@@ -521,19 +549,24 @@ impl<'a> SkillLine<'a> {
 
     fn render_with_description_chars(&self, description_chars: usize) -> String {
         if description_chars == 0 {
-            format!("- {}: (file: {})", self.name, self.path)
+            self.render_with_description("")
         } else {
             let end = self.rendered_description_prefix_len(description_chars);
             let description = &self.description[..end];
-            format!("- {}: {} (file: {})", self.name, description, self.path)
+            self.render_with_description(description)
         }
     }
 
     fn render_with_description(&self, description: &str) -> String {
-        if description.is_empty() {
-            format!("- {}: (file: {})", self.name, self.path)
+        let location = if let Some(environment_id) = self.environment_id {
+            format!("env: {environment_id}, file: {}", self.path)
         } else {
-            format!("- {}: {} (file: {})", self.name, description, self.path)
+            format!("file: {}", self.path)
+        };
+        if description.is_empty() {
+            format!("- {}: ({location})", self.name)
+        } else {
+            format!("- {}: {} ({location})", self.name, description)
         }
     }
 }
@@ -639,6 +672,7 @@ fn build_aliased_available_skills(
     outcome: &SkillLoadOutcome,
     skills: &[SkillMetadata],
     budget: SkillMetadataBudget,
+    environment_render: SkillEnvironmentRender,
 ) -> Option<AvailableSkills> {
     let plan = build_alias_plan(outcome, skills, budget)?;
     if plan.table_cost >= budget.limit() {
@@ -653,9 +687,21 @@ fn build_aliased_available_skills(
     let ordered_skills = ordered_skills_for_budget(skills);
     let skill_lines = ordered_skills
         .into_iter()
-        .map(|skill| SkillLine::with_path(skill, render_skill_path_with_aliases(skill, &plan)))
+        .map(|skill| {
+            SkillLine::with_path(
+                skill,
+                render_skill_path_with_aliases(skill, &plan),
+                environment_render,
+            )
+        })
         .collect::<Vec<_>>();
-    build_available_skills_from_lines(skill_lines, skills.len(), adjusted_budget, plan.aliases)
+    build_available_skills_from_lines(
+        skill_lines,
+        skills.len(),
+        adjusted_budget,
+        plan.aliases,
+        environment_render,
+    )
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -665,8 +711,9 @@ struct SkillPathAliases {
 
 struct AliasPlan {
     aliases: SkillPathAliases,
-    root_aliases: HashMap<AbsolutePathBuf, String>,
-    alias_root_by_path: HashMap<AbsolutePathBuf, AbsolutePathBuf>,
+    root_aliases: HashMap<codex_exec_server::EnvironmentPathRef, String>,
+    alias_root_by_path:
+        HashMap<codex_exec_server::EnvironmentPathRef, codex_exec_server::EnvironmentPathRef>,
     table_cost: usize,
 }
 
@@ -677,7 +724,7 @@ fn build_alias_plan(
 ) -> Option<AliasPlan> {
     let skill_paths = skills
         .iter()
-        .map(|skill| skill.path_to_skills_md.clone())
+        .map(|skill| skill.source_path.clone())
         .collect::<HashSet<_>>();
     let skill_root_by_path = outcome
         .skill_root_by_path
@@ -736,9 +783,12 @@ fn build_alias_plan(
 }
 
 fn ordered_alias_roots(
-    used_roots: &[AbsolutePathBuf],
-    alias_root_by_skill_root: &HashMap<AbsolutePathBuf, AbsolutePathBuf>,
-) -> Option<Vec<AbsolutePathBuf>> {
+    used_roots: &[codex_exec_server::EnvironmentPathRef],
+    alias_root_by_skill_root: &HashMap<
+        codex_exec_server::EnvironmentPathRef,
+        codex_exec_server::EnvironmentPathRef,
+    >,
+) -> Option<Vec<codex_exec_server::EnvironmentPathRef>> {
     let mut seen = HashSet::new();
     let mut alias_roots = Vec::new();
     for root in used_roots {
@@ -751,10 +801,10 @@ fn ordered_alias_roots(
 }
 
 fn alias_root_for_skill_root(
-    root: &AbsolutePathBuf,
+    root: &codex_exec_server::EnvironmentPathRef,
     plugin_version_skill_counts: &HashMap<AbsolutePathBuf, usize>,
-) -> AbsolutePathBuf {
-    let Some(plugin_version_base) = plugin_version_base(root.as_path()) else {
+) -> codex_exec_server::EnvironmentPathRef {
+    let Some(plugin_version_base) = plugin_version_base(root.path().as_path()) else {
         return root.clone();
     };
     let skill_count = plugin_version_skill_counts
@@ -764,16 +814,18 @@ fn alias_root_for_skill_root(
     if skill_count > 1 {
         root.clone()
     } else {
-        plugin_marketplace_base(root.as_path()).unwrap_or_else(|| root.clone())
+        root.with_path(
+            plugin_marketplace_base(root.path().as_path()).unwrap_or_else(|| root.path().clone()),
+        )
     }
 }
 
 fn plugin_version_skill_counts_for_skill_roots<'a>(
-    skill_roots: impl Iterator<Item = &'a AbsolutePathBuf>,
+    skill_roots: impl Iterator<Item = &'a codex_exec_server::EnvironmentPathRef>,
 ) -> HashMap<AbsolutePathBuf, usize> {
     let mut counts = HashMap::new();
     for root in skill_roots {
-        if let Some(plugin_version_base) = plugin_version_base(root.as_path()) {
+        if let Some(plugin_version_base) = plugin_version_base(root.path().as_path()) {
             let count = counts.entry(plugin_version_base).or_insert(0usize);
             *count = count.saturating_add(1);
         }
@@ -786,19 +838,24 @@ fn aliased_metadata_overhead_cost(
     skill_root_lines: &[String],
 ) -> usize {
     let empty_skill_lines: &[String] = &[];
-    let absolute_body = render_available_skills_body(&[], empty_skill_lines);
-    let aliased_body = render_available_skills_body(skill_root_lines, empty_skill_lines);
+    let absolute_body =
+        render_available_skills_body(&[], empty_skill_lines, SkillEnvironmentRender::Omit);
+    let aliased_body = render_available_skills_body(
+        skill_root_lines,
+        empty_skill_lines,
+        SkillEnvironmentRender::Omit,
+    );
     budget
         .cost(&aliased_body)
         .saturating_sub(budget.cost(&absolute_body))
 }
 
-fn build_skill_root_lines(roots: &[AbsolutePathBuf]) -> Vec<String> {
+fn build_skill_root_lines(roots: &[codex_exec_server::EnvironmentPathRef]) -> Vec<String> {
     roots
         .iter()
         .enumerate()
         .map(|(index, root)| {
-            let root_str = root.to_string_lossy().replace('\\', "/");
+            let root_str = root.path().to_string_lossy().replace('\\', "/");
             format!("- `r{index}` = `{root_str}`")
         })
         .collect()
@@ -840,12 +897,12 @@ fn render_skill_path_with_aliases(skill: &SkillMetadata, plan: &AliasPlan) -> St
 }
 
 fn outcome_relative_skill_path(skill: &SkillMetadata, plan: &AliasPlan) -> Option<String> {
-    let alias_root = plan.alias_root_by_path.get(&skill.path_to_skills_md)?;
+    let alias_root = plan.alias_root_by_path.get(&skill.source_path)?;
     let alias = plan.root_aliases.get(alias_root)?;
     let relative_path = skill
         .path_to_skills_md
         .as_path()
-        .strip_prefix(alias_root.as_path())
+        .strip_prefix(alias_root.path().as_path())
         .ok()?;
     let relative_path = relative_path.to_string_lossy().replace('\\', "/");
     Some(format!("{alias}/{relative_path}"))
@@ -875,10 +932,13 @@ fn available_skills_cost(budget: SkillMetadataBudget, available: &AvailableSkill
     metadata_cost.saturating_add(lines_cost(budget, &available.skill_lines))
 }
 
-fn ordered_absolute_skill_lines(skills: &[SkillMetadata]) -> Vec<SkillLine<'_>> {
+fn ordered_absolute_skill_lines(
+    skills: &[SkillMetadata],
+    environment_render: SkillEnvironmentRender,
+) -> Vec<SkillLine<'_>> {
     ordered_skills_for_budget(skills)
         .into_iter()
-        .map(SkillLine::new)
+        .map(|skill| SkillLine::new(skill, environment_render))
         .collect()
 }
 
@@ -920,7 +980,13 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
+            path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md"))
+                .abs()
+                .clone(),
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
+            ),
+            environment_id: "local".to_string(),
             scope,
             plugin_id: None,
         }
@@ -937,7 +1003,7 @@ mod tests {
     }
 
     fn expected_skill_line(skill: &SkillMetadata, description: &str) -> String {
-        SkillLine::new(skill).render_with_description(description)
+        SkillLine::new(skill, SkillEnvironmentRender::Omit).render_with_description(description)
     }
 
     fn normalized_path(path: &AbsolutePathBuf) -> String {
@@ -948,6 +1014,10 @@ mod tests {
         skills: Vec<SkillMetadata>,
         roots: Vec<AbsolutePathBuf>,
     ) -> SkillLoadOutcome {
+        let roots = roots
+            .into_iter()
+            .map(codex_exec_server::EnvironmentPathRef::local)
+            .collect::<Vec<_>>();
         let skill_root_by_path = skills
             .iter()
             .filter_map(|skill| {
@@ -957,9 +1027,9 @@ mod tests {
                         skill
                             .path_to_skills_md
                             .as_path()
-                            .starts_with(root.as_path())
+                            .starts_with(root.path().as_path())
                     })
-                    .map(|root| (skill.path_to_skills_md.clone(), root.clone()))
+                    .map(|root| (skill.source_path.clone(), root.clone()))
             })
             .collect::<HashMap<_, _>>();
         SkillLoadOutcome {
@@ -975,10 +1045,11 @@ mod tests {
         budget: SkillMetadataBudget,
     ) -> Option<AvailableSkills> {
         build_available_skills_from_lines(
-            ordered_absolute_skill_lines(skills),
+            ordered_absolute_skill_lines(skills, SkillEnvironmentRender::Omit),
             skills.len(),
             budget,
             SkillPathAliases::default(),
+            SkillEnvironmentRender::Omit,
         )
     }
 
@@ -1010,9 +1081,10 @@ mod tests {
     fn budgeted_rendering_truncates_descriptions_equally_before_omitting_skills() {
         let alpha = make_skill_with_description("alpha-skill", SkillScope::Repo, "abcdef");
         let beta = make_skill_with_description("beta-skill", SkillScope::Repo, "uvwxyz");
-        let minimum_cost = SkillLine::new(&alpha)
+        let minimum_cost = SkillLine::new(&alpha, SkillEnvironmentRender::Omit)
             .minimum_cost(SkillMetadataBudget::Characters(usize::MAX))
-            + SkillLine::new(&beta).minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
+            + SkillLine::new(&beta, SkillEnvironmentRender::Omit)
+                .minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
         let budget = SkillMetadataBudget::Characters(minimum_cost + 6);
 
         let rendered = build_available_skills_from_metadata(&[beta.clone(), alpha.clone()], budget)
@@ -1035,9 +1107,10 @@ mod tests {
     fn budgeted_rendering_does_not_warn_when_average_description_truncation_is_within_threshold() {
         let alpha = make_skill_with_description("alpha-skill", SkillScope::Repo, "abcdefghij");
         let beta = make_skill_with_description("beta-skill", SkillScope::Repo, "uvwxyzabcd");
-        let minimum_cost = SkillLine::new(&alpha)
+        let minimum_cost = SkillLine::new(&alpha, SkillEnvironmentRender::Omit)
             .minimum_cost(SkillMetadataBudget::Characters(usize::MAX))
-            + SkillLine::new(&beta).minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
+            + SkillLine::new(&beta, SkillEnvironmentRender::Omit)
+                .minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
         let budget = SkillMetadataBudget::Characters(minimum_cost + 6);
 
         let rendered = build_available_skills_from_metadata(&[alpha, beta], budget)
@@ -1056,9 +1129,9 @@ mod tests {
         let long_skill =
             make_skill_with_description("long-skill", SkillScope::Repo, &long_description);
         let empty_skill = make_skill_with_description("empty-skill", SkillScope::Repo, "");
-        let minimum_cost = SkillLine::new(&long_skill)
+        let minimum_cost = SkillLine::new(&long_skill, SkillEnvironmentRender::Omit)
             .minimum_cost(SkillMetadataBudget::Characters(usize::MAX))
-            + SkillLine::new(&empty_skill)
+            + SkillLine::new(&empty_skill, SkillEnvironmentRender::Omit)
                 .minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
         let budget = SkillMetadataBudget::Characters(minimum_cost + 49);
 
@@ -1084,8 +1157,8 @@ mod tests {
         let long_description = "a".repeat(1000);
         let long_skill =
             make_skill_with_description("long-skill", SkillScope::Repo, &long_description);
-        let minimum_cost =
-            SkillLine::new(&long_skill).minimum_cost(SkillMetadataBudget::Tokens(usize::MAX));
+        let minimum_cost = SkillLine::new(&long_skill, SkillEnvironmentRender::Omit)
+            .minimum_cost(SkillMetadataBudget::Tokens(usize::MAX));
         let budget = SkillMetadataBudget::Tokens(minimum_cost + 1);
 
         let rendered = build_available_skills_from_metadata(&[long_skill], budget)
@@ -1101,9 +1174,10 @@ mod tests {
     fn budgeted_rendering_redistributes_unused_description_budget() {
         let short = make_skill_with_description("short-skill", SkillScope::Repo, "x");
         let long = make_skill_with_description("long-skill", SkillScope::Repo, "abcdefghi");
-        let minimum_cost = SkillLine::new(&short)
+        let minimum_cost = SkillLine::new(&short, SkillEnvironmentRender::Omit)
             .minimum_cost(SkillMetadataBudget::Characters(usize::MAX))
-            + SkillLine::new(&long).minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
+            + SkillLine::new(&long, SkillEnvironmentRender::Omit)
+                .minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
         let budget = SkillMetadataBudget::Characters(minimum_cost + 11);
 
         let rendered = build_available_skills_from_metadata(&[short.clone(), long.clone()], budget)
@@ -1127,10 +1201,14 @@ mod tests {
         let user = make_skill("user-skill", SkillScope::User);
         let repo = make_skill("repo-skill", SkillScope::Repo);
         let admin = make_skill("admin-skill", SkillScope::Admin);
-        let system_cost = SkillMetadataBudget::Characters(usize::MAX)
-            .cost(&format!("{}\n", SkillLine::new(&system).render_minimum()));
-        let admin_cost = SkillMetadataBudget::Characters(usize::MAX)
-            .cost(&format!("{}\n", SkillLine::new(&admin).render_minimum()));
+        let system_cost = SkillMetadataBudget::Characters(usize::MAX).cost(&format!(
+            "{}\n",
+            SkillLine::new(&system, SkillEnvironmentRender::Omit).render_minimum()
+        ));
+        let admin_cost = SkillMetadataBudget::Characters(usize::MAX).cost(&format!(
+            "{}\n",
+            SkillLine::new(&admin, SkillEnvironmentRender::Omit).render_minimum()
+        ));
         let budget = SkillMetadataBudget::Characters(system_cost + admin_cost);
 
         let rendered = build_available_skills_from_metadata(&[system, user, repo, admin], budget)
@@ -1158,8 +1236,10 @@ mod tests {
         let mut oversized = make_skill("oversized-system-skill", SkillScope::System);
         oversized.description = "desc ".repeat(100);
         let repo = make_skill("repo-skill", SkillScope::Repo);
-        let repo_cost = SkillMetadataBudget::Characters(usize::MAX)
-            .cost(&format!("{}\n", SkillLine::new(&repo).render_full()));
+        let repo_cost = SkillMetadataBudget::Characters(usize::MAX).cost(&format!(
+            "{}\n",
+            SkillLine::new(&repo, SkillEnvironmentRender::Omit).render_full()
+        ));
         let budget = SkillMetadataBudget::Characters(repo_cost);
 
         let rendered = build_available_skills_from_metadata(&[oversized, repo], budget)
@@ -1195,6 +1275,7 @@ mod tests {
         let rendered = build_available_skills(
             &outcome,
             SkillMetadataBudget::Characters(usize::MAX),
+            SkillEnvironmentRender::Omit,
             SkillRenderSideEffects::None,
         )
         .expect("skills should render");
@@ -1218,7 +1299,8 @@ mod tests {
         let outcome = outcome_with_roots(skills.clone(), vec![root]);
         let absolute_minimum = skills.iter().fold(0usize, |cost, skill| {
             cost.saturating_add(
-                SkillLine::new(skill).minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
+                SkillLine::new(skill, SkillEnvironmentRender::Omit)
+                    .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
             )
         });
         let plan = build_alias_plan(
@@ -1229,8 +1311,12 @@ mod tests {
         .expect("alias plan should build");
         let alias_minimum = skills.iter().fold(plan.table_cost, |cost, skill| {
             cost.saturating_add(
-                SkillLine::with_path(skill, render_skill_path_with_aliases(skill, &plan))
-                    .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
+                SkillLine::with_path(
+                    skill,
+                    render_skill_path_with_aliases(skill, &plan),
+                    SkillEnvironmentRender::Omit,
+                )
+                .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
             )
         });
         assert!(
@@ -1241,6 +1327,7 @@ mod tests {
         let rendered = build_available_skills(
             &outcome,
             SkillMetadataBudget::Characters(alias_minimum),
+            SkillEnvironmentRender::Omit,
             SkillRenderSideEffects::None,
         )
         .expect("skills should render");
@@ -1262,6 +1349,51 @@ mod tests {
         let rendered_text = rendered.skill_lines.join("\n");
         assert!(rendered_text.contains("r0/skill-0/SKILL.md"));
         assert!(rendered_text.contains("r0/skill-11/SKILL.md"));
+    }
+
+    #[test]
+    fn multi_environment_rendering_qualifies_absolute_and_aliased_skill_lines() {
+        let root = test_path_buf("/tmp/repo/.agents/skills").abs();
+        let mut skill = skill_with_path("gh-fix-ci", &root.join("gh-fix-ci/SKILL.md"));
+        skill.environment_id = "devbox".to_string();
+        let outcome = outcome_with_roots(vec![skill.clone()], vec![root.clone()]);
+
+        let absolute = build_available_skills(
+            &outcome,
+            SkillMetadataBudget::Characters(usize::MAX),
+            SkillEnvironmentRender::Include,
+            SkillRenderSideEffects::None,
+        )
+        .expect("skills should render");
+        assert_eq!(
+            absolute.skill_lines,
+            vec![format!(
+                "- gh-fix-ci: desc (env: devbox, file: {})",
+                normalized_path(&skill.path_to_skills_md)
+            )]
+        );
+
+        let plan = build_alias_plan(
+            &outcome,
+            &[skill.clone()],
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .expect("alias plan should build");
+        let aliased = build_aliased_available_skills(
+            &outcome,
+            &[skill],
+            SkillMetadataBudget::Characters(usize::MAX),
+            SkillEnvironmentRender::Include,
+        )
+        .expect("skills should render");
+        assert_eq!(
+            plan.aliases.skill_root_lines,
+            vec!["- `r0` = `/tmp/repo/.agents/skills`"]
+        );
+        assert_eq!(
+            aliased.skill_lines,
+            vec!["- gh-fix-ci: desc (env: devbox, file: r0/gh-fix-ci/SKILL.md)"]
+        );
     }
 
     #[test]
@@ -1347,13 +1479,18 @@ mod tests {
         .expect("alias plan should build");
         let alpha_cost = SkillMetadataBudget::Characters(usize::MAX).cost(&format!(
             "{}\n",
-            SkillLine::with_path(&alpha, render_skill_path_with_aliases(&alpha, &plan))
-                .render_minimum()
+            SkillLine::with_path(
+                &alpha,
+                render_skill_path_with_aliases(&alpha, &plan),
+                SkillEnvironmentRender::Omit,
+            )
+            .render_minimum()
         ));
         let rendered = build_aliased_available_skills(
             &outcome,
             &[alpha, beta],
             SkillMetadataBudget::Characters(plan.table_cost + alpha_cost),
+            SkillEnvironmentRender::Omit,
         )
         .expect("skills should render");
 
@@ -1507,6 +1644,7 @@ mod tests {
     fn skill_with_path(name: &str, path: &AbsolutePathBuf) -> SkillMetadata {
         let mut skill = make_skill(name, SkillScope::User);
         skill.path_to_skills_md = path.clone();
+        skill.source_path = codex_exec_server::EnvironmentPathRef::local(path.clone());
         skill
     }
 }

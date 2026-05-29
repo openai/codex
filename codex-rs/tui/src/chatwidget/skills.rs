@@ -241,7 +241,9 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata
                     .collect(),
             }),
         policy: None,
-        path_to_skills_md: skill.path.clone(),
+        path_to_skills_md: skill.path.clone().clone(),
+        source_path: codex_exec_server::EnvironmentPathRef::local(skill.path.clone()),
+        environment_id: "local".to_string(),
         scope,
         plugin_id: None,
     })

@@ -653,6 +653,7 @@ pub async fn load_plugin_skills(
         .into_iter()
         .map(|path| SkillRoot {
             path: plugin_root.with_path(path),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: Some(plugin_id.as_key()),
             plugin_root: Some(plugin_root.clone()),

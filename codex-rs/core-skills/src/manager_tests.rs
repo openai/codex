@@ -71,6 +71,10 @@ fn plugin_skill_root_for_skill_path(skill_path: &Path, plugin_id: &str) -> Plugi
 }
 
 fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
+    let path = path
+        .abs()
+        .canonicalize()
+        .expect("skill path should canonicalize");
     SkillMetadata {
         name: name.to_string(),
         description: "test".to_string(),
@@ -78,10 +82,9 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize"),
+        path_to_skills_md: path.clone(),
+        source_path: EnvironmentPathRef::local(path),
+        environment_id: "local".to_string(),
         scope: SkillScope::User,
         plugin_id: None,
     }
@@ -98,7 +101,10 @@ fn local_skills_input(
 ) -> SkillsLoadInput {
     let path_ref = skill_root_path_ref(cwd);
     SkillsLoadInput::new(
-        path_ref,
+        vec![SkillEnvironment {
+            environment_id: "local".to_string(),
+            path: path_ref,
+        }],
         Some(Arc::clone(&LOCAL_FS)),
         effective_skill_roots,
         config_layer_stack.clone(),
@@ -475,7 +481,10 @@ async fn skills_for_cwd_without_local_fs_skips_local_roots() {
     )
     .expect("valid config layer stack");
     let skills_input = SkillsLoadInput::new(
-        skill_root_path_ref(cwd.path().abs()),
+        vec![SkillEnvironment {
+            environment_id: "local".to_string(),
+            path: skill_root_path_ref(cwd.path().abs()),
+        }],
         /*local_file_system*/ None,
         Vec::new(),
         config_layer_stack.clone(),

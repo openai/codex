@@ -7255,7 +7255,11 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs().clone(),
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            ),
+            environment_id: "local".to_string(),
             scope: SkillScope::Admin,
             plugin_id: None,
         },
@@ -7266,7 +7270,11 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs().clone(),
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            ),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
         },
@@ -7302,13 +7310,18 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+        path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs().clone(),
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+        ),
+        environment_id: "local".to_string(),
         scope: SkillScope::Repo,
         plugin_id: None,
     }];
     let rendered = build_available_skills(
         &outcome,
         SkillMetadataBudget::Characters(1),
+        SkillEnvironmentRender::Omit,
         SkillRenderSideEffects::ThreadStart {
             session_telemetry: &session_telemetry,
         },
@@ -7347,7 +7360,11 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
+        path_to_skills_md: test_path_buf("/tmp/alpha-skill/SKILL.md").abs().clone(),
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
+        ),
+        environment_id: "local".to_string(),
         scope: SkillScope::Repo,
         plugin_id: None,
     };
@@ -7358,7 +7375,11 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
+        path_to_skills_md: test_path_buf("/tmp/beta-skill/SKILL.md").abs().clone(),
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
+        ),
+        environment_id: "local".to_string(),
         scope: SkillScope::Repo,
         plugin_id: None,
     };
@@ -7375,6 +7396,7 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
     let rendered = build_available_skills(
         &outcome,
         SkillMetadataBudget::Characters(minimum_budget + 6),
+        SkillEnvironmentRender::Omit,
         SkillRenderSideEffects::ThreadStart {
             session_telemetry: &session_telemetry,
         },
@@ -7406,7 +7428,11 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs().clone(),
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            ),
+            environment_id: "local".to_string(),
             scope: SkillScope::Admin,
             plugin_id: None,
         },
@@ -7417,7 +7443,11 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs().clone(),
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            ),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
         },

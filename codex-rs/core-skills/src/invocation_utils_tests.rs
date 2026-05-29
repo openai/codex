@@ -19,7 +19,9 @@ fn test_skill_metadata(skill_doc_path: AbsolutePathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: skill_doc_path,
+        path_to_skills_md: skill_doc_path.clone(),
+        source_path: codex_exec_server::EnvironmentPathRef::local(skill_doc_path),
+        environment_id: "local".to_string(),
         scope: codex_protocol::protocol::SkillScope::User,
         plugin_id: None,
     }

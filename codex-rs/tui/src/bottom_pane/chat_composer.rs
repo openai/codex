@@ -6254,7 +6254,9 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: skill_path.clone(),
+            path_to_skills_md: skill_path.clone().clone(),
+            source_path: codex_exec_server::EnvironmentPathRef::local(skill_path.clone()),
+            environment_id: "local".to_string(),
             scope: crate::test_support::skill_scope_user(),
             plugin_id: None,
         }]));
@@ -6297,7 +6299,9 @@ mod tests {
             }),
             dependencies: None,
             policy: None,
-            path_to_skills_md: skill_path.clone(),
+            path_to_skills_md: skill_path.clone().clone(),
+            source_path: codex_exec_server::EnvironmentPathRef::local(skill_path.clone()),
+            environment_id: "local".to_string(),
             scope: crate::test_support::skill_scope_repo(),
             plugin_id: None,
         }]));
@@ -6389,7 +6393,13 @@ mod tests {
                     }),
                     dependencies: None,
                     policy: None,
-                    path_to_skills_md: test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
+                    path_to_skills_md: test_path_buf("/tmp/repo/google-calendar/SKILL.md")
+                        .abs()
+                        .clone(),
+                    source_path: codex_exec_server::EnvironmentPathRef::local(
+                        test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
+                    ),
+                    environment_id: "local".to_string(),
                     scope: crate::test_support::skill_scope_repo(),
                     plugin_id: None,
                 }]));
