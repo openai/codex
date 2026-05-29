@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::RolloutRecorder;
@@ -59,6 +60,7 @@ pub(super) async fn read_thread(
                 rollout_thread.name = thread.name;
             }
             rollout_thread.git_info = thread.git_info;
+            rollout_thread.multi_agent_version = thread.multi_agent_version;
             rollout_thread.permission_profile = permission_profile_from_metadata_value(
                 &metadata_sandbox_policy,
                 rollout_thread.cwd.as_path(),
@@ -129,6 +131,9 @@ pub(super) async fn read_thread_by_rollout_path(
             metadata.git_branch.or(fallback_branch),
             metadata.git_origin_url.or(fallback_origin_url),
         );
+        if metadata.multi_agent_version.is_some() {
+            thread.multi_agent_version = metadata.multi_agent_version;
+        }
     }
     attach_history_if_requested(&mut thread, include_history).await?;
     Ok(thread)
@@ -162,6 +167,14 @@ async fn attach_history_if_requested(
         });
     };
     let items = load_history_items(&path).await?;
+    if let Some(multi_agent_version) = items.iter().rev().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == thread_id => {
+            Some(meta_line.meta.multi_agent_version)
+        }
+        _ => None,
+    }) {
+        thread.multi_agent_version = multi_agent_version;
+    }
     thread.history = Some(StoredThreadHistory { thread_id, items });
     Ok(())
 }
@@ -287,6 +300,11 @@ async fn stored_thread_from_sqlite_metadata(
         .ok()
         .map(|meta_line| meta_line.meta);
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
+    let multi_agent_version = metadata.multi_agent_version.or_else(|| {
+        session_meta
+            .as_ref()
+            .and_then(|meta| meta.multi_agent_version)
+    });
     let preview = metadata
         .preview
         .clone()
@@ -307,6 +325,7 @@ async fn stored_thread_from_sqlite_metadata(
         },
         model: metadata.model,
         reasoning_effort: metadata.reasoning_effort,
+        multi_agent_version,
         created_at: metadata.created_at,
         updated_at: metadata.updated_at,
         archived_at: metadata.archived_at,
@@ -370,6 +389,7 @@ fn stored_thread_from_meta_line(
             .unwrap_or_else(|| store.config.default_model_provider_id.clone()),
         model: None,
         reasoning_effort: None,
+        multi_agent_version: meta_line.meta.multi_agent_version,
         created_at,
         updated_at,
         archived_at: archived.then_some(updated_at),

@@ -218,6 +218,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
+                multi_agent_version: None,
                 memory_mode: ThreadMemoryMode::Disabled,
             },
             event_persistence_mode: ThreadEventPersistenceMode::default(),

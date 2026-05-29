@@ -6,6 +6,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
@@ -61,6 +62,8 @@ pub struct ThreadPersistenceMetadata {
     pub cwd: Option<PathBuf>,
     /// Model provider associated with the thread.
     pub model_provider: String,
+    /// Thread-scoped multi-agent runtime selector.
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// Memory mode associated with the live thread.
     pub memory_mode: MemoryMode,
 }
@@ -372,6 +375,8 @@ pub struct StoredThread {
     pub model: Option<String>,
     /// Latest observed reasoning effort, if known.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Thread-scoped multi-agent runtime selector.
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// Thread creation timestamp.
     pub created_at: DateTime<Utc>,
     /// Thread last-update timestamp.
@@ -479,6 +484,13 @@ pub struct ThreadMetadataPatch {
     pub model: Option<String>,
     /// Latest observed reasoning effort.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Thread-scoped multi-agent runtime selector.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub multi_agent_version: ClearableField<MultiAgentVersion>,
     /// Creation timestamp when known.
     pub created_at: Option<DateTime<Utc>>,
     /// Last update timestamp for this metadata observation.
@@ -559,6 +571,9 @@ impl ThreadMetadataPatch {
         if next.reasoning_effort.is_some() {
             self.reasoning_effort = next.reasoning_effort;
         }
+        if next.multi_agent_version.is_some() {
+            self.multi_agent_version = next.multi_agent_version;
+        }
         if next.created_at.is_some() {
             self.created_at = next.created_at;
         }
@@ -616,6 +631,7 @@ impl ThreadMetadataPatch {
             && self.model_provider.is_none()
             && self.model.is_none()
             && self.reasoning_effort.is_none()
+            && self.multi_agent_version.is_none()
             && self.created_at.is_none()
             && self.updated_at.is_none()
             && self.source.is_none()

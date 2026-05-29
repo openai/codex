@@ -63,6 +63,7 @@ impl ThreadMetadataSync {
         };
         let update = ThreadMetadataPatch {
             model_provider: Some(params.metadata.model_provider.clone()),
+            multi_agent_version: Some(params.metadata.multi_agent_version),
             created_at: Some(created_at),
             updated_at: Some(created_at),
             source: Some(params.source.clone()),
@@ -178,7 +179,10 @@ impl ThreadMetadataSync {
         self.observe_items_with_update(
             items,
             ThreadMetadataPatch {
-                updated_at: Some(Utc::now()),
+                updated_at: items
+                    .iter()
+                    .any(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+                    .then(Utc::now),
                 ..Default::default()
             },
         )
@@ -205,6 +209,7 @@ impl ThreadMetadataSync {
                     update.agent_nickname = Some(meta_line.meta.agent_nickname.clone());
                     update.agent_role = Some(meta_line.meta.agent_role.clone());
                     update.agent_path = Some(meta_line.meta.agent_path.clone());
+                    update.multi_agent_version = Some(meta_line.meta.multi_agent_version);
                     if let Some(model_provider) = meta_line.meta.model_provider.clone()
                         && !model_provider.is_empty()
                     {
@@ -345,6 +350,7 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.model_provider.is_some()
         || update.model.is_some()
         || update.reasoning_effort.is_some()
+        || update.multi_agent_version.is_some()
         || update.created_at.is_some()
         || update.source.is_some()
         || update.thread_source.is_some()
@@ -371,6 +377,7 @@ fn git_info_patch_from_observation(git_info: GitInfo) -> GitInfoPatch {
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::openai_models::MultiAgentVersion;
     use codex_protocol::protocol::CompactedItem;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
@@ -495,6 +502,23 @@ mod tests {
     }
 
     #[test]
+    fn session_metadata_only_append_does_not_touch_updated_at() {
+        let thread_id = ThreadId::new();
+        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
+        let mut session_meta = session_meta(thread_id);
+        session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
+
+        let update = sync
+            .observe_appended_items(&[RolloutItem::SessionMeta(session_meta)])
+            .expect("session metadata should update selector");
+
+        assert_eq!(
+            (update.patch.multi_agent_version, update.patch.updated_at,),
+            (Some(Some(MultiAgentVersion::V2)), None)
+        );
+    }
+
+    #[test]
     fn resume_history_waits_for_append_before_flushing_metadata() {
         let thread_id = ThreadId::new();
         let mut sync = ThreadMetadataSync::for_resume(&resume_params(
@@ -527,6 +551,7 @@ mod tests {
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
+                multi_agent_version: None,
                 memory_mode: ThreadMemoryMode::Enabled,
             },
             event_persistence_mode: ThreadEventPersistenceMode::Limited,

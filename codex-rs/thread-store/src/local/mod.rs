@@ -296,8 +296,11 @@ mod tests {
 
     use codex_protocol::ThreadId;
     use codex_protocol::models::BaseInstructions;
+    use codex_protocol::openai_models::MultiAgentVersion;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadMemoryMode;
     use codex_protocol::protocol::UserMessageEvent;
@@ -357,6 +360,93 @@ mod tests {
             .expect_err("shutdown should remove the live thread writer");
         assert!(
             matches!(err, ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn live_thread_persists_multi_agent_version_in_rollout_and_sqlite() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+
+        live_thread
+            .append_items(&[user_message_item("persist selector")])
+            .await
+            .expect("append live item");
+        live_thread
+            .append_items(&[RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: thread_id,
+                    source: SessionSource::Exec,
+                    multi_agent_version: Some(MultiAgentVersion::V2),
+                    ..Default::default()
+                },
+                git: None,
+            })])
+            .await
+            .expect("append selector update");
+        live_thread.flush().await.expect("flush live thread");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("load rollout path");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        let stored_thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("stored thread read");
+        let (items, _, _) = RolloutRecorder::load_rollout_items(rollout_path.as_path())
+            .await
+            .expect("load rollout items");
+        let persisted_versions = items
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.multi_agent_version),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let jsonl_only_thread =
+            LocalThreadStore::new(test_config(home.path()), /*state_db*/ None)
+                .read_thread_by_rollout_path(
+                    rollout_path,
+                    /*include_archived*/ false,
+                    /*include_history*/ true,
+                )
+                .await
+                .expect("jsonl-only stored thread read");
+
+        assert_eq!(
+            (
+                persisted_versions,
+                metadata.multi_agent_version,
+                stored_thread.multi_agent_version,
+                jsonl_only_thread.multi_agent_version
+            ),
+            (
+                vec![None, Some(MultiAgentVersion::V2)],
+                Some(MultiAgentVersion::V2),
+                Some(MultiAgentVersion::V2),
+                Some(MultiAgentVersion::V2)
+            )
         );
     }
 
@@ -537,6 +627,7 @@ mod tests {
                 metadata: ThreadPersistenceMetadata {
                     cwd: Some(home.path().to_path_buf()),
                     model_provider: "different-provider".to_string(),
+                    multi_agent_version: None,
                     memory_mode: ThreadMemoryMode::Enabled,
                 },
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
@@ -592,6 +683,7 @@ mod tests {
                 metadata: ThreadPersistenceMetadata {
                     cwd: Some(home.path().to_path_buf()),
                     model_provider: "different-provider".to_string(),
+                    multi_agent_version: None,
                     memory_mode: ThreadMemoryMode::Enabled,
                 },
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
@@ -806,6 +898,7 @@ mod tests {
                 metadata: ThreadPersistenceMetadata {
                     cwd: None,
                     model_provider: "test-provider".to_string(),
+                    multi_agent_version: None,
                     memory_mode: ThreadMemoryMode::Enabled,
                 },
                 event_persistence_mode: ThreadEventPersistenceMode::Limited,
@@ -1036,6 +1129,7 @@ mod tests {
         ThreadPersistenceMetadata {
             cwd: Some(std::env::current_dir().expect("cwd")),
             model_provider: "test-provider".to_string(),
+            multi_agent_version: None,
             memory_mode: ThreadMemoryMode::Enabled,
         }
     }

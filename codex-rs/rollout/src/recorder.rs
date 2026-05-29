@@ -13,6 +13,7 @@ use chrono::SecondsFormat;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::openai_models::MultiAgentVersion;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -83,6 +84,7 @@ pub enum RolloutRecorderParams {
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
+        multi_agent_version: Option<MultiAgentVersion>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
     },
@@ -158,6 +160,7 @@ impl RolloutRecorderParams {
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
+        multi_agent_version: Option<MultiAgentVersion>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Self {
@@ -166,6 +169,7 @@ impl RolloutRecorderParams {
             forked_from_id,
             source,
             thread_source,
+            multi_agent_version,
             base_instructions,
             dynamic_tools,
         }
@@ -654,6 +658,7 @@ impl RolloutRecorder {
                 forked_from_id,
                 source,
                 thread_source,
+                multi_agent_version,
                 base_instructions,
                 dynamic_tools,
             } => {
@@ -683,6 +688,7 @@ impl RolloutRecorder {
                     source,
                     thread_source,
                     model_provider: Some(config.model_provider_id().to_string()),
+                    multi_agent_version,
                     base_instructions: Some(base_instructions),
                     dynamic_tools: if dynamic_tools.is_empty() {
                         None
@@ -1023,6 +1029,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         agent_nickname,
         agent_role,
         model_provider,
+        multi_agent_version,
         cli_version,
         created_at,
         updated_at,
@@ -1057,6 +1064,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if item.model_provider.is_none() {
         item.model_provider = model_provider;
+    }
+    if item.multi_agent_version.is_none() {
+        item.multi_agent_version = multi_agent_version;
     }
     if item.cli_version.is_none() {
         item.cli_version = cli_version;
@@ -1693,6 +1703,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         model_provider: Some(item.model_provider),
+        multi_agent_version: item.multi_agent_version,
         cli_version: Some(item.cli_version),
         created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
         updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),

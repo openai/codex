@@ -237,6 +237,13 @@ pub enum ToolMode {
     CodeModeOnly,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiAgentVersion {
+    V1,
+    V2,
+}
+
 fn deserialize_optional_model_selector<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,

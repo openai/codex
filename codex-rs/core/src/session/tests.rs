@@ -3456,6 +3456,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
+                multi_agent_version: None,
                 memory_mode: if config.memories.generate_memories {
                     ThreadMemoryMode::Enabled
                 } else {
@@ -5951,6 +5952,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
+                multi_agent_version: None,
                 memory_mode: if config.memories.generate_memories {
                     ThreadMemoryMode::Enabled
                 } else {

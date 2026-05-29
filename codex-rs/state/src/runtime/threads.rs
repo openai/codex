@@ -18,6 +18,7 @@ SELECT
     threads.agent_role,
     threads.agent_path,
     threads.model_provider,
+    threads.multi_agent_version,
     threads.model,
     threads.reasoning_effort,
     threads.cwd,
@@ -491,6 +492,7 @@ INSERT INTO threads (
     agent_role,
     agent_path,
     model_provider,
+    multi_agent_version,
     model,
     reasoning_effort,
     cwd,
@@ -507,7 +509,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -527,6 +529,12 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.agent_role.as_deref())
         .bind(metadata.agent_path.as_deref())
         .bind(metadata.model_provider.as_str())
+        .bind(
+            metadata
+                .multi_agent_version
+                .as_ref()
+                .map(crate::extract::enum_to_string),
+        )
         .bind(metadata.model.as_deref())
         .bind(
             metadata
@@ -697,6 +705,7 @@ INSERT INTO threads (
     agent_role,
     agent_path,
     model_provider,
+    multi_agent_version,
     model,
     reasoning_effort,
     cwd,
@@ -713,7 +722,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -726,6 +735,7 @@ ON CONFLICT(id) DO UPDATE SET
     agent_role = excluded.agent_role,
     agent_path = excluded.agent_path,
     model_provider = excluded.model_provider,
+    multi_agent_version = excluded.multi_agent_version,
     model = excluded.model,
     reasoning_effort = excluded.reasoning_effort,
     cwd = excluded.cwd,
@@ -759,6 +769,12 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.agent_role.as_deref())
         .bind(metadata.agent_path.as_deref())
         .bind(metadata.model_provider.as_str())
+        .bind(
+            metadata
+                .multi_agent_version
+                .as_ref()
+                .map(crate::extract::enum_to_string),
+        )
         .bind(metadata.model.as_deref())
         .bind(
             metadata
@@ -929,6 +945,7 @@ SELECT
     threads.agent_role,
     threads.agent_path,
     threads.model_provider,
+    threads.multi_agent_version,
     threads.model,
     threads.reasoning_effort,
     threads.cwd,
@@ -1328,6 +1345,7 @@ mod tests {
                 agent_nickname: None,
                 agent_role: None,
                 model_provider: None,
+                multi_agent_version: None,
                 base_instructions: None,
                 dynamic_tools: None,
                 memory_mode: Some("polluted".to_string()),
@@ -1387,6 +1405,7 @@ mod tests {
                 agent_nickname: None,
                 agent_role: None,
                 model_provider: None,
+                multi_agent_version: None,
                 base_instructions: None,
                 dynamic_tools: None,
                 memory_mode: None,

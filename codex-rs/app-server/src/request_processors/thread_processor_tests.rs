@@ -400,6 +400,7 @@ mod thread_processor_behavior_tests {
             model_provider: "openai".to_string(),
             model: None,
             reasoning_effort: None,
+            multi_agent_version: None,
             created_at: created_at.with_timezone(&Utc),
             updated_at: updated_at.with_timezone(&Utc),
             archived_at: None,

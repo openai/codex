@@ -22,6 +22,7 @@ use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
@@ -68,6 +69,8 @@ pub struct ThreadItem {
     pub agent_role: Option<String>,
     /// Model provider from session metadata.
     pub model_provider: Option<String>,
+    /// Thread-scoped multi-agent runtime selector.
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// CLI version from session metadata.
     pub cli_version: Option<String>,
     /// RFC3339 timestamp string for when the session was created, if available.
@@ -98,6 +101,7 @@ struct HeadTailSummary {
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     model_provider: Option<String>,
+    multi_agent_version: Option<MultiAgentVersion>,
     cli_version: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
@@ -781,6 +785,7 @@ async fn build_thread_item(
             agent_nickname,
             agent_role,
             model_provider,
+            multi_agent_version,
             cli_version,
             created_at,
             updated_at: mut summary_updated_at,
@@ -802,6 +807,7 @@ async fn build_thread_item(
             agent_nickname,
             agent_role,
             model_provider,
+            multi_agent_version,
             cli_version,
             created_at,
             updated_at: summary_updated_at,
@@ -1104,6 +1110,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();
                     summary.agent_role = session_meta_line.meta.agent_role.clone();
                     summary.model_provider = session_meta_line.meta.model_provider.clone();
+                    summary.multi_agent_version = session_meta_line.meta.multi_agent_version;
                     summary.thread_id = Some(session_meta_line.meta.id);
                     summary.cwd = Some(session_meta_line.meta.cwd.clone());
                     summary.git_branch = session_meta_line
