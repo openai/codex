@@ -2,7 +2,6 @@ use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::io;
-use std::path::Component;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -63,6 +62,21 @@ impl EnvironmentPathRef {
         Self::new(Arc::clone(&self.file_system), path)
     }
 
+    pub fn join_relative(&self, relative_path: &Path) -> Option<Self> {
+        self.file_system
+            .join(&self.path, relative_path)
+            .ok()
+            .map(|path| self.with_path(path))
+    }
+
+    pub fn parent_dir(&self) -> Option<Self> {
+        self.file_system
+            .parent(&self.path)
+            .ok()
+            .flatten()
+            .map(|path| self.with_path(path))
+    }
+
     /// Best-effort resolves this path through its bound filesystem.
     pub fn canonicalize_if_exists(&self) -> Self {
         self.file_system
@@ -105,11 +119,14 @@ mod tests {
     use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
+    use std::path::Path;
     use std::sync::Mutex;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     enum RecordedMethod {
         Canonicalize,
+        Join,
+        Parent,
         ReadFileText,
         Metadata,
         ReadDirectory,
@@ -174,6 +191,28 @@ mod tests {
                 ));
             }
             Ok(path.parent().unwrap())
+        }
+
+        fn join(
+            &self,
+            base_path: &AbsolutePathBuf,
+            relative_path: &Path,
+        ) -> io::Result<AbsolutePathBuf> {
+            self.push_call(RecordedCall {
+                method: RecordedMethod::Join,
+                path: base_path.clone(),
+                sandbox: None,
+            });
+            AbsolutePathBuf::from_absolute_path_checked(base_path.as_path().join(relative_path))
+        }
+
+        fn parent(&self, path: &AbsolutePathBuf) -> io::Result<Option<AbsolutePathBuf>> {
+            self.push_call(RecordedCall {
+                method: RecordedMethod::Parent,
+                path: path.clone(),
+                sandbox: None,
+            });
+            Ok(path.parent())
         }
 
         async fn read_file(
@@ -385,6 +424,29 @@ mod tests {
     }
 
     #[test]
+    fn join_relative_keeps_bound_file_system_identity() {
+        let path = std::env::temp_dir().join("skills").abs();
+        let file_system = Arc::new(RecordingFileSystem::default());
+        let path_ref = EnvironmentPathRef::new(file_system.clone(), path.clone());
+
+        assert_eq!(
+            path_ref.join_relative(Path::new("demo")),
+            Some(EnvironmentPathRef::new(
+                file_system.clone(),
+                std::env::temp_dir().join("skills/demo").abs(),
+            ))
+        );
+        assert_eq!(
+            file_system.recorded_calls(),
+            vec![RecordedCall {
+                method: RecordedMethod::Join,
+                path,
+                sandbox: None,
+            }]
+        );
+    }
+
+    #[test]
     fn join_relative_keeps_literal_tilde_under_bound_path() {
         let path_ref = EnvironmentPathRef::local(std::env::temp_dir().join("skills").abs());
 
@@ -401,6 +463,29 @@ mod tests {
         let path_ref = EnvironmentPathRef::local(std::env::temp_dir().join("skills").abs());
 
         assert_eq!(path_ref.join_relative(Path::new("../outside")), None);
+    }
+
+    #[test]
+    fn parent_dir_keeps_bound_file_system_identity() {
+        let path = std::env::temp_dir().join("skills/demo").abs();
+        let file_system = Arc::new(RecordingFileSystem::default());
+        let path_ref = EnvironmentPathRef::new(file_system.clone(), path.clone());
+
+        assert_eq!(
+            path_ref.parent_dir(),
+            Some(EnvironmentPathRef::new(
+                file_system.clone(),
+                std::env::temp_dir().join("skills").abs(),
+            ))
+        );
+        assert_eq!(
+            file_system.recorded_calls(),
+            vec![RecordedCall {
+                method: RecordedMethod::Parent,
+                path,
+                sandbox: None,
+            }]
+        );
     }
 
     #[cfg(windows)]
