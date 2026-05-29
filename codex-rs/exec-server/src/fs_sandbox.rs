@@ -298,6 +298,7 @@ fn spawn_command(
     command.stdin(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
+    command.kill_on_drop(true);
     command.spawn().map_err(io_error)
 }
 
