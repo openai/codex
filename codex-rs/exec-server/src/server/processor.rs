@@ -4,7 +4,9 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
 
+use crate::ExecServerRuntimeConfig;
 use crate::ExecServerRuntimePaths;
+use crate::LocalFileSystemConfig;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
@@ -21,13 +23,18 @@ use crate::server::session_registry::SessionRegistry;
 pub(crate) struct ConnectionProcessor {
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimePaths,
+    filesystem: LocalFileSystemConfig,
 }
 
 impl ConnectionProcessor {
-    pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
+    pub(crate) fn new_with_config(
+        runtime_paths: ExecServerRuntimePaths,
+        config: ExecServerRuntimeConfig,
+    ) -> Self {
         Self {
-            session_registry: SessionRegistry::new(),
+            session_registry: SessionRegistry::new_with_config(config.sessions, config.processes),
             runtime_paths,
+            filesystem: config.filesystem,
         }
     }
 
@@ -36,6 +43,7 @@ impl ConnectionProcessor {
             connection,
             Arc::clone(&self.session_registry),
             self.runtime_paths.clone(),
+            self.filesystem.clone(),
         )
         .await;
     }
@@ -45,6 +53,7 @@ async fn run_connection(
     connection: JsonRpcConnection,
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimePaths,
+    filesystem: LocalFileSystemConfig,
 ) {
     let router = Arc::new(build_router());
     let JsonRpcConnection {
@@ -57,10 +66,11 @@ async fn run_connection(
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
-    let handler = Arc::new(ExecServerHandler::new(
+    let handler = Arc::new(ExecServerHandler::new_with_config(
         session_registry,
         notifications,
         runtime_paths,
+        filesystem,
     ));
 
     let outbound_task = tokio::spawn(async move {
@@ -207,6 +217,7 @@ mod tests {
     use tokio::time::timeout;
 
     use super::run_connection;
+    use crate::ExecServerRuntimeConfig;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
@@ -322,7 +333,12 @@ mod tests {
         let (server_writer, client_reader) = duplex(1 << 20);
         let connection =
             JsonRpcConnection::from_stdio(server_reader, server_writer, label.to_string());
-        let task = tokio::spawn(run_connection(connection, registry, test_runtime_paths()));
+        let task = tokio::spawn(run_connection(
+            connection,
+            registry,
+            test_runtime_paths(),
+            ExecServerRuntimeConfig::default().filesystem,
+        ));
         (client_writer, BufReader::new(client_reader).lines(), task)
     }
 
