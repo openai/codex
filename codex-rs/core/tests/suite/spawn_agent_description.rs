@@ -183,7 +183,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     );
     assert!(
         description.contains(
-            "Spawned agents inherit your current model by default. Omit `model` unless an explicit override is needed."
+            "Spawned agents inherit your current model by default. If provided, `model` specifies the model to use for the spawned agent."
         ),
         "expected inherited-model guidance in spawn_agent description: {description:?}"
     );
