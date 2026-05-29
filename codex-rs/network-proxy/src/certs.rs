@@ -104,7 +104,7 @@ const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
 
 // Best-effort compatibility set for common child toolchains that accept a CA bundle path.
 // This is intentionally curated rather than pretending to cover every TLS client.
-pub(crate) const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
+pub const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
     "CODEX_CA_CERTIFICATE",
     "SSL_CERT_FILE",
     "REQUESTS_CA_BUNDLE",

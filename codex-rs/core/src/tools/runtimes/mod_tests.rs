@@ -8,6 +8,7 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxy;
@@ -133,6 +134,9 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     assert_eq!(exec_request.network, None);
     for key in PROXY_ENV_KEYS {
         assert_eq!(exec_request.env.get(*key), None, "{key} should be unset");
+    }
+    for key in CUSTOM_CA_ENV_KEYS {
+        assert_eq!(exec_request.env.get(key), None, "{key} should be unset");
     }
     #[cfg(target_os = "macos")]
     assert_eq!(exec_request.env.get(PROXY_GIT_SSH_COMMAND_ENV_KEY), None);

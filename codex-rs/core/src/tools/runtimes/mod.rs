@@ -12,6 +12,7 @@ use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
@@ -59,6 +60,9 @@ pub(crate) fn exec_env_for_sandbox_permissions(
     {
         for key in PROXY_ENV_KEYS {
             env.remove(*key);
+        }
+        for key in CUSTOM_CA_ENV_KEYS {
+            env.remove(key);
         }
         // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
         #[cfg(target_os = "macos")]
@@ -235,6 +239,7 @@ fn build_proxy_env_exports() -> (String, String) {
     let mut keys = PROXY_ENV_KEYS
         .iter()
         .copied()
+        .chain(CUSTOM_CA_ENV_KEYS)
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
     keys.sort_unstable();

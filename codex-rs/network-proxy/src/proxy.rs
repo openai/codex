@@ -589,9 +589,15 @@ fn apply_proxy_env_overrides(
 
     if let Some(mitm_ca_trust_bundles) = mitm_ca_trust_bundles {
         for key in crate::certs::CUSTOM_CA_ENV_KEYS {
-            let managed_path = mitm_ca_trust_bundles
-                .path_for_env_key(key)
-                .to_string_lossy();
+            let managed_path = mitm_ca_trust_bundles.path_for_env_key(key);
+            let managed_path = if key == "CODEX_CA_CERTIFICATE"
+                && let Some(path) = mitm_ca_trust_bundles.env_paths.get("SSL_CERT_FILE")
+            {
+                path.as_path()
+            } else {
+                managed_path
+            }
+            .to_string_lossy();
             if env
                 .get(key)
                 .filter(|value| !value.is_empty())
@@ -1165,6 +1171,39 @@ mod tests {
                 Some(&mitm_ca_trust_bundle_path.display().to_string())
             );
         }
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_uses_ssl_bundle_for_codex_ca_certificate() {
+        let ssl_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ssl-ca-bundle.pem");
+        let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
+        let mitm_ca_trust_bundles = crate::certs::ManagedMitmCaTrustBundles {
+            default_path: mitm_ca_trust_bundle_path.to_path_buf(),
+            env_paths: HashMap::from([(
+                "SSL_CERT_FILE".to_string(),
+                ssl_ca_trust_bundle_path.to_path_buf(),
+            )]),
+            inherited_env_values: HashMap::new(),
+        };
+        let mut env = HashMap::new();
+
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
+            Some(&mitm_ca_trust_bundles),
+        );
+
+        assert_eq!(
+            env.get("CODEX_CA_CERTIFICATE"),
+            Some(&ssl_ca_trust_bundle_path.display().to_string())
+        );
+        assert_eq!(
+            env.get("SSL_CERT_FILE"),
+            Some(&ssl_ca_trust_bundle_path.display().to_string())
+        );
     }
 
     #[test]

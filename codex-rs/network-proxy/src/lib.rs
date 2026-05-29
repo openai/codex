@@ -16,6 +16,7 @@ mod socks5;
 mod state;
 mod upstream;
 
+pub use certs::CUSTOM_CA_ENV_KEYS;
 pub use config::NetworkDomainPermission;
 pub use config::NetworkDomainPermissionEntry;
 pub use config::NetworkDomainPermissions;
