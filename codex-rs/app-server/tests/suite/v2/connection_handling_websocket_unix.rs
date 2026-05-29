@@ -226,6 +226,7 @@ async fn send_turn_start_request(stream: &mut WsClient, id: i64, thread_id: &str
         id,
         Some(serde_json::to_value(TurnStartParams {
             thread_id: thread_id.to_string(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),

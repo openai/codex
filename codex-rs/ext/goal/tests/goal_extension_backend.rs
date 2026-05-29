@@ -8,6 +8,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
+use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
@@ -1121,6 +1122,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         tool_name: codex_extension_api::ToolName::plain(tool_name),
         truncation_policy: TruncationPolicy::Bytes(1024),
         conversation_history: codex_extension_api::ConversationHistory::default(),
+        turn_item_emitter: Arc::new(NoopTurnItemEmitter),
         payload: ToolPayload::Function {
             arguments: arguments.to_string(),
         },

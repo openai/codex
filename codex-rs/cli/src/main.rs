@@ -452,6 +452,10 @@ struct AppServerCommand {
     )]
     listen: codex_app_server::AppServerTransport,
 
+    /// Use stdio as the transport (equivalent to `--listen stdio://`).
+    #[arg(long = "stdio", conflicts_with = "listen")]
+    stdio: bool,
+
     /// Enable remote control for this app-server process.
     #[arg(long = "remote-control", hide = true)]
     remote_control: bool,
@@ -965,6 +969,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 subcommand,
                 strict_config: app_server_strict_config,
                 listen,
+                stdio,
                 remote_control,
                 analytics_default_enabled,
                 auth,
@@ -978,7 +983,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             match subcommand {
                 None => {
-                    let transport = listen;
+                    let transport = if stdio {
+                        codex_app_server::AppServerTransport::Stdio
+                    } else {
+                        listen
+                    };
                     let auth = auth.try_into_settings()?;
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
                         remote_control_enabled: remote_control,
@@ -3195,6 +3204,25 @@ mod tests {
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
         );
+    }
+
+    #[test]
+    fn app_server_stdio_flag_parses() {
+        let app_server = app_server_from_args(["codex", "app-server", "--stdio"].as_ref());
+        assert!(app_server.stdio);
+    }
+
+    #[test]
+    fn app_server_stdio_flag_conflicts_with_listen() {
+        let err = MultitoolCli::try_parse_from([
+            "codex",
+            "app-server",
+            "--stdio",
+            "--listen",
+            "stdio://",
+        ])
+        .expect_err("--stdio and --listen should be rejected together");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

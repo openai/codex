@@ -113,6 +113,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
             request_id: RequestId::Integer(2),
             params: TurnStartParams {
                 thread_id: thread.id.clone(),
+                client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: "Hello".to_string(),
                     text_elements: Vec::new(),

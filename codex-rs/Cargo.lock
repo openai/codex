@@ -1928,6 +1928,7 @@ dependencies = [
  "codex-git-utils",
  "codex-guardian",
  "codex-hooks",
+ "codex-image-generation-extension",
  "codex-login",
  "codex-mcp",
  "codex-memories-extension",
@@ -2056,17 +2057,6 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
-]
-
-[[package]]
-name = "codex-app-server-start-bench"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-app-server-protocol",
- "divan",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -2730,18 +2720,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-debug-client"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "codex-app-server-protocol",
- "pretty_assertions",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [
@@ -3048,6 +3026,31 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "codex-image-generation-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "codex-api",
+ "codex-core",
+ "codex-extension-api",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider",
+ "codex-model-provider-info",
+ "codex-protocol",
+ "codex-tools",
+ "http 1.4.0",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

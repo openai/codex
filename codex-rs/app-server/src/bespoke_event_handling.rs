@@ -2153,6 +2153,7 @@ mod tests {
         let created_at = Utc::now();
         let history_items = vec![
             RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "before rollback".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -3228,6 +3229,7 @@ mod tests {
             state.track_current_turn_event(
                 "turn-1",
                 &EventMsg::UserMessage(codex_protocol::protocol::UserMessageEvent {
+                    client_id: None,
                     message: "already tracked".to_string(),
                     images: None,
                     local_images: Vec::new(),

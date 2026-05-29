@@ -402,13 +402,6 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --target ${{ matrix.target }} --tests --profile ${{ matrix.profile }} --timings -- -D warnings
 
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: just
-
-      - name: End-to-end benchmark smoke test
-        run: just bench-e2e-smoke
-
       - name: Upload Cargo timings (clippy)
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

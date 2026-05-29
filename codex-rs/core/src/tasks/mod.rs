@@ -793,6 +793,7 @@ impl Session {
         {
             warn!("failed to apply goal runtime maybe-continue event: {err}");
         }
+        self.emit_thread_idle_lifecycle_if_idle().await;
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {

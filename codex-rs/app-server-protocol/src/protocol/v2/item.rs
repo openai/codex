@@ -212,7 +212,11 @@ impl CommandAction {
 pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    UserMessage { id: String, content: Vec<UserInput> },
+    UserMessage {
+        id: String,
+        client_id: Option<String>,
+        content: Vec<UserInput>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     HookPrompt {
@@ -776,6 +780,7 @@ impl From<CoreTurnItem> for ThreadItem {
         match value {
             CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
                 id: user.id,
+                client_id: user.client_id,
                 content: user.content.into_iter().map(UserInput::from).collect(),
             },
             CoreTurnItem::HookPrompt(hook_prompt) => ThreadItem::HookPrompt {

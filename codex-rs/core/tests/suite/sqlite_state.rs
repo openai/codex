@@ -236,6 +236,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                 RolloutLine {
                     timestamp: "2026-01-27T12:00:01Z".to_string(),
                     item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                        client_id: None,
                         message: "hello from backfill".to_string(),
                         images: None,
                         local_images: Vec::new(),

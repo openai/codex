@@ -2460,6 +2460,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
+        workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
@@ -2490,6 +2491,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         )),
         RolloutItem::EventMsg(EventMsg::UserMessage(
             codex_protocol::protocol::UserMessageEvent {
+                client_id: None,
                 message: "forked seed".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -2686,6 +2688,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         )),
         RolloutItem::EventMsg(EventMsg::UserMessage(
             codex_protocol::protocol::UserMessageEvent {
+                client_id: None,
                 message: "turn 1 user".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -2714,6 +2717,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         )),
         RolloutItem::EventMsg(EventMsg::UserMessage(
             codex_protocol::protocol::UserMessageEvent {
+                client_id: None,
                 message: "turn 2 user".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -2798,6 +2802,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             },
         )),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "turn 1 user".to_string(),
             images: None,
             local_images: Vec::new(),
@@ -2844,6 +2849,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             },
         )),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "turn 2 user".to_string(),
             images: None,
             local_images: Vec::new(),
@@ -2900,6 +2906,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             },
         )),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "turn 1 user".to_string(),
             images: None,
             local_images: Vec::new(),
@@ -2926,6 +2933,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             },
         )),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "turn 2 user".to_string(),
             images: None,
             local_images: Vec::new(),
@@ -2952,6 +2960,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             },
         )),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "turn 3 user".to_string(),
             images: None,
             local_images: Vec::new(),
@@ -5410,6 +5419,7 @@ async fn submit_with_id_captures_current_span_trace_context() {
             .submit_with_id(Submission {
                 id: "sub-1".into(),
                 op: Op::Interrupt,
+                client_user_message_id: None,
                 trace: None,
             })
             .await
@@ -5481,6 +5491,7 @@ fn submission_dispatch_span_prefers_submission_trace_context() {
         submission_dispatch_span(&Submission {
             id: "sub-1".into(),
             op: Op::Interrupt,
+            client_user_message_id: None,
             trace: Some(submission_trace),
         })
     });
@@ -5507,6 +5518,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
                 item_id: None,
             },
         }),
+        client_user_message_id: None,
         trace: None,
     });
 
@@ -5574,6 +5586,7 @@ async fn user_turn_updates_approvals_reviewer() {
                 ..Default::default()
             },
         },
+        /*client_user_message_id*/ None,
     )
     .await;
 
@@ -5867,6 +5880,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     let dispatch_span = submission_dispatch_span(&Submission {
         id: "sub-1".into(),
         op: Op::Interrupt,
+        client_user_message_id: None,
         trace: Some(submission_trace.clone()),
     });
     let dispatch_span_id = dispatch_span.context().span().span_context().span_id();
@@ -5877,10 +5891,13 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     async {
         sess.spawn_task(
             Arc::clone(&tc),
-            vec![TurnInput::UserInput(vec![UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }])],
+            vec![TurnInput::UserInput {
+                content: vec![UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                client_id: None,
+            }],
             TraceCaptureTask {
                 captured_trace: Arc::clone(&captured_trace),
             },
@@ -6689,10 +6706,13 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     sess.set_previous_turn_settings(/*previous_turn_settings*/ None)
         .await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
 
     sess.spawn_task(
         Arc::clone(&tc),
@@ -7775,6 +7795,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
     session
         .persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
             UserMessageEvent {
+                client_id: None,
                 message: "seed rollout".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -7895,6 +7916,29 @@ async fn realtime_conversation_list_voices_emits_builtin_list() {
 }
 
 #[derive(Clone, Copy)]
+struct CompletingTask;
+
+impl SessionTask for CompletingTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.completing"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<TurnInput>,
+        _cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
 struct NeverEndingTask {
     kind: TaskKind,
     listen_to_cancellation_token: bool,
@@ -7958,10 +8002,13 @@ impl SessionTask for GuardianDeniedApprovalTask {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "trigger guardian denials".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "trigger guardian denials".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     sess.spawn_task(Arc::clone(&tc), input, GuardianDeniedApprovalTask)
         .await;
 
@@ -7989,10 +8036,13 @@ async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "keep turn active for helper reviews".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "keep turn active for helper reviews".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8049,10 +8099,13 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
 #[test_log::test]
 async fn abort_regular_task_emits_marker_before_turn_aborted() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8087,10 +8140,13 @@ async fn abort_regular_task_emits_marker_before_turn_aborted() {
 #[tokio::test]
 async fn abort_gracefully_emits_marker_before_turn_aborted() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8125,10 +8181,13 @@ async fn abort_gracefully_emits_marker_before_turn_aborted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8153,6 +8212,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         pending_user_input.clone(),
         /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
+        /*client_user_message_id*/ None,
         /*responsesapi_client_metadata*/ None,
     )
     .await
@@ -8212,6 +8272,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     assert!(matches!(
         fourth.msg,
         EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
             message,
             images,
             text_elements,
@@ -8238,6 +8299,86 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     ));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_finish_emits_thread_idle_lifecycle_after_active_turn_clears() {
+    struct ThreadIdleRecorder {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        idle_tx: async_channel::Sender<()>,
+        expected_thread_id: ThreadId,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadIdleRecorder {
+        async fn on_thread_idle(&self, input: codex_extension_api::ThreadIdleInput<'_>) {
+            assert_eq!(
+                self.expected_thread_id.to_string(),
+                input.thread_store.level_id()
+            );
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.idle_tx.send(()).await.expect("idle receiver open");
+        }
+    }
+
+    let (mut session, turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (idle_tx, idle_rx) = async_channel::bounded(1);
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(Arc::new(ThreadIdleRecorder {
+        calls: Arc::clone(&calls),
+        idle_tx,
+        expected_thread_id: session.conversation_id,
+    }));
+    session.services.extensions = Arc::new(builder.build());
+
+    let session = Arc::new(session);
+    session
+        .spawn_task(Arc::new(turn_context), Vec::new(), CompletingTask)
+        .await;
+
+    timeout(StdDuration::from_secs(2), idle_rx.recv())
+        .await
+        .expect("thread idle lifecycle")
+        .expect("idle receiver open");
+    assert_eq!(1, calls.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(session.active_turn.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
+    struct ThreadIdleRecorder {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadIdleRecorder {
+        async fn on_thread_idle(&self, _input: codex_extension_api::ThreadIdleInput<'_>) {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.thread_lifecycle_contributor(Arc::new(ThreadIdleRecorder {
+        calls: Arc::clone(&calls),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root(),
+            Vec::new(),
+            "pending trigger".to_string(),
+            /*trigger_turn*/ true,
+        ))
+        .await;
+
+    session.emit_thread_idle_lifecycle_if_idle().await;
+
+    assert_eq!(0, calls.load(std::sync::atomic::Ordering::SeqCst));
+}
+
 #[tokio::test]
 async fn steer_input_requires_active_turn() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
@@ -8251,6 +8392,7 @@ async fn steer_input_requires_active_turn() {
             input,
             /*additional_context*/ Default::default(),
             /*expected_turn_id*/ None,
+            /*client_user_message_id*/ None,
             /*responsesapi_client_metadata*/ None,
         )
         .await
@@ -8262,10 +8404,13 @@ async fn steer_input_requires_active_turn() {
 #[tokio::test]
 async fn steer_input_enforces_expected_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8285,6 +8430,7 @@ async fn steer_input_enforces_expected_turn_id() {
             steer_input,
             /*additional_context*/ Default::default(),
             Some("different-turn-id"),
+            /*client_user_message_id*/ None,
             /*responsesapi_client_metadata*/ None,
         )
         .await
@@ -8308,10 +8454,13 @@ async fn steer_input_rejects_non_regular_turns() {
         (TaskKind::Compact, NonSteerableTurnKind::Compact),
     ] {
         let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
-        let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-            text: "hello".to_string(),
-            text_elements: Vec::new(),
-        }])];
+        let input = vec![TurnInput::UserInput {
+            content: vec![UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            client_id: None,
+        }];
         let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
         sess.spawn_task(
             turn_context,
@@ -8332,6 +8481,7 @@ async fn steer_input_rejects_non_regular_turns() {
                 steer_input,
                 /*additional_context*/ Default::default(),
                 /*expected_turn_id*/ None,
+                /*client_user_message_id*/ None,
                 /*responsesapi_client_metadata*/ None,
             )
             .await
@@ -8346,10 +8496,13 @@ async fn steer_input_rejects_non_regular_turns() {
 #[tokio::test]
 async fn steer_input_returns_active_turn_id() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -8369,6 +8522,7 @@ async fn steer_input_returns_active_turn_id() {
             steer_input,
             /*additional_context*/ Default::default(),
             Some(&tc.sub_id),
+            /*client_user_message_id*/ None,
             /*responsesapi_client_metadata*/ None,
         )
         .await
@@ -8556,24 +8710,13 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
     })
     .await??;
 
-    let continuation_request = responses
+    let goal_context_text = responses
         .requests()
         .into_iter()
-        .find(|request| request.body_contains_text("<goal_context>"))
-        .expect("expected a goal continuation request");
-    let body = continuation_request.body_json();
-    let goal_context_message = body["input"]
-        .as_array()
-        .expect("input should be an array")
-        .iter()
-        .find(|item| item.to_string().contains("<goal_context>"))
+        .flat_map(|request| request.message_input_texts("user"))
+        .find(|text| text.contains("<codex_internal_context source=\"goal\">"))
         .expect("goal context message should be present");
-    assert_eq!(goal_context_message["role"].as_str(), Some("user"));
-    assert!(
-        goal_context_message
-            .to_string()
-            .contains("Continue working toward the active thread goal.")
-    );
+    assert!(goal_context_text.contains("Continue working toward the active thread goal."));
 
     Ok(())
 }
@@ -8843,8 +8986,8 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     let [ContentItem::InputText { text }] = content.as_slice() else {
         panic!("expected one text span in budget-limit steering message, got {content:#?}");
     };
-    assert!(text.starts_with("<goal_context>"));
-    assert!(text.trim_end().ends_with("</goal_context>"));
+    assert!(text.starts_with("<codex_internal_context source=\"goal\">"));
+    assert!(text.trim_end().ends_with("</codex_internal_context>"));
     assert!(text.contains("budget_limited"));
     assert!(text.to_lowercase().contains("wrap up this turn soon"));
     assert!(sess.active_turn.lock().await.is_some());
@@ -9066,8 +9209,8 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
                         && content.iter().any(|content| matches!(
                             content,
                             ContentItem::InputText { text }
-                                if text.starts_with("<goal_context>")
-                                    && text.trim_end().ends_with("</goal_context>")
+                                if text.starts_with("<codex_internal_context source=\"goal\">")
+                                    && text.trim_end().ends_with("</codex_internal_context>")
                                     && text.contains("The active thread goal objective was edited")
                                     && text.contains("Write a concise benchmark summary")
                         ))
@@ -9360,6 +9503,7 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
         }],
         /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
+        /*client_user_message_id*/ None,
         /*responsesapi_client_metadata*/ None,
     )
     .await
@@ -9368,10 +9512,13 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
         vec![
-            TurnInput::UserInput(vec![UserInput::Text {
-                text: "follow up".to_string(),
-                text_elements: Vec::new(),
-            }]),
+            TurnInput::UserInput {
+                content: vec![UserInput::Text {
+                    text: "follow up".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                client_id: None
+            },
             TurnInput::ResponseItem(ResponseItem::from(communication.to_response_input_item())),
         ],
     );
@@ -9410,6 +9557,7 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
         }],
         /*additional_context*/ Default::default(),
         Some(&tc.sub_id),
+        /*client_user_message_id*/ None,
         /*responsesapi_client_metadata*/ None,
     )
     .await
@@ -9422,10 +9570,13 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
     assert_eq!(
         sess.input_queue.get_pending_input(&sess.active_turn).await,
         vec![
-            TurnInput::UserInput(vec![UserInput::Text {
-                text: "follow up".to_string(),
-                text_elements: Vec::new(),
-            }]),
+            TurnInput::UserInput {
+                content: vec![UserInput::Text {
+                    text: "follow up".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                client_id: None
+            },
             TurnInput::ResponseItem(ResponseItem::from(communication.to_response_input_item())),
         ],
     );
@@ -9490,10 +9641,13 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: "start review".to_string(),
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "start review".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
         .await;
 

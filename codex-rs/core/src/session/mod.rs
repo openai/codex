@@ -667,6 +667,25 @@ impl Codex {
         let sub = Submission {
             id: id.clone(),
             op,
+            client_user_message_id: None,
+            trace,
+        };
+        self.submit_with_id(sub).await?;
+        Ok(id)
+    }
+
+    pub async fn submit_user_input_with_client_user_message_id(
+        &self,
+        op: Op,
+        trace: Option<W3cTraceContext>,
+        client_user_message_id: Option<String>,
+    ) -> CodexResult<String> {
+        debug_assert!(matches!(op, Op::UserInput { .. }));
+        let id = Uuid::now_v7().to_string();
+        let sub = Submission {
+            id: id.clone(),
+            op,
+            client_user_message_id,
             trace,
         };
         self.submit_with_id(sub).await?;
@@ -722,6 +741,7 @@ impl Codex {
         input: Vec<UserInput>,
         additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
+        client_user_message_id: Option<String>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.session
@@ -729,6 +749,7 @@ impl Codex {
                 input,
                 additional_context,
                 expected_turn_id,
+                client_user_message_id,
                 responsesapi_client_metadata,
             )
             .await
@@ -1074,6 +1095,7 @@ impl Session {
                 thread_settings: Default::default(),
             },
             /*mirror_user_text_to_realtime*/ None,
+            /*client_user_message_id*/ None,
         )
         .await;
     }
@@ -3056,6 +3078,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         input: &[UserInput],
+        client_id: Option<String>,
     ) {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
@@ -3063,7 +3086,9 @@ impl Session {
         let response_item = ResponseItem::from(ResponseInputItem::from(input.to_vec()));
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
-        let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
+        let mut user_message_item = UserMessageItem::new(input);
+        user_message_item.client_id = client_id;
+        let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
@@ -3099,6 +3124,7 @@ impl Session {
         input: Vec<UserInput>,
         additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
+        client_user_message_id: Option<String>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         let mut active = self.active_turn.lock().await;
@@ -3155,7 +3181,10 @@ impl Session {
             .map(ResponseItem::from)
             .map(TurnInput::ResponseItem)
             .collect::<Vec<_>>();
-        pending_input.push(TurnInput::UserInput(input));
+        pending_input.push(TurnInput::UserInput {
+            content: input,
+            client_id: client_user_message_id,
+        });
         self.input_queue
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 active_turn.turn_state.as_ref(),

@@ -88,6 +88,7 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Search the web".to_string(),
                 text_elements: Vec::new(),

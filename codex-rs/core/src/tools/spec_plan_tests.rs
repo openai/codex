@@ -960,6 +960,16 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     .await;
     image_generation.assert_visible_contains(&["image_generation"]);
 
+    let extension_flag_without_imagegen_tool = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    extension_flag_without_imagegen_tool.assert_visible_contains(&["image_generation"]);
+    extension_flag_without_imagegen_tool.assert_visible_lacks(&["image_gen"]);
+
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
         turn.model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
