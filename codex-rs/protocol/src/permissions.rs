@@ -2838,6 +2838,29 @@ mod tests {
     }
 
     #[test]
+    fn with_required_readable_roots_rejects_read_deny() {
+        let cwd = TempDir::new().expect("tempdir");
+        let denied_path = AbsolutePathBuf::from_absolute_path(cwd.path().join("managed-ca.pem"))
+            .expect("absolute path");
+        let err = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: denied_path.clone(),
+            },
+            access: FileSystemAccessMode::Deny,
+        }])
+        .with_required_readable_roots(cwd.path(), std::slice::from_ref(&denied_path))
+        .expect_err("read deny should win");
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "required readable root is denied by filesystem policy: {}",
+                denied_path.as_path().display()
+            )
+        );
+    }
+
+    #[test]
     fn with_additional_writable_roots_skips_existing_effective_access() {
         let cwd = TempDir::new().expect("tempdir");
         let cwd_root = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");

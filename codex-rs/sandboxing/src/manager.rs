@@ -61,6 +61,32 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     }
 }
 
+pub fn with_managed_mitm_ca_readable_roots(
+    permission_profile: PermissionProfile,
+    network: Option<&NetworkProxy>,
+    sandbox_policy_cwd: &Path,
+) -> std::io::Result<PermissionProfile> {
+    let Some(network) = network else {
+        return Ok(permission_profile);
+    };
+    let managed_mitm_ca_trust_bundle_paths = network
+        .managed_mitm_ca_trust_bundle_paths()
+        .into_iter()
+        .map(AbsolutePathBuf::from_absolute_path)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let (file_system_sandbox_policy, network_sandbox_policy) =
+        permission_profile.to_runtime_permissions();
+    let file_system_sandbox_policy = file_system_sandbox_policy
+        .with_required_readable_roots(sandbox_policy_cwd, &managed_mitm_ca_trust_bundle_paths)?;
+    Ok(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            permission_profile.enforcement(),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        ),
+    )
+}
+
 #[derive(Debug)]
 pub struct SandboxCommand {
     pub program: OsString,
@@ -184,22 +210,12 @@ impl SandboxManager {
             windows_sandbox_private_desktop,
         } = request;
         let additional_permissions = command.additional_permissions.take();
-        let mut effective_permission_profile =
-            effective_permission_profile(permissions, additional_permissions.as_ref());
-        if let Some(network) = network {
-            let managed_mitm_ca_trust_bundle_paths = network
-                .managed_mitm_ca_trust_bundle_paths()
-                .into_iter()
-                .map(AbsolutePathBuf::from_absolute_path)
-                .collect::<std::io::Result<Vec<_>>>()
-                .map_err(SandboxTransformError::ManagedMitmCaTrust)?;
-            effective_permission_profile = effective_permission_profile
-                .with_required_readable_roots(
-                    sandbox_policy_cwd,
-                    &managed_mitm_ca_trust_bundle_paths,
-                )
-                .map_err(SandboxTransformError::ManagedMitmCaTrust)?;
-        }
+        let effective_permission_profile = with_managed_mitm_ca_readable_roots(
+            effective_permission_profile(permissions, additional_permissions.as_ref()),
+            network,
+            sandbox_policy_cwd,
+        )
+        .map_err(SandboxTransformError::ManagedMitmCaTrust)?;
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
         let mut argv = Vec::with_capacity(1 + command.args.len());

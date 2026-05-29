@@ -54,8 +54,9 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 ];
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
+
 /// Options that control how bubblewrap is invoked.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BwrapOptions {
     /// Whether to mount a fresh `/proc` inside the sandbox.
     ///
@@ -317,37 +318,34 @@ fn create_bwrap_flags(
     args.push("--new-session".to_string());
     args.push("--die-with-parent".to_string());
     args.extend(filesystem_args);
-    let mut bwrap_args = BwrapArgs {
-        args,
-        preserved_files,
-        synthetic_mount_targets,
-        protected_create_targets,
-    };
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
-    bwrap_args.args.push("--unshare-user".to_string());
-    bwrap_args.args.push("--unshare-pid".to_string());
+    args.push("--unshare-user".to_string());
+    args.push("--unshare-pid".to_string());
     if options.network_mode.should_unshare_network() {
-        bwrap_args.args.push("--unshare-net".to_string());
+        args.push("--unshare-net".to_string());
     }
     // Mount a fresh /proc unless the caller explicitly disables it.
     if options.mount_proc {
-        bwrap_args.args.push("--proc".to_string());
-        bwrap_args.args.push("/proc".to_string());
+        args.push("--proc".to_string());
+        args.push("/proc".to_string());
     }
     if normalized_command_cwd.as_path() != command_cwd {
         // Bubblewrap otherwise inherits the helper's logical cwd, which can be
         // a symlink alias that disappears once the sandbox only mounts
         // canonical roots. Enter the canonical command cwd explicitly so
         // relative paths stay aligned with the mounted filesystem view.
-        bwrap_args.args.push("--chdir".to_string());
-        bwrap_args
-            .args
-            .push(path_to_string(normalized_command_cwd.as_path()));
+        args.push("--chdir".to_string());
+        args.push(path_to_string(normalized_command_cwd.as_path()));
     }
-    bwrap_args.args.push("--".to_string());
-    bwrap_args.args.extend(command);
-    Ok(bwrap_args)
+    args.push("--".to_string());
+    args.extend(command);
+    Ok(BwrapArgs {
+        args,
+        preserved_files,
+        synthetic_mount_targets,
+        protected_create_targets,
+    })
 }
 
 /// Build the bubblewrap filesystem mounts for a given filesystem policy.

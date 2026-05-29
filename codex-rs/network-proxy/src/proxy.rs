@@ -10,7 +10,6 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
 use std::path::PathBuf;
@@ -307,7 +306,10 @@ struct NetworkProxyRuntimeSettings {
 impl NetworkProxyRuntimeSettings {
     fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
         let mitm_ca_trust_bundles = if config.network.mitm {
-            let env = custom_ca_env_values();
+            let env = crate::certs::CUSTOM_CA_ENV_KEYS
+                .into_iter()
+                .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
+                .collect();
             let cwd = std::env::current_dir()
                 .context("failed to resolve current dir for managed MITM CA")?;
             Some(crate::certs::managed_ca_trust_bundles(&env, &cwd)?)
@@ -321,23 +323,6 @@ impl NetworkProxyRuntimeSettings {
             mitm_ca_trust_bundles,
         })
     }
-}
-
-fn custom_ca_env_values() -> HashMap<String, String> {
-    collect_custom_ca_env_values(
-        crate::certs::CUSTOM_CA_ENV_KEYS
-            .into_iter()
-            .filter_map(|key| std::env::var_os(key).map(|value| (key.to_string(), value))),
-    )
-}
-
-fn collect_custom_ca_env_values(
-    values: impl IntoIterator<Item = (String, OsString)>,
-) -> HashMap<String, String> {
-    values
-        .into_iter()
-        .filter_map(|(key, value)| value.into_string().ok().map(|value| (key, value)))
-        .collect()
 }
 
 #[derive(Clone)]
@@ -1036,31 +1021,6 @@ mod tests {
         assert_eq!(has_proxy_url_env_vars(&env), true);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn collect_custom_ca_env_values_skips_non_unicode_values() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let env = collect_custom_ca_env_values([
-            (
-                "SSL_CERT_FILE".to_string(),
-                OsString::from("/tmp/custom-ca.pem"),
-            ),
-            (
-                "REQUESTS_CA_BUNDLE".to_string(),
-                OsString::from_vec(vec![0xFF]),
-            ),
-        ]);
-
-        assert_eq!(
-            env,
-            HashMap::from([(
-                "SSL_CERT_FILE".to_string(),
-                "/tmp/custom-ca.pem".to_string(),
-            )])
-        );
-    }
-
     #[test]
     fn apply_proxy_env_overrides_sets_common_tool_vars() {
         let mut env = HashMap::new();
@@ -1179,10 +1139,7 @@ mod tests {
         let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
         let mitm_ca_trust_bundles = crate::certs::ManagedMitmCaTrustBundles {
             default_path: mitm_ca_trust_bundle_path.to_path_buf(),
-            env_paths: HashMap::from([(
-                "SSL_CERT_FILE".to_string(),
-                ssl_ca_trust_bundle_path.to_path_buf(),
-            )]),
+            env_paths: HashMap::from([("SSL_CERT_FILE", ssl_ca_trust_bundle_path.to_path_buf())]),
             inherited_env_values: HashMap::new(),
         };
         let mut env = HashMap::new();

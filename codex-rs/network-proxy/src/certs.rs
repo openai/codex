@@ -121,8 +121,8 @@ pub const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedMitmCaTrustBundles {
     pub(crate) default_path: PathBuf,
-    pub(crate) env_paths: HashMap<String, PathBuf>,
-    pub(crate) inherited_env_values: HashMap<String, String>,
+    pub(crate) env_paths: HashMap<&'static str, PathBuf>,
+    pub(crate) inherited_env_values: HashMap<&'static str, String>,
 }
 
 impl ManagedMitmCaTrustBundles {
@@ -153,7 +153,7 @@ fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn managed_ca_trust_bundles(
-    env: &HashMap<String, String>,
+    env: &HashMap<&'static str, String>,
     cwd: &Path,
 ) -> Result<ManagedMitmCaTrustBundles> {
     let (cert_path, _) = managed_ca_paths()?;
@@ -162,28 +162,28 @@ pub(crate) fn managed_ca_trust_bundles(
 
 fn managed_ca_trust_bundles_for_cert_path(
     cert_path: &Path,
-    env: &HashMap<String, String>,
+    env: &HashMap<&'static str, String>,
     cwd: &Path,
 ) -> Result<ManagedMitmCaTrustBundles> {
-    let default_path = inherited_generated_trust_bundle_path(
-        env.get("SSL_CERT_FILE").map(String::as_str),
-        cert_path,
-        cwd,
-    )
-    .map_or_else(
-        || {
-            let trust_bundle = build_default_managed_ca_trust_bundle(cert_path)?;
-            persist_managed_ca_trust_bundle(cert_path, &trust_bundle)
-        },
-        Ok,
-    )?;
+    let default_path = env
+        .get("SSL_CERT_FILE")
+        .map(String::as_str)
+        .map(|value| resolve_ca_bundle_path(value, cwd))
+        .filter(|path| is_current_generated_trust_bundle_path(path, cert_path))
+        .map_or_else(
+            || {
+                let trust_bundle = build_default_managed_ca_trust_bundle(cert_path)?;
+                persist_managed_ca_trust_bundle(cert_path, &trust_bundle)
+            },
+            Ok,
+        )?;
     let mut env_paths = HashMap::new();
     let mut inherited_env_values = HashMap::new();
     for key in CUSTOM_CA_ENV_KEYS {
         let Some(value) = env.get(key).filter(|value| !value.is_empty()) else {
             continue;
         };
-        inherited_env_values.insert(key.to_string(), value.clone());
+        inherited_env_values.insert(key, value.clone());
         let path = resolve_ca_bundle_path(value, cwd);
         let trust_bundle_path = if is_current_generated_trust_bundle_path(&path, cert_path) {
             path
@@ -191,7 +191,7 @@ fn managed_ca_trust_bundles_for_cert_path(
             let trust_bundle = build_managed_ca_trust_bundle_for_path(cert_path, &path)?;
             persist_managed_ca_trust_bundle(cert_path, &trust_bundle)?
         };
-        env_paths.insert(key.to_string(), trust_bundle_path);
+        env_paths.insert(key, trust_bundle_path);
     }
 
     Ok(ManagedMitmCaTrustBundles {
@@ -237,18 +237,17 @@ fn build_managed_ca_trust_bundle_for_path(
     Ok(trust_bundle)
 }
 
-fn inherited_generated_trust_bundle_path(
-    value: Option<&str>,
-    managed_ca_cert_path: &Path,
-    cwd: &Path,
-) -> Option<PathBuf> {
-    value
-        .map(|value| resolve_ca_bundle_path(value, cwd))
-        .filter(|path| is_current_generated_trust_bundle_path(path, managed_ca_cert_path))
-}
-
 fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Path) -> bool {
-    if !is_generated_trust_bundle_path(path, managed_ca_cert_path) {
+    let Some(proxy_dir) = managed_ca_cert_path.parent() else {
+        return false;
+    };
+    let Some(file_name) = path.file_name().and_then(|file_name| file_name.to_str()) else {
+        return false;
+    };
+    if path.parent() != Some(proxy_dir)
+        || !file_name.starts_with(MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX)
+        || !file_name.ends_with(".pem")
+    {
         return false;
     }
     let Ok(trust_bundle) = fs::read(path) else {
@@ -261,18 +260,6 @@ fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Pa
         && trust_bundle
             .windows(managed_ca_cert.len())
             .any(|window| window == managed_ca_cert)
-}
-
-fn is_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Path) -> bool {
-    let Some(proxy_dir) = managed_ca_cert_path.parent() else {
-        return false;
-    };
-    let Some(file_name) = path.file_name().and_then(|file_name| file_name.to_str()) else {
-        return false;
-    };
-    path.parent() == Some(proxy_dir)
-        && file_name.starts_with(MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX)
-        && file_name.ends_with(".pem")
 }
 
 fn persist_managed_ca_trust_bundle(
@@ -578,14 +565,10 @@ mod tests {
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
         fs::write(&trust_bundle_path, "stale managed bundle\n").unwrap();
         let trust_bundle_path_env = trust_bundle_path.display().to_string();
-        assert_eq!(
-            inherited_generated_trust_bundle_path(
-                Some(&trust_bundle_path_env),
-                &managed_ca_cert_path,
-                dir.path(),
-            ),
-            None,
-        );
+        assert!(!is_current_generated_trust_bundle_path(
+            &resolve_ca_bundle_path(&trust_bundle_path_env, dir.path()),
+            &managed_ca_cert_path,
+        ));
     }
 
     #[test]
@@ -599,13 +582,10 @@ mod tests {
         fs::write(&curl_bundle_path, "curl ca\n").unwrap();
         let env = HashMap::from([
             (
-                "REQUESTS_CA_BUNDLE".to_string(),
+                "REQUESTS_CA_BUNDLE",
                 requests_bundle_path.display().to_string(),
             ),
-            (
-                "CURL_CA_BUNDLE".to_string(),
-                curl_bundle_path.display().to_string(),
-            ),
+            ("CURL_CA_BUNDLE", curl_bundle_path.display().to_string()),
         ]);
 
         let bundles =
@@ -629,7 +609,7 @@ mod tests {
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
         fs::write(&requests_bundle_path, "requests ca\n").unwrap();
         let env = HashMap::from([(
-            "REQUESTS_CA_BUNDLE".to_string(),
+            "REQUESTS_CA_BUNDLE",
             requests_bundle_path.display().to_string(),
         )]);
 

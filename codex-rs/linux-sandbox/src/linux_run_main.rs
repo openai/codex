@@ -230,15 +230,15 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
-        run_bwrap_with_proc_fallback(RunBwrapWithProcFallbackArgs {
-            sandbox_policy_cwd: &sandbox_policy_cwd,
-            command_cwd: command_cwd.as_deref(),
-            file_system_sandbox_policy: &file_system_sandbox_policy,
+        run_bwrap_with_proc_fallback(
+            &sandbox_policy_cwd,
+            command_cwd.as_deref(),
+            &file_system_sandbox_policy,
             network_sandbox_policy,
             inner,
-            mount_proc: !no_proc,
+            !no_proc,
             allow_network_for_proxy,
-        });
+        );
     }
 
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
@@ -314,26 +314,15 @@ fn ensure_legacy_landlock_mode_supports_policy(
     }
 }
 
-struct RunBwrapWithProcFallbackArgs<'a> {
-    sandbox_policy_cwd: &'a Path,
-    command_cwd: Option<&'a Path>,
-    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+fn run_bwrap_with_proc_fallback(
+    sandbox_policy_cwd: &Path,
+    command_cwd: Option<&Path>,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
-}
-
-fn run_bwrap_with_proc_fallback(args: RunBwrapWithProcFallbackArgs<'_>) -> ! {
-    let RunBwrapWithProcFallbackArgs {
-        sandbox_policy_cwd,
-        command_cwd,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-        inner,
-        mount_proc,
-        allow_network_for_proxy,
-    } = args;
+) -> ! {
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);

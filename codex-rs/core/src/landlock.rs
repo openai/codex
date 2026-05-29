@@ -6,6 +6,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile;
+use codex_sandboxing::with_managed_mitm_ca_readable_roots;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,18 +34,11 @@ pub async fn spawn_command_under_linux_sandbox<P>(
 where
     P: AsRef<Path>,
 {
-    let mut permission_profile = permission_profile.clone();
-    if let Some(network) = network {
-        let managed_mitm_ca_trust_bundle_paths = network
-            .managed_mitm_ca_trust_bundle_paths()
-            .into_iter()
-            .map(AbsolutePathBuf::from_absolute_path)
-            .collect::<std::io::Result<Vec<_>>>()?;
-        permission_profile = permission_profile.with_required_readable_roots(
-            sandbox_policy_cwd.as_path(),
-            &managed_mitm_ca_trust_bundle_paths,
-        )?;
-    }
+    let permission_profile = with_managed_mitm_ca_readable_roots(
+        permission_profile.clone(),
+        network,
+        sandbox_policy_cwd.as_path(),
+    )?;
     let network_sandbox_policy = permission_profile.network_sandbox_policy();
     let args = create_linux_sandbox_command_args_for_permission_profile(
         command,

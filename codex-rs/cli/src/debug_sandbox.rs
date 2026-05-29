@@ -23,6 +23,7 @@ use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission
 use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::create_seatbelt_command_args;
+use codex_sandboxing::with_managed_mitm_ca_readable_roots;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use tokio::process::Child;
@@ -257,18 +258,11 @@ async fn run_command_under_sandbox(
     let network = network_proxy
         .as_ref()
         .map(codex_core::config::StartedNetworkProxy::proxy);
-    let mut runtime_permission_profile = config.permissions.effective_permission_profile();
-    if let Some(network) = network.as_ref() {
-        let managed_mitm_ca_trust_bundle_paths = network
-            .managed_mitm_ca_trust_bundle_paths()
-            .into_iter()
-            .map(AbsolutePathBuf::from_absolute_path)
-            .collect::<std::io::Result<Vec<_>>>()?;
-        runtime_permission_profile = runtime_permission_profile.with_required_readable_roots(
-            sandbox_policy_cwd.as_path(),
-            &managed_mitm_ca_trust_bundle_paths,
-        )?;
-    }
+    let runtime_permission_profile = with_managed_mitm_ca_readable_roots(
+        config.permissions.effective_permission_profile(),
+        network.as_ref(),
+        sandbox_policy_cwd.as_path(),
+    )?;
 
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
