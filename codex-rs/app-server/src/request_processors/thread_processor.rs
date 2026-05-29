@@ -463,6 +463,29 @@ impl ThreadRequestProcessor {
         }
     }
 
+    pub(crate) async fn thread_delete(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadDeleteParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        match self.thread_delete_inner(params).await {
+            Ok((response, deleted_thread_ids)) => {
+                self.outgoing
+                    .send_response(request_id.clone(), response)
+                    .await;
+                for thread_id in deleted_thread_ids {
+                    self.outgoing
+                        .send_server_notification(ServerNotification::ThreadDeleted(
+                            ThreadDeletedNotification { thread_id },
+                        ))
+                        .await;
+                }
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub(crate) async fn thread_increment_elicitation(
         &self,
         params: ThreadIncrementElicitationParams,
@@ -750,6 +773,14 @@ impl ThreadRequestProcessor {
     }
 
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
+        self.prepare_thread_for_removal(thread_id, "archive").await;
+    }
+
+    async fn prepare_thread_for_delete(&self, thread_id: ThreadId) {
+        self.prepare_thread_for_removal(thread_id, "delete").await;
+    }
+
+    async fn prepare_thread_for_removal(&self, thread_id: ThreadId, operation: &str) {
         let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
         if let Some(conversation) = removed_conversation {
             info!("thread {thread_id} was active; shutting down");
@@ -757,11 +788,11 @@ impl ThreadRequestProcessor {
                 ThreadShutdownResult::Complete => {}
                 ThreadShutdownResult::SubmitFailed => {
                     error!(
-                        "failed to submit Shutdown to thread {thread_id}; proceeding with archive"
+                        "failed to submit Shutdown to thread {thread_id}; proceeding with {operation}"
                     );
                 }
                 ThreadShutdownResult::TimedOut => {
-                    warn!("thread {thread_id} shutdown timed out; proceeding with archive");
+                    warn!("thread {thread_id} shutdown timed out; proceeding with {operation}");
                 }
             }
         }
@@ -1295,22 +1326,9 @@ impl ThreadRequestProcessor {
             .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
 
         let mut thread_ids = vec![thread_id];
-        if let Some(state_db_ctx) = self.state_db.as_ref() {
-            let descendants = state_db_ctx
-                .list_thread_spawn_descendants(thread_id)
-                .await
-                .map_err(|err| {
-                    internal_error(format!(
-                        "failed to list spawned descendants for session {thread_id}: {err}"
-                    ))
-                })?;
-            let mut seen = HashSet::from([thread_id]);
-            for descendant_id in descendants {
-                if seen.insert(descendant_id) {
-                    thread_ids.push(descendant_id);
-                }
-            }
-        }
+        let mut seen = HashSet::from([thread_id]);
+        self.append_state_db_spawn_descendants(thread_id, &mut thread_ids, &mut seen)
+            .await?;
 
         let mut archive_thread_ids = Vec::new();
         match self
@@ -1393,6 +1411,115 @@ impl ThreadRequestProcessor {
         }
 
         Ok((ThreadArchiveResponse {}, archived_thread_ids))
+    }
+
+    async fn append_state_db_spawn_descendants(
+        &self,
+        thread_id: ThreadId,
+        thread_ids: &mut Vec<ThreadId>,
+        seen: &mut HashSet<ThreadId>,
+    ) -> Result<(), JSONRPCErrorError> {
+        let Some(state_db_ctx) = self.state_db.as_ref() else {
+            return Ok(());
+        };
+        let descendants = state_db_ctx
+            .list_thread_spawn_descendants(thread_id)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to list spawned descendants for thread id {thread_id}: {err}"
+                ))
+            })?;
+        for descendant_id in descendants {
+            if seen.insert(descendant_id) {
+                thread_ids.push(descendant_id);
+            }
+        }
+        Ok(())
+    }
+
+    async fn thread_delete_inner(
+        &self,
+        params: ThreadDeleteParams,
+    ) -> Result<(ThreadDeleteResponse, Vec<String>), JSONRPCErrorError> {
+        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        self.thread_delete_response(params).await
+    }
+
+    async fn thread_delete_response(
+        &self,
+        params: ThreadDeleteParams,
+    ) -> Result<(ThreadDeleteResponse, Vec<String>), JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+
+        let mut thread_ids = vec![thread_id];
+        let mut seen = HashSet::from([thread_id]);
+        let has_state_db = self.state_db.is_some();
+        self.append_state_db_spawn_descendants(thread_id, &mut thread_ids, &mut seen)
+            .await?;
+
+        match self
+            .thread_manager
+            .list_agent_subtree_thread_ids(thread_id)
+            .await
+        {
+            Ok(live_thread_ids) => {
+                for live_thread_id in live_thread_ids {
+                    if seen.insert(live_thread_id) {
+                        thread_ids.push(live_thread_id);
+                    }
+                }
+            }
+            Err(CodexErr::ThreadNotFound(_)) if has_state_db => {}
+            Err(CodexErr::ThreadNotFound(_)) => {
+                return Err(internal_error(format!(
+                    "cannot delete thread {thread_id}: sqlite state db is unavailable and the thread is not loaded"
+                )));
+            }
+            Err(err) => return Err(core_thread_write_error("delete thread", err)),
+        }
+
+        let mut deleted_thread_ids = Vec::new();
+        let Some((parent_thread_id, descendant_thread_ids)) = thread_ids.split_first() else {
+            return Ok((ThreadDeleteResponse {}, deleted_thread_ids));
+        };
+
+        self.prepare_thread_for_delete(*parent_thread_id).await;
+        match self
+            .thread_store
+            .delete_thread(StoreDeleteThreadParams {
+                thread_id: *parent_thread_id,
+            })
+            .await
+        {
+            Ok(()) => {
+                deleted_thread_ids.push(parent_thread_id.to_string());
+            }
+            Err(err) => return Err(thread_store_delete_error(err)),
+        }
+
+        for descendant_thread_id in descendant_thread_ids.iter().rev().copied() {
+            self.prepare_thread_for_delete(descendant_thread_id).await;
+            match self
+                .thread_store
+                .delete_thread(StoreDeleteThreadParams {
+                    thread_id: descendant_thread_id,
+                })
+                .await
+            {
+                Ok(()) => {
+                    deleted_thread_ids.push(descendant_thread_id.to_string());
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to delete spawned descendant thread {descendant_thread_id} while deleting {thread_id}: {err}"
+                    );
+                }
+            }
+        }
+
+        Ok((ThreadDeleteResponse {}, deleted_thread_ids))
     }
 
     async fn thread_increment_elicitation_inner(
@@ -3982,6 +4109,19 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
             operation: unsupported_operation,
         } => unsupported_thread_store_operation(unsupported_operation),
         err => internal_error(format!("failed to {operation} session: {err}")),
+    }
+}
+
+fn thread_store_delete_error(err: ThreadStoreError) -> JSONRPCErrorError {
+    match err {
+        ThreadStoreError::ThreadNotFound { thread_id } => {
+            invalid_request(format!("thread not found: {thread_id}"))
+        }
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => {
+            unsupported_thread_store_operation(operation)
+        }
+        err => internal_error(format!("failed to delete thread: {err}")),
     }
 }
 

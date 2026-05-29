@@ -1071,6 +1071,11 @@ impl MessageProcessor {
                     .thread_archive(request_id.clone(), params)
                     .await
             }
+            ClientRequest::ThreadDelete { params, .. } => {
+                self.thread_processor
+                    .thread_delete(request_id.clone(), params)
+                    .await
+            }
             ClientRequest::ThreadIncrementElicitation { params, .. } => {
                 self.thread_processor
                     .thread_increment_elicitation(params)

@@ -69,7 +69,7 @@ The API exposes three top level primitives representing an interaction between a
 - **Turn**: One turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
 - **Item**: Represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations. Example items include user message, agent reasoning, agent message, shell command, file edit, etc.
 
-Use the thread APIs to create, list, or archive conversations. Drive a conversation with turn APIs and stream progress via turn notifications.
+Use the thread APIs to create, list, archive, or delete conversations. Drive a conversation with turn APIs and stream progress via turn notifications.
 
 ## Lifecycle Overview
 
@@ -151,6 +151,7 @@ Example with notification opt-out:
 - `thread/settings/updated` — experimental notification emitted to subscribed clients when a loaded thread’s effective next-turn settings change; includes `threadId` and the full `threadSettings`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
+- `thread/delete` — hard-delete a thread whether archived or active, discover its spawned descendants before deleting, and then best-effort delete descendant threads, rollout files, goals, subagent state, logs, and related metadata; returns `{}` on success and emits `thread/deleted` for each thread whose deletion committed.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
@@ -609,6 +610,16 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 ```
 
 An archived thread will not appear in `thread/list` unless `archived` is set to `true`.
+
+### Example: Delete a thread
+
+Use `thread/delete` to hard-delete a thread and attempt to delete its spawned descendant threads and associated metadata. The server deletes the requested thread’s state DB row as the commit point; once that succeeds, rollout file deletion and descendant cleanup are best effort.
+
+```json
+{ "method": "thread/delete", "id": 23, "params": { "threadId": "thr_b" } }
+{ "id": 23, "result": {} }
+{ "method": "thread/deleted", "params": { "threadId": "thr_b" } }
+```
 
 ### Example: Unarchive a thread
 
@@ -1198,7 +1209,7 @@ All filesystem paths in this section must be absolute.
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/deleted`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.
 
 Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
 

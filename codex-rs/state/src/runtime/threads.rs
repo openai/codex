@@ -886,15 +886,91 @@ ON CONFLICT(id) DO UPDATE SET
 
     /// Delete a thread metadata row by id.
     pub async fn delete_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
+        let thread_id_string = thread_id.to_string();
         let result = sqlx::query("DELETE FROM threads WHERE id = ?")
-            .bind(thread_id.to_string())
+            .bind(thread_id_string.as_str())
             .execute(self.pool.as_ref())
             .await?;
         let rows_affected = result.rows_affected();
-        self.memories.delete_thread_memory(thread_id).await?;
-        if rows_affected > 0 {
-            let _ = self.thread_goals.delete_thread_goal(thread_id).await?;
+        if rows_affected == 0 {
+            return Ok(0);
         }
+
+        if let Err(err) = sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
+            .bind(thread_id_string.as_str())
+            .execute(self.pool.as_ref())
+            .await
+        {
+            warn!("failed to delete dynamic tools for thread {thread_id}: {err}");
+        }
+
+        if let Err(err) = sqlx::query(
+            "DELETE FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
+        )
+        .bind(thread_id_string.as_str())
+        .bind(thread_id_string.as_str())
+        .execute(self.pool.as_ref())
+        .await
+        {
+            warn!("failed to delete spawn edges for thread {thread_id}: {err}");
+        }
+
+        let now = Utc::now().timestamp();
+        if let Err(err) = sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    assigned_thread_id = NULL,
+    updated_at = ?,
+    last_error = ?
+WHERE assigned_thread_id = ? AND status = ?
+            "#,
+        )
+        .bind(AgentJobItemStatus::Pending.as_str())
+        .bind(now)
+        .bind("assigned thread was deleted")
+        .bind(thread_id_string.as_str())
+        .bind(AgentJobItemStatus::Running.as_str())
+        .execute(self.pool.as_ref())
+        .await
+        {
+            warn!("failed to requeue agent job items for deleted thread {thread_id}: {err}");
+        }
+
+        if let Err(err) = sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET assigned_thread_id = NULL, updated_at = ?
+WHERE assigned_thread_id = ?
+            "#,
+        )
+        .bind(now)
+        .bind(thread_id_string.as_str())
+        .execute(self.pool.as_ref())
+        .await
+        {
+            warn!(
+                "failed to clear agent job item assignments for deleted thread {thread_id}: {err}"
+            );
+        }
+
+        if let Err(err) = sqlx::query("DELETE FROM logs WHERE thread_id = ?")
+            .bind(thread_id_string.as_str())
+            .execute(self.logs_pool.as_ref())
+            .await
+        {
+            warn!("failed to delete logs for thread {thread_id}: {err}");
+        }
+
+        if let Err(err) = self.memories.delete_thread_memory(thread_id).await {
+            warn!("failed to delete memory metadata for thread {thread_id}: {err}");
+        }
+
+        if let Err(err) = self.thread_goals.delete_thread_goal(thread_id).await {
+            warn!("failed to delete goal for thread {thread_id}: {err}");
+        }
+
         Ok(rows_affected)
     }
 }
@@ -1142,6 +1218,7 @@ mod tests {
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::path::PathBuf;
 
     #[tokio::test]
@@ -1180,6 +1257,161 @@ mod tests {
                 .await
                 .expect("memory mode should remain readable");
         assert_eq!(memory_mode, "disabled");
+    }
+
+    #[tokio::test]
+    async fn delete_thread_cleans_associated_state() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000401").expect("valid thread id");
+        let child_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000402").expect("valid thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await
+            .expect("thread insert should succeed");
+        runtime
+            .upsert_thread_spawn_edge(
+                thread_id,
+                child_thread_id,
+                DirectionalThreadSpawnEdgeStatus::Closed,
+            )
+            .await
+            .expect("spawn edge insert should succeed");
+        sqlx::query(
+            r#"
+INSERT INTO thread_dynamic_tools (thread_id, position, name, description, input_schema)
+VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .bind(0_i64)
+        .bind("test_tool")
+        .bind("test dynamic tool")
+        .bind("{}")
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("dynamic tool insert should succeed");
+        runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "test goal",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("goal insert should succeed");
+        runtime
+            .insert_log(&LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "test".to_string(),
+                message: Some("legacy log".to_string()),
+                feedback_log_body: Some("feedback log".to_string()),
+                thread_id: Some(thread_id.to_string()),
+                process_uuid: Some("process-1".to_string()),
+                module_path: None,
+                file: None,
+                line: None,
+            })
+            .await
+            .expect("log insert should succeed");
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: "job-1".to_string(),
+                    name: "test-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: None,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: "item-1".to_string(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path": "file-1"}),
+                }],
+            )
+            .await
+            .expect("agent job insert should succeed");
+        runtime
+            .mark_agent_job_running("job-1")
+            .await
+            .expect("agent job should mark running");
+        runtime
+            .mark_agent_job_item_running_with_thread("job-1", "item-1", &thread_id.to_string())
+            .await
+            .expect("agent job item should mark running");
+
+        let rows = runtime
+            .delete_thread(thread_id)
+            .await
+            .expect("thread delete should succeed");
+
+        assert_eq!(rows, 1);
+        assert!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("thread lookup should succeed")
+                .is_none()
+        );
+        let dynamic_tool_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM thread_dynamic_tools WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("dynamic tool count should be readable");
+        assert_eq!(dynamic_tool_count, 0);
+        let spawn_edge_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
+        )
+        .bind(thread_id.to_string())
+        .bind(thread_id.to_string())
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("spawn edge count should be readable");
+        assert_eq!(spawn_edge_count, 0);
+        assert!(
+            runtime
+                .thread_goals()
+                .get_thread_goal(thread_id)
+                .await
+                .expect("goal lookup should succeed")
+                .is_none()
+        );
+        let logs = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec![thread_id.to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("log query should succeed");
+        assert_eq!(logs.len(), 0);
+        let job_item = runtime
+            .get_agent_job_item("job-1", "item-1")
+            .await
+            .expect("job item lookup should succeed")
+            .expect("job item should exist");
+        assert_eq!(job_item.status, AgentJobItemStatus::Pending);
+        assert_eq!(job_item.assigned_thread_id, None);
+        assert_eq!(
+            job_item.last_error,
+            Some("assigned thread was deleted".to_string())
+        );
     }
 
     #[tokio::test]
