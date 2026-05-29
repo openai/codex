@@ -4129,10 +4129,10 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .skills_for_cwd(
             &crate::skills_load_input_from_config(
                 &parent_config,
-                crate::skills::EnvironmentPathRef::new(
+                Some(crate::skills::EnvironmentPathRef::new(
                     Arc::clone(&skill_fs),
                     parent_config.cwd.clone(),
-                ),
+                )),
                 session
                     .services
                     .environment_manager
@@ -4709,7 +4709,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
     let skills_input = crate::skills_load_input_from_config(
         &per_turn_config,
-        cwd,
+        Some(cwd),
         services
             .environment_manager
             .try_local_environment()
@@ -6562,7 +6562,7 @@ where
     );
     let skills_input = crate::skills_load_input_from_config(
         &per_turn_config,
-        cwd,
+        Some(cwd),
         services
             .environment_manager
             .try_local_environment()
@@ -7255,6 +7255,9 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            ),
             path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
             plugin_id: None,
@@ -7266,6 +7269,9 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            ),
             path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
             plugin_id: None,
@@ -7302,6 +7308,9 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+        ),
         path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7347,6 +7356,9 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
+        ),
         path_to_skills_md: test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7358,6 +7370,9 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
+        ),
         path_to_skills_md: test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7406,6 +7421,9 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            ),
             path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
             plugin_id: None,
@@ -7417,6 +7435,9 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            ),
             path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
             plugin_id: None,

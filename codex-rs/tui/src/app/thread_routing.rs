@@ -621,7 +621,6 @@ impl App {
                     app_server
                         .skills_list(codex_app_server_protocol::SkillsListParams {
                             cwds: cwds.clone(),
-                            environment_id: None,
                             force_reload: *force_reload,
                         })
                         .await,

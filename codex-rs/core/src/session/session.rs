@@ -461,12 +461,7 @@ async fn warm_plugins_and_skills_for_session_init(
                 environment.cwd.clone(),
             )
         });
-    let Some(path_ref) = path_ref else {
-        return Vec::new();
-    };
-    let local_file_system = environment_manager
-        .try_local_environment()
-        .map(|environment| environment.get_filesystem());
+    let local_file_system = Some(Arc::clone(&codex_exec_server::LOCAL_FS));
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();

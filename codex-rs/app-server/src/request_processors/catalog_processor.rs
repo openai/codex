@@ -17,12 +17,12 @@ const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    disabled_paths: &HashSet<codex_exec_server::EnvironmentPathRef>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
         .iter()
         .map(|skill| {
-            let enabled = !disabled_paths.contains(&skill.path_to_skills_md);
+            let enabled = !disabled_paths.contains(&skill.source_path);
             codex_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
@@ -499,11 +499,7 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams {
-            cwds,
-            environment_id,
-            force_reload,
-        } = params;
+        let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
         } else {
@@ -518,22 +514,11 @@ impl CatalogRequestProcessor {
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let environment_manager = self.thread_manager.environment_manager();
-        let selected_environment = match environment_id {
-            Some(environment_id) => {
-                let environment = environment_manager
-                    .get_environment(&environment_id)
-                    .ok_or_else(|| {
-                        invalid_request(format!(
-                            "unknown skills/list environment id `{environment_id}`"
-                        ))
-                    })?;
-                Some(environment)
-            }
-            None => environment_manager.try_local_environment(),
-        };
-        let local_file_system = environment_manager
-            .try_local_environment()
-            .map(|environment| environment.get_filesystem());
+        // TODO: Reintroduce env-scoped `skills/list` only after cwd/config-layer discovery can run
+        // against the selected environment and the design decides which non-repo roots stay local
+        // versus follow that environment.
+        let selected_environment = environment_manager.default_environment();
+        let local_file_system = Some(Arc::clone(&codex_exec_server::LOCAL_FS));
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
@@ -570,24 +555,13 @@ impl CatalogRequestProcessor {
                     } else {
                         Vec::new()
                     };
-                    let Some(environment) = selected_environment.as_ref() else {
-                        // Omitted `environmentId` uses the legacy implicit local target. When
-                        // local exec is disabled there is no valid implicit target, so return an
-                        // empty catalog rather than silently switching to the default environment.
-                        return (
-                            index,
-                            codex_app_server_protocol::SkillsListEntry {
-                                cwd,
-                                skills: Vec::new(),
-                                errors: Vec::new(),
-                            },
-                        );
-                    };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        codex_exec_server::EnvironmentPathRef::new(
-                            environment.get_filesystem(),
-                            cwd_abs.clone(),
-                        ),
+                        selected_environment.as_ref().map(|environment| {
+                            codex_exec_server::EnvironmentPathRef::new(
+                                environment.get_filesystem(),
+                                cwd_abs.clone(),
+                            )
+                        }),
                         local_file_system,
                         effective_skill_roots,
                         config_layer_stack,

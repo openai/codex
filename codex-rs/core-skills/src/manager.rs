@@ -27,7 +27,7 @@ use codex_exec_server::ExecutorFileSystem;
 
 #[derive(Clone)]
 pub struct SkillsLoadInput {
-    pub env_path: EnvironmentPathRef,
+    pub env_path: Option<EnvironmentPathRef>,
     /// Local user/system/plugin skill roots are read from this filesystem for now.
     pub local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     pub effective_skill_roots: Vec<PluginSkillRoot>,
@@ -49,7 +49,7 @@ impl std::fmt::Debug for SkillsLoadInput {
 
 impl SkillsLoadInput {
     pub fn new(
-        env_path: EnvironmentPathRef,
+        env_path: Option<EnvironmentPathRef>,
         local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
         effective_skill_roots: Vec<PluginSkillRoot>,
         config_layer_stack: ConfigLayerStack,
@@ -136,7 +136,7 @@ impl SkillsManager {
 
     pub async fn skill_roots_for_config(&self, input: &SkillsLoadInput) -> Vec<SkillRoot> {
         let mut roots = skill_roots(
-            &input.env_path,
+            input.env_path.as_ref(),
             input.local_file_system.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
@@ -168,7 +168,7 @@ impl SkillsManager {
         }
 
         let mut roots = skill_roots(
-            &input.env_path,
+            input.env_path.as_ref(),
             input.local_file_system.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
@@ -254,7 +254,7 @@ impl SkillsManager {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct SkillsPathCacheKey {
-    env_path: EnvironmentPathRef,
+    env_path: Option<EnvironmentPathRef>,
     local_file_system: Option<ExecutorFileSystemRef>,
 }
 
@@ -338,7 +338,7 @@ fn config_skills_cache_key(
 
 fn finalize_skill_outcome(
     mut outcome: SkillLoadOutcome,
-    disabled_paths: HashSet<AbsolutePathBuf>,
+    disabled_paths: HashSet<EnvironmentPathRef>,
 ) -> SkillLoadOutcome {
     outcome.disabled_paths = disabled_paths;
     let (by_scripts_dir, by_doc_path) =

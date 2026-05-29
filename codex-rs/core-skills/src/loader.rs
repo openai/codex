@@ -1,6 +1,5 @@
 use crate::model::SkillDependencies;
 use crate::model::SkillError;
-use crate::model::SkillFileSystemsByPath;
 use crate::model::SkillInterface;
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
@@ -162,14 +161,11 @@ where
     I: IntoIterator<Item = SkillRoot>,
 {
     let mut outcome = SkillLoadOutcome::default();
-    let mut skill_roots: Vec<AbsolutePathBuf> = Vec::new();
-    let mut skill_root_by_path: HashMap<AbsolutePathBuf, AbsolutePathBuf> = HashMap::new();
-    let mut file_systems_by_skill_path: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>> =
-        HashMap::new();
+    let mut skill_roots: Vec<EnvironmentPathRef> = Vec::new();
+    let mut skill_root_by_path: HashMap<EnvironmentPathRef, EnvironmentPathRef> = HashMap::new();
     for root in roots {
         let root_path = canonicalize_for_skill_identity(root.path.path());
         let root_path_ref = root.path.with_path(root_path.clone());
-        let fs = root_path_ref.file_system();
         let skills_before_root = outcome.skills.len();
         discover_skills_under_root(
             &root_path_ref,
@@ -180,34 +176,29 @@ where
         )
         .await;
         for skill in &outcome.skills[skills_before_root..] {
-            if !skill_roots.contains(&root_path) {
-                skill_roots.push(root_path.clone());
+            if !skill_roots.contains(&root_path_ref) {
+                skill_roots.push(root_path_ref.clone());
             }
             skill_root_by_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| root_path.clone());
-            file_systems_by_skill_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| Arc::clone(&fs));
+                .entry(skill.source_path.clone())
+                .or_insert_with(|| root_path_ref.clone());
         }
     }
 
-    let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
+    let mut seen: HashSet<EnvironmentPathRef> = HashSet::new();
     outcome
         .skills
-        .retain(|skill| seen.insert(skill.path_to_skills_md.clone()));
-    let retained_skill_paths: HashSet<AbsolutePathBuf> = outcome
+        .retain(|skill| seen.insert(skill.source_path.clone()));
+    let retained_skill_paths: HashSet<EnvironmentPathRef> = outcome
         .skills
         .iter()
-        .map(|skill| skill.path_to_skills_md.clone())
+        .map(|skill| skill.source_path.clone())
         .collect();
     skill_root_by_path.retain(|path, _| retained_skill_paths.contains(path));
-    let used_roots: HashSet<AbsolutePathBuf> = skill_root_by_path.values().cloned().collect();
+    let used_roots: HashSet<EnvironmentPathRef> = skill_root_by_path.values().cloned().collect();
     skill_roots.retain(|root| used_roots.contains(root));
-    file_systems_by_skill_path.retain(|path, _| retained_skill_paths.contains(path));
     outcome.skill_roots = skill_roots;
     outcome.skill_root_by_path = Arc::new(skill_root_by_path);
-    outcome.file_systems_by_skill_path = SkillFileSystemsByPath::new(file_systems_by_skill_path);
 
     fn scope_rank(scope: SkillScope) -> u8 {
         // Higher-priority scopes first (matches root scan order for dedupe).
@@ -230,15 +221,14 @@ where
 }
 
 pub(crate) async fn skill_roots(
-    env_path: &EnvironmentPathRef,
+    env_path: Option<&EnvironmentPathRef>,
     local_file_system: Option<&Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
     // `env_path` owns workspace/repo-relative skill discovery for the selected environment.
-    // `local_file_system` owns client-local system/user/plugin roots and is absent when local exec
-    // is disabled, in which case those local roots intentionally do not load.
+    // `local_file_system` owns client-local system/user/plugin roots.
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     skill_roots_with_home_dir(
@@ -253,7 +243,7 @@ pub(crate) async fn skill_roots(
 }
 
 async fn skill_roots_with_home_dir(
-    env_path: &EnvironmentPathRef,
+    env_path: Option<&EnvironmentPathRef>,
     local_file_system: Option<&Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     home_dir: Option<&AbsolutePathBuf>,
@@ -262,7 +252,10 @@ async fn skill_roots_with_home_dir(
 ) -> Vec<SkillRoot> {
     // Assemble one precedence-ordered root list from the two authorities above, then dedupe before
     // any reads happen so downstream loading stays oblivious to local-vs-selected-env routing.
-    let mut roots = repo_config_skill_roots(env_path, config_layer_stack);
+    let mut roots = env_path
+        .into_iter()
+        .flat_map(|env_path| repo_config_skill_roots(env_path, config_layer_stack))
+        .collect::<Vec<_>>();
     roots.extend(local_skill_roots(
         local_file_system,
         config_layer_stack,
@@ -270,7 +263,9 @@ async fn skill_roots_with_home_dir(
         plugin_skill_roots,
         extra_skill_roots,
     ));
-    roots.extend(repo_agents_skill_roots(env_path, config_layer_stack).await);
+    if let Some(env_path) = env_path {
+        roots.extend(repo_agents_skill_roots(env_path, config_layer_stack).await);
+    }
     dedupe_skill_roots_by_path(&mut roots);
     roots
 }
@@ -283,11 +278,10 @@ fn local_skill_roots(
     extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
     // These roots are absolute paths on the client machine, not paths inside the selected
-    // workspace environment. Bind them to the available local exec filesystem so remote turns
-    // keep loading local installed/bundled/plugin skills without reading those paths remotely.
+    // workspace environment. Bind them to the local-authority filesystem so remote turns keep
+    // loading local installed/bundled/plugin skills without reading those paths remotely.
     let Some(local_file_system) = local_file_system else {
-        // Local exec can be disabled. In that case, keep repo/env skill loading intact but skip
-        // local absolute roots instead of falling back to the process-global local filesystem.
+        // Some focused tests intentionally omit local authority to prove repo-only loading.
         return Vec::new();
     };
     let mut roots = Vec::new();
@@ -524,6 +518,8 @@ fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
 }
 
 fn canonicalize_for_skill_identity(path: &AbsolutePathBuf) -> AbsolutePathBuf {
+    // TODO: Canonicalize through the bound executor filesystem once it exposes a realpath API.
+    // The local fallback below cannot resolve remote-only paths.
     path.canonicalize().unwrap_or_else(|_| path.clone())
 }
 
@@ -742,7 +738,8 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-        path_to_skills_md: resolved_path,
+        path_to_skills_md: resolved_path.clone(),
+        source_path: skill_path.with_path(resolved_path),
         scope,
         plugin_id: plugin_id.map(str::to_string),
     })
@@ -1135,7 +1132,7 @@ pub(crate) async fn skill_roots_from_layer_stack(
     let path_ref = EnvironmentPathRef::new(fs, cwd.clone());
     let local_file_system = path_ref.file_system();
     skill_roots_with_home_dir(
-        &path_ref,
+        Some(&path_ref),
         Some(&local_file_system),
         config_layer_stack,
         home_dir,

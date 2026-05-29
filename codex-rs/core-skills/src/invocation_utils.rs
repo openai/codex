@@ -3,22 +3,24 @@ use std::path::Path;
 
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
+use codex_exec_server::EnvironmentPathRef;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub(crate) fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,
 ) -> (
-    HashMap<AbsolutePathBuf, SkillMetadata>,
-    HashMap<AbsolutePathBuf, SkillMetadata>,
+    HashMap<EnvironmentPathRef, SkillMetadata>,
+    HashMap<EnvironmentPathRef, SkillMetadata>,
 ) {
     let mut by_scripts_dir = HashMap::new();
     let mut by_skill_doc_path = HashMap::new();
     for skill in skills {
-        let skill_doc_path = canonicalize_if_exists(&skill.path_to_skills_md);
+        let skill_doc_path = canonicalize_if_exists(&skill.source_path);
         by_skill_doc_path.insert(skill_doc_path, skill.clone());
 
         if let Some(skill_dir) = skill.path_to_skills_md.parent() {
-            let scripts_dir = canonicalize_if_exists(&skill_dir.join("scripts"));
+            let scripts_dir =
+                canonicalize_if_exists(&skill.source_path.with_path(skill_dir.join("scripts")));
             by_scripts_dir.insert(scripts_dir, skill);
         }
     }
@@ -29,7 +31,7 @@ pub(crate) fn build_implicit_skill_path_indexes(
 pub fn detect_implicit_skill_invocation_for_command(
     outcome: &SkillLoadOutcome,
     command: &str,
-    workdir: &AbsolutePathBuf,
+    workdir: &EnvironmentPathRef,
 ) -> Option<SkillMetadata> {
     let workdir = canonicalize_if_exists(workdir);
     let tokens = tokenize_command(command);
@@ -81,14 +83,20 @@ fn script_run_token(tokens: &[String]) -> Option<&str> {
 fn detect_skill_script_run(
     outcome: &SkillLoadOutcome,
     tokens: &[String],
-    workdir: &AbsolutePathBuf,
+    workdir: &EnvironmentPathRef,
 ) -> Option<SkillMetadata> {
     let script_token = script_run_token(tokens)?;
     let script_path = Path::new(script_token);
-    let script_path = canonicalize_if_exists(&workdir.join(script_path));
+    let script_path = canonicalize_if_exists(&resolve_path_ref(workdir, script_path)?);
 
-    for path in script_path.ancestors() {
-        if let Some(candidate) = outcome.implicit_skills_by_scripts_dir.get(&path) {
+    for path in script_path.path().ancestors() {
+        let Ok(path) = AbsolutePathBuf::from_absolute_path(path) else {
+            continue;
+        };
+        if let Some(candidate) = outcome
+            .implicit_skills_by_scripts_dir
+            .get(&script_path.with_path(path))
+        {
             return Some(candidate.clone());
         }
     }
@@ -99,7 +107,7 @@ fn detect_skill_script_run(
 fn detect_skill_doc_read(
     outcome: &SkillLoadOutcome,
     tokens: &[String],
-    workdir: &AbsolutePathBuf,
+    workdir: &EnvironmentPathRef,
 ) -> Option<SkillMetadata> {
     if !command_reads_file(tokens) {
         return None;
@@ -110,7 +118,7 @@ fn detect_skill_doc_read(
             continue;
         }
         let path = Path::new(token);
-        let candidate_path = canonicalize_if_exists(&workdir.join(path));
+        let candidate_path = canonicalize_if_exists(&resolve_path_ref(workdir, path)?);
         if let Some(candidate) = outcome.implicit_skills_by_doc_path.get(&candidate_path) {
             return Some(candidate.clone());
         }
@@ -136,8 +144,24 @@ fn command_basename(command: &str) -> String {
         .to_string()
 }
 
-fn canonicalize_if_exists(path: &AbsolutePathBuf) -> AbsolutePathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.clone())
+fn resolve_path_ref(workdir: &EnvironmentPathRef, path: &Path) -> Option<EnvironmentPathRef> {
+    if path.is_absolute() {
+        AbsolutePathBuf::from_absolute_path(path)
+            .ok()
+            .map(|path| workdir.with_path(path))
+    } else {
+        workdir.join_relative(path)
+    }
+}
+
+fn canonicalize_if_exists(path: &EnvironmentPathRef) -> EnvironmentPathRef {
+    // TODO: Canonicalize through the bound executor filesystem once it exposes a realpath API.
+    // The local fallback below cannot resolve remote-only paths.
+    path.with_path(
+        path.path()
+            .canonicalize()
+            .unwrap_or_else(|_| path.path().clone()),
+    )
 }
 
 #[cfg(test)]

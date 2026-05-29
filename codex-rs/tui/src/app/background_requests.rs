@@ -674,7 +674,6 @@ pub(super) async fn fetch_skills_list(
             request_id,
             params: SkillsListParams {
                 cwds: vec![cwd],
-                environment_id: None,
                 force_reload: true,
             },
         })

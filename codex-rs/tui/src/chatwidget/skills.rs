@@ -242,6 +242,9 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata
             }),
         policy: None,
         path_to_skills_md: skill.path.clone(),
+        // TODO: `skills/list` is local-only until its response carries source authority alongside
+        // the raw path; consume that authority here before supporting non-local listed skills.
+        source_path: codex_exec_server::EnvironmentPathRef::local(skill.path.clone()),
         scope,
         plugin_id: None,
     })
