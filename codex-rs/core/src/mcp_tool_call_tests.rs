@@ -1886,6 +1886,7 @@ async fn persist_codex_app_tool_approval_writes_tool_override() {
                 "calendar".to_string(),
                 AppConfig {
                     enabled: true,
+                    approvals_reviewer: None,
                     destructive_enabled: None,
                     open_world_enabled: None,
                     default_tools_approval_mode: None,
@@ -2666,6 +2667,55 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     assert_eq!(
         guardian_request_log.single_request().path(),
         "/v1/responses"
+    );
+}
+
+#[tokio::test]
+async fn codex_apps_mcp_uses_connector_approvals_reviewer_override() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "user"
+
+[apps.calendar]
+approvals_reviewer = "auto_review"
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+    let (_session, mut turn_context) = make_session_and_context().await;
+    turn_context.config = Arc::new(config);
+    let metadata = approval_metadata(
+        Some("calendar"),
+        Some("Calendar"),
+        /*connector_description*/ None,
+        /*tool_title*/ None,
+        /*tool_description*/ None,
+    );
+    let connected_app_invocation = McpInvocation {
+        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool: "create_event".to_string(),
+        arguments: None,
+    };
+
+    assert_eq!(
+        mcp_approvals_reviewer(&turn_context, &connected_app_invocation, Some(&metadata),),
+        ApprovalsReviewer::AutoReview
+    );
+
+    let custom_mcp_invocation = McpInvocation {
+        server: "custom_server".to_string(),
+        tool: "create_event".to_string(),
+        arguments: None,
+    };
+    assert_eq!(
+        mcp_approvals_reviewer(&turn_context, &custom_mcp_invocation, Some(&metadata)),
+        ApprovalsReviewer::User
     );
 }
 

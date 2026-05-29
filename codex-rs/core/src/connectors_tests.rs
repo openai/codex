@@ -12,6 +12,7 @@ use codex_config::ConfigRequirementsToml;
 use codex_config::types::AppConfig;
 use codex_config::types::AppToolConfig;
 use codex_config::types::AppToolsConfig;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsDefaultConfig;
 use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
@@ -377,6 +378,7 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: None,
@@ -388,6 +390,96 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
 
     assert!(app_is_enabled(&apps_config, Some("calendar")));
     assert!(!app_is_enabled(&apps_config, Some("drive")));
+}
+
+#[tokio::test]
+async fn app_approvals_reviewer_allows_app_to_enable_guardian() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "user"
+
+[apps.calendar]
+approvals_reviewer = "auto_review"
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+
+    assert_eq!(
+        app_approvals_reviewer(&config, Some("calendar")),
+        ApprovalsReviewer::AutoReview
+    );
+    assert_eq!(
+        app_approvals_reviewer(&config, Some("drive")),
+        ApprovalsReviewer::User
+    );
+}
+
+#[tokio::test]
+async fn app_approvals_reviewer_allows_app_to_disable_guardian() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "auto_review"
+
+[apps.calendar]
+approvals_reviewer = "user"
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+
+    assert_eq!(
+        app_approvals_reviewer(&config, Some("calendar")),
+        ApprovalsReviewer::User
+    );
+    assert_eq!(
+        app_approvals_reviewer(&config, Some("drive")),
+        ApprovalsReviewer::AutoReview
+    );
+}
+
+#[tokio::test]
+async fn app_approvals_reviewer_respects_global_reviewer_requirements() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "auto_review"
+
+[apps.calendar]
+approvals_reviewer = "user"
+"#,
+    )
+    .expect("write config");
+    let requirements = ConfigRequirementsToml {
+        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+        ..Default::default()
+    };
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await
+        .expect("config should build");
+
+    assert_eq!(
+        app_approvals_reviewer(&config, Some("calendar")),
+        ApprovalsReviewer::AutoReview
+    );
 }
 
 #[test]
@@ -932,6 +1024,7 @@ fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: None,
@@ -969,6 +1062,7 @@ fn app_tool_policy_per_tool_enabled_true_overrides_app_level_disable_flags() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: None,
@@ -1012,6 +1106,7 @@ fn app_tool_policy_default_tools_enabled_true_overrides_app_level_tool_hints() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: None,
@@ -1047,6 +1142,7 @@ fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() 
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: Some(true),
                 open_world_enabled: Some(true),
                 default_tools_approval_mode: Some(AppToolApproval::Approve),
@@ -1084,6 +1180,7 @@ fn app_tool_policy_uses_default_tools_approval_mode() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: None,
                 open_world_enabled: None,
                 default_tools_approval_mode: Some(AppToolApproval::Prompt),
@@ -1123,6 +1220,7 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
             "calendar".to_string(),
             AppConfig {
                 enabled: true,
+                approvals_reviewer: None,
                 destructive_enabled: Some(false),
                 open_world_enabled: Some(false),
                 default_tools_approval_mode: Some(AppToolApproval::Auto),

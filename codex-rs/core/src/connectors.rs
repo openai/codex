@@ -26,6 +26,7 @@ use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
@@ -564,6 +565,25 @@ pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -
         tool_info.tool.annotations.as_ref(),
     )
     .enabled
+}
+
+pub(crate) fn app_approvals_reviewer(
+    config: &Config,
+    connector_id: Option<&str>,
+) -> ApprovalsReviewer {
+    read_user_apps_config(config)
+        .as_ref()
+        .and_then(|apps_config| connector_id.and_then(|id| apps_config.apps.get(id)))
+        .and_then(|app| app.approvals_reviewer)
+        .filter(|reviewer| {
+            config
+                .config_layer_stack
+                .requirements()
+                .approvals_reviewer
+                .can_set(reviewer)
+                .is_ok()
+        })
+        .unwrap_or(config.approvals_reviewer)
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {

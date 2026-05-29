@@ -5,6 +5,7 @@ use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
 use codex_app_server_protocol::AppConfig;
 use codex_app_server_protocol::AppToolApproval;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -333,6 +334,7 @@ async fn config_read_includes_apps() -> Result<()> {
         r#"
 [apps.app1]
 enabled = false
+approvals_reviewer = "user"
 destructive_enabled = false
 default_tools_approval_mode = "prompt"
 "#,
@@ -368,6 +370,7 @@ default_tools_approval_mode = "prompt"
                 "app1".to_string(),
                 AppConfig {
                     enabled: false,
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
                     destructive_enabled: Some(false),
                     open_world_enabled: None,
                     default_tools_approval_mode: Some(AppToolApproval::Prompt),
@@ -379,6 +382,16 @@ default_tools_approval_mode = "prompt"
     );
     assert_eq!(
         origins.get("apps.app1.enabled").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+            profile: None,
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps.app1.approvals_reviewer")
+            .expect("origin")
+            .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
             profile: None,
