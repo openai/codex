@@ -1,0 +1,109 @@
+use super::enroll::format_headers;
+use super::enroll::preview_remote_control_response_body;
+use super::protocol::RemoteControlTarget;
+use super::protocol::StartRemoteControlPairingRequest;
+use super::protocol::StartRemoteControlPairingResponse;
+use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_login::default_client::build_reqwest_client;
+use std::io;
+use std::io::ErrorKind;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+
+const REMOTE_CONTROL_PAIRING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[derive(Debug, Clone)]
+pub(super) struct RemoteControlPairingClient {
+    pairing_url: String,
+    remote_control_token: String,
+    expires_at: OffsetDateTime,
+}
+
+impl RemoteControlPairingClient {
+    pub(super) fn new(
+        remote_control_target: &RemoteControlTarget,
+        remote_control_token: String,
+        expires_at: OffsetDateTime,
+    ) -> Self {
+        Self {
+            pairing_url: remote_control_target.pair_url.clone(),
+            remote_control_token,
+            expires_at,
+        }
+    }
+
+    pub(super) async fn start(
+        &self,
+        request: StartRemoteControlPairingRequest,
+    ) -> io::Result<RemoteControlPairingStartResponse> {
+        if self.expires_at <= OffsetDateTime::now_utc() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "remote control pairing is unavailable because the server token expired",
+            ));
+        }
+
+        let response = build_reqwest_client()
+            .post(&self.pairing_url)
+            .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
+            .bearer_auth(&self.remote_control_token)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to start remote control pairing at `{}`: {err}",
+                    self.pairing_url
+                ))
+            })?;
+        let headers = response.headers().clone();
+        let status = response.status();
+        let body = response.bytes().await.map_err(|err| {
+            io::Error::other(format!(
+                "failed to read remote control pairing response from `{}`: {err}",
+                self.pairing_url
+            ))
+        })?;
+        let body_preview = preview_remote_control_response_body(&body);
+        if !status.is_success() {
+            return Err(io::Error::other(format!(
+                "remote control pairing failed at `{}`: HTTP {status}, {}, body: {body_preview}",
+                self.pairing_url,
+                format_headers(&headers)
+            )));
+        }
+
+        let pairing = serde_json::from_slice::<StartRemoteControlPairingResponse>(&body).map_err(
+            |err| {
+                io::Error::other(format!(
+                    "failed to parse remote control pairing response from `{}`: HTTP {status}, {}, body: {body_preview}, decode error: {err}",
+                    self.pairing_url,
+                    format_headers(&headers)
+                ))
+            },
+        )?;
+        let StartRemoteControlPairingResponse {
+            pairing_code,
+            manual_pairing_code,
+            server_id,
+            environment_id,
+            expires_at,
+        } = pairing;
+        let _ = server_id;
+        let expires_at = OffsetDateTime::parse(&expires_at, &Rfc3339)
+            .map_err(|err| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("invalid remote control pairing expires_at: {err}"),
+                )
+            })?
+            .unix_timestamp();
+
+        Ok(RemoteControlPairingStartResponse {
+            pairing_code,
+            manual_pairing_code,
+            environment_id,
+            expires_at,
+        })
+    }
+}

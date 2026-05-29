@@ -211,8 +211,14 @@ fn redact_remote_control_response_body(body: &str) -> String {
     let Some(body_object) = body_json.as_object_mut() else {
         return body.to_string();
     };
-    if let Some(remote_control_token) = body_object.get_mut("remote_control_token") {
-        *remote_control_token = serde_json::Value::String("<redacted>".to_string());
+    for sensitive_field in [
+        "remote_control_token",
+        "pairing_code",
+        "manual_pairing_code",
+    ] {
+        if let Some(value) = body_object.get_mut(sensitive_field) {
+            *value = serde_json::Value::String("<redacted>".to_string());
+        }
     }
     body_json.to_string()
 }
@@ -439,6 +445,20 @@ mod tests {
             json!({
                 "server_id": "srv_e_test",
                 "remote_control_token": "<redacted>",
+            })
+        );
+    }
+
+    #[test]
+    fn preview_remote_control_response_body_redacts_pairing_codes() {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&preview_remote_control_response_body(
+                br#"{"pairing_code":"pairing-code","manual_pairing_code":"ABCD-EFGH"}"#
+            ))
+            .expect("redacted response preview should stay valid json"),
+            json!({
+                "pairing_code": "<redacted>",
+                "manual_pairing_code": "<redacted>",
             })
         );
     }

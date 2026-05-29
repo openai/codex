@@ -44,6 +44,24 @@ pub struct RemoteControlStatusReadResponse {
     pub environment_id: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlPairingStartParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_code: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlPairingStartResponse {
+    pub pairing_code: String,
+    pub manual_pairing_code: Option<String>,
+    pub environment_id: String,
+    pub expires_at: i64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
