@@ -25,6 +25,7 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 const USAGE_CARD_MAX_INNER_WIDTH: usize = 72;
+const USAGE_CARD_EXTRA_HORIZONTAL_PADDING: usize = 1;
 const USAGE_BAR_WIDTH: usize = 20;
 const USAGE_BAR_MIN_LABEL_WIDTH: usize = 8;
 const USAGE_BAR_GLYPH: &str = "▄";
@@ -122,7 +123,7 @@ impl HistoryCell for UsageErrorHistoryCell {
             .max()
             .unwrap_or(0)
             .min(available_width);
-        with_border_with_inner_width(lines, inner_width)
+        with_usage_border(lines, inner_width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -173,7 +174,7 @@ fn usage_report_lines(report: &UsageReport, width: u16) -> Vec<Line<'static>> {
             " No tracked usage in this range yet.",
             inner_width,
         );
-        return with_border_with_inner_width(lines, inner_width);
+        return with_usage_border(lines, inner_width);
     }
 
     if sections.iter().all(|(_, entries)| entries.is_empty()) {
@@ -183,19 +184,35 @@ fn usage_report_lines(report: &UsageReport, width: u16) -> Vec<Line<'static>> {
             " No attributed skills, subagents, agent tasks, apps, MCP servers, or plugins in this range.",
             inner_width,
         );
-        return with_border_with_inner_width(lines, inner_width);
+        return with_usage_border(lines, inner_width);
     }
 
     for (label, entries) in sections {
         push_section(&mut lines, label, entries, label_column_width, inner_width);
     }
-    with_border_with_inner_width(lines, inner_width)
+    with_usage_border(lines, inner_width)
 }
 
 fn usage_card_available_width(width: u16) -> Option<usize> {
-    (width >= 4).then(|| {
-        usize::from(width.saturating_sub(/*rhs*/ 4)).min(USAGE_CARD_MAX_INNER_WIDTH)
+    let frame_width = 4 + USAGE_CARD_EXTRA_HORIZONTAL_PADDING * 2;
+    (usize::from(width) >= frame_width).then(|| {
+        usize::from(width)
+            .saturating_sub(frame_width)
+            .min(USAGE_CARD_MAX_INNER_WIDTH)
     })
+}
+
+fn with_usage_border(lines: Vec<Line<'static>>, inner_width: usize) -> Vec<Line<'static>> {
+    let lines = lines
+        .into_iter()
+        .map(|line| {
+            let mut spans = Vec::with_capacity(line.spans.len() + 1);
+            spans.push(Span::from(" ".repeat(USAGE_CARD_EXTRA_HORIZONTAL_PADDING)));
+            spans.extend(line.spans);
+            Line::from(spans)
+        })
+        .collect();
+    with_border_with_inner_width(lines, inner_width + USAGE_CARD_EXTRA_HORIZONTAL_PADDING * 2)
 }
 
 fn usage_label_column_width(sections: &[(&'static str, &[UsageEntry])]) -> usize {

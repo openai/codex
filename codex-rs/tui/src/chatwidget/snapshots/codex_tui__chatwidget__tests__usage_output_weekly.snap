@@ -4,18 +4,18 @@ expression: rendered
 ---
 /usage week
 
-╭────────────────────────────────────────────────────────╮
-│ Weekly usage by token share, Nov 7 to Nov 14           │
-│ Percent of consumed tokens in this selected range      │
-│                                                        │
-│ 17% of consumed tokens came from agent task "guardian" │
-│                                                        │
-│  Skills                                                │
-│   └─ /tmux      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    8%             │
-│                                                        │
-│  Subagents                                             │
-│   └─ default    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   13%             │
-│                                                        │
-│  Agent tasks                                           │
-│   └─ guardian   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   17%             │
-╰────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────╮
+│  Weekly usage by token share, Nov 7 to Nov 14            │
+│  Percent of consumed tokens in this selected range       │
+│                                                          │
+│  17% of consumed tokens came from agent task "guardian"  │
+│                                                          │
+│   Skills                                                 │
+│    └─ /tmux      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    8%              │
+│                                                          │
+│   Subagents                                              │
+│    └─ default    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   13%              │
+│                                                          │
+│   Agent tasks                                            │
+│    └─ guardian   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   17%              │
+╰──────────────────────────────────────────────────────────╯

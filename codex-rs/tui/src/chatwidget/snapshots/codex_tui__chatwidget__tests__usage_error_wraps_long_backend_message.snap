@@ -4,10 +4,10 @@ expression: rendered
 ---
 /usage
 
-╭────────────────────────────────────────────────────────╮
-│ Usage by token share                                   │
-│ Percent of consumed tokens in this selected range      │
-│                                                        │
-│  Failed to load usage: sqlite state database could not │
-│  be opened because the configured path is unavailable  │
-╰────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────╮
+│  Usage by token share                                    │
+│  Percent of consumed tokens in this selected range       │
+│                                                          │
+│   Failed to load usage: sqlite state database could not  │
+│   be opened because the configured path is unavailable   │
+╰──────────────────────────────────────────────────────────╯
