@@ -319,8 +319,6 @@ mod tests {
     use std::time::Instant;
 
     use async_trait::async_trait;
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use codex_exec_server::EnvironmentManager;
     use codex_exec_server::ExecProcessEventReceiver;
     use codex_exec_server::ExecServerError;
@@ -462,13 +460,39 @@ mod tests {
     }
 
     fn powershell_command(script: &str) -> String {
-        let encoded = BASE64_STANDARD.encode(
-            script
+        let encoded = base64_standard_encode(
+            &script
                 .encode_utf16()
                 .flat_map(u16::to_le_bytes)
                 .collect::<Vec<u8>>(),
         );
         format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")
+    }
+
+    fn base64_standard_encode(bytes: &[u8]) -> String {
+        const BASE64_STANDARD_ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+        let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let block = chunk
+                .iter()
+                .fold(0_u32, |block, byte| (block << 8) | u32::from(*byte))
+                << ((3 - chunk.len()) * 8);
+            encoded.push(BASE64_STANDARD_ALPHABET[((block >> 18) & 0x3f) as usize] as char);
+            encoded.push(BASE64_STANDARD_ALPHABET[((block >> 12) & 0x3f) as usize] as char);
+            encoded.push(if chunk.len() > 1 {
+                BASE64_STANDARD_ALPHABET[((block >> 6) & 0x3f) as usize] as char
+            } else {
+                '='
+            });
+            encoded.push(if chunk.len() > 2 {
+                BASE64_STANDARD_ALPHABET[(block & 0x3f) as usize] as char
+            } else {
+                '='
+            });
+        }
+        encoded
     }
 
     fn sleep_command(seconds: u64) -> String {
