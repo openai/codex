@@ -221,7 +221,7 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
         "echo hello".to_string(),
     ];
 
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -233,31 +233,6 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
     assert_eq!(rewritten[1], "-c");
     assert!(rewritten[2].contains("if . '"));
     assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
-}
-
-#[test]
-fn maybe_wrap_shell_command_skips_non_login_command_without_snapshot() {
-    let dir = tempdir().expect("create temp dir");
-    let session_shell = Shell {
-        shell_type: ShellType::Bash,
-        shell_path: PathBuf::from("/bin/bash"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-    };
-    let command = vec![
-        "/bin/bash".to_string(),
-        "-c".to_string(),
-        "printf '%s' \"$FROM_SESSION_START\"".to_string(),
-    ];
-
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
-        &command,
-        &session_shell,
-        &dir.path().abs(),
-        &HashMap::new(),
-        &HashMap::new(),
-    );
-
-    assert_eq!(rewritten, command);
 }
 
 #[test]
@@ -277,7 +252,7 @@ fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
         "echo 'hello'".to_string(),
     ];
 
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -305,7 +280,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
         "echo hello".to_string(),
     ];
 
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -336,7 +311,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
         "echo hello".to_string(),
     ];
 
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -369,7 +344,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
         "arg1".to_string(),
     ];
 
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -404,7 +379,7 @@ fn maybe_wrap_shell_lc_with_snapshot_skips_when_cwd_mismatch() {
         "echo hello".to_string(),
     ];
 
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &command_cwd.abs(),
@@ -433,7 +408,7 @@ fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
     ];
     let command_cwd = dir.path().join(".");
 
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &command_cwd.abs(),
@@ -469,7 +444,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_explicit_override_precedence() {
     ];
     let explicit_env_overrides =
         HashMap::from([("TEST_ENV_SNAPSHOT".to_string(), "worktree".to_string())]);
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -509,7 +484,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
         "-lc".to_string(),
         "printf '%s' \"$CODEX_THREAD_ID\"".to_string(),
     ];
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -551,7 +526,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
         "printf '%s\\n%s\\n%s\\n%s' \"$PIP_PROXY\" \"$HTTP_PROXY\" \"$http_proxy\" \"$GIT_SSH_COMMAND\""
             .to_string(),
     ];
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -608,7 +583,7 @@ fn maybe_wrap_shell_lc_with_snapshot_refreshes_codex_proxy_git_ssh_command() {
         "-lc".to_string(),
         format!("printf '%s' \"${PROXY_GIT_SSH_COMMAND_ENV_KEY}\""),
     ];
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -653,7 +628,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_custom_git_ssh_command() {
         "-lc".to_string(),
         format!("printf '%s' \"${PROXY_GIT_SSH_COMMAND_ENV_KEY}\""),
     ];
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -699,7 +674,7 @@ fn maybe_wrap_shell_lc_with_snapshot_clears_stale_codex_git_ssh_command_without_
             "if [ \"${{{PROXY_GIT_SSH_COMMAND_ENV_KEY}+x}}\" = x ]; then printf 'set'; else printf 'unset'; fi"
         ),
     ];
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -736,7 +711,7 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_user_proxy_env_when_proxy_inactive() 
         "-lc".to_string(),
         "printf '%s' \"$HTTP_PROXY\"".to_string(),
     ];
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -786,7 +761,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_live_env_when_snapshot_proxy_activ
              if [ \"${{{PROXY_ACTIVE_ENV_KEY}+x}}\" = x ]; then printf 'active:%s' \"${PROXY_ACTIVE_ENV_KEY}\"; else printf 'active:unset'; fi"
         ),
     ];
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -831,7 +806,7 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
         "-lc".to_string(),
         "printf '%s' \"$PATH\"".to_string(),
     ];
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -868,7 +843,7 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
         "printf '%s' \"$PATH\"".to_string(),
     ];
     let explicit_env_overrides = HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]);
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -916,7 +891,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_zsh_fork_path_prepend() {
     let mut env = HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]);
     let mut explicit_env_overrides = HashMap::new();
     apply_zsh_fork_path_prepend(&mut env, &mut explicit_env_overrides, zsh_path.as_path());
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -960,7 +935,7 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
         "OPENAI_API_KEY".to_string(),
         "super-secret-value".to_string(),
     )]);
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),
@@ -1008,7 +983,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
         "CODEX_TEST_UNSET_OVERRIDE".to_string(),
         "worktree-value".to_string(),
     )]);
-    let rewritten = maybe_wrap_shell_command_with_runtime_env(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         &dir.path().abs(),

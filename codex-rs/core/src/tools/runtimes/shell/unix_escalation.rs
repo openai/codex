@@ -119,8 +119,8 @@ pub(super) async fn try_run_zsh_fork(
 
     let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
     prepend_zsh_fork_bin_to_path(&mut env, shell_zsh_path);
-    let additional_permissions = req.additional_permissions.clone();
-    let command = build_sandbox_command(command, &req.cwd, &env, additional_permissions)?;
+    let command =
+        build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,

@@ -20,7 +20,7 @@ use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
-use crate::tools::runtimes::maybe_wrap_shell_command_with_runtime_env;
+use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -148,7 +148,7 @@ pub(crate) async fn execute_user_shell_command(
             exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
         }
     }
-    let exec_command = maybe_wrap_shell_command_with_runtime_env(
+    let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
         #[allow(deprecated)]

@@ -22,6 +22,7 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::path::Path;
 
 pub(crate) mod apply_patch;
@@ -138,15 +139,18 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
     command
 }
 
-/// POSIX-only wrapper for commands produced by `Shell::derive_exec_args` when a
-/// login-shell snapshot must be sourced before the user script:
+/// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
+/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
+/// when a snapshot is configured on the session shell, rewrite the argv
+/// to a single non-login shell that sources the snapshot before running
+/// the original script:
 ///
-///   shell -lc "<script>" with a matching snapshot
-///   => user_shell -c ". SNAPSHOT; exec shell -c <script>"
+///   shell -lc "<script>"
+///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
 ///
 /// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
-/// be run by Bash/Zsh/sh. A snapshot remains restricted to login commands in
-/// its matching cwd.
+/// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
+/// not match the snapshot cwd, this is a no-op.
 ///
 /// `explicit_env_overrides` and `env` are intentionally separate inputs.
 /// `explicit_env_overrides` contains policy-driven shell env overrides that
@@ -154,7 +158,7 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 /// environment. We need access to both so snapshot restore logic can preserve
 /// runtime-only vars like `CODEX_THREAD_ID` without pretending they came from
 /// the explicit override policy.
-pub(crate) fn maybe_wrap_shell_command_with_runtime_env(
+pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
     cwd: &AbsolutePathBuf,
@@ -162,7 +166,18 @@ pub(crate) fn maybe_wrap_shell_command_with_runtime_env(
     env: &HashMap<String, String>,
 ) -> Vec<String> {
     if cfg!(windows) {
-        // TODO: Support a Windows shell environment persistence contract.
+        return command.to_vec();
+    }
+
+    let Some(snapshot) = session_shell.shell_snapshot() else {
+        return command.to_vec();
+    };
+
+    if !snapshot.path.exists() {
+        return command.to_vec();
+    }
+
+    if !path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd) {
         return command.to_vec();
     }
 
@@ -175,13 +190,15 @@ pub(crate) fn maybe_wrap_shell_command_with_runtime_env(
         return command.to_vec();
     }
 
-    let Some(snapshot) = session_shell.shell_snapshot().filter(|snapshot| {
-        snapshot.path.exists()
-            && path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd)
-    }) else {
-        return command.to_vec();
-    };
-
+    let snapshot_path = snapshot.path.to_string_lossy();
+    let shell_path = session_shell.shell_path.to_string_lossy();
+    let original_shell = shell_single_quote(&command[0]);
+    let original_script = shell_single_quote(&command[2]);
+    let snapshot_path = shell_single_quote(snapshot_path.as_ref());
+    let trailing_args = command[3..]
+        .iter()
+        .map(|arg| format!(" '{}'", shell_single_quote(arg)))
+        .collect::<String>();
     let mut override_env = explicit_env_overrides.clone();
     if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
         override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
@@ -190,26 +207,17 @@ pub(crate) fn maybe_wrap_shell_command_with_runtime_env(
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
     let override_captures = join_shell_blocks([override_captures, proxy_captures]);
     let override_exports = join_shell_blocks([override_exports, proxy_exports]);
-    let path = shell_single_quote(&snapshot.path.to_string_lossy());
-    let source_commands = format!("if . '{path}' >/dev/null 2>&1; then :; fi");
-    let original_shell = shell_single_quote(&command[0]);
-    let original_script = shell_single_quote(&command[2]);
-    let trailing_args = command[3..]
-        .iter()
-        .map(|arg| format!(" '{}'", shell_single_quote(arg)))
-        .collect::<String>();
-    let execution = format!("exec '{original_shell}' -c '{original_script}'{trailing_args}");
     let rewritten_script = if override_exports.is_empty() {
-        format!("{source_commands}\n\n{execution}")
+        format!(
+            "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+        )
     } else {
-        format!("{override_captures}\n\n{source_commands}\n\n{override_exports}\n\n{execution}")
+        format!(
+            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+        )
     };
 
-    vec![
-        session_shell.shell_path.to_string_lossy().to_string(),
-        "-c".to_string(),
-        rewritten_script,
-    ]
+    vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
 }
 
 fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {
