@@ -191,18 +191,11 @@ impl AgentControl {
         initial_operation: Op,
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
-        let multi_agent_version = config
-            .features
-            .enabled(Feature::MultiAgentV2)
-            .then_some(MultiAgentVersion::V2);
         let spawned_agent = Box::pin(self.spawn_agent_internal(
             config,
             initial_operation,
             session_source,
-            SpawnAgentOptions {
-                multi_agent_version,
-                ..Default::default()
-            },
+            SpawnAgentOptions::default(),
         ))
         .await?;
         Ok(spawned_agent.thread_id)

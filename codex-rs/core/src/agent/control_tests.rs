@@ -1543,12 +1543,11 @@ async fn spawn_child_completion_notifies_parent_history() {
 async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
     let harness = AgentControlHarness::new().await;
     let (root_thread_id, root_thread) = harness.start_thread().await;
-    let mut config = harness.config.clone();
-    let _ = config.features.enable(Feature::MultiAgentV2);
+    let config = harness.config.clone();
     let worker_path = AgentPath::root().join("worker_a").expect("worker path");
     let worker_thread_id = harness
         .control
-        .spawn_agent(
+        .spawn_agent_with_metadata(
             config.clone(),
             text_input("hello worker"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1558,13 +1557,17 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
+            SpawnAgentOptions {
+                multi_agent_version: Some(MultiAgentVersion::V2),
+                ..Default::default()
+            },
         )
         .await
         .expect("worker spawn should succeed");
     let tester_path = worker_path.join("tester").expect("tester path");
     let tester_thread_id = harness
         .control
-        .spawn_agent(
+        .spawn_agent_with_metadata(
             config,
             text_input("hello tester"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1574,6 +1577,10 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
+            SpawnAgentOptions {
+                multi_agent_version: Some(MultiAgentVersion::V2),
+                ..Default::default()
+            },
         )
         .await
         .expect("tester spawn should succeed");
