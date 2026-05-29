@@ -4,8 +4,11 @@ pub use auth::McpOAuthLoginSupport;
 pub use auth::McpOAuthScopesSource;
 pub use auth::ResolvedMcpOAuthScopes;
 pub use auth::compute_auth_statuses;
+pub use auth::compute_auth_statuses_with_runtime_context;
 pub use auth::discover_supported_scopes;
+pub use auth::discover_supported_scopes_with_runtime_context;
 pub use auth::oauth_login_support;
+pub use auth::oauth_login_support_with_runtime_context;
 pub use auth::resolve_oauth_scopes;
 pub use auth::should_retry_without_scopes;
 
@@ -272,7 +275,7 @@ pub async fn read_mcp_resource(
     let mut mcp_servers = effective_mcp_servers(config, auth);
     let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
     mcp_servers.retain(|name, _| name == server);
-    let auth_statuses = compute_auth_statuses(
+    let auth_statuses = compute_auth_statuses_with_runtime_context(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         auth,
@@ -339,7 +342,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         };
     }
 
-    let auth_status_entries = compute_auth_statuses(
+    let auth_status_entries = compute_auth_statuses_with_runtime_context(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         auth,

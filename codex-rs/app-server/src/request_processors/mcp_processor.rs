@@ -152,7 +152,7 @@ impl McpRequestProcessor {
         };
 
         let discovered_scopes = if scopes.is_none() && server.scopes.is_none() {
-            discover_supported_scopes(&name, server, &runtime_context).await
+            discover_supported_scopes_with_runtime_context(&name, server, &runtime_context).await
         } else {
             None
         };

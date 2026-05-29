@@ -39,7 +39,7 @@ use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
-use codex_mcp::compute_auth_statuses;
+use codex_mcp::compute_auth_statuses_with_runtime_context;
 use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::with_codex_apps_mcp;
 
@@ -252,7 +252,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         });
     }
 
-    let auth_status_entries = compute_auth_statuses(
+    let auth_status_entries = compute_auth_statuses_with_runtime_context(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         auth.as_ref(),

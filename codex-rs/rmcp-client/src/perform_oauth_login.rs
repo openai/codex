@@ -17,7 +17,6 @@ use oauth2::AuthorizationCode;
 use oauth2::ClientId;
 use oauth2::ClientSecret;
 use oauth2::CsrfToken;
-use oauth2::EmptyExtraTokenFields;
 use oauth2::EndpointNotSet;
 use oauth2::EndpointSet;
 use oauth2::HttpRequest;
@@ -32,12 +31,12 @@ use oauth2::StandardErrorResponse;
 use oauth2::StandardRevocableToken;
 use oauth2::StandardTokenIntrospectionResponse;
 use oauth2::TokenUrl;
-use oauth2::basic::BasicClient;
 use oauth2::basic::BasicErrorResponseType;
 use oauth2::basic::BasicTokenType;
 use reqwest::Url;
 use reqwest::header::HeaderMap;
 use rmcp::transport::auth::OAuthTokenResponse;
+use rmcp::transport::auth::VendorExtraTokenFields;
 use sha2::Digest;
 use sha2::Sha256;
 use tiny_http::Response;
@@ -65,7 +64,7 @@ struct OauthHeaders {
 type OAuthClient = oauth2::Client<
     StandardErrorResponse<BasicErrorResponseType>,
     OAuthTokenResponse,
-    StandardTokenIntrospectionResponse<EmptyExtraTokenFields, BasicTokenType>,
+    StandardTokenIntrospectionResponse<VendorExtraTokenFields, BasicTokenType>,
     StandardRevocableToken,
     StandardErrorResponse<RevocationErrorResponseType>,
     EndpointSet,
@@ -73,6 +72,14 @@ type OAuthClient = oauth2::Client<
     EndpointNotSet,
     EndpointNotSet,
     EndpointSet,
+>;
+
+type OAuthClientBuilder = oauth2::Client<
+    StandardErrorResponse<BasicErrorResponseType>,
+    OAuthTokenResponse,
+    StandardTokenIntrospectionResponse<VendorExtraTokenFields, BasicTokenType>,
+    StandardRevocableToken,
+    StandardErrorResponse<RevocationErrorResponseType>,
 >;
 
 struct OAuthState {
@@ -98,7 +105,7 @@ impl OAuthState {
             client_id,
             client_secret,
         } = client;
-        let mut client = BasicClient::new(ClientId::new(client_id.clone()))
+        let mut client = OAuthClientBuilder::new(ClientId::new(client_id.clone()))
             .set_auth_uri(AuthUrl::new(metadata.authorization_endpoint)?)
             .set_token_uri(TokenUrl::new(metadata.token_endpoint)?)
             .set_redirect_uri(RedirectUrl::new(redirect_uri.to_string())?);

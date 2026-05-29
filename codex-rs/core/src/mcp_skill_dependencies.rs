@@ -23,7 +23,7 @@ use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
-use codex_mcp::oauth_login_support;
+use codex_mcp::oauth_login_support_with_runtime_context;
 use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
 
@@ -149,15 +149,17 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     };
 
     for (name, server_config) in added {
-        let oauth_config = match oauth_login_support(&name, &server_config, &runtime_context).await
-        {
-            McpOAuthLoginSupport::Supported(config) => config,
-            McpOAuthLoginSupport::Unsupported => continue,
-            McpOAuthLoginSupport::Unknown(err) => {
-                warn!("MCP server may or may not require login for dependency {name}: {err}");
-                continue;
-            }
-        };
+        let oauth_config =
+            match oauth_login_support_with_runtime_context(&name, &server_config, &runtime_context)
+                .await
+            {
+                McpOAuthLoginSupport::Supported(config) => config,
+                McpOAuthLoginSupport::Unsupported => continue,
+                McpOAuthLoginSupport::Unknown(err) => {
+                    warn!("MCP server may or may not require login for dependency {name}: {err}");
+                    continue;
+                }
+            };
 
         let resolved_scopes = resolve_oauth_scopes(
             /*explicit_scopes*/ None,

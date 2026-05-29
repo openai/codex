@@ -334,7 +334,7 @@ impl Session {
                 turn_context.cwd.to_path_buf(),
             ),
         };
-        let auth_statuses = compute_auth_statuses(
+        let auth_statuses = compute_auth_statuses_with_runtime_context(
             mcp_servers.iter(),
             store_mode,
             auth.as_ref(),

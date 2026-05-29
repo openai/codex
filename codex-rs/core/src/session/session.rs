@@ -631,7 +631,7 @@ impl Session {
                 environment_manager_for_mcp,
                 config_for_mcp.cwd.to_path_buf(),
             );
-            let auth_statuses = compute_auth_statuses(
+            let auth_statuses = compute_auth_statuses_with_runtime_context(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
                 auth.as_ref(),

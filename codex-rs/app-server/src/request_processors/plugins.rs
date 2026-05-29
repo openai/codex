@@ -10,7 +10,7 @@ use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
 use codex_mcp::McpOAuthLoginSupport;
-use codex_mcp::oauth_login_support;
+use codex_mcp::oauth_login_support_with_runtime_context;
 use codex_mcp::should_retry_without_scopes;
 use codex_rmcp_client::perform_oauth_login_silent_with_http_client;
 
@@ -1570,7 +1570,13 @@ impl PluginRequestProcessor {
             config.cwd.to_path_buf(),
         );
         for (name, server) in plugin_mcp_servers {
-            let oauth_config = match oauth_login_support(&name, &server, &runtime_context).await {
+            let oauth_config = match oauth_login_support_with_runtime_context(
+                &name,
+                &server,
+                &runtime_context,
+            )
+            .await
+            {
                 McpOAuthLoginSupport::Supported(config) => config,
                 McpOAuthLoginSupport::Unsupported => continue,
                 McpOAuthLoginSupport::Unknown(err) => {
