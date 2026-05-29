@@ -97,6 +97,7 @@ use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AdditionalContextEntry;
@@ -225,6 +226,7 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
+use self::turn_context::resolve_multi_agent_version;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -392,6 +394,7 @@ pub struct CodexSpawnOk {
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) installation_id: String,
+    pub(crate) parent_multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -457,6 +460,7 @@ impl Codex {
         let CodexSpawnArgs {
             mut config,
             installation_id,
+            parent_multi_agent_version,
             auth_manager,
             models_manager,
             environment_manager,
@@ -485,14 +489,6 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= config.agent_max_depth
-            && !config.features.enabled(Feature::MultiAgentV2)
-        {
-            let _ = config.features.disable(Feature::SpawnCsv);
-            let _ = config.features.disable(Feature::Collab);
-        }
-
         let primary_environment = environment_selections.primary_environment();
         let mut user_instruction_warnings = Vec::new();
         let user_instructions = AgentsMdManager::new(&config)
@@ -518,7 +514,6 @@ impl Codex {
             )
         };
 
-        let config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -543,6 +538,21 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        let multi_agent_version = resolve_multi_agent_version(
+            &config,
+            &session_source,
+            conversation_history
+                .get_multi_agent_version()
+                .or(parent_multi_agent_version),
+        );
+        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
+            && depth >= config.agent_max_depth
+            && multi_agent_version != Some(MultiAgentVersion::V2)
+        {
+            let _ = config.features.disable(Feature::SpawnCsv);
+            let _ = config.features.disable(Feature::Collab);
+        }
+        let config = Arc::new(config);
         let base_instructions = config
             .base_instructions
             .clone()
@@ -610,6 +620,7 @@ impl Codex {
             session_configuration,
             config.clone(),
             installation_id,
+            multi_agent_version,
             auth_manager.clone(),
             models_manager.clone(),
             exec_policy,
@@ -1644,13 +1655,13 @@ impl Session {
         }
     }
 
-    /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
+    /// Forwards terminal turn events from children spawned by a MultiAgentV2 parent.
     async fn maybe_notify_parent_of_terminal_turn(
         &self,
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if !self.enabled(Feature::MultiAgentV2) {
+        if turn_context.multi_agent_version != Some(MultiAgentVersion::V2) {
             return;
         }
 

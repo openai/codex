@@ -34,6 +34,7 @@ use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
 use codex_analytics::TurnTokenUsageFact;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
@@ -50,8 +51,8 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 
-use codex_features::Feature;
 use codex_protocol::models::ContentItem;
+use codex_protocol::openai_models::MultiAgentVersion;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
@@ -70,11 +71,14 @@ pub(crate) enum InterruptedTurnHistoryMarker {
 }
 
 impl InterruptedTurnHistoryMarker {
-    pub(crate) fn from_config(config: &Config) -> Self {
+    pub(crate) fn from_config(
+        config: &Config,
+        multi_agent_version: Option<MultiAgentVersion>,
+    ) -> Self {
         if !config.agent_interrupt_message_enabled {
             return Self::Disabled;
         }
-        if config.features.enabled(Feature::MultiAgentV2) {
+        if multi_agent_version == Some(MultiAgentVersion::V2) {
             Self::Developer
         } else {
             Self::ContextualUser
@@ -840,9 +844,11 @@ impl Session {
             .await;
 
         if reason == TurnAbortReason::Interrupted
-            && let Some(marker) = interrupted_turn_history_marker(
-                InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),
-            )
+            && let Some(marker) =
+                interrupted_turn_history_marker(InterruptedTurnHistoryMarker::from_config(
+                    task.turn_context.config.as_ref(),
+                    task.turn_context.multi_agent_version,
+                ))
         {
             self.record_conversation_items(
                 task.turn_context.as_ref(),

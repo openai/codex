@@ -8,11 +8,13 @@ use codex_mcp::ToolInfo;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
@@ -30,8 +32,10 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::resolve_multi_agent_version;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
@@ -225,6 +229,15 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             ToolMode::Direct
         }
     });
+    turn.multi_agent_version = {
+        if turn.config.features.enabled(Feature::MultiAgentV2) {
+            Some(MultiAgentVersion::V2)
+        } else if turn.config.features.enabled(Feature::Collab) {
+            Some(MultiAgentVersion::V1)
+        } else {
+            None
+        }
+    };
 }
 
 fn set_features(turn: &mut TurnContext, features: &[Feature]) {
@@ -819,6 +832,109 @@ async fn tool_mode_selector_overrides_feature_flags() {
         codex_code_mode::PUBLIC_TOOL_NAME,
         codex_code_mode::WAIT_TOOL_NAME,
     ]);
+}
+
+#[tokio::test]
+async fn resolved_multi_agent_version_controls_runtime_behavior() {
+    let v1 = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        turn.multi_agent_version = Some(MultiAgentVersion::V1);
+    })
+    .await;
+
+    v1.assert_visible_contains(&[MULTI_AGENT_V1_NAMESPACE]);
+    v1.assert_visible_lacks(&[
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "send_message",
+        "followup_task",
+        "list_agents",
+    ]);
+    assert_eq!(
+        v1.namespace_function_names(MULTI_AGENT_V1_NAMESPACE),
+        &[
+            "close_agent".to_string(),
+            "resume_agent".to_string(),
+            "send_input".to_string(),
+            "spawn_agent".to_string(),
+            "wait_agent".to_string(),
+        ]
+    );
+
+    let v2 = probe(|turn| {
+        set_feature(turn, Feature::Collab, /*enabled*/ false);
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
+        turn.multi_agent_version = Some(MultiAgentVersion::V2);
+    })
+    .await;
+
+    v2.assert_visible_contains(&[
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+    ]);
+
+    let review = probe(|turn| {
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::Review);
+        turn.multi_agent_version = resolve_multi_agent_version(
+            turn.config.as_ref(),
+            &turn.session_source,
+            /*inherited_multi_agent_version*/ None,
+        );
+    })
+    .await;
+    review.assert_visible_lacks(&[
+        MULTI_AGENT_V1_NAMESPACE,
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+    ]);
+
+    let guardian_review = probe(|turn| {
+        turn.session_source =
+            SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()));
+        turn.multi_agent_version = resolve_multi_agent_version(
+            turn.config.as_ref(),
+            &turn.session_source,
+            /*inherited_multi_agent_version*/ None,
+        );
+    })
+    .await;
+    guardian_review.assert_visible_lacks(&[
+        MULTI_AGENT_V1_NAMESPACE,
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+    ]);
+
+    let max_depth_v1 = probe(|turn| {
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: turn.config.agent_max_depth,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+        turn.multi_agent_version = resolve_multi_agent_version(
+            turn.config.as_ref(),
+            &turn.session_source,
+            Some(MultiAgentVersion::V1),
+        );
+    })
+    .await;
+    max_depth_v1.assert_visible_lacks(&[MULTI_AGENT_V1_NAMESPACE]);
 }
 
 #[tokio::test]

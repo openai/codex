@@ -1,4 +1,5 @@
 use super::turn_context::TurnEnvironment;
+use super::turn_context::resolve_multi_agent_version;
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
@@ -44,6 +45,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelServiceTier;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -4493,6 +4495,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         session_configuration,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
+        /*multi_agent_version*/ None,
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -4722,11 +4725,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
+        /*multi_agent_version*/ None,
     );
 
     let session = Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        multi_agent_version: None,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
@@ -4839,6 +4844,7 @@ async fn make_session_with_config_and_rx(
         session_configuration,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
+        /*multi_agent_version*/ None,
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -4943,6 +4949,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         session_configuration,
         Arc::clone(&config),
         "11111111-1111-4111-8111-111111111111".to_string(),
+        /*multi_agent_version*/ None,
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),
@@ -6566,11 +6573,13 @@ where
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
+        /*multi_agent_version*/ None,
     ));
 
     let session = Arc::new(Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        multi_agent_version: None,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
@@ -7009,18 +7018,28 @@ async fn build_initial_context_uses_previous_realtime_state() {
 async fn make_multi_agent_v2_usage_hint_test_session(
     enable_multi_agent_v2: bool,
 ) -> (Arc<Session>, Arc<TurnContext>) {
-    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
-        CodexAuth::from_api_key("Test API Key"),
-        Vec::new(),
-        |config| {
-            if enable_multi_agent_v2 {
-                let _ = config.features.enable(Feature::MultiAgentV2);
-            }
-            config.multi_agent_v2.root_agent_usage_hint_text = Some("Root guidance.".to_string());
-            config.multi_agent_v2.subagent_usage_hint_text = Some("Subagent guidance.".to_string());
-        },
-    )
-    .await;
+    let (mut session, mut turn_context, _rx_event) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                if enable_multi_agent_v2 {
+                    let _ = config.features.enable(Feature::MultiAgentV2);
+                }
+                config.multi_agent_v2.root_agent_usage_hint_text =
+                    Some("Root guidance.".to_string());
+                config.multi_agent_v2.subagent_usage_hint_text =
+                    Some("Subagent guidance.".to_string());
+            },
+        )
+        .await;
+    let multi_agent_version = enable_multi_agent_v2.then_some(MultiAgentVersion::V2);
+    Arc::get_mut(&mut session)
+        .expect("session should not be shared")
+        .multi_agent_version = multi_agent_version;
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should not be shared")
+        .multi_agent_version = multi_agent_version;
     (session, turn_context)
 }
 
@@ -7171,6 +7190,93 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_dis
             )
         }),
         "did not expect multi-agent v2 usage hint developer messages, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_selector_is_v1() {
+    let (session, mut turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should not be shared")
+        .multi_agent_version = Some(MultiAgentVersion::V1);
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+
+    let developer_messages = developer_message_texts(&initial_context);
+    assert!(
+        !developer_messages.iter().any(|message| {
+            matches!(
+                message.as_slice(),
+                ["Root guidance."] | ["Subagent guidance."]
+            )
+        }),
+        "did not expect multi-agent v2 usage hint developer messages, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_adds_multi_agent_v2_usage_hint_when_selector_is_v2() {
+    let (session, mut turn_context) =
+        make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should not be shared")
+        .multi_agent_version = Some(MultiAgentVersion::V2);
+
+    let initial_context = session.build_initial_context(turn_context.as_ref()).await;
+
+    let developer_messages = developer_message_texts(&initial_context);
+    assert!(
+        developer_messages
+            .iter()
+            .any(|message| message.as_slice() == ["Root guidance."]),
+        "expected standalone root usage hint developer message, got {developer_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn spawned_child_multi_agent_version_follows_parent_system() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let resolved_from_v2_parent = resolve_multi_agent_version(
+        turn_context.config.as_ref(),
+        &child_source,
+        Some(MultiAgentVersion::V2),
+    );
+
+    let resolved_from_v1_parent = resolve_multi_agent_version(
+        turn_context.config.as_ref(),
+        &child_source,
+        Some(MultiAgentVersion::V1),
+    );
+
+    assert_eq!(
+        (resolved_from_v2_parent, resolved_from_v1_parent),
+        (Some(MultiAgentVersion::V2), Some(MultiAgentVersion::V1),)
+    );
+}
+
+#[tokio::test]
+async fn model_switch_preserves_thread_multi_agent_version() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.multi_agent_version = Some(MultiAgentVersion::V1);
+
+    let switched_context = turn_context
+        .with_model(
+            turn_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+
+    assert_eq!(
+        switched_context.multi_agent_version,
+        Some(MultiAgentVersion::V1)
     );
 }
 

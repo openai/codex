@@ -14,6 +14,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
@@ -756,6 +757,114 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         .shutdown_and_wait()
         .await
         .expect("shutdown resumed thread");
+}
+
+#[tokio::test]
+async fn legacy_rollout_resume_persists_flag_resolved_multi_agent_version() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    config
+        .features
+        .disable(Feature::Collab)
+        .expect("collab should be disableable");
+    config
+        .features
+        .disable(Feature::MultiAgentV2)
+        .expect("multi-agent v2 should be disableable");
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await.expect("state db");
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, Some(state_db.clone())),
+        Some(state_db.clone()),
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+    );
+
+    let source = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start legacy source thread");
+    source.thread.ensure_rollout_materialized().await;
+    source
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush legacy source rollout");
+    let rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("legacy source rollout path should exist");
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown legacy source thread");
+    let _ = manager.remove_thread(&source.thread_id).await;
+
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("multi-agent v2 should be enableable");
+    let resumed = manager
+        .resume_thread_from_rollout(
+            config,
+            rollout_path.clone(),
+            auth_manager,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("resume legacy source thread");
+    resumed
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush resumed source rollout");
+    let resumed_history = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read resumed source rollout");
+    let persisted_versions = resumed_history
+        .get_rollout_items()
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.multi_agent_version),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let metadata = state_db
+        .get_thread(resumed.thread_id)
+        .await
+        .expect("read sqlite metadata")
+        .expect("sqlite metadata");
+
+    assert_eq!(
+        (
+            resumed.thread.codex.session.multi_agent_version,
+            persisted_versions,
+            metadata.multi_agent_version
+        ),
+        (
+            Some(MultiAgentVersion::V2),
+            vec![None, Some(MultiAgentVersion::V2)],
+            Some(MultiAgentVersion::V2)
+        )
+    );
+
+    resumed
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown resumed source thread");
 }
 
 #[tokio::test]

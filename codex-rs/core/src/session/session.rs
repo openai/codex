@@ -7,10 +7,14 @@ use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
+use std::fs::metadata;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -19,6 +23,8 @@ use tokio::sync::Semaphore;
 pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     pub(crate) installation_id: String,
+    /// Thread-scoped multi-agent runtime selector, resolved when the thread starts.
+    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) out_of_band_elicitation_paused: watch::Sender<bool>,
@@ -484,6 +490,7 @@ impl Session {
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         installation_id: String,
+        multi_agent_version: Option<MultiAgentVersion>,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
         exec_policy: Arc<ExecPolicyManager>,
@@ -559,7 +566,7 @@ impl Session {
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
                                     model_provider: config.model_provider_id.clone(),
-                                    multi_agent_version: None,
+                                    multi_agent_version,
                                     memory_mode: if config.memories.generate_memories {
                                         ThreadMemoryMode::Enabled
                                     } else {
@@ -572,7 +579,7 @@ impl Session {
                         .await?
                     }
                     InitialHistory::Resumed(resumed_history) => {
-                        LiveThread::resume(
+                        let live_thread = LiveThread::resume(
                             Arc::clone(&thread_store),
                             ResumeThreadParams {
                                 thread_id: resumed_history.conversation_id,
@@ -582,7 +589,7 @@ impl Session {
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
                                     model_provider: config.model_provider_id.clone(),
-                                    multi_agent_version: None,
+                                    multi_agent_version,
                                     memory_mode: if config.memories.generate_memories {
                                         ThreadMemoryMode::Enabled
                                     } else {
@@ -592,7 +599,41 @@ impl Session {
                                 event_persistence_mode,
                             },
                         )
-                        .await?
+                        .await?;
+                        if initial_history.get_multi_agent_version().is_none()
+                            && let Some(multi_agent_version) = multi_agent_version
+                            && let Some(mut session_meta) = resumed_history
+                                .history
+                                .iter()
+                                .rev()
+                                .find_map(|item| match item {
+                                    RolloutItem::SessionMeta(meta_line)
+                                        if meta_line.meta.id == resumed_history.conversation_id =>
+                                    {
+                                        Some(meta_line.clone())
+                                    }
+                                    _ => None,
+                                })
+                        {
+                            session_meta.meta.multi_agent_version = Some(multi_agent_version);
+                            let rollout_modified_at = if let Some(rollout_path) =
+                                live_thread.local_rollout_path().await?
+                            {
+                                Some((rollout_path.clone(), metadata(rollout_path)?.modified()?))
+                            } else {
+                                None
+                            };
+                            live_thread
+                                .append_items(&[RolloutItem::SessionMeta(session_meta)])
+                                .await?;
+                            if let Some((rollout_path, modified_at)) = rollout_modified_at {
+                                OpenOptions::new()
+                                    .append(true)
+                                    .open(rollout_path)?
+                                    .set_times(FileTimes::new().set_modified(modified_at))?;
+                            }
+                        }
+                        live_thread
                     }
                 };
                 Ok(Some(live_thread))
@@ -1057,6 +1098,7 @@ impl Session {
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
                 installation_id,
+                multi_agent_version,
                 tx_event: tx_event.clone(),
                 agent_status,
                 out_of_band_elicitation_paused,

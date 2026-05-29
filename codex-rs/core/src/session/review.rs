@@ -108,6 +108,7 @@ pub(super) async fn spawn_review_thread(
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
         tool_mode,
+        multi_agent_version: None,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,

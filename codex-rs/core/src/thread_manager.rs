@@ -12,6 +12,7 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
+use crate::session::turn_context::resolve_multi_agent_version;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
@@ -34,6 +35,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -595,12 +597,14 @@ impl ThreadManager {
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
         let session_source = options.session_source.unwrap_or(resumed_session_source);
         let thread_source = options.thread_source.or(resumed_thread_source);
+        let parent_multi_agent_version = options.initial_history.get_multi_agent_version();
         Box::pin(self.state.spawn_thread_with_source(
             options.config,
             options.initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             session_source,
+            parent_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             options.dynamic_tools,
@@ -640,7 +644,10 @@ impl ThreadManager {
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
-            InterruptedTurnHistoryMarker::from_config(&options.config),
+            InterruptedTurnHistoryMarker::from_config(
+                &options.config,
+                fork_source.codex.session.multi_agent_version,
+            ),
         );
         self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
             .await
@@ -685,6 +692,7 @@ impl ThreadManager {
             auth_manager,
             self.agent_control(),
             session_source,
+            /*parent_multi_agent_version*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
@@ -746,6 +754,7 @@ impl ThreadManager {
             auth_manager,
             self.agent_control(),
             session_source,
+            /*parent_multi_agent_version*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
@@ -905,7 +914,17 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
+        let session_source = history
+            .get_resumed_session_sources()
+            .map(|(session_source, _)| session_source)
+            .unwrap_or_else(|| self.state.session_source.clone());
+        let multi_agent_version = resolve_multi_agent_version(
+            &config,
+            &session_source,
+            history.get_multi_agent_version(),
+        );
+        let interrupted_marker =
+            InterruptedTurnHistoryMarker::from_config(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -1039,6 +1058,7 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
+            /*parent_multi_agent_version*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             /*persist_extended_history*/ false,
@@ -1056,6 +1076,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
+        parent_multi_agent_version: Option<MultiAgentVersion>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
@@ -1073,6 +1094,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            parent_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1108,6 +1130,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            /*parent_multi_agent_version*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
@@ -1129,6 +1152,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         agent_control: AgentControl,
         session_source: SessionSource,
+        parent_multi_agent_version: Option<MultiAgentVersion>,
         thread_source: Option<ThreadSource>,
         forked_from_thread_id: Option<ThreadId>,
         persist_extended_history: bool,
@@ -1145,6 +1169,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            parent_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1176,12 +1201,14 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
+        let parent_multi_agent_version = initial_history.get_multi_agent_version();
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             auth_manager,
             agent_control,
             self.session_source.clone(),
+            parent_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             dynamic_tools,
@@ -1204,6 +1231,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
+        parent_multi_agent_version: Option<MultiAgentVersion>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
@@ -1248,6 +1276,7 @@ impl ThreadManagerState {
         } = Codex::spawn(CodexSpawnArgs {
             config,
             installation_id: self.installation_id.clone(),
+            parent_multi_agent_version,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),

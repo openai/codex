@@ -2,11 +2,16 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::guardian::is_guardian_reviewer_source;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
@@ -57,6 +62,7 @@ pub struct TurnContext {
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
     pub(crate) tool_mode: ToolMode,
+    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -99,6 +105,31 @@ pub struct TurnContext {
     pub(crate) server_model_warning_emitted: AtomicBool,
     pub(crate) model_verification_emitted: AtomicBool,
 }
+
+pub(crate) fn resolve_multi_agent_version(
+    config: &Config,
+    session_source: &SessionSource,
+    inherited_multi_agent_version: Option<MultiAgentVersion>,
+) -> Option<MultiAgentVersion> {
+    if is_guardian_reviewer_source(session_source)
+        || matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::Review)
+        )
+    {
+        return None;
+    }
+    inherited_multi_agent_version.or_else(|| {
+        if config.features.enabled(Feature::MultiAgentV2) {
+            Some(MultiAgentVersion::V2)
+        } else if config.features.enabled(Feature::Collab) {
+            Some(MultiAgentVersion::V1)
+        } else {
+            None
+        }
+    })
+}
+
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
@@ -183,6 +214,7 @@ impl TurnContext {
                 ToolMode::Direct
             }
         });
+        let multi_agent_version = self.multi_agent_version;
         let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
@@ -224,6 +256,7 @@ impl TurnContext {
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
             tool_mode,
+            multi_agent_version,
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -463,6 +496,7 @@ impl Session {
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
         goal_tools_supported: bool,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -524,6 +558,7 @@ impl Session {
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
             tool_mode,
+            multi_agent_version,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             reasoning_effort,
@@ -745,6 +780,7 @@ impl Session {
             sub_id,
             skills_outcome,
             goal_tools_supported,
+            self.multi_agent_version,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

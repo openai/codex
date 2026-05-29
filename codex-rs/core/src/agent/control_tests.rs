@@ -561,13 +561,11 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
-    let _ = parent_config.features.enable(Feature::MultiAgentV2);
     parent_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Parent root guidance.".to_string());
     parent_config.multi_agent_v2.subagent_usage_hint_text =
         Some("Parent subagent guidance.".to_string());
     let mut child_config = harness.config.clone();
-    let _ = child_config.features.enable(Feature::MultiAgentV2);
     child_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Child root guidance.".to_string());
     child_config.multi_agent_v2.subagent_usage_hint_text =
@@ -655,13 +653,14 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
-                agent_path: None,
+                agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path")),
                 agent_nickname: None,
                 agent_role: None,
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
             },
         )
@@ -814,13 +813,14 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
-                agent_path: None,
+                agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path")),
                 agent_nickname: None,
                 agent_role: None,
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
             },
         )
@@ -1119,6 +1119,7 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
             },
         )
@@ -1222,13 +1223,14 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
-                agent_path: None,
+                agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path")),
                 agent_nickname: None,
                 agent_role: None,
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
             },
         )
@@ -1527,12 +1529,11 @@ async fn spawn_child_completion_notifies_parent_history() {
 async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
     let harness = AgentControlHarness::new().await;
     let (root_thread_id, root_thread) = harness.start_thread().await;
-    let mut config = harness.config.clone();
-    let _ = config.features.enable(Feature::MultiAgentV2);
+    let config = harness.config.clone();
     let worker_path = AgentPath::root().join("worker_a").expect("worker path");
     let worker_thread_id = harness
         .control
-        .spawn_agent(
+        .spawn_agent_with_metadata(
             config.clone(),
             text_input("hello worker"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1542,13 +1543,18 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
+            SpawnAgentOptions {
+                multi_agent_version: Some(MultiAgentVersion::V2),
+                ..Default::default()
+            },
         )
         .await
-        .expect("worker spawn should succeed");
+        .expect("worker spawn should succeed")
+        .thread_id;
     let tester_path = worker_path.join("tester").expect("tester path");
     let tester_thread_id = harness
         .control
-        .spawn_agent(
+        .spawn_agent_with_metadata(
             config,
             text_input("hello tester"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -1558,9 +1564,14 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
+            SpawnAgentOptions {
+                multi_agent_version: Some(MultiAgentVersion::V2),
+                ..Default::default()
+            },
         )
         .await
-        .expect("tester spawn should succeed");
+        .expect("tester spawn should succeed")
+        .thread_id;
     harness
         .control
         .shutdown_live_agent(worker_thread_id)
@@ -2599,6 +2610,79 @@ async fn resume_closed_child_reopens_open_descendants() {
         .shutdown_live_agent(parent_thread_id)
         .await
         .expect("parent shutdown should succeed");
+}
+
+#[tokio::test]
+async fn resume_agent_from_rollout_restores_persisted_multi_agent_version() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("hello"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                multi_agent_version: Some(MultiAgentVersion::V2),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("child spawn should succeed")
+        .thread_id;
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should exist");
+    persist_thread_for_tree_resume(&child_thread, "persist selector").await;
+    assert_eq!(
+        child_thread.codex.session.multi_agent_version,
+        Some(MultiAgentVersion::V2)
+    );
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let resumed_thread_id = harness
+        .control
+        .resume_agent_from_rollout(
+            harness.config.clone(),
+            child_thread_id,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+        )
+        .await
+        .expect("child resume should succeed");
+    let resumed_thread = harness
+        .manager
+        .get_thread(resumed_thread_id)
+        .await
+        .expect("resumed child thread should exist");
+
+    assert_eq!(
+        resumed_thread.codex.session.multi_agent_version,
+        Some(MultiAgentVersion::V2)
+    );
+
+    let _ = harness
+        .control
+        .shutdown_agent_tree(parent_thread_id)
+        .await
+        .expect("agent tree shutdown should succeed");
 }
 
 #[tokio::test]

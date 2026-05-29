@@ -60,6 +60,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -285,14 +286,6 @@ fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.provider.capabilities().namespace_tools
 }
 
-fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.features.get().enabled(Feature::MultiAgentV2)
-}
-
-fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
-    multi_agent_v2_enabled(turn_context) || turn_context.features.get().enabled(Feature::Collab)
-}
-
 fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.goal_tools_enabled()
         && !matches!(
@@ -351,7 +344,7 @@ fn standalone_image_generation_available(
 }
 
 fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOptions {
-    if multi_agent_v2_enabled(turn_context) {
+    if turn_context.multi_agent_version == Some(MultiAgentVersion::V2) {
         return WaitAgentTimeoutOptions {
             default_timeout_ms: turn_context.config.multi_agent_v2.default_wait_timeout_ms,
             min_timeout_ms: turn_context.config.multi_agent_v2.min_wait_timeout_ms,
@@ -367,7 +360,7 @@ fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOpt
 }
 
 fn max_concurrent_threads_per_session(turn_context: &TurnContext) -> Option<usize> {
-    multi_agent_v2_enabled(turn_context).then_some(
+    (turn_context.multi_agent_version == Some(MultiAgentVersion::V2)).then_some(
         turn_context
             .config
             .multi_agent_v2
@@ -646,8 +639,16 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
 fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let turn_context = context.turn_context;
-    if collab_tools_enabled(turn_context) {
-        if multi_agent_v2_enabled(turn_context) {
+    if matches!(
+        &turn_context.session_source,
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. })
+            if turn_context.multi_agent_version == Some(MultiAgentVersion::V1)
+                && *depth >= turn_context.config.agent_max_depth
+    ) {
+        return;
+    }
+    if turn_context.multi_agent_version.is_some() {
+        if turn_context.multi_agent_version == Some(MultiAgentVersion::V2) {
             let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {
                 ToolExposure::DirectModelOnly
             } else {
