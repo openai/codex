@@ -1339,17 +1339,18 @@ impl App {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn handle_skills_list_response(&mut self, response: SkillsListResponse) {
-        let cwd = self.chat_widget.config_ref().cwd.clone();
-        let errors = errors_for_cwd(&cwd, &response);
-        if errors.is_empty() {
-            self.skill_load_warnings_by_cwd.remove(&cwd);
-        } else if !self
-            .skill_load_warnings_by_cwd
-            .get(&cwd)
-            .is_some_and(|previous_errors| previous_errors == &errors)
-        {
-            emit_skill_load_warnings(&self.app_event_tx, &errors);
-            self.skill_load_warnings_by_cwd.insert(cwd, errors);
+        let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+        if let Some(errors) = errors_for_cwd(&cwd, &response) {
+            if errors.is_empty() {
+                self.skill_load_warnings_by_cwd.remove(&cwd);
+            } else if !self
+                .skill_load_warnings_by_cwd
+                .get(&cwd)
+                .is_some_and(|previous_errors| previous_errors == &errors)
+            {
+                emit_skill_load_warnings(&self.app_event_tx, &errors);
+                self.skill_load_warnings_by_cwd.insert(cwd, errors);
+            }
         }
 
         self.chat_widget.handle_skills_list_response(response);

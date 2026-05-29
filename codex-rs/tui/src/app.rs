@@ -456,13 +456,12 @@ fn rollout_path_is_resumable(rollout_path: &Path) -> bool {
     std::fs::metadata(rollout_path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
-fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Vec<SkillErrorInfo> {
+fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Option<Vec<SkillErrorInfo>> {
     response
         .data
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.errors.clone())
-        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

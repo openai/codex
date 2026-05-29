@@ -2315,6 +2315,18 @@ async fn repeated_skill_load_warnings_emit_once_until_errors_clear() {
 
     app.handle_skills_list_response(codex_app_server_protocol::SkillsListResponse {
         data: vec![codex_app_server_protocol::SkillsListEntry {
+            cwd: test_path_buf("/tmp/other-project"),
+            skills: Vec::new(),
+            errors: Vec::new(),
+        }],
+    });
+    assert!(drain_insert_history_cells(&mut app_event_rx).is_empty());
+
+    app.handle_skills_list_response(response.clone());
+    assert!(drain_insert_history_cells(&mut app_event_rx).is_empty());
+
+    app.handle_skills_list_response(codex_app_server_protocol::SkillsListResponse {
+        data: vec![codex_app_server_protocol::SkillsListEntry {
             cwd,
             skills: Vec::new(),
             errors: Vec::new(),
