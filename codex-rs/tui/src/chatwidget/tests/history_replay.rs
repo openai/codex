@@ -164,6 +164,30 @@ async fn replayed_user_messages_seed_composer_history() {
 }
 
 #[tokio::test]
+async fn replayed_review_prompt_does_not_seed_composer_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_item(
+        AppServerThreadItem::EnteredReviewMode {
+            id: "review-start".to_string(),
+            review: "changes against main".to_string(),
+        },
+        "turn-1".to_string(),
+        ReplayKind::ResumeInitialMessages,
+    );
+    replay_user_message_text(
+        &mut chat,
+        "review-prompt",
+        "Review the code changes against the base branch 'main'.",
+        ReplayKind::ResumeInitialMessages,
+    );
+    drain_insert_history(&mut rx);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -1212,6 +1212,9 @@ impl ChatWidget {
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
+            if self.review.is_review_mode {
+                return;
+            }
             let mention_bindings = items
                 .iter()
                 .filter_map(|item| match item {
@@ -1250,9 +1253,7 @@ impl ChatWidget {
                     mention_bindings,
                     pending_pastes: Vec::new(),
                 });
-            if !self.review.is_review_mode {
-                self.on_user_message_display(display);
-            }
+            self.on_user_message_display(display);
             return;
         }
 
