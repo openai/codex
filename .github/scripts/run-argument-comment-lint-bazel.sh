@@ -50,6 +50,9 @@ read_query_labels() {
     exit 1
   fi
 
+  if [[ ! -s "$query_stdout" ]]; then
+    cat "$query_stderr" >&2
+  fi
   cat "$query_stdout"
   rm -f "$query_stdout" "$query_stderr"
 }

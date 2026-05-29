@@ -59,12 +59,15 @@ or share it.
 
 ## BuildBuddy remote configurations
 
-GitHub Actions routes Bazel traffic through
+GitHub Actions routes Bazel build and output-resolution commands through
 `.github/scripts/run_bazel_with_buildbuddy.py`. Higher-level helpers such as
 `.github/scripts/run-bazel-ci.sh` and `.github/scripts/rusty_v8_bazel.py`
 delegate remote configuration selection to that wrapper. The wrapper reads the
 GitHub Actions repository and event payload rather than relying on workflow
 files to duplicate tenant-selection logic.
+
+Loading-phase target-discovery `bazel query` commands run locally because they
+only enumerate labels and do not need remote caches or execution.
 
 The `Cache/BES` host is also used for remote downloads.
 

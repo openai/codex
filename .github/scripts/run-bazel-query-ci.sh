@@ -2,15 +2,16 @@
 
 set -euo pipefail
 
-# Run Bazel queries with the same CI startup settings as the main build/test
-# invocation so target-discovery queries can reuse the same Bazel server.
+# Run target-discovery queries with the same startup settings as the main
+# build/test invocation so they can reuse the same Bazel server. Queries only
+# enumerate labels, so they intentionally do not select CI or remote configs.
 
 query_args=()
-windows_cross_compile=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --windows-cross-compile)
-      windows_cross_compile=1
+      # Retained for existing callers; platform selection affects the later
+      # build, not this loading-phase label query.
       shift
       ;;
     --)
@@ -31,20 +32,6 @@ fi
 
 query_expression="$1"
 
-ci_config=ci-linux
-case "${RUNNER_OS:-}" in
-  macOS)
-    ci_config=ci-macos
-    ;;
-  Windows)
-    if [[ $windows_cross_compile -eq 1 ]]; then
-      ci_config=ci-windows-cross
-    else
-      ci_config=ci-windows
-    fi
-    ;;
-esac
-
 bazel_startup_args=()
 if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
   bazel_startup_args+=("--output_user_root=${BAZEL_OUTPUT_USER_ROOT}")
@@ -52,19 +39,14 @@ fi
 
 run_bazel() {
   if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-    MSYS2_ARG_CONV_EXCL='*' "$(dirname "${BASH_SOURCE[0]}")/run_bazel_with_buildbuddy.py" "$@"
+    MSYS2_ARG_CONV_EXCL='*' bazel "$@"
     return
   fi
 
-  "$(dirname "${BASH_SOURCE[0]}")/run_bazel_with_buildbuddy.py" "$@"
+  bazel "$@"
 }
 
 bazel_query_args=(--noexperimental_remote_repo_contents_cache query)
-if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-  bazel_query_args+=(
-    "--config=${ci_config}"
-  )
-fi
 
 if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
   bazel_query_args+=("--repo_contents_cache=${BAZEL_REPO_CONTENTS_CACHE}")
@@ -74,8 +56,6 @@ if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
   bazel_query_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
 fi
 
-# Query takes one positional expression. Keep it last so the remote-config
-# wrapper can insert its Bazel options before it.
 if (( ${#query_args[@]} > 0 )); then
   bazel_query_args+=("${query_args[@]}")
 fi
