@@ -54,8 +54,9 @@ impl Default for HooksConfig {
             plugin_hook_load_warnings: Vec::new(),
             shell_program: None,
             shell_args: Vec::new(),
-            local_cwd: AbsolutePathBuf::current_dir()
-                .expect("test hook config should resolve current directory"),
+            local_cwd: AbsolutePathBuf::current_dir().unwrap_or_else(|err| {
+                panic!("test hook config should resolve current directory: {err}")
+            }),
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         }
     }
