@@ -241,9 +241,10 @@ else
   env -0
 fi"#;
 
-const POWERSHELL_DUMP_ENV_SCRIPT: &str = r#"$items = @(Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
-  [PSCustomObject]@{ Name = $_.Name; Value = $_.Value }
-})
+const POWERSHELL_DUMP_ENV_SCRIPT: &str = r#"$items = [ordered]@{}
+Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
+  $items[$_.Name] = $_.Value
+}
 ConvertTo-Json -InputObject $items -Compress -Depth 2"#;
 
 const POWERSHELL_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = r#"$envFile = $env:CODEX_ENV_FILE
@@ -253,9 +254,10 @@ if (![string]::IsNullOrEmpty($envFile) -and (Test-Path -LiteralPath $envFile -Pa
   } catch {
   }
 }
-$items = @(Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
-  [PSCustomObject]@{ Name = $_.Name; Value = $_.Value }
-})
+$items = [ordered]@{}
+Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
+  $items[$_.Name] = $_.Value
+}
 ConvertTo-Json -InputObject $items -Compress -Depth 2"#;
 
 fn parse_posix_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
@@ -276,20 +278,6 @@ fn parse_posix_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
     Ok(env)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct PowerShellEnvEntry {
-    name: String,
-    value: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum PowerShellEnvOutput {
-    Entries(Vec<PowerShellEnvEntry>),
-    Entry(PowerShellEnvEntry),
-}
-
 fn parse_powershell_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
     let output =
         std::str::from_utf8(output).context("captured PowerShell environment was not UTF-8")?;
@@ -297,16 +285,9 @@ fn parse_powershell_env_output(output: &[u8]) -> Result<HashMap<String, String>>
     if output.is_empty() {
         return Ok(HashMap::new());
     }
-    let output: PowerShellEnvOutput =
+    let output: HashMap<String, String> =
         serde_json::from_str(output).context("failed to parse captured PowerShell environment")?;
-    let entries = match output {
-        PowerShellEnvOutput::Entries(entries) => entries,
-        PowerShellEnvOutput::Entry(entry) => vec![entry],
-    };
-    Ok(entries
-        .into_iter()
-        .map(|entry| (entry.name, entry.value.unwrap_or_default()))
-        .collect())
+    Ok(output)
 }
 
 fn diff_env(

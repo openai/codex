@@ -150,10 +150,13 @@ fn shell_env_file_for_session_skips_cmd() -> Result<()> {
 }
 
 #[test]
-fn powershell_env_output_parser_accepts_single_entry() -> Result<()> {
+fn powershell_env_output_parser_accepts_json_object() -> Result<()> {
     assert_eq!(
-        parse_powershell_env_output(br#"{"Name":"ONLY","Value":"one"}"#)?,
-        HashMap::from([("ONLY".to_string(), "one".to_string())])
+        parse_powershell_env_output(br#"{"ONLY":"one","EMPTY":""}"#)?,
+        HashMap::from([
+            ("ONLY".to_string(), "one".to_string()),
+            ("EMPTY".to_string(), "".to_string()),
+        ])
     );
 
     Ok(())
