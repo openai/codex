@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::thread;
 use tokio::io;
 use tracing::trace;
 
@@ -15,6 +16,7 @@ use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
 use crate::client::LazyRemoteExecServerClient;
+use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
@@ -40,6 +42,29 @@ impl RemoteFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for RemoteFileSystem {
+    fn canonicalize(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
+        trace!("remote fs canonicalize");
+        let runtime = tokio::runtime::Handle::try_current().map_err(|err| {
+            io::Error::other(format!("remote fs canonicalize requires runtime: {err}"))
+        })?;
+        let client = self.client.clone();
+        let path = path.clone();
+        // ExecutorFileSystem::canonicalize is synchronous, so remote callers have to hop through
+        // the active runtime from a helper thread to reach the JSON-RPC filesystem surface.
+        thread::spawn(move || {
+            runtime.block_on(async move {
+                let client = client.get().await.map_err(map_remote_error)?;
+                let response = client
+                    .fs_canonicalize(FsCanonicalizeParams { path })
+                    .await
+                    .map_err(map_remote_error)?;
+                Ok(response.path)
+            })
+        })
+        .join()
+        .map_err(|_| io::Error::other("remote fs canonicalize thread panicked"))?
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,

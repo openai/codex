@@ -79,6 +79,10 @@ impl LocalFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {
+    fn canonicalize(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
+        self.unsandboxed.canonicalize(path)
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,
@@ -152,6 +156,10 @@ impl ExecutorFileSystem for LocalFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for UnsandboxedFileSystem {
+    fn canonicalize(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
+        self.file_system.canonicalize(path)
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,
@@ -238,6 +246,10 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for DirectFileSystem {
+    fn canonicalize(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
+        path.canonicalize()
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,

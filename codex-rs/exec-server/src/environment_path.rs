@@ -2,6 +2,8 @@ use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::io;
+use std::path::Component;
+use std::path::Path;
 use std::sync::Arc;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -60,6 +62,13 @@ impl EnvironmentPathRef {
     pub fn with_path(&self, path: AbsolutePathBuf) -> Self {
         Self::new(Arc::clone(&self.file_system), path)
     }
+
+    /// Best-effort resolves this path through its bound filesystem.
+    pub fn canonicalize_if_exists(&self) -> Self {
+        self.file_system
+            .canonicalize(&self.path)
+            .map_or_else(|_| self.clone(), |path| self.with_path(path))
+    }
 }
 
 impl PartialEq for EnvironmentPathRef {
@@ -100,6 +109,7 @@ mod tests {
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     enum RecordedMethod {
+        Canonicalize,
         ReadFileText,
         Metadata,
         ReadDirectory,
@@ -114,17 +124,26 @@ mod tests {
 
     struct RecordingFileSystem {
         calls: Mutex<Vec<RecordedCall>>,
+        canonicalize_supported: bool,
     }
 
     impl Default for RecordingFileSystem {
         fn default() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                canonicalize_supported: true,
             }
         }
     }
 
     impl RecordingFileSystem {
+        fn without_canonicalize() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                canonicalize_supported: false,
+            }
+        }
+
         fn recorded_calls(&self) -> Vec<RecordedCall> {
             match self.calls.lock() {
                 Ok(calls) => calls.clone(),
@@ -142,6 +161,21 @@ mod tests {
 
     #[async_trait]
     impl ExecutorFileSystem for RecordingFileSystem {
+        fn canonicalize(&self, path: &AbsolutePathBuf) -> io::Result<AbsolutePathBuf> {
+            self.push_call(RecordedCall {
+                method: RecordedMethod::Canonicalize,
+                path: path.clone(),
+                sandbox: None,
+            });
+            if !self.canonicalize_supported {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "filesystem does not support canonicalization",
+                ));
+            }
+            Ok(path.parent().unwrap())
+        }
+
         async fn read_file(
             &self,
             path: &AbsolutePathBuf,
@@ -317,5 +351,64 @@ mod tests {
 
         let set = HashSet::from([left, same, different_path, different_fs]);
         assert_eq!(set.len(), 3);
+    }
+    #[test]
+    fn canonicalize_if_exists_keeps_bound_file_system_identity() {
+        let path = std::env::temp_dir().join("skills/demo").abs();
+        let file_system = Arc::new(RecordingFileSystem::default());
+        let path_ref = EnvironmentPathRef::new(file_system.clone(), path.clone());
+
+        let canonicalized = path_ref.canonicalize_if_exists();
+
+        assert_eq!(canonicalized.path(), &path.parent().unwrap());
+        assert_eq!(
+            canonicalized,
+            EnvironmentPathRef::new(file_system.clone(), path.parent().unwrap())
+        );
+        assert_eq!(
+            file_system.recorded_calls(),
+            vec![RecordedCall {
+                method: RecordedMethod::Canonicalize,
+                path,
+                sandbox: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn canonicalize_if_exists_keeps_unsupported_path() {
+        let path = std::env::temp_dir().join("skills/demo").abs();
+        let path_ref =
+            EnvironmentPathRef::new(Arc::new(RecordingFileSystem::without_canonicalize()), path);
+
+        assert_eq!(path_ref.canonicalize_if_exists(), path_ref);
+    }
+
+    #[test]
+    fn join_relative_keeps_literal_tilde_under_bound_path() {
+        let path_ref = EnvironmentPathRef::local(std::env::temp_dir().join("skills").abs());
+
+        assert_eq!(
+            path_ref
+                .join_relative(Path::new("~"))
+                .map(|path_ref| path_ref.path().clone()),
+            Some(std::env::temp_dir().join("skills/~").abs())
+        );
+    }
+
+    #[test]
+    fn join_relative_rejects_parent_dirs() {
+        let path_ref = EnvironmentPathRef::local(std::env::temp_dir().join("skills").abs());
+
+        assert_eq!(path_ref.join_relative(Path::new("../outside")), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn join_relative_rejects_windows_prefixed_and_rooted_paths() {
+        let path_ref = EnvironmentPathRef::local(std::env::temp_dir().join("skills").abs());
+
+        assert_eq!(path_ref.join_relative(Path::new(r"C:temp")), None);
+        assert_eq!(path_ref.join_relative(Path::new(r"\temp")), None);
     }
 }

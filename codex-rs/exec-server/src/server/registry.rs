@@ -5,6 +5,7 @@ use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
 use crate::protocol::ExecParams;
+use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
@@ -12,6 +13,7 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
@@ -94,6 +96,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         FS_GET_METADATA_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsGetMetadataParams| async move {
             handler.fs_get_metadata(params).await
+        },
+    );
+    router.request(
+        FS_CANONICALIZE_METHOD,
+        |handler: Arc<ExecServerHandler>, params: FsCanonicalizeParams| async move {
+            handler.fs_canonicalize(params).await
         },
     );
     router.request(
