@@ -24,6 +24,7 @@ REMOTE_EXECUTION_CONFIGS = {
     "--config=ci-v8",
     "--config=ci-windows-cross",
 }
+QUERY_COMMANDS = {"query", "cquery"}
 
 
 # Only authenticated workflow runs executing trusted upstream code may use the
@@ -101,14 +102,20 @@ def bazel_args_with_remote_config(
     ]
 
     try:
-        separator_idx = args.index("--")
+        insertion_idx = args.index("--")
     except ValueError:
-        # No target separator is present, so command options can be appended.
-        return [*args, *remote_args]
+        if any(command in args for command in QUERY_COMMANDS):
+            # `query` and `cquery` accept one trailing expression; keep
+            # wrapper-added options in front of it without adding a separator.
+            insertion_idx = len(args) - 1
+        else:
+            # No target separator or query expression is present, so command
+            # options can be appended.
+            insertion_idx = len(args)
 
-    # Insert command options before a Bazel `--` separator so targets or
-    # `bazel run` arguments after the separator do not absorb the remote config.
-    return [*args[:separator_idx], *remote_args, *args[separator_idx:]]
+    # In both forms, keep the wrapper-added options out of positional payloads:
+    # arguments to `bazel run`, or the final query expression.
+    return [*args[:insertion_idx], *remote_args, *args[insertion_idx:]]
 
 
 def bazel_command(*args: str, env: Mapping[str, str] | None = None) -> list[str]:

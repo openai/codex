@@ -79,6 +79,32 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ),
         )
 
+    def test_query_remote_configuration_is_inserted_before_expression(self) -> None:
+        expression = 'kind("rust_library rule", //codex-rs/...)'
+        env = {"BUILDBUDDY_API_KEY": "fork-token"}
+
+        for command in ("query", "cquery"):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    [
+                        command,
+                        "--config=ci-windows-cross",
+                        "--output=label",
+                        "--config=buildbuddy-generic-rbe",
+                        "--remote_header=x-buildbuddy-api-key=fork-token",
+                        expression,
+                    ],
+                    run_bazel_with_buildbuddy.bazel_args_with_remote_config(
+                        [
+                            command,
+                            "--config=ci-windows-cross",
+                            "--output=label",
+                            expression,
+                        ],
+                        env,
+                    ),
+                )
+
     def test_same_repository_pull_request_selects_openai_host(self) -> None:
         with TemporaryDirectory() as temp_dir:
             self.assertEqual(

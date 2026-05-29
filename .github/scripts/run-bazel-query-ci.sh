@@ -74,12 +74,12 @@ if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
   bazel_query_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
 fi
 
-# The remote-config wrapper inserts options before this separator. Query
-# expressions must remain the final positional argument.
+# Query takes one positional expression. Keep it last so the remote-config
+# wrapper can insert its Bazel options before it.
 if (( ${#query_args[@]} > 0 )); then
   bazel_query_args+=("${query_args[@]}")
 fi
-bazel_query_args+=(-- "$query_expression")
+bazel_query_args+=("$query_expression")
 
 if (( ${#bazel_startup_args[@]} > 0 )); then
   run_bazel "${bazel_startup_args[@]}" "${bazel_query_args[@]}"
