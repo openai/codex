@@ -15,7 +15,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ResponsesApiNamespaceTool;
 use pretty_assertions::assert_eq;
-use tokio as _; // Keep dev-dep for cargo-shear; tests use #[tokio::test].
 
 use super::GeneratedImageOutput;
 use super::ImageRequest;
