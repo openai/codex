@@ -136,7 +136,7 @@ impl Transport<RoleClient> for ExecutorProcessTransport {
             let mut bytes = to_vec(&item).map_err(io::Error::other)?;
             bytes.push(b'\n');
             let response = process
-                .write(Some(bytes), false)
+                .write(Some(bytes), /*close_stdin*/ false)
                 .await
                 .map_err(io::Error::other)?;
             match response.status {

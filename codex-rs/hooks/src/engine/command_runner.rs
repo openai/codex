@@ -195,7 +195,10 @@ async fn write_remote_stdin(
     input_json: &str,
 ) -> Result<(), String> {
     let response = process
-        .write(Some(input_json.as_bytes().to_vec()), true)
+        .write(
+            Some(input_json.as_bytes().to_vec()),
+            /*close_stdin*/ true,
+        )
         .await
         .map_err(|err| format!("failed to write hook stdin: {err}"))?;
     if response.status == WriteStatus::Accepted {
@@ -213,7 +216,7 @@ async fn collect_output(
     let mut after_seq = None;
     loop {
         let response = process
-            .read(after_seq, None, Some(50))
+            .read(after_seq, /*max_bytes*/ None, Some(50))
             .await
             .map_err(|err| err.to_string())?;
         for chunk in response.chunks {
@@ -473,7 +476,9 @@ mod tests {
         chunks: Vec<ProcessOutputChunk>,
         exit_code: Option<i32>,
     ) -> ReadResponse {
-        read_response(chunks, 4, true, exit_code, true)
+        read_response(
+            chunks, /*next_seq*/ 4, /*exited*/ true, exit_code, /*closed*/ true,
+        )
     }
 
     fn output_chunk(
@@ -492,7 +497,7 @@ mod tests {
     async fn omitted_environment_id_runs_locally() {
         let result = run_command(
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
-            &handler("printf local-hook", None),
+            &handler("printf local-hook", /*environment_id*/ None),
             "{}",
             &Default::default(),
         )
@@ -513,7 +518,10 @@ mod tests {
         shell.local_cwd = local_cwd.clone();
         let result = run_command(
             &shell,
-            &handler(if cfg!(windows) { "cd" } else { "pwd -P" }, None),
+            &handler(
+                if cfg!(windows) { "cd" } else { "pwd -P" },
+                /*environment_id*/ None,
+            ),
             "{}",
             &Default::default(),
         )
@@ -549,7 +557,10 @@ mod tests {
     async fn local_hook_receives_stdin_and_captures_stderr_and_exit_code() {
         let result = run_command(
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
-            &handler("cat; printf stderr >&2; exit 7", None),
+            &handler(
+                "cat; printf stderr >&2; exit 7",
+                /*environment_id*/ None,
+            ),
             "{\"hook\":true}",
             &Default::default(),
         )
@@ -563,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_hook_timeout_returns_error() {
-        let mut handler = handler("sleep 5", None);
+        let mut handler = handler("sleep 5", /*environment_id*/ None);
         handler.timeout_sec = 1;
         let result = run_command(
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
@@ -683,9 +694,21 @@ mod tests {
             WriteStatus::Accepted,
             vec![Ok(closed_read_response(
                 vec![
-                    output_chunk(1, codex_exec_server::ExecOutputStream::Stdout, b"stdout"),
-                    output_chunk(2, codex_exec_server::ExecOutputStream::Stderr, b"stderr"),
-                    output_chunk(3, codex_exec_server::ExecOutputStream::Pty, b"pty"),
+                    output_chunk(
+                        /*seq*/ 1,
+                        codex_exec_server::ExecOutputStream::Stdout,
+                        b"stdout",
+                    ),
+                    output_chunk(
+                        /*seq*/ 2,
+                        codex_exec_server::ExecOutputStream::Stderr,
+                        b"stderr",
+                    ),
+                    output_chunk(
+                        /*seq*/ 3,
+                        codex_exec_server::ExecOutputStream::Pty,
+                        b"pty",
+                    ),
                 ],
                 Some(0),
             ))],
@@ -703,7 +726,7 @@ mod tests {
 
     #[tokio::test]
     async fn remote_hook_collect_output_surfaces_process_failure() {
-        let mut response = closed_read_response(Vec::new(), None);
+        let mut response = closed_read_response(Vec::new(), /*exit_code*/ None);
         response.failure = Some("transport disconnected".to_string());
         let process = MockExecProcess::new(WriteStatus::Accepted, vec![Ok(response)]);
 
@@ -736,7 +759,7 @@ mod tests {
 
     #[tokio::test]
     async fn remote_hook_read_failure_terminates_process() {
-        let mut response = closed_read_response(Vec::new(), None);
+        let mut response = closed_read_response(Vec::new(), /*exit_code*/ None);
         response.failure = Some("transport disconnected".to_string());
         let process = MockExecProcess::new(WriteStatus::Accepted, vec![Ok(response)]);
         let result = run_started_remote_hook_command(
