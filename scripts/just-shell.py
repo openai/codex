@@ -14,8 +14,11 @@ import sys
 
 
 ARGS_TOKEN = "{args}"
+STDERR_NULL_TOKEN = "{stderr-null}"
 POWERSHELL_ARGS = "@($args | Select-Object -Skip 1)"
+POWERSHELL_STDERR_NULL = '2>$null; exit $LASTEXITCODE'
 SH_ARGS = '"$@"'
+SH_STDERR_NULL = "2>/dev/null"
 
 
 def main() -> int:
@@ -35,6 +38,7 @@ def main() -> int:
 
 def run_sh(command: str, recipe_name: str, recipe_args: list[str]) -> int:
     command = command.replace(ARGS_TOKEN, SH_ARGS)
+    command = command.replace(STDERR_NULL_TOKEN, SH_STDERR_NULL)
     return subprocess.run(
         ["sh", "-cu", command, recipe_name, *recipe_args],
         check=False,
@@ -52,6 +56,7 @@ def run_powershell(command: str, recipe_name: str, recipe_args: list[str]) -> in
         return 1
 
     command = command.replace(ARGS_TOKEN, POWERSHELL_ARGS)
+    command = command.replace(STDERR_NULL_TOKEN, POWERSHELL_STDERR_NULL)
     return subprocess.run(
         [
             pwsh,

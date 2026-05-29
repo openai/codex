@@ -38,15 +38,8 @@ app-server-test-client *args:
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex {args}
 
 # Format Rust and Python SDK code.
-[unix]
 fmt:
-    cargo fmt -- --config imports_granularity=Item 2>/dev/null
-    uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
-    uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
-
-[windows]
-fmt:
-    cargo fmt -- --config imports_granularity=Item 2>$null; exit $LASTEXITCODE
+    cargo fmt -- --config imports_granularity=Item {stderr-null}
     uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
     uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
 
