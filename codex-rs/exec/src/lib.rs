@@ -448,6 +448,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let config = build_config(overrides.clone()).await?;
     let config = if config.approvals_reviewer == ApprovalsReviewer::AutoReview
         && !dangerously_bypass_approvals_and_sandbox
+        && !removed_full_auto
     {
         build_config(ConfigOverrides {
             approval_policy: None,
