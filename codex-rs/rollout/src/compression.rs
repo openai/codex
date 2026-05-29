@@ -1,17 +1,16 @@
-use std::ffi::OsStr;
-use std::fs::File;
 use std::io;
-use std::io::BufRead;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
-
-use tokio::io::AsyncBufReadExt;
+use std::time::Duration;
 
 const COMPRESSED_SUFFIX: &str = ".zst";
+const OPEN_ROLLOUT_LINE_READER_RETRIES: usize = 3;
+const OPEN_ROLLOUT_LINE_READER_RETRY_DELAY: Duration = Duration::from_millis(50);
 
+/// Returns the modified time for the existing plain or compressed rollout file.
 pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::OffsetDateTime>> {
-    let Some(path) = existing_rollout_path(path).await else {
+    let Some(path) = path::existing_rollout_path(path).await else {
         return Ok(None);
     };
     let meta = tokio::fs::metadata(path).await?;
@@ -21,68 +20,49 @@ pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::O
 
 /// Opens a rollout line reader that transparently handles plain `.jsonl` and `.jsonl.zst` files.
 ///
-/// If the requested path disappears during a representation transition, this retries the matching
-/// plain/compressed sibling once so callers do not need to know which representation is on disk.
+/// If the requested path disappears during a representation transition, this briefly retries
+/// resolution so callers do not need to know which representation is on disk.
 pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineReader> {
-    match open_rollout_line_reader_once(path).await {
-        Ok(reader) => Ok(reader),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            match open_rollout_line_reader_once(path).await {
-                Ok(reader) => Ok(reader),
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    open_rollout_line_reader_alternate(path).await
-                }
-                Err(err) => Err(err),
+    for _ in 0..OPEN_ROLLOUT_LINE_READER_RETRIES {
+        match reader::open_once(path).await {
+            Ok(reader) => return Ok(reader),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                tokio::time::sleep(OPEN_ROLLOUT_LINE_READER_RETRY_DELAY).await;
             }
+            Err(err) => return Err(err),
         }
-        Err(err) => Err(err),
     }
+    reader::open_once(path).await
 }
 
+/// Returns the compressed `.jsonl.zst` path for a rollout path.
 pub(crate) fn compressed_rollout_path(path: &Path) -> PathBuf {
-    if is_compressed_rollout_path(path) {
-        return path.to_path_buf();
-    }
-    let mut file_name = path
-        .file_name()
-        .map(OsStr::to_os_string)
-        .unwrap_or_else(|| OsStr::new("rollout.jsonl").to_os_string());
-    file_name.push(COMPRESSED_SUFFIX);
-    path.with_file_name(file_name)
+    path::compressed_rollout_path(path)
 }
 
 /// Returns the plain `.jsonl` path for a plain or compressed rollout path.
 pub fn plain_rollout_path(path: &Path) -> PathBuf {
-    let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
-        return path.to_path_buf();
-    };
-    let Some(plain_file_name) = file_name.strip_suffix(COMPRESSED_SUFFIX) else {
-        return path.to_path_buf();
-    };
-    path.with_file_name(plain_file_name)
+    path::plain_rollout_path(path)
 }
 
+/// Returns whether the path names a compressed rollout file.
 pub(crate) fn is_compressed_rollout_path(path: &Path) -> bool {
-    path.file_name()
-        .and_then(OsStr::to_str)
-        .is_some_and(|name| name.ends_with(".jsonl.zst"))
+    path::is_compressed_rollout_path(path)
 }
 
+/// Returns whether the file name is a rollout file name.
 pub(crate) fn is_rollout_file_name(name: &str) -> bool {
-    parse_rollout_file_name(name).is_some()
+    file_name::is_rollout_file_name(name)
 }
 
+/// Parses a rollout file name, returning its plain `.jsonl` name when valid.
 pub(crate) fn parse_rollout_file_name(name: &str) -> Option<&str> {
-    let name = name.strip_suffix(COMPRESSED_SUFFIX).unwrap_or(name);
-    if name.starts_with("rollout-") && name.ends_with(".jsonl") {
-        Some(name)
-    } else {
-        None
-    }
+    file_name::parse_rollout_file_name(name)
 }
 
+/// Returns whether a compressed rollout should be skipped because the plain sibling exists.
 pub(crate) fn should_skip_compressed_sibling(path: &Path) -> bool {
-    is_compressed_rollout_path(path) && plain_rollout_path(path).exists()
+    path::should_skip_compressed_sibling(path)
 }
 
 /// Line-oriented rollout reader returned by [`open_rollout_line_reader`].
@@ -120,59 +100,127 @@ type BlockingLineReader = std::io::Lines<std::io::BufReader<Box<dyn Read + Send>
 /// Returns the existing rollout path, preferring the plain `.jsonl` file over
 /// its `.jsonl.zst` compressed sibling.
 pub async fn existing_rollout_path(path: &Path) -> Option<PathBuf> {
-    let plain_path = plain_rollout_path(path);
-    if tokio::fs::try_exists(plain_path.as_path())
-        .await
-        .unwrap_or(false)
-    {
-        return Some(plain_path);
-    }
-    let compressed_path = compressed_rollout_path(plain_path.as_path());
-    if tokio::fs::try_exists(compressed_path.as_path())
-        .await
-        .unwrap_or(false)
-    {
-        return Some(compressed_path);
-    }
-    None
+    path::existing_rollout_path(path).await
 }
 
-async fn open_rollout_line_reader_once(path: &Path) -> io::Result<RolloutLineReader> {
-    let path = existing_rollout_path(path)
-        .await
-        .unwrap_or_else(|| path.to_path_buf());
-    if is_compressed_rollout_path(path.as_path()) {
-        return open_compressed_reader(path).await;
+mod path {
+    use std::ffi::OsStr;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    use super::COMPRESSED_SUFFIX;
+
+    /// Returns the compressed `.jsonl.zst` path for a rollout path.
+    pub(super) fn compressed_rollout_path(path: &Path) -> PathBuf {
+        if is_compressed_rollout_path(path) {
+            return path.to_path_buf();
+        }
+        let mut file_name = path
+            .file_name()
+            .map(OsStr::to_os_string)
+            .unwrap_or_else(|| OsStr::new("rollout.jsonl").to_os_string());
+        file_name.push(COMPRESSED_SUFFIX);
+        path.with_file_name(file_name)
     }
-    let file = tokio::fs::File::open(path).await?;
-    Ok(RolloutLineReader {
-        inner: RolloutLineReaderInner::Plain(tokio::io::BufReader::new(file).lines()),
-    })
+
+    /// Returns the plain `.jsonl` path for a plain or compressed rollout path.
+    pub(super) fn plain_rollout_path(path: &Path) -> PathBuf {
+        let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+            return path.to_path_buf();
+        };
+        let Some(plain_file_name) = file_name.strip_suffix(COMPRESSED_SUFFIX) else {
+            return path.to_path_buf();
+        };
+        path.with_file_name(plain_file_name)
+    }
+
+    /// Returns whether the path names a compressed rollout file.
+    pub(super) fn is_compressed_rollout_path(path: &Path) -> bool {
+        path.file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.ends_with(".jsonl.zst"))
+    }
+
+    /// Returns whether a compressed rollout should be skipped because the plain sibling exists.
+    pub(super) fn should_skip_compressed_sibling(path: &Path) -> bool {
+        is_compressed_rollout_path(path) && plain_rollout_path(path).exists()
+    }
+
+    /// Returns the existing rollout path, preferring the plain sibling when both exist.
+    pub(super) async fn existing_rollout_path(path: &Path) -> Option<PathBuf> {
+        let plain_path = plain_rollout_path(path);
+        if tokio::fs::try_exists(plain_path.as_path())
+            .await
+            .unwrap_or(false)
+        {
+            return Some(plain_path);
+        }
+        let compressed_path = compressed_rollout_path(plain_path.as_path());
+        if tokio::fs::try_exists(compressed_path.as_path())
+            .await
+            .unwrap_or(false)
+        {
+            return Some(compressed_path);
+        }
+        None
+    }
 }
 
-async fn open_rollout_line_reader_alternate(path: &Path) -> io::Result<RolloutLineReader> {
-    let plain_path = plain_rollout_path(path);
-    let compressed_path = compressed_rollout_path(plain_path.as_path());
-    if is_compressed_rollout_path(path) {
-        let file = tokio::fs::File::open(plain_path).await?;
-        return Ok(RolloutLineReader {
+mod file_name {
+    use super::COMPRESSED_SUFFIX;
+
+    /// Returns whether the file name is a rollout file name.
+    pub(super) fn is_rollout_file_name(name: &str) -> bool {
+        parse_rollout_file_name(name).is_some()
+    }
+
+    /// Parses a rollout file name, returning its plain `.jsonl` name when valid.
+    pub(super) fn parse_rollout_file_name(name: &str) -> Option<&str> {
+        let name = name.strip_suffix(COMPRESSED_SUFFIX).unwrap_or(name);
+        if name.starts_with("rollout-") && name.ends_with(".jsonl") {
+            Some(name)
+        } else {
+            None
+        }
+    }
+}
+
+mod reader {
+    use std::fs::File;
+    use std::io;
+    use std::io::BufRead;
+    use std::io::Read;
+    use std::path::Path;
+
+    use super::RolloutLineReader;
+    use super::RolloutLineReaderInner;
+    use super::path;
+    use tokio::io::AsyncBufReadExt;
+
+    /// Opens the current plain or compressed rollout representation after resolving the path once.
+    pub(super) async fn open_once(path: &Path) -> io::Result<RolloutLineReader> {
+        let path = path::existing_rollout_path(path)
+            .await
+            .unwrap_or_else(|| path.to_path_buf());
+        if path::is_compressed_rollout_path(path.as_path()) {
+            let reader = tokio::task::spawn_blocking(move || {
+                let input = File::open(path.as_path())?;
+                let decoder = zstd::stream::read::Decoder::new(input)?;
+                Ok::<_, io::Error>(
+                    io::BufReader::new(Box::new(decoder) as Box<dyn Read + Send>).lines(),
+                )
+            })
+            .await
+            .map_err(io::Error::other)??;
+            return Ok(RolloutLineReader {
+                inner: RolloutLineReaderInner::Blocking(Some(reader)),
+            });
+        }
+        let file = tokio::fs::File::open(path).await?;
+        Ok(RolloutLineReader {
             inner: RolloutLineReaderInner::Plain(tokio::io::BufReader::new(file).lines()),
-        });
+        })
     }
-    open_compressed_reader(compressed_path).await
-}
-
-async fn open_compressed_reader(path: PathBuf) -> io::Result<RolloutLineReader> {
-    let reader = tokio::task::spawn_blocking(move || {
-        let input = File::open(path.as_path())?;
-        let decoder = zstd::stream::read::Decoder::new(input)?;
-        Ok::<_, io::Error>(io::BufReader::new(Box::new(decoder) as Box<dyn Read + Send>).lines())
-    })
-    .await
-    .map_err(io::Error::other)??;
-    Ok(RolloutLineReader {
-        inner: RolloutLineReaderInner::Blocking(Some(reader)),
-    })
 }
 
 #[cfg(test)]
