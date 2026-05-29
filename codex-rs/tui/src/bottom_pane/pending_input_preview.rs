@@ -24,6 +24,7 @@ pub(crate) struct PendingInputPreview {
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
     pub queued_messages: Vec<String>,
+    pub has_editable_queued_message: bool,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: Option<key_hint::KeyBinding>,
@@ -39,6 +40,7 @@ impl PendingInputPreview {
             pending_steers: Vec::new(),
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
+            has_editable_queued_message: false,
             edit_binding: Some(key_hint::alt(KeyCode::Up)),
             interrupt_binding: Some(key_hint::plain(KeyCode::Esc)),
         }
@@ -151,7 +153,7 @@ impl PendingInputPreview {
             }
         }
 
-        if !self.queued_messages.is_empty()
+        if self.has_editable_queued_message
             && let Some(edit_binding) = self.edit_binding
         {
             lines.push(
@@ -197,13 +199,22 @@ mod tests {
     #[test]
     fn desired_height_one_message() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue.queued_messages.push("Hello, world!".to_string());
         assert_eq!(queue.desired_height(/*width*/ 40), 3);
     }
 
     #[test]
+    fn desired_height_server_owned_message_omits_edit_hint() {
+        let mut queue = PendingInputPreview::new();
+        queue.queued_messages.push("Hello, world!".to_string());
+        assert_eq!(queue.desired_height(/*width*/ 40), 2);
+    }
+
+    #[test]
     fn render_one_message() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue.queued_messages.push("Hello, world!".to_string());
         let width = 40;
         let height = queue.desired_height(width);
@@ -215,6 +226,7 @@ mod tests {
     #[test]
     fn render_one_message_with_shift_left_binding() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue.queued_messages.push("Hello, world!".to_string());
         queue.set_edit_binding(Some(key_hint::shift(KeyCode::Left)));
         let width = 40;
@@ -230,6 +242,7 @@ mod tests {
     #[test]
     fn render_two_messages() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue.queued_messages.push("Hello, world!".to_string());
         queue
             .queued_messages
@@ -244,6 +257,7 @@ mod tests {
     #[test]
     fn render_more_than_three_messages() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue.queued_messages.push("Hello, world!".to_string());
         queue
             .queued_messages
@@ -264,6 +278,7 @@ mod tests {
     #[test]
     fn render_wrapped_message() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue
             .queued_messages
             .push("This is a longer message that should be wrapped".to_string());
@@ -280,6 +295,7 @@ mod tests {
     #[test]
     fn render_many_line_message() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue
             .queued_messages
             .push("This is\na message\nwith many\nlines".to_string());
@@ -293,6 +309,7 @@ mod tests {
     #[test]
     fn long_url_like_message_does_not_expand_into_wrapped_ellipsis_rows() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue.queued_messages.push(
             "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/session_id=abc123def456ghi789"
                 .to_string(),
@@ -351,6 +368,7 @@ mod tests {
     #[test]
     fn render_pending_steers_above_queued_messages() {
         let mut queue = PendingInputPreview::new();
+        queue.has_editable_queued_message = true;
         queue.pending_steers.push("Please continue.".to_string());
         queue
             .pending_steers

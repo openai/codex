@@ -125,6 +125,7 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::TurnSubmission;
 use codex_app_server_protocol::UserInput;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
@@ -346,6 +347,8 @@ mod ide_context;
 use self::ide_context::IdeContextState;
 mod input_queue;
 use self::input_queue::InputQueueState;
+#[cfg(test)]
+use self::input_queue::ServerQueueBarrier;
 mod input_flow;
 mod input_restore;
 mod input_submission;
@@ -428,7 +431,6 @@ use self::user_messages::ThreadComposerState;
 pub(crate) use self::user_messages::ThreadInputState;
 pub(crate) use self::user_messages::UserMessage;
 use self::user_messages::UserMessageDisplay;
-#[cfg(test)]
 use self::user_messages::UserMessageHistoryOverride;
 use self::user_messages::UserMessageHistoryRecord;
 use self::user_messages::app_server_text_elements;

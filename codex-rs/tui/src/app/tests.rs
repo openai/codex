@@ -5138,6 +5138,50 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
     .await;
 }
 
+#[test]
+fn failed_server_queue_submission_falls_back_without_exiting_tui() -> Result<()> {
+    const WORKER_THREADS: usize = 1;
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_stack_size(TEST_STACK_SIZE_BYTES)
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let mut app = make_test_app().await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let thread_id = ThreadId::new();
+        let op = AppCommand::queue_turn(
+            codex_app_server_protocol::TurnSubmission {
+                input: vec![UserInput::Text {
+                    text: "durable follow-up".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+            crate::chatwidget::UserMessage::from("durable follow-up"),
+        );
+
+        let handled = app
+            .try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op)
+            .await
+            .expect("queue failure should fall back locally");
+
+        assert!(handled);
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["durable follow-up".to_string()]
+        );
+        Ok(())
+    })
+}
+
 #[tokio::test]
 async fn override_turn_context_sends_thread_settings_update() {
     Box::pin(async {

@@ -1179,10 +1179,12 @@ impl BottomPane {
         queued: Vec<String>,
         pending_steers: Vec<String>,
         rejected_steers: Vec<String>,
+        has_editable_queued_message: bool,
     ) {
         self.pending_input_preview.pending_steers = pending_steers;
         self.pending_input_preview.rejected_steers = rejected_steers;
         self.pending_input_preview.queued_messages = queued;
+        self.pending_input_preview.has_editable_queued_message = has_editable_queued_message;
         self.request_redraw();
     }
 
@@ -2431,6 +2433,7 @@ mod tests {
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
             Vec::new(),
+            /*has_editable_queued_message*/ true,
         );
 
         let width = 48;
@@ -2462,6 +2465,7 @@ mod tests {
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
             Vec::new(),
+            /*has_editable_queued_message*/ true,
         );
         pane.hide_status_indicator();
 
@@ -2494,6 +2498,7 @@ mod tests {
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
             Vec::new(),
+            /*has_editable_queued_message*/ true,
         );
 
         let width = 48;

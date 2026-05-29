@@ -54,7 +54,16 @@ impl ChatWidget {
             ServerNotification::ThreadSettingsUpdated(notification) => {
                 self.on_thread_settings_updated(notification);
             }
+            ServerNotification::ThreadQueueChanged(notification) => {
+                self.input_queue.set_server_queued_turns(
+                    notification.queued_turns,
+                    notification.dispatching_queued_turn_id,
+                );
+                self.refresh_pending_input_preview();
+                self.maybe_send_next_queued_input();
+            }
             ServerNotification::TurnStarted(notification) => {
+                self.input_queue.note_server_queue_turn_started();
                 self.turn_lifecycle.last_turn_id = Some(notification.turn.id);
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
@@ -62,6 +71,7 @@ impl ChatWidget {
                 }
             }
             ServerNotification::TurnCompleted(notification) => {
+                self.input_queue.note_server_queue_turn_completed();
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
@@ -222,7 +232,6 @@ impl ChatWidget {
             | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadArchived(_)
             | ServerNotification::ThreadUnarchived(_)
-            | ServerNotification::ThreadQueueChanged(_)
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::ProcessOutputDelta(_)

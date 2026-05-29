@@ -154,6 +154,65 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
 }
 
 #[tokio::test]
+async fn thread_queue_changed_updates_server_queue_preview() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadQueueChanged(
+            codex_app_server_protocol::ThreadQueueChangedNotification {
+                thread_id: thread_id.to_string(),
+                dispatching_queued_turn_id: None,
+                queued_turns: vec![codex_app_server_protocol::QueuedTurn {
+                    id: "queued-turn".to_string(),
+                    submission: codex_app_server_protocol::TurnSubmission {
+                        input: vec![UserInput::Text {
+                            text: "queued follow-up".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        ..Default::default()
+                    },
+                    status: codex_app_server_protocol::QueuedTurnStatus::Pending,
+                }],
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(
+        chat.input_queue.server_queued_messages,
+        vec!["queued follow-up".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn empty_thread_queue_snapshot_releases_local_queue() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.input_queue.note_server_queue_submission();
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("local fallback").into());
+    chat.input_queue
+        .queued_user_message_history_records
+        .push_back(UserMessageHistoryRecord::UserMessageText);
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadQueueChanged(
+            codex_app_server_protocol::ThreadQueueChangedNotification {
+                thread_id: thread_id.to_string(),
+                dispatching_queued_turn_id: None,
+                queued_turns: Vec::new(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
+}
+
+#[tokio::test]
 async fn thread_settings_updated_preserves_default_settings_for_plan_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     let thread_id = ThreadId::new();

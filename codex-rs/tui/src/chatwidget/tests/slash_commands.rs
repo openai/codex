@@ -1569,6 +1569,28 @@ async fn queued_follow_up_suppresses_agent_turn_complete_notification() {
 }
 
 #[tokio::test]
+async fn durable_queued_follow_up_suppresses_agent_turn_complete_notification() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+    chat.queue_user_message("Continue durably".into());
+    assert_matches!(op_rx.try_recv(), Ok(Op::QueueTurn { .. }));
+    chat.input_queue.set_server_queued_turns(
+        vec![codex_app_server_protocol::QueuedTurn {
+            id: "queued".to_string(),
+            submission: Default::default(),
+            status: codex_app_server_protocol::QueuedTurnStatus::Pending,
+        }],
+        /*dispatching_queued_turn_id*/ None,
+    );
+
+    complete_turn_with_message(&mut chat, "turn-1", Some("Still working"));
+
+    assert_matches!(chat.pending_notification, None);
+}
+
+#[tokio::test]
 async fn queued_menu_slash_keeps_agent_turn_complete_notification() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());

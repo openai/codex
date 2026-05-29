@@ -73,6 +73,8 @@ use codex_app_server_protocol::ThreadMemoryModeSetResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
+use codex_app_server_protocol::ThreadQueueAddParams;
+use codex_app_server_protocol::ThreadQueueAddResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -106,6 +108,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+use codex_app_server_protocol::TurnSubmission;
 use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -601,6 +604,24 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/metadata/update failed while syncing git branch")
+    }
+
+    pub(crate) async fn thread_queue_add(
+        &mut self,
+        thread_id: ThreadId,
+        submission: TurnSubmission,
+    ) -> Result<ThreadQueueAddResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadQueueAdd {
+                request_id,
+                params: ThreadQueueAddParams {
+                    thread_id: thread_id.to_string(),
+                    submission: submission.into(),
+                },
+            })
+            .await
+            .wrap_err("thread/queue/add failed in TUI")
     }
 
     pub(crate) async fn thread_settings_update(

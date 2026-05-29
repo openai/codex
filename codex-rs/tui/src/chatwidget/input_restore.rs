@@ -148,7 +148,9 @@ impl ChatWidget {
     /// state stays aligned with the merged attachment list. Returns `None` when there is nothing to
     /// restore.
     fn drain_pending_messages_for_restore(&mut self) -> Option<UserMessage> {
-        if self.input_queue.pending_steers.is_empty() && !self.has_queued_follow_up_messages() {
+        if self.input_queue.pending_steers.is_empty()
+            && !self.input_queue.has_locally_owned_follow_up_messages()
+        {
             return None;
         }
 
@@ -273,6 +275,9 @@ impl ChatWidget {
                 .input_queue
                 .queued_user_message_history_records
                 .clone(),
+            server_queued_messages: self.input_queue.server_queued_messages.clone(),
+            server_queue_has_pending_turn: self.input_queue.server_queue_has_pending_turn,
+            server_queue_barrier: self.input_queue.server_queue_barrier,
             user_turn_pending_start: self.input_queue.user_turn_pending_start,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
@@ -352,6 +357,10 @@ impl ChatWidget {
                 self.input_queue.queued_user_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,
             );
+            self.input_queue.server_queued_messages = input_state.server_queued_messages;
+            self.input_queue.server_queue_has_pending_turn =
+                input_state.server_queue_has_pending_turn;
+            self.input_queue.server_queue_barrier = input_state.server_queue_barrier;
         } else {
             self.turn_lifecycle
                 .restore_running(/*running*/ false, Instant::now());

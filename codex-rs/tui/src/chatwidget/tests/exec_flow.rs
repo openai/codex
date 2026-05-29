@@ -1005,6 +1005,7 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
 #[tokio::test]
 async fn user_message_during_user_shell_command_is_queued_not_steered() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
     let begin = begin_exec_with_source(

@@ -927,6 +927,195 @@ async fn empty_enter_during_task_does_not_queue() {
 }
 
 #[tokio::test]
+async fn app_server_queue_gate_routes_plain_follow_up_to_durable_queue() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.queue_user_message("queued submission".into());
+
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert!(chat.input_queue.blocks_local_queue_autosend());
+    match op_rx.try_recv() {
+        Ok(Op::QueueTurn {
+            submission,
+            fallback_user_message,
+        }) => {
+            assert_eq!(
+                submission.input,
+                vec![UserInput::Text {
+                    text: "queued submission".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+            assert_eq!(fallback_user_message.text, "queued submission");
+        }
+        other => panic!("expected Op::QueueTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn app_server_queue_gate_keeps_ephemeral_follow_up_local() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
+    chat.config.ephemeral = true;
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.queue_user_message("side conversation follow-up".into());
+
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn app_server_queue_gate_keeps_shell_follow_up_local() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.queue_user_message("!echo hello".into());
+
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn app_server_queue_gate_keeps_plain_follow_up_local_behind_older_shell_input() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.queue_user_message("!echo hello".into());
+    chat.queue_user_message("plain follow-up".into());
+
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 2);
+    assert_eq!(chat.input_queue.queued_user_messages[0].text, "!echo hello");
+    assert_eq!(
+        chat.input_queue.queued_user_messages[1].text,
+        "plain follow-up"
+    );
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn app_server_queue_gate_keeps_plain_follow_up_local_behind_pending_steer() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.input_queue
+        .pending_steers
+        .push_back(pending_steer("pending steer"));
+
+    chat.queue_user_message("plain follow-up".into());
+
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.input_queue.queued_user_messages[0].text,
+        "plain follow-up"
+    );
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn failed_app_server_queue_submission_falls_back_to_local_queue() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.queue_user_message("queued submission".into());
+    let Op::QueueTurn {
+        fallback_user_message,
+        ..
+    } = op_rx.try_recv().expect("queued turn op")
+    else {
+        panic!("expected queued turn op");
+    };
+
+    chat.requeue_failed_server_submission(fallback_user_message);
+
+    assert!(!chat.input_queue.blocks_local_queue_autosend());
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.input_queue.queued_user_messages[0].text,
+        "queued submission"
+    );
+    assert!(matches!(
+        chat.input_queue
+            .queued_user_message_history_records
+            .front(),
+        Some(UserMessageHistoryRecord::Override(history)) if history.text.is_empty()
+    ));
+}
+
+#[tokio::test]
+async fn failed_app_server_queue_submission_starts_local_fallback_when_idle() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.input_queue.note_server_queue_submission();
+    chat.requeue_failed_server_submission("queued submission".into());
+
+    assert!(chat.maybe_send_next_queued_input());
+    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
+}
+
+#[tokio::test]
+async fn failed_app_server_queue_submission_returns_to_front_of_local_queue() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AppServerQueue, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.queue_user_message("durable first".into());
+    let Op::QueueTurn {
+        fallback_user_message,
+        ..
+    } = op_rx.try_recv().expect("queued turn op")
+    else {
+        panic!("expected queued turn op");
+    };
+    chat.queue_user_message("!echo local second".into());
+
+    chat.requeue_failed_server_submission(fallback_user_message);
+
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 2);
+    assert_eq!(
+        chat.input_queue.queued_user_messages[0].text,
+        "durable first"
+    );
+    assert_eq!(
+        chat.input_queue.queued_user_messages[1].text,
+        "!echo local second"
+    );
+}
+
+#[tokio::test]
+async fn interrupted_turn_keeps_server_owned_follow_up_scheduled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    chat.input_queue.server_queued_messages = vec!["durable follow-up".to_string()];
+    chat.input_queue.server_queue_has_pending_turn = true;
+    chat.input_queue.server_queue_barrier = ServerQueueBarrier::WaitingForTurn;
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert_eq!(
+        chat.input_queue.server_queued_messages,
+        vec!["durable follow-up".to_string()]
+    );
+    assert_eq!(
+        chat.input_queue.server_queue_barrier,
+        ServerQueueBarrier::WaitingForTurn
+    );
+    assert!(chat.bottom_pane.composer_text().is_empty());
+}
+
+#[tokio::test]
 async fn pending_steer_esc_does_not_steal_vim_insert_escape() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
@@ -995,6 +1184,9 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         rejected_steer_history_records: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
         queued_user_message_history_records: VecDeque::new(),
+        server_queued_messages: Vec::new(),
+        server_queue_has_pending_turn: false,
+        server_queue_barrier: ServerQueueBarrier::Inactive,
         user_turn_pending_start: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
@@ -1011,6 +1203,30 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     assert!(!chat.turn_lifecycle.agent_turn_running);
     assert!(!chat.turn_lifecycle.sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn restore_thread_input_state_preserves_server_queue_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.input_queue.server_queued_messages = vec!["durable follow-up".to_string()];
+    chat.input_queue.server_queue_has_pending_turn = true;
+    chat.input_queue.server_queue_barrier = ServerQueueBarrier::WaitingForTurn;
+    let input_state = chat
+        .capture_thread_input_state()
+        .expect("captured thread input state");
+    chat.input_queue.clear();
+
+    chat.restore_thread_input_state(Some(input_state));
+
+    assert_eq!(
+        chat.input_queue.server_queued_messages,
+        vec!["durable follow-up".to_string()]
+    );
+    assert_eq!(
+        chat.input_queue.server_queue_barrier,
+        ServerQueueBarrier::WaitingForTurn
+    );
+    assert!(chat.input_queue.server_queue_has_pending_turn);
 }
 
 #[tokio::test]

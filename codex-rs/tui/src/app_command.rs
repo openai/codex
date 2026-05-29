@@ -9,6 +9,7 @@ use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
+use codex_app_server_protocol::TurnSubmission;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -22,6 +23,8 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::chatwidget::UserMessage;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -50,6 +53,11 @@ pub(crate) enum AppCommand {
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
+    },
+    QueueTurn {
+        submission: TurnSubmission,
+        #[serde(skip)]
+        fallback_user_message: UserMessage,
     },
     OverrideTurnContext {
         cwd: Option<PathBuf>,
@@ -166,6 +174,16 @@ impl AppCommand {
             final_output_json_schema,
             collaboration_mode,
             personality,
+        }
+    }
+
+    pub(crate) fn queue_turn(
+        submission: TurnSubmission,
+        fallback_user_message: UserMessage,
+    ) -> Self {
+        Self::QueueTurn {
+            submission,
+            fallback_user_message,
         }
     }
 

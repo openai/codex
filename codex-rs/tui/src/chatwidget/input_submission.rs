@@ -2,6 +2,12 @@
 
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SubmissionTarget {
+    Turn,
+    Queue,
+}
+
 impl ChatWidget {
     pub(super) fn user_message_from_submission(
         &mut self,
@@ -69,6 +75,18 @@ impl ChatWidget {
         );
     }
 
+    pub(super) fn submit_user_message_to_queue(&mut self, user_message: UserMessage) {
+        let (accepted, _) = self.submit_user_message_with_history_and_shell_escape_policy(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+            ShellEscapePolicy::Disallow,
+            SubmissionTarget::Queue,
+        );
+        if !accepted {
+            self.note_server_queue_submission_failed();
+        }
+    }
+
     pub(super) fn submit_user_message_with_history_record(
         &mut self,
         user_message: UserMessage,
@@ -78,6 +96,7 @@ impl ChatWidget {
             user_message,
             history_record,
             ShellEscapePolicy::Allow,
+            SubmissionTarget::Turn,
         )
         .0
     }
@@ -91,6 +110,7 @@ impl ChatWidget {
             user_message,
             UserMessageHistoryRecord::UserMessageText,
             shell_escape_policy,
+            SubmissionTarget::Turn,
         )
         .1
     }
@@ -100,6 +120,7 @@ impl ChatWidget {
         user_message: UserMessage,
         history_record: UserMessageHistoryRecord,
         shell_escape_policy: ShellEscapePolicy,
+        submission_target: SubmissionTarget,
     ) -> (bool, Option<AppCommand>) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -137,6 +158,7 @@ impl ChatWidget {
             );
             return (false, None);
         }
+        let fallback_user_message = user_message.clone();
         let UserMessage {
             text,
             local_images,
@@ -145,7 +167,8 @@ impl ChatWidget {
             mention_bindings,
         } = user_message;
 
-        let render_in_history = !self.turn_lifecycle.agent_turn_running;
+        let render_in_history =
+            submission_target == SubmissionTarget::Turn && !self.turn_lifecycle.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -319,37 +342,49 @@ impl ChatWidget {
         } else {
             None
         };
-        let pending_steer = (!render_in_history).then(|| PendingSteer {
-            user_message: UserMessage {
-                text: text.clone(),
-                local_images: local_images.clone(),
-                remote_image_urls: remote_image_urls.clone(),
-                text_elements: text_elements.clone(),
-                mention_bindings: mention_bindings.clone(),
-            },
-            history_record: history_record.clone(),
-            compare_key: Self::pending_steer_compare_key_from_items(&items),
-        });
-        let personality = self
-            .config
-            .personality
-            .filter(|_| self.config.features.enabled(Feature::Personality))
-            .filter(|_| self.current_model_supports_personality());
-        let service_tier = self.service_tier_update_for_core();
-        let active_permission_profile = self.config.permissions.active_permission_profile();
-        let op = AppCommand::user_turn(
-            items,
-            self.config.cwd.to_path_buf(),
-            AskForApproval::from(self.config.permissions.approval_policy.value()),
-            active_permission_profile,
-            effective_mode.model().to_string(),
-            effective_mode.reasoning_effort(),
-            /*summary*/ None,
-            service_tier,
-            /*final_output_json_schema*/ None,
-            collaboration_mode,
-            personality,
-        );
+        let pending_steer = (submission_target == SubmissionTarget::Turn && !render_in_history)
+            .then(|| PendingSteer {
+                user_message: UserMessage {
+                    text: text.clone(),
+                    local_images: local_images.clone(),
+                    remote_image_urls: remote_image_urls.clone(),
+                    text_elements: text_elements.clone(),
+                    mention_bindings: mention_bindings.clone(),
+                },
+                history_record: history_record.clone(),
+                compare_key: Self::pending_steer_compare_key_from_items(&items),
+            });
+        let op = match submission_target {
+            SubmissionTarget::Turn => {
+                let personality = self
+                    .config
+                    .personality
+                    .filter(|_| self.config.features.enabled(Feature::Personality))
+                    .filter(|_| self.current_model_supports_personality());
+                let service_tier = self.service_tier_update_for_core();
+                let active_permission_profile = self.config.permissions.active_permission_profile();
+                AppCommand::user_turn(
+                    items,
+                    self.config.cwd.to_path_buf(),
+                    AskForApproval::from(self.config.permissions.approval_policy.value()),
+                    active_permission_profile,
+                    effective_mode.model().to_string(),
+                    effective_mode.reasoning_effort(),
+                    /*summary*/ None,
+                    service_tier,
+                    /*final_output_json_schema*/ None,
+                    collaboration_mode,
+                    personality,
+                )
+            }
+            SubmissionTarget::Queue => AppCommand::queue_turn(
+                TurnSubmission {
+                    input: items,
+                    ..Default::default()
+                },
+                fallback_user_message,
+            ),
+        };
 
         if !self.submit_op(op.clone()) {
             return (false, None);

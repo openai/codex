@@ -616,6 +616,23 @@ impl App {
                 }
                 Ok(true)
             }
+            AppCommand::QueueTurn {
+                submission,
+                fallback_user_message,
+            } => {
+                if let Err(err) = app_server
+                    .thread_queue_add(thread_id, submission.clone())
+                    .await
+                {
+                    self.chat_widget
+                        .requeue_failed_server_submission(fallback_user_message.clone());
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to queue follow-up through app-server; queued locally instead: {err}"
+                    ));
+                    self.chat_widget.maybe_send_next_queued_input();
+                }
+                Ok(true)
+            }
             AppCommand::ListSkills { cwds, force_reload } => {
                 self.handle_skills_list_result(
                     app_server

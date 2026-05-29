@@ -82,14 +82,25 @@ impl ChatWidget {
         user_message: UserMessage,
         action: QueuedInputAction,
     ) {
-        if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
-            self.input_queue
-                .queued_user_messages
-                .push_back(QueuedUserMessage::new(user_message, action));
-            self.input_queue
-                .queued_user_message_history_records
-                .push_back(UserMessageHistoryRecord::UserMessageText);
-            self.refresh_pending_input_preview();
+        if self.is_session_configured()
+            && self.is_user_turn_pending_or_running()
+            && action == QueuedInputAction::Plain
+            && !user_message.text.starts_with('!')
+            && self.config.features.enabled(Feature::AppServerQueue)
+            && !self.config.ephemeral
+            && !self.only_user_shell_commands_running()
+            && self.input_queue.queued_user_messages.is_empty()
+            && self.input_queue.rejected_steers_queue.is_empty()
+            && self.input_queue.pending_steers.is_empty()
+        {
+            self.input_queue.note_server_queue_submission();
+            self.submit_user_message_to_queue(user_message);
+        } else if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
+            self.queue_user_message_locally(
+                user_message,
+                action,
+                UserMessageHistoryRecord::UserMessageText,
+            );
         } else {
             self.submit_user_message(user_message);
         }
@@ -98,6 +109,9 @@ impl ChatWidget {
     /// If idle and there are queued inputs, submit exactly one to start the next turn.
     pub(crate) fn maybe_send_next_queued_input(&mut self) -> bool {
         if self.input_queue.suppress_queue_autosend {
+            return false;
+        }
+        if self.input_queue.blocks_local_queue_autosend() {
             return false;
         }
         if self.is_user_turn_pending_or_running() {
@@ -137,6 +151,45 @@ impl ChatWidget {
         submitted_follow_up
     }
 
+    pub(crate) fn note_server_queue_submission_failed(&mut self) {
+        self.input_queue.note_server_queue_submission_failed();
+        self.refresh_pending_input_preview();
+    }
+
+    pub(crate) fn requeue_failed_server_submission(&mut self, user_message: UserMessage) {
+        self.input_queue.note_server_queue_submission_failed();
+        self.input_queue
+            .queued_user_messages
+            .push_front(QueuedUserMessage::new(
+                user_message,
+                QueuedInputAction::Plain,
+            ));
+        self.input_queue
+            .queued_user_message_history_records
+            .push_front(UserMessageHistoryRecord::Override(
+                UserMessageHistoryOverride {
+                    text: String::new(),
+                    text_elements: Vec::new(),
+                },
+            ));
+        self.refresh_pending_input_preview();
+    }
+
+    fn queue_user_message_locally(
+        &mut self,
+        user_message: UserMessage,
+        action: QueuedInputAction,
+        history_record: UserMessageHistoryRecord,
+    ) {
+        self.input_queue
+            .queued_user_messages
+            .push_back(QueuedUserMessage::new(user_message, action));
+        self.input_queue
+            .queued_user_message_history_records
+            .push_back(history_record);
+        self.refresh_pending_input_preview();
+    }
+
     pub(super) fn is_user_turn_pending_or_running(&self) -> bool {
         self.input_queue.user_turn_pending_start || self.bottom_pane.is_task_running()
     }
@@ -157,6 +210,7 @@ impl ChatWidget {
             preview.queued_messages,
             preview.pending_steers,
             preview.rejected_steers,
+            preview.has_editable_queued_message,
         );
     }
 
