@@ -702,19 +702,38 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
+        let path_ref = primary_turn_environment.map(|turn_environment| {
+            crate::skills::EnvironmentPathRef::new(
+                turn_environment.environment.get_filesystem(),
+                turn_environment.cwd.clone(),
+            )
+        });
+        // Local turns use their local environment filesystem for both cwd and host-local roots so
+        // implicit command detection can match either kind of loaded skill. Remote turns still
+        // keep host-local user/system/plugin roots on the process-local filesystem.
+        let local_file_system = self
+            .services
+            .environment_manager
+            .try_local_environment()
+            .map(|environment| environment.get_filesystem())
+            .or_else(|| Some(Arc::clone(&codex_exec_server::LOCAL_FS)));
+        let plugins_input = per_turn_config.plugins_config_input();
         let plugin_outcome = self
             .services
             .plugins_manager
-            .plugins_for_config(&per_turn_config.plugins_config_input())
+            .plugins_for_config(&plugins_input)
             .await;
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let fs = primary_turn_environment
-            .map(|turn_environment| turn_environment.environment.get_filesystem());
+        let skills_input = skills_load_input_from_config(
+            &per_turn_config,
+            path_ref,
+            local_file_system,
+            effective_skill_roots,
+        );
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config(&skills_input, fs)
+                .skills_for_config(&skills_input)
                 .await,
         );
         let goal_tools_supported = !per_turn_config.ephemeral && self.state_db().is_some();

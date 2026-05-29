@@ -451,6 +451,56 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
 }
 
 #[tokio::test]
+async fn skills_list_skips_cwd_roots_when_only_remote_environment_is_configured() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_skill(&codex_home, "home-skill")?;
+    let repo_skill_dir = cwd.path().join(".codex/skills/repo-skill");
+    std::fs::create_dir_all(&repo_skill_dir)?;
+    std::fs::write(
+        repo_skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: from repo root\n---\n\n# Body\n",
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(CODEX_EXEC_SERVER_URL_ENV_VAR, Some("ws://127.0.0.1:8765"))],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { data } = to_response(response)?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].cwd, cwd.path().to_path_buf());
+    assert_eq!(data[0].errors, Vec::new());
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .any(|skill| skill.name == "home-skill")
+    );
+    assert!(
+        data[0]
+            .skills
+            .iter()
+            .all(|skill| skill.name != "repo-skill")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn skills_list_accepts_relative_cwds() -> Result<()> {
     let codex_home = TempDir::new()?;
     let relative_cwd = std::path::PathBuf::from("relative-cwd");
