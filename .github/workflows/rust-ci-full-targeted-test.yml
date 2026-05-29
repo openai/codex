@@ -32,7 +32,7 @@ jobs:
       profile: ci-test
       artifact_id: targeted-macos-aarch64
       use_sccache: true
-      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=user_shell_commands_do_not_inherit_managed_network_proxy)' }}
+      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=session::tests::user_shell_commands_do_not_inherit_managed_network_proxy)' }}
       partition_tests: false
       require_single_test: true
     secrets: inherit
@@ -50,7 +50,7 @@ jobs:
       artifact_id: targeted-linux-x64-remote
       remote_env: true
       use_sccache: true
-      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=user_shell_commands_do_not_inherit_managed_network_proxy)' }}
+      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=session::tests::user_shell_commands_do_not_inherit_managed_network_proxy)' }}
       partition_tests: false
       require_single_test: true
     secrets: inherit
@@ -67,7 +67,7 @@ jobs:
       profile: ci-test
       artifact_id: targeted-linux-arm64
       use_sccache: true
-      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=user_shell_commands_do_not_inherit_managed_network_proxy)' }}
+      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=session::tests::user_shell_commands_do_not_inherit_managed_network_proxy)' }}
       partition_tests: false
       require_single_test: true
     secrets: inherit
@@ -84,7 +84,7 @@ jobs:
       profile: ci-test
       artifact_id: targeted-windows-x64
       test_threads: 8
-      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=user_shell_commands_do_not_inherit_managed_network_proxy)' }}
+      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=session::tests::user_shell_commands_do_not_inherit_managed_network_proxy)' }}
       partition_tests: false
       require_single_test: true
     secrets: inherit
@@ -105,7 +105,7 @@ jobs:
       artifact_id: targeted-windows-arm64
       test_threads: 8
       use_sccache: true
-      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=user_shell_commands_do_not_inherit_managed_network_proxy)' }}
+      nextest_filterset: ${{ github.event_name == 'workflow_dispatch' && inputs.nextest_filterset || 'test(=session::tests::user_shell_commands_do_not_inherit_managed_network_proxy)' }}
       partition_tests: false
       require_single_test: true
     secrets: inherit

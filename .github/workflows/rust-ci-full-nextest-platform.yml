@@ -419,7 +419,7 @@ jobs:
                 --workspace-remap "${workspace_root}" \
                 --filterset "${NEXTEST_FILTERSET}" \
                 --message-format json |
-                python3 -c 'import json, sys; print(json.load(sys.stdin)["test-count"])'
+                python3 -c 'import json, sys; test_list = json.load(sys.stdin); print(sum(testcase["filter-match"]["status"] == "matches" for suite in test_list["rust-suites"].values() for testcase in suite["testcases"].values()))'
             )"
             if [[ "${test_count}" != "1" ]]; then
               echo "nextest filterset must resolve to exactly one test; got ${test_count}" >&2
