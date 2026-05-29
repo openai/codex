@@ -202,7 +202,7 @@ fn hook_dir_mut(
 
 fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -> bool {
     // Destructure without `..` so new hook events cannot be introduced without
-    // deciding whether requirements composition should append them.
+    // deciding whether requirements layer merging should append them.
     let HookEventsToml {
         pre_tool_use,
         permission_request,

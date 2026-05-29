@@ -75,7 +75,7 @@ impl fmt::Display for RequirementSource {
                 write!(f, "cloud requirements")
             }
             RequirementSource::Composite { sources } => {
-                write!(f, "requirements composition: ")?;
+                write!(f, "requirements layers: ")?;
                 for (index, source) in sources.iter().enumerate() {
                     if index > 0 {
                         write!(f, ", ")?;
