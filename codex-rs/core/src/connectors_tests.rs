@@ -1238,7 +1238,7 @@ discoverables = [
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     let discoverable_tools =
-        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[])
+        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[], &[])
             .await
             .expect("discoverable tools should load");
 

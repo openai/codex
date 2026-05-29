@@ -20,6 +20,7 @@ const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
 
 pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
+    loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     if !config.features.enabled(Feature::Plugins) {
         return Ok(Vec::new());
@@ -45,32 +46,15 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .list_marketplaces_for_config(&plugins_input, &[])
         .context("failed to list plugin marketplaces for tool suggestions")?
         .marketplaces;
-    let mut installed_app_connector_ids = HashSet::<String>::new();
-    for marketplace in &marketplaces {
-        for plugin in &marketplace.plugins {
-            if !plugin.installed {
-                continue;
-            }
-
-            let plugin_id = plugin.id.clone();
-            match plugins_manager
-                .read_plugin_detail_for_marketplace_plugin(
-                    &plugins_input,
-                    &marketplace.name,
-                    plugin.clone(),
-                )
-                .await
-            {
-                Ok(plugin) => {
-                    installed_app_connector_ids
-                        .extend(plugin.apps.into_iter().map(|connector_id| connector_id.0));
-                }
-                Err(err) => warn!(
-                    "failed to load installed plugin apps for tool suggestion {plugin_id}: {err:#}"
-                ),
-            }
-        }
-    }
+    let mut installed_app_connector_ids = plugins_manager
+        .plugins_for_config(&plugins_input)
+        .await
+        .capability_summaries()
+        .iter()
+        .flat_map(|plugin| plugin.app_connector_ids.iter())
+        .map(|connector_id| connector_id.0.clone())
+        .collect::<HashSet<_>>();
+    installed_app_connector_ids.extend(loaded_plugin_app_connector_ids.iter().cloned());
 
     let mut discoverable_plugins = Vec::<DiscoverablePluginInfo>::new();
     for marketplace in marketplaces {
