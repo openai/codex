@@ -30,4 +30,3 @@ index a240dd6..6e64dfd 100644
 +
  pub fn android_ndk_toolchain() -> Result<path::PathBuf> {
      let host_os = host_os();
- 
