@@ -329,6 +329,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
             ),
         }),
         post_tool_use_payload: None,
+        history_truncation_policy: None,
     };
 
     assert_eq!(
@@ -356,6 +357,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
             ),
         }),
         post_tool_use_payload: None,
+        history_truncation_policy: None,
     };
 
     assert_eq!(
