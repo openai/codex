@@ -14,15 +14,15 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 
 use super::GeneratedImageOutput;
 use super::ImageRequest;
 use super::ImagegenAction;
 use super::ImagegenArgs;
-use super::generated_image_output_dir;
+use super::generated_image_output_hint;
 use super::imagegen_tool_spec;
-use super::persist_generated_image;
 use super::request_for_action;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
@@ -55,15 +55,14 @@ fn generate_uses_fixed_request_defaults() {
     );
 }
 
-#[tokio::test]
-async fn generated_output_returns_image_input_and_persists_artifact() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let output_hint = persist_generated_image(tempdir.path(), "call-1", RESULT)
-        .await
-        .expect("generated image should persist");
+#[test]
+fn generated_output_returns_image_input_and_output_hint() {
+    let saved_path =
+        AbsolutePathBuf::from_absolute_path("/tmp/generated_images/thread-1/call-1.png")
+            .expect("absolute path");
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
-        output_hint: Some(output_hint),
+        output_hint: Some(generated_image_output_hint(&saved_path)),
     };
 
     let ResponseInputItem::FunctionCallOutput {
@@ -87,15 +86,11 @@ async fn generated_output_returns_image_input_and_persists_artifact() {
                 text: format!(
                     "Generated images are saved to {} as {} by default.\n\
                      If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
-                    tempdir.path().display(),
-                    tempdir.path().join("call-1.png").display(),
+                    "/tmp/generated_images/thread-1",
+                    saved_path.display(),
                 ),
             },
         ]
-    );
-    assert_eq!(
-        std::fs::read(tempdir.path().join("call-1.png")).expect("saved generated image"),
-        b"png"
     );
 }
 
@@ -262,14 +257,6 @@ fn edit_without_image_history_returns_tool_error() {
     assert_eq!(
         error.to_string(),
         "image edit requested without any usable image in conversation history"
-    );
-}
-
-#[test]
-fn generated_image_output_dir_is_scoped_to_sanitized_thread_id() {
-    assert_eq!(
-        generated_image_output_dir(std::path::Path::new("/tmp/codex-home"), "thread/1"),
-        std::path::PathBuf::from("/tmp/codex-home/generated_images/thread_1")
     );
 }
 
