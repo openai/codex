@@ -85,12 +85,18 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
     .await;
 }
 
-pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
+pub async fn user_input_or_turn(
+    sess: &Arc<Session>,
+    sub_id: String,
+    op: Op,
+    client_user_message_id: Option<String>,
+) {
     user_input_or_turn_inner(
         sess,
         sub_id,
         op,
         /*mirror_user_text_to_realtime*/ Some(()),
+        client_user_message_id,
     )
     .await;
 }
@@ -190,6 +196,7 @@ pub(super) async fn user_input_or_turn_inner(
     sub_id: String,
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
+    client_user_message_id: Option<String>,
 ) {
     let Op::UserInput {
         items,
@@ -229,6 +236,7 @@ pub(super) async fn user_input_or_turn_inner(
             items.clone(),
             additional_context.clone(),
             /*expected_turn_id*/ None,
+            client_user_message_id.clone(),
             responsesapi_client_metadata.clone(),
         )
         .await
@@ -260,7 +268,10 @@ pub(super) async fn user_input_or_turn_inner(
                 .map(TurnInput::ResponseItem)
                 .collect::<Vec<_>>();
             if !items.is_empty() {
-                task_input.push(TurnInput::UserInput(items));
+                task_input.push(TurnInput::UserInput {
+                    content: items,
+                    client_id: client_user_message_id,
+                });
             }
             sess.spawn_task(
                 Arc::clone(&current_context),
@@ -619,6 +630,9 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
         .unified_exec_manager
         .terminate_all_processes()
         .await;
+    if let Err(err) = sess.services.code_mode_service.shutdown().await {
+        warn!("failed to shutdown code mode session: {err}");
+    }
     let mcp_shutdown = {
         let mut manager = sess.services.mcp_connection_manager.write().await;
         manager.begin_shutdown()
@@ -773,7 +787,8 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::UserInput { .. } => {
-                    user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
+                    user_input_or_turn(&sess, sub.id.clone(), sub.op, sub.client_user_message_id)
+                        .await;
                     false
                 }
                 Op::ThreadSettings { thread_settings } => {

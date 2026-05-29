@@ -1,9 +1,15 @@
 use axum::Router;
+use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::http::Request;
 use axum::http::StatusCode;
+use axum::http::header::ORIGIN;
+use axum::middleware;
+use axum::middleware::Next;
 use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::routing::any;
 use axum::routing::get;
 use std::io::Write as _;
@@ -13,6 +19,7 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
 use tracing::info;
+use tracing::warn;
 
 use crate::ExecServerRuntimePaths;
 use crate::connection::JsonRpcConnection;
@@ -123,6 +130,7 @@ async fn run_websocket_listener(
     let router = Router::new()
         .route("/", any(websocket_upgrade_handler))
         .route("/readyz", get(readiness_handler))
+        .layer(middleware::from_fn(reject_requests_with_origin_header))
         .with_state(ExecServerWebSocketState { processor });
     axum::serve(
         listener,
@@ -139,6 +147,22 @@ struct ExecServerWebSocketState {
 
 async fn readiness_handler() -> StatusCode {
     StatusCode::OK
+}
+
+async fn reject_requests_with_origin_header(
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request.headers().contains_key(ORIGIN) {
+        warn!(
+            method = %request.method(),
+            uri = %request.uri(),
+            "rejecting exec-server websocket listener request with Origin header"
+        );
+        Err(StatusCode::FORBIDDEN)
+    } else {
+        Ok(next.run(request).await)
+    }
 }
 
 async fn websocket_upgrade_handler(

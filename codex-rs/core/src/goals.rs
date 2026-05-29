@@ -6,7 +6,8 @@
 
 use crate::StateDbHandle;
 use crate::context::ContextualUserFragment;
-use crate::context::GoalContext;
+use crate::context::InternalContextSource;
+use crate::context::InternalModelContextFragment;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -1597,7 +1598,10 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseItem {
 }
 
 fn goal_context_input_item(prompt: String) -> ResponseItem {
-    ResponseItem::from(GoalContext::new(prompt).into_response_input_item())
+    ContextualUserFragment::into(InternalModelContextFragment::new(
+        InternalContextSource::from_static("goal"),
+        prompt,
+    ))
 }
 
 pub(crate) fn protocol_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
@@ -1799,7 +1803,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<goal_context>\nContinue working.\n</goal_context>".to_string(),
+                    text: "<codex_internal_context source=\"goal\">\nContinue working.\n</codex_internal_context>".to_string(),
                 }],
                 phase: None,
             }

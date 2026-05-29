@@ -1756,6 +1756,7 @@ fn client_request_turn_start_granular_approval_policy_is_marked_experimental() {
             request_id: crate::RequestId::Integer(4),
             params: TurnStartParams {
                 thread_id: "thr_123".to_string(),
+                client_user_message_id: None,
                 input: Vec::new(),
                 approval_policy: Some(AskForApproval::Granular {
                     sandbox_approval: false,
@@ -2277,7 +2278,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
             ),
             (
                 "/tmp/ignored.sock".to_string(),
-                NetworkUnixSocketPermission::None,
+                NetworkUnixSocketPermission::Deny,
             ),
         ])),
         allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
@@ -2301,7 +2302,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
             "allowedDomains": ["api.openai.com"],
             "deniedDomains": ["blocked.example.com"],
             "unixSockets": {
-                "/tmp/ignored.sock": "none",
+                "/tmp/ignored.sock": "deny",
                 "/tmp/proxy.sock": "allow"
             },
             "allowUnixSockets": ["/tmp/proxy.sock"],
@@ -2314,6 +2315,7 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
 fn core_turn_item_into_thread_item_converts_supported_variants() {
     let user_item = TurnItem::UserMessage(UserMessageItem {
         id: "user-1".to_string(),
+        client_id: Some("client-message-1".to_string()),
         content: vec![
             CoreUserInput::Text {
                 text: "hello".to_string(),
@@ -2342,6 +2344,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItem::from(user_item),
         ThreadItem::UserMessage {
             id: "user-1".to_string(),
+            client_id: Some("client-message-1".to_string()),
             content: vec![
                 UserInput::Text {
                     text: "hello".to_string(),
@@ -2621,6 +2624,27 @@ fn skills_list_params_serialization_uses_force_reload() {
             "forceReload": true,
         }),
     );
+}
+
+#[test]
+fn skills_extra_roots_set_params_serialization_uses_extra_roots() {
+    assert_eq!(
+        serde_json::to_value(SkillsExtraRootsSetParams {
+            extra_roots: vec![absolute_path("tmp/skills")],
+        })
+        .unwrap(),
+        json!({
+            "extraRoots": [absolute_path_string("tmp/skills")],
+        }),
+    );
+}
+
+#[test]
+fn skills_extra_roots_set_params_rejects_relative_roots() {
+    let result = serde_json::from_value::<SkillsExtraRootsSetParams>(json!({
+        "extraRoots": ["relative/path"],
+    }));
+    assert!(result.is_err());
 }
 
 #[test]
@@ -3582,6 +3606,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
 
     let without_override = TurnStartParams {
         thread_id: "thread_123".to_string(),
+        client_user_message_id: None,
         input: vec![],
         responsesapi_client_metadata: None,
         additional_context: None,

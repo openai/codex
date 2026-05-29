@@ -1069,12 +1069,9 @@ pub(crate) fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
 }
 
 pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
-    match subagent_source {
-        SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        } => Some(parent_thread_id.to_string()),
-        _ => None,
-    }
+    subagent_source
+        .parent_thread_id()
+        .map(|parent_thread_id| parent_thread_id.to_string())
 }
 
 fn analytics_hook_status(status: HookRunStatus) -> HookRunStatus {

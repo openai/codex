@@ -29,6 +29,10 @@ impl ConversationHistory {
 /// Future returned when an extension tool emits a visible turn-item lifecycle event.
 pub type TurnItemEmissionFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
+/// Future returned when an image-generation extension publishes completed image bytes.
+pub type ImageGenerationCompletionFuture<'a> =
+    Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
+
 /// Visible turn items that an extension fully owns and may emit as-is.
 ///
 /// Add only item kinds that require no additional host finalization before
@@ -48,6 +52,19 @@ pub trait TurnItemEmitter: Send + Sync {
 
     /// Emits the completion of one visible turn item.
     fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
+
+    /// Publishes image bytes for host persistence and visible completion.
+    ///
+    /// Returns persisted-artifact context for the extension's model-facing
+    /// function output when the host saves the generated image successfully.
+    fn image_generation_completed<'a>(
+        &'a self,
+        _call_id: String,
+        _prompt: String,
+        _result: String,
+    ) -> ImageGenerationCompletionFuture<'a> {
+        Box::pin(std::future::ready(None))
+    }
 }
 
 /// Turn-item emitter used when a caller does not expose visible item emission.
