@@ -128,7 +128,7 @@ async fn worker_compresses_old_archived_rollouts_only() -> anyhow::Result<()> {
     let fresh_temp = active_path.with_file_name("rollout-fresh.jsonl.zst.tmp");
     fs::write(&fresh_temp, "fresh temp")?;
 
-    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf()).await?;
 
     assert!(active_path.exists());
     assert!(!compressed_rollout_path(&active_path).exists());
@@ -152,7 +152,7 @@ async fn compression_preserves_rollout_permissions() -> anyhow::Result<()> {
     fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o600))?;
     set_old_mtime(&rollout_path)?;
 
-    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf()).await?;
 
     let compressed_path = compressed_rollout_path(&rollout_path);
     assert!(!rollout_path.exists());
@@ -220,7 +220,7 @@ async fn compression_preserves_read_only_rollout_permissions() -> anyhow::Result
     fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o400))?;
     let source_modified = fs::metadata(&rollout_path)?.modified()?;
 
-    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf()).await?;
 
     let compressed_path = compressed_rollout_path(&rollout_path);
     let compressed_metadata = fs::metadata(&compressed_path)?;
@@ -241,7 +241,7 @@ async fn worker_skips_existing_compressed_archived_rollouts() -> anyhow::Result<
     let compressed_path = compressed_rollout_path(&rollout_path);
     set_old_mtime(&compressed_path)?;
 
-    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf()).await?;
 
     assert!(!rollout_path.exists());
     assert!(compressed_path.exists());
@@ -250,6 +250,25 @@ async fn worker_skips_existing_compressed_archived_rollouts() -> anyhow::Result<
     assert_eq!(loaded_thread_id, Some(thread_id));
     assert_eq!(parse_errors, 0);
     assert_eq!(items.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn worker_skips_when_fresh_lock_exists() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(11);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "locked worker")?;
+    set_old_mtime(&rollout_path)?;
+    let lock_dir = home.path().join(".tmp");
+    fs::create_dir_all(lock_dir.as_path())?;
+    fs::write(lock_dir.join("rollout-compression.lock"), "locked")?;
+
+    worker::run(home.path().to_path_buf()).await?;
+
+    assert!(rollout_path.exists());
+    assert!(!compressed_rollout_path(&rollout_path).exists());
     Ok(())
 }
 
@@ -359,7 +378,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
 fn compress_now(path: &std::path::Path) -> anyhow::Result<()> {
     let compressed_path = compressed_rollout_path(path);
     let permissions = fs::metadata(path)?.permissions();
-    encode_zstd(path, compressed_path.as_path(), &permissions)?;
+    worker::encode_zstd(path, compressed_path.as_path(), &permissions)?;
     fs::remove_file(path)?;
     Ok(())
 }
