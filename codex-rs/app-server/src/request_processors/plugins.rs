@@ -10,9 +10,9 @@ use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
 use codex_mcp::McpOAuthLoginSupport;
-use codex_mcp::oauth_login_support;
+use codex_mcp::oauth_login_support_with_runtime_context;
 use codex_mcp::should_retry_without_scopes;
-use codex_rmcp_client::perform_oauth_login_silent;
+use codex_rmcp_client::perform_oauth_login_silent_with_http_client;
 
 #[derive(Clone)]
 pub(crate) struct PluginRequestProcessor {
@@ -1565,8 +1565,18 @@ impl PluginRequestProcessor {
         config: &Config,
         plugin_mcp_servers: HashMap<String, McpServerConfig>,
     ) {
+        let runtime_context = McpRuntimeContext::new(
+            self.thread_manager.environment_manager(),
+            config.cwd.to_path_buf(),
+        );
         for (name, server) in plugin_mcp_servers {
-            let oauth_config = match oauth_login_support(&server.transport).await {
+            let oauth_config = match oauth_login_support_with_runtime_context(
+                &name,
+                &server,
+                &runtime_context,
+            )
+            .await
+            {
                 McpOAuthLoginSupport::Supported(config) => config,
                 McpOAuthLoginSupport::Unsupported => continue,
                 McpOAuthLoginSupport::Unknown(err) => {
@@ -1586,12 +1596,19 @@ impl PluginRequestProcessor {
             let store_mode = config.mcp_oauth_credentials_store_mode;
             let callback_port = config.mcp_oauth_callback_port;
             let callback_url = config.mcp_oauth_callback_url.clone();
+            let http_client = match runtime_context.resolve_streamable_http_client(&name, &server) {
+                Ok(http_client) => http_client,
+                Err(err) => {
+                    warn!("failed to resolve MCP server {name} for plugin login: {err}");
+                    continue;
+                }
+            };
             let outgoing = Arc::clone(&self.outgoing);
             let notification_name = name.clone();
 
             tokio::spawn(async move {
                 let oauth_client_id = server.oauth_client_id();
-                let first_attempt = perform_oauth_login_silent(
+                let first_attempt = perform_oauth_login_silent_with_http_client(
                     &name,
                     &oauth_config.url,
                     store_mode,
@@ -1602,12 +1619,13 @@ impl PluginRequestProcessor {
                     server.oauth_resource.as_deref(),
                     callback_port,
                     callback_url.as_deref(),
+                    Arc::clone(&http_client),
                 )
                 .await;
 
                 let final_result = match first_attempt {
                     Err(err) if should_retry_without_scopes(&resolved_scopes, &err) => {
-                        perform_oauth_login_silent(
+                        perform_oauth_login_silent_with_http_client(
                             &name,
                             &oauth_config.url,
                             store_mode,
@@ -1618,6 +1636,7 @@ impl PluginRequestProcessor {
                             server.oauth_resource.as_deref(),
                             callback_port,
                             callback_url.as_deref(),
+                            http_client,
                         )
                         .await
                     }

@@ -9,6 +9,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::Json;
+use axum::extract::RawQuery;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::HeaderValue;
@@ -21,6 +22,7 @@ use axum::http::header::HOST;
 use axum::http::header::WWW_AUTHENTICATE;
 use axum::middleware;
 use axum::middleware::Next;
+use axum::response::Redirect;
 use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
@@ -153,6 +155,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }),
         )
+        .route("/oauth/authorize", get(fake_oauth_authorize))
+        .route("/oauth/token", post(fake_oauth_token))
         .nest_service(
             "/mcp",
             StreamableHttpService::new(
@@ -177,6 +181,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, router).await?;
     task::yield_now().await;
     Ok(())
+}
+
+async fn fake_oauth_authorize(RawQuery(query): RawQuery) -> Result<Redirect, StatusCode> {
+    let params = reqwest::Url::parse(&format!(
+        "http://localhost/?{}",
+        query.as_deref().ok_or(StatusCode::BAD_REQUEST)?
+    ))
+    .map_err(|_| StatusCode::BAD_REQUEST)?
+    .query_pairs()
+    .into_owned()
+    .collect::<HashMap<_, _>>();
+    let redirect_uri = params.get("redirect_uri").ok_or(StatusCode::BAD_REQUEST)?;
+    let state = params.get("state").ok_or(StatusCode::BAD_REQUEST)?;
+    let mut callback_url =
+        reqwest::Url::parse(redirect_uri).map_err(|_| StatusCode::BAD_REQUEST)?;
+    callback_url
+        .query_pairs_mut()
+        .append_pair("code", "test-authorization-code")
+        .append_pair("state", state);
+    Ok(Redirect::temporary(callback_url.as_str()))
+}
+
+async fn fake_oauth_token() -> Json<serde_json::Value> {
+    Json(json!({
+        "access_token": "test-access-token",
+        "refresh_token": "test-refresh-token",
+        "token_type": "bearer",
+    }))
 }
 
 impl ServerHandler for TestToolServer {

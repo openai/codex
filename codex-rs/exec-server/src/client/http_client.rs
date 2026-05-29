@@ -20,6 +20,8 @@ pub(crate) mod response_body_stream;
 #[path = "rpc_http_client.rs"]
 mod rpc_http_client;
 
+pub use reqwest_http_client::HTTP_REQUEST_NO_PROXY_HEADER;
+pub use reqwest_http_client::HTTP_REQUEST_NO_REDIRECTS_HEADER;
 pub(crate) use reqwest_http_client::PendingReqwestHttpBodyStream;
 pub use reqwest_http_client::ReqwestHttpClient;
 pub(crate) use reqwest_http_client::ReqwestHttpRequestRunner;

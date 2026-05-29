@@ -130,6 +130,12 @@ impl McpRequestProcessor {
                 "No MCP server named '{name}' found."
             )));
         };
+        let environment_manager = self.thread_manager.environment_manager();
+        // This threadless login path has no turn cwd or turn-selected
+        // environment. Use config cwd only as the local stdio fallback; HTTP
+        // auth routing still follows each MCP server's configured environment.
+        let runtime_context =
+            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
         let (url, http_headers, env_http_headers) = match &server.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -146,14 +152,19 @@ impl McpRequestProcessor {
         };
 
         let discovered_scopes = if scopes.is_none() && server.scopes.is_none() {
-            discover_supported_scopes(&server.transport).await
+            discover_supported_scopes_with_runtime_context(&name, server, &runtime_context).await
         } else {
             None
         };
         let resolved_scopes =
             resolve_oauth_scopes(scopes, server.scopes.clone(), discovered_scopes);
 
-        let handle = perform_oauth_login_return_url(
+        let http_client = runtime_context
+            .resolve_streamable_http_client(&name, server)
+            .map_err(|err| {
+                internal_error(format!("failed to resolve MCP server '{name}': {err}"))
+            })?;
+        let handle = perform_oauth_login_return_url_with_http_client(
             &name,
             &url,
             config.mcp_oauth_credentials_store_mode,
@@ -165,6 +176,7 @@ impl McpRequestProcessor {
             timeout_secs,
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
+            http_client,
         )
         .await
         .map_err(|err| internal_error(format!("failed to login to MCP server '{name}': {err}")))?;
