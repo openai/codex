@@ -47,6 +47,33 @@ fn tool_names(body: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn namespace_child_tool_names(body: &Value, namespace: &str) -> Vec<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("type").and_then(Value::as_str) == Some("namespace")
+                    && tool.get("name").and_then(Value::as_str) == Some(namespace)
+                {
+                    tool.get("tools").and_then(Value::as_array).map(|children| {
+                        children
+                            .iter()
+                            .filter_map(|child| {
+                                child
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                            })
+                            .collect()
+                    })
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn selected_tool_names(body: &Value, selected: &[&str]) -> Vec<String> {
     tool_names(body)
         .into_iter()
@@ -159,26 +186,18 @@ async fn catalog_multi_agent_version_selector_overrides_feature_flags() -> Resul
     })
     .await?;
     assert_eq!(
-        selected_tool_names(
-            &v1_body,
-            &[
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait_agent",
-                "close_agent",
-                "send_message",
-                "followup_task",
-                "list_agents",
-            ],
-        ),
+        namespace_child_tool_names(&v1_body, "multi_agent_v1"),
         vec![
-            "spawn_agent".to_string(),
-            "send_input".to_string(),
-            "resume_agent".to_string(),
-            "wait_agent".to_string(),
             "close_agent".to_string(),
+            "resume_agent".to_string(),
+            "send_input".to_string(),
+            "spawn_agent".to_string(),
+            "wait_agent".to_string(),
         ]
+    );
+    assert_eq!(
+        selected_tool_names(&v1_body, &["send_message", "followup_task", "list_agents"]),
+        Vec::<String>::new()
     );
     assert!(
         !v1_body
@@ -225,6 +244,10 @@ async fn catalog_multi_agent_version_selector_overrides_feature_flags() -> Resul
             "close_agent".to_string(),
             "list_agents".to_string(),
         ]
+    );
+    assert_eq!(
+        namespace_child_tool_names(&v2_body, "multi_agent_v1"),
+        Vec::<String>::new()
     );
     assert!(
         tool_description(&v2_body, "spawn_agent").is_some_and(
@@ -273,37 +296,27 @@ async fn catalog_omitted_and_unknown_multi_agent_versions_follow_feature_flags()
     })
     .await?;
 
-    let expected_v1_tools = vec![
-        "spawn_agent".to_string(),
-        "send_input".to_string(),
-        "resume_agent".to_string(),
-        "wait_agent".to_string(),
-        "close_agent".to_string(),
-    ];
     assert_eq!(
         (
-            selected_tool_names(
-                &omitted_body,
-                &[
-                    "spawn_agent",
-                    "send_input",
-                    "resume_agent",
-                    "wait_agent",
-                    "close_agent",
-                ],
-            ),
-            selected_tool_names(
-                &unknown_body,
-                &[
-                    "spawn_agent",
-                    "send_input",
-                    "resume_agent",
-                    "wait_agent",
-                    "close_agent",
-                ],
-            ),
+            namespace_child_tool_names(&omitted_body, "multi_agent_v1"),
+            namespace_child_tool_names(&unknown_body, "multi_agent_v1"),
         ),
-        (expected_v1_tools.clone(), expected_v1_tools)
+        (
+            vec![
+                "close_agent".to_string(),
+                "resume_agent".to_string(),
+                "send_input".to_string(),
+                "spawn_agent".to_string(),
+                "wait_agent".to_string(),
+            ],
+            vec![
+                "close_agent".to_string(),
+                "resume_agent".to_string(),
+                "send_input".to_string(),
+                "spawn_agent".to_string(),
+                "wait_agent".to_string(),
+            ],
+        )
     );
 
     Ok(())
