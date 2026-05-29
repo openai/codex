@@ -518,9 +518,6 @@ impl CatalogRequestProcessor {
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let environment_manager = self.thread_manager.environment_manager();
-        let selected_environment_id = environment_id
-            .clone()
-            .unwrap_or_else(|| codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string());
         let selected_environment = match environment_id {
             Some(environment_id) => {
                 let environment = environment_manager
@@ -530,9 +527,16 @@ impl CatalogRequestProcessor {
                             "unknown skills/list environment id `{environment_id}`"
                         ))
                     })?;
-                Some(environment)
+                Some((environment_id, environment))
             }
-            None => environment_manager.try_local_environment(),
+            None => environment_manager
+                .try_local_environment()
+                .map(|environment| {
+                    (
+                        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                        environment,
+                    )
+                }),
         };
         let local_file_system = environment_manager
             .try_local_environment()
@@ -542,7 +546,6 @@ impl CatalogRequestProcessor {
                 let config = &config;
                 let local_file_system = local_file_system.clone();
                 let selected_environment = selected_environment.clone();
-                let selected_environment_id = selected_environment_id.clone();
                 let plugins_manager = &plugins_manager;
                 let skills_manager = &skills_manager;
                 async move {
@@ -574,7 +577,7 @@ impl CatalogRequestProcessor {
                     } else {
                         Vec::new()
                     };
-                    let Some(environment) = selected_environment.as_ref() else {
+                    let Some((environment_id, environment)) = selected_environment.as_ref() else {
                         // Omitted `environmentId` uses the legacy implicit local target. When
                         // local exec is disabled there is no valid implicit target, so return an
                         // empty catalog rather than silently switching to the default environment.
@@ -589,7 +592,7 @@ impl CatalogRequestProcessor {
                     };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
                         vec![codex_core::skills::loader::SkillEnvironment {
-                            environment_id: selected_environment_id.clone(),
+                            environment_id: environment_id.clone(),
                             path: codex_exec_server::EnvironmentPathRef::new(
                                 environment.get_filesystem(),
                                 cwd_abs.clone(),
