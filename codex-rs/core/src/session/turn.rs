@@ -900,14 +900,16 @@ pub(crate) fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
+    let tools = router.model_visible_specs();
     let usage_attribution = crate::usage::UsagePromptAttribution::from_prompt(
         &input,
+        &tools,
         router,
         base_instructions.text.as_str(),
     );
     Prompt {
         input,
-        tools: router.model_visible_specs(),
+        tools,
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         usage_attribution,
         base_instructions,

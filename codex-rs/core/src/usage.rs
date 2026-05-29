@@ -7,6 +7,7 @@ use codex_protocol::protocol::UsageAttributionItem;
 use codex_protocol::protocol::UsageContributor;
 use codex_protocol::protocol::UsageContributorKind;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -26,18 +27,18 @@ pub(crate) struct UsagePromptContributor {
 impl UsagePromptAttribution {
     pub(crate) fn from_prompt(
         input: &[ResponseItem],
+        tools: &[ToolSpec],
         router: &ToolRouter,
         base_instructions: &str,
     ) -> Self {
         let mut contributors = skill_contributors(input);
-        contributors.extend(router.usage_contributors());
+        contributors.extend_from_slice(router.usage_contributors());
         contributors.extend(tool_result_contributors(input, router));
         let input_tokens = input
             .iter()
             .map(estimate_response_item_tokens)
             .fold(0i64, i64::saturating_add);
-        let tool_tokens = router
-            .model_visible_specs()
+        let tool_tokens = tools
             .iter()
             .map(estimate_serialized_tokens)
             .fold(0i64, i64::saturating_add);
@@ -105,54 +106,45 @@ fn tool_result_contributors(
 ) -> Vec<UsagePromptContributor> {
     let contributors_by_call_id = input
         .iter()
-        .filter_map(|item| tool_call_contributors(item, router))
+        .filter_map(|item| {
+            let (call_id, tool_name) = match item {
+                ResponseItem::FunctionCall {
+                    call_id,
+                    name,
+                    namespace,
+                    ..
+                } => (call_id, ToolName::new(namespace.clone(), name)),
+                ResponseItem::CustomToolCall { call_id, name, .. } => {
+                    (call_id, ToolName::plain(name))
+                }
+                _ => return None,
+            };
+            let contributors = router.usage_contributors_for_tool_name(&tool_name);
+            (!contributors.is_empty()).then(|| (call_id.clone(), contributors))
+        })
         .collect::<HashMap<_, _>>();
     input
         .iter()
-        .filter_map(|item| tool_result_contributor(item, &contributors_by_call_id))
+        .filter_map(|item| {
+            let call_id = match item {
+                ResponseItem::FunctionCallOutput { call_id, .. }
+                | ResponseItem::CustomToolCallOutput { call_id, .. } => call_id,
+                _ => return None,
+            };
+            let source_estimated_tokens = estimate_response_item_tokens(item);
+            Some(
+                contributors_by_call_id
+                    .get(call_id)?
+                    .iter()
+                    .cloned()
+                    .map(move |contributor| UsagePromptContributor {
+                        contributor,
+                        source_estimated_tokens,
+                    }),
+            )
+        })
         .flatten()
         .collect()
-}
-
-fn tool_call_contributors(
-    item: &ResponseItem,
-    router: &ToolRouter,
-) -> Option<(String, Vec<UsageContributor>)> {
-    let (call_id, tool_name) = match item {
-        ResponseItem::FunctionCall {
-            call_id,
-            name,
-            namespace,
-            ..
-        } => (call_id, ToolName::new(namespace.clone(), name)),
-        ResponseItem::CustomToolCall { call_id, name, .. } => (call_id, ToolName::plain(name)),
-        _ => return None,
-    };
-    let contributors = router.usage_contributors_for_tool_name(&tool_name);
-    (!contributors.is_empty()).then(|| (call_id.clone(), contributors))
-}
-
-fn tool_result_contributor(
-    item: &ResponseItem,
-    contributors_by_call_id: &HashMap<String, Vec<UsageContributor>>,
-) -> Option<Vec<UsagePromptContributor>> {
-    let call_id = match item {
-        ResponseItem::FunctionCallOutput { call_id, .. }
-        | ResponseItem::CustomToolCallOutput { call_id, .. } => call_id,
-        _ => return None,
-    };
-    let source_estimated_tokens = estimate_response_item_tokens(item);
-    Some(
-        contributors_by_call_id
-            .get(call_id)?
-            .iter()
-            .cloned()
-            .map(|contributor| UsagePromptContributor {
-                contributor,
-                source_estimated_tokens,
-            })
-            .collect(),
-    )
 }
 
 fn skill_contributor(item: &ResponseItem) -> Option<UsagePromptContributor> {

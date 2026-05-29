@@ -74,18 +74,17 @@ impl ToolRouter {
         self.model_visible_specs.clone()
     }
 
-    pub(crate) fn usage_contributors(&self) -> Vec<crate::usage::UsagePromptContributor> {
-        self.usage_contributors.clone()
+    pub(crate) fn usage_contributors(&self) -> &[crate::usage::UsagePromptContributor] {
+        &self.usage_contributors
     }
 
     pub(crate) fn usage_contributors_for_tool_name(
         &self,
         tool_name: &ToolName,
-    ) -> Vec<codex_protocol::protocol::UsageContributor> {
+    ) -> &[codex_protocol::protocol::UsageContributor] {
         self.usage_contributors_by_tool_name
             .get(tool_name)
-            .cloned()
-            .unwrap_or_default()
+            .map_or(&[], Vec::as_slice)
     }
 
     #[cfg(test)]

@@ -88,8 +88,8 @@ impl ToolPlanProbe {
             .collect::<Vec<_>>();
         let prompt_usage_contributor_labels = router
             .usage_contributors()
-            .into_iter()
-            .map(|contributor| contributor.contributor.label)
+            .iter()
+            .map(|contributor| contributor.contributor.label.clone())
             .collect::<Vec<_>>();
         let tool_usage_contributor_labels = registered_tool_names
             .iter()
@@ -99,8 +99,8 @@ impl ToolPlanProbe {
                     (
                         name.to_string(),
                         contributors
-                            .into_iter()
-                            .map(|contributor| contributor.label)
+                            .iter()
+                            .map(|contributor| contributor.label.clone())
                             .collect::<Vec<_>>(),
                     )
                 })
