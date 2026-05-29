@@ -67,6 +67,7 @@ impl ThreadRequestProcessor {
             Err(err) => return Err(core_thread_write_error("delete thread", err)),
         }
 
+        self.validate_root_thread_delete(thread_id).await?;
         self.prepare_thread_for_removal(thread_id, "delete").await;
         match self
             .thread_store
@@ -100,6 +101,28 @@ impl ThreadRequestProcessor {
         }
 
         Ok((ThreadDeleteResponse {}, deleted_thread_ids))
+    }
+
+    async fn validate_root_thread_delete(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<(), JSONRPCErrorError> {
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await
+            && thread.rollout_path().is_none()
+        {
+            return Err(invalid_request(format!(
+                "thread is not persisted and cannot be deleted: {thread_id}"
+            )));
+        }
+        self.thread_store
+            .read_thread(StoreReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .map(|_| ())
+            .map_err(thread_store_delete_error)
     }
 }
 

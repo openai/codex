@@ -1,15 +1,21 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadDeletedNotification;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
 use codex_protocol::ThreadId;
@@ -195,6 +201,37 @@ async fn thread_delete_deletes_spawned_descendants_and_metadata() -> Result<()> 
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_delete_rejects_live_ephemeral_thread_without_unloading() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let thread_id = start_ephemeral_thread(&mut mcp).await?;
+
+    let delete_id = mcp
+        .send_thread_delete_request(ThreadDeleteParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let delete_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(delete_id)),
+    )
+    .await??;
+    assert_eq!(
+        delete_err.error.message,
+        format!("thread is not persisted and cannot be deleted: {thread_id}")
+    );
+
+    let loaded_thread_ids = loaded_thread_ids(&mut mcp).await?;
+    assert_eq!(loaded_thread_ids, vec![thread_id]);
+
+    Ok(())
+}
+
 async fn seed_thread_metadata(
     state_db: &StateRuntime,
     codex_home: &Path,
@@ -215,4 +252,58 @@ async fn seed_thread_metadata(
     let metadata = builder.build("mock_provider");
     state_db.upsert_thread(&metadata).await?;
     Ok(id)
+}
+
+async fn start_ephemeral_thread(mcp: &mut McpProcess) -> Result<String> {
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2".to_string()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(response)?;
+    Ok(thread.id)
+}
+
+async fn loaded_thread_ids(mcp: &mut McpProcess) -> Result<Vec<String>> {
+    let request_id = mcp
+        .send_thread_loaded_list_request(ThreadLoadedListParams::default())
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadLoadedListResponse { mut data, .. } =
+        to_response::<ThreadLoadedListResponse>(response)?;
+    data.sort();
+    Ok(data)
+}
+
+fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
 }
