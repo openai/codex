@@ -51,7 +51,8 @@ pub(crate) fn compressed_rollout_path(path: &Path) -> PathBuf {
     path.with_file_name(file_name)
 }
 
-pub(crate) fn plain_rollout_path(path: &Path) -> PathBuf {
+/// Returns the plain `.jsonl` path for a plain or compressed rollout path.
+pub fn plain_rollout_path(path: &Path) -> PathBuf {
     let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
         return path.to_path_buf();
     };

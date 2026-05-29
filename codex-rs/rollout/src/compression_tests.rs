@@ -46,11 +46,16 @@ async fn find_thread_path_by_id_handles_compressed_rollout_filenames() -> anyhow
     let compressed_path = compressed_rollout_path(&rollout_path);
 
     assert_eq!(
-        crate::find_thread_path_by_id_str(home.path(), &uuid.to_string(), None).await?,
+        crate::find_thread_path_by_id_str(
+            home.path(),
+            &uuid.to_string(),
+            /*state_db_ctx*/ None
+        )
+        .await?,
         Some(compressed_path)
     );
     assert_eq!(
-        crate::find_thread_path_by_id_str(home.path(), "not-a-uuid", None).await?,
+        crate::find_thread_path_by_id_str(home.path(), "not-a-uuid", /*state_db_ctx*/ None).await?,
         None
     );
     Ok(())
@@ -67,7 +72,12 @@ async fn find_thread_path_by_id_ignores_compression_temp_matches() -> anyhow::Re
     write_rollout(&temp_path, thread_id, "temporary file should not resolve")?;
 
     assert_eq!(
-        crate::find_thread_path_by_id_str(home.path(), &uuid.to_string(), None).await?,
+        crate::find_thread_path_by_id_str(
+            home.path(),
+            &uuid.to_string(),
+            /*state_db_ctx*/ None
+        )
+        .await?,
         None
     );
     Ok(())

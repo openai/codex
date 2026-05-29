@@ -233,6 +233,7 @@ async fn read_thread_from_rollout_path(
     .ok_or_else(|| ThreadStoreError::Internal {
         message: format!("failed to read thread id from {}", path.display()),
     })?;
+    thread.rollout_path = Some(codex_rollout::plain_rollout_path(path.as_path()));
     if let Ok(meta_line) = read_session_meta_line(path.as_path()).await {
         thread.forked_from_id = meta_line.meta.forked_from_id;
         if let Some(model_provider) = meta_line
@@ -286,9 +287,7 @@ async fn stored_thread_from_sqlite_metadata(
         .await
         .ok()
         .map(|meta_line| meta_line.meta);
-    let rollout_path = codex_rollout::existing_rollout_path(metadata.rollout_path.as_path())
-        .await
-        .unwrap_or_else(|| metadata.rollout_path.clone());
+    let rollout_path = codex_rollout::plain_rollout_path(metadata.rollout_path.as_path());
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
     let preview = metadata
         .preview
@@ -361,9 +360,10 @@ fn stored_thread_from_meta_line(
         .and_then(|meta| meta.modified().ok())
         .map(DateTime::<Utc>::from)
         .unwrap_or(created_at);
+    let rollout_path = codex_rollout::plain_rollout_path(path.as_path());
     StoredThread {
         thread_id: meta_line.meta.id,
-        rollout_path: Some(path),
+        rollout_path: Some(rollout_path),
         forked_from_id: meta_line.meta.forked_from_id,
         preview: String::new(),
         name: None,
