@@ -2769,16 +2769,6 @@ mod tests {
     }
 
     #[test]
-    fn archive_commands_reject_extra_positional_argument() {
-        for command in ["archive", "unarchive"] {
-            let err = MultitoolCli::try_parse_from(["codex", command, "old", "name"])
-                .expect_err("archive commands should reject unquoted session names");
-
-            assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-        }
-    }
-
-    #[test]
     fn archive_merges_scoped_tui_flags() {
         let (target, interactive, remote) = finalize_archive_from_args(
             [

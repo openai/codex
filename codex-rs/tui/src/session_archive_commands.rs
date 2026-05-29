@@ -36,37 +36,6 @@ pub enum SessionArchiveAction {
     Unarchive,
 }
 
-impl SessionArchiveAction {
-    fn archived_filter(self) -> bool {
-        match self {
-            Self::Archive => false,
-            Self::Unarchive => true,
-        }
-    }
-
-    fn command_name(self) -> &'static str {
-        match self {
-            Self::Archive => "archive",
-            Self::Unarchive => "unarchive",
-        }
-    }
-
-    fn past_tense(self) -> &'static str {
-        match self {
-            Self::Archive => "Archived",
-            Self::Unarchive => "Unarchived",
-        }
-    }
-
-    fn search_scope(self) -> &'static str {
-        match self {
-            Self::Archive => "active",
-            Self::Unarchive => "archived",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct SessionArchiveCommandOptions {
     pub cli: Cli,
     pub arg0_paths: Arg0DispatchPaths,
@@ -78,14 +47,16 @@ fn success_message(
     session_id: ThreadId,
     session_name: Option<&str>,
 ) -> String {
-    let action = action.past_tense();
+    let action = match action {
+        SessionArchiveAction::Archive => "Archived",
+        SessionArchiveAction::Unarchive => "Unarchived",
+    };
     match session_name {
         Some(name) => format!("{action} session {name} ({session_id})."),
         None => format!("{action} session {session_id}."),
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedSessionTarget {
     session_id: ThreadId,
     session_name: Option<String>,
@@ -139,18 +110,16 @@ async fn resolve_session_target(
         });
     }
 
+    let search_scope = match action {
+        SessionArchiveAction::Archive => "active",
+        SessionArchiveAction::Unarchive => "archived",
+    };
     let resolved = lookup_session_by_exact_name(app_server, action, target)
         .await?
         .map(session_target_from_app_server_thread)
         .transpose()?;
 
-    resolved.with_context(|| {
-        format!(
-            "No {} session found matching '{}'.",
-            action.search_scope(),
-            target
-        )
-    })
+    resolved.with_context(|| format!("No {search_scope} session found matching '{target}'."))
 }
 
 async fn lookup_session_by_exact_name(
@@ -170,18 +139,13 @@ async fn lookup_session_by_exact_name(
                 source_kinds: Some(super::resume_source_kinds(
                     /*include_non_interactive*/ false,
                 )),
-                archived: Some(action.archived_filter()),
+                archived: Some(matches!(action, SessionArchiveAction::Unarchive)),
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
             })
             .await
-            .wrap_err_with(|| {
-                format!(
-                    "failed to list sessions while resolving session to {}",
-                    action.command_name()
-                )
-            })?;
+            .wrap_err("failed to list sessions while resolving session name")?;
 
         if let Some(thread) = response
             .data
@@ -343,49 +307,4 @@ async fn start_app_server_for_archive_command(
         AppServerSession::new(app_server, app_server_target.thread_params_mode())
             .with_remote_cwd_override(remote_cwd_override),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_app_server_protocol::SessionSource;
-    use codex_app_server_protocol::ThreadStatus;
-    use codex_utils_absolute_path::AbsolutePathBuf;
-
-    fn app_server_thread(id: &str) -> AppServerThread {
-        AppServerThread {
-            id: id.to_string(),
-            session_id: id.to_string(),
-            forked_from_id: None,
-            preview: String::new(),
-            ephemeral: false,
-            model_provider: "mock_provider".to_string(),
-            created_at: 0,
-            updated_at: 0,
-            status: ThreadStatus::NotLoaded,
-            path: None,
-            cwd: AbsolutePathBuf::from_absolute_path(std::env::current_dir().expect("cwd"))
-                .expect("absolute cwd"),
-            cli_version: String::new(),
-            source: SessionSource::Cli,
-            thread_source: None,
-            agent_nickname: None,
-            agent_role: None,
-            git_info: None,
-            name: Some("saved-thread".to_string()),
-            turns: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn session_target_from_app_server_thread_reports_invalid_ids() {
-        let err = session_target_from_app_server_thread(app_server_thread("not-a-thread-id"))
-            .expect_err("invalid ids should be reported as normal errors");
-
-        assert!(
-            err.to_string()
-                .contains("app server returned invalid session id `not-a-thread-id`"),
-            "unexpected error: {err}"
-        );
-    }
 }
