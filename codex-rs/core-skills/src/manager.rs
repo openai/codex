@@ -28,9 +28,7 @@ use codex_exec_server::ExecutorFileSystem;
 #[derive(Clone)]
 pub struct SkillsLoadInput {
     pub env_path: EnvironmentPathRef,
-    /// Local absolute skill roots use this filesystem when local exec is available.
-    /// Repo-relative roots still use `env_path`, so remote turns do not accidentally
-    /// read local user/system/plugin skill paths from the remote filesystem.
+    /// Local user/system/plugin skill roots are read from this filesystem for now.
     pub local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
