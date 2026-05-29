@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/permissions.rs
 expression: "lines_to_single_string(&cells[0])"
 ---
-• Permissions updated to Default
+• Permissions updated to Ask for approval
