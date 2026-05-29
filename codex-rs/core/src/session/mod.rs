@@ -2526,16 +2526,6 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
-    /// Append ResponseItems to the in-memory conversation history only.
-    pub(crate) async fn record_into_history(
-        &self,
-        items: &[ResponseItem],
-        turn_context: &TurnContext,
-    ) {
-        self.record_into_history_with_policy(items, turn_context.truncation_policy)
-            .await;
-    }
-
     pub(crate) async fn record_into_history_with_policy(
         &self,
         items: &[ResponseItem],
