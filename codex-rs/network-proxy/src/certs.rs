@@ -121,7 +121,7 @@ pub const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedMitmCaTrustBundle {
     pub(crate) path: PathBuf,
-    pub(crate) inherited_env_values: HashMap<&'static str, String>,
+    pub(crate) startup_env_values: HashMap<&'static str, String>,
 }
 
 fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
@@ -146,7 +146,7 @@ fn managed_ca_trust_bundle_for_cert_path(
     cert_path: &Path,
     env: &HashMap<&'static str, String>,
 ) -> Result<ManagedMitmCaTrustBundle> {
-    let inherited_env_values = CUSTOM_CA_ENV_KEYS
+    let startup_env_values = CUSTOM_CA_ENV_KEYS
         .into_iter()
         .filter_map(|key| {
             env.get(key)
@@ -159,7 +159,7 @@ fn managed_ca_trust_bundle_for_cert_path(
 
     Ok(ManagedMitmCaTrustBundle {
         path,
-        inherited_env_values,
+        startup_env_values,
     })
 }
 
@@ -508,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_ca_trust_bundle_preserves_startup_ca_env_values() {
+    fn managed_ca_trust_bundle_records_startup_ca_env_values() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
@@ -516,7 +516,7 @@ mod tests {
         let trust_bundle =
             managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
         assert_eq!(
-            trust_bundle.inherited_env_values,
+            trust_bundle.startup_env_values,
             HashMap::from([("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string())])
         );
     }

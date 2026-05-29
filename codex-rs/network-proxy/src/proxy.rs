@@ -9,6 +9,7 @@ use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
@@ -577,7 +578,7 @@ fn apply_proxy_env_overrides(
                 .filter(|value| !value.is_empty())
                 .is_some_and(|value| {
                     value != &managed_path
-                        && mitm_ca_trust_bundle.inherited_env_values.get(key) != Some(value)
+                        && mitm_ca_trust_bundle.startup_env_values.get(key) != Some(value)
                 })
             {
                 // TODO(viyatb): Fold readable command-scoped CA overrides into a managed MITM
@@ -626,10 +627,21 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
+    /// Returns the generated MITM CA bundle path child sandboxes should expose to TLS clients.
+    pub fn managed_mitm_ca_trust_bundle_path(&self) -> Option<AbsolutePathBuf> {
+        self.runtime_settings()
+            .mitm_ca_trust_bundle
+            .and_then(|bundle| {
+                AbsolutePathBuf::from_absolute_path(bundle.path)
+                    .map_err(|err| warn!("managed MITM CA trust bundle path is invalid: {err}"))
+                    .ok()
+            })
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         let runtime_settings = self.runtime_settings();
         // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
-        // managed MITM CA vars preserve startup trust unless a child overrides them.
+        // managed MITM CA vars preserve child-scoped overrides after proxy startup.
         apply_proxy_env_overrides(
             env,
             self.http_addr,
@@ -1095,7 +1107,7 @@ mod tests {
         let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
         let mitm_ca_trust_bundle = crate::certs::ManagedMitmCaTrustBundle {
             path: mitm_ca_trust_bundle_path.to_path_buf(),
-            inherited_env_values: HashMap::new(),
+            startup_env_values: HashMap::new(),
         };
         apply_proxy_env_overrides(
             &mut env,
@@ -1124,7 +1136,7 @@ mod tests {
         let mitm_ca_trust_bundle_path = Path::new("/tmp/codex-proxy/ca-bundle.pem");
         let mitm_ca_trust_bundle = crate::certs::ManagedMitmCaTrustBundle {
             path: mitm_ca_trust_bundle_path.to_path_buf(),
-            inherited_env_values: HashMap::new(),
+            startup_env_values: HashMap::new(),
         };
 
         apply_proxy_env_overrides(
