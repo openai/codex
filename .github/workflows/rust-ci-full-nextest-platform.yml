@@ -47,6 +47,18 @@ on:
         required: false
         default: false
         type: boolean
+      nextest_filterset:
+        required: false
+        default: "all()"
+        type: string
+      partition_tests:
+        required: false
+        default: true
+        type: boolean
+      require_single_test:
+        required: false
+        default: false
+        type: boolean
 
 # Caller workflow-level env does not flow through workflow_call, so keep the
 # Cargo git transport hardening on the archive and shard jobs directly here.
@@ -287,7 +299,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   shard:
-    name: Tests shard ${{ matrix.shard }}/4
+    name: Tests ${{ matrix.shard == 0 && 'selected test' || format('shard {0}/4', matrix.shard) }}
     needs: archive
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
     timeout-minutes: 60
@@ -300,7 +312,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ inputs.partition_tests && fromJSON('[1, 2, 3, 4]') || fromJSON('[0]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -391,10 +403,28 @@ jobs:
             --no-fail-fast
             --archive-file "${archive_file}"
             --workspace-remap "${workspace_root}"
-            --partition "hash:${{ matrix.shard }}/4"
+            --filterset "${NEXTEST_FILTERSET}"
           )
+          if [[ "${{ matrix.shard }}" != "0" ]]; then
+            nextest_args+=(--partition "hash:${{ matrix.shard }}/4")
+          fi
           if [[ "${{ inputs.test_threads }}" != "0" ]]; then
             nextest_args+=(--test-threads "${{ inputs.test_threads }}")
+          fi
+
+          if [[ "${REQUIRE_SINGLE_TEST}" == "true" ]]; then
+            test_count="$(
+              cargo nextest list \
+                --archive-file "${archive_file}" \
+                --workspace-remap "${workspace_root}" \
+                --filterset "${NEXTEST_FILTERSET}" \
+                --message-format json |
+                python3 -c 'import json, sys; print(json.load(sys.stdin)["test-count"])'
+            )"
+            if [[ "${test_count}" != "1" ]]; then
+              echo "nextest filterset must resolve to exactly one test; got ${test_count}" >&2
+              exit 1
+            fi
           fi
 
           test_command=(cargo nextest "${nextest_args[@]}")
@@ -419,6 +449,8 @@ jobs:
 
           "${test_command[@]}"
         env:
+          NEXTEST_FILTERSET: ${{ inputs.nextest_filterset }}
+          REQUIRE_SINGLE_TEST: ${{ inputs.require_single_test && 'true' || 'false' }}
           RUST_BACKTRACE: 1
           RUST_MIN_STACK: "8388608" # 8 MiB
           NEXTEST_STATUS_LEVEL: leak

@@ -26,6 +26,10 @@ The workflows in this directory are split so that pull requests get fast, review
   - release-profile Cargo builds
   - cross-platform `argument-comment-lint`
   - Linux remote-env tests
+- `rust-ci-full-targeted-test.yml` is the manual one-test repro path for the
+  `rust-ci-full` nextest lanes. Dispatch it with one platform and one exact
+  cargo-nextest filterset such as `test(=module::test)`; the workflow rejects
+  filtersets that resolve to zero or multiple tests.
 
 ## Rule Of Thumb
 
