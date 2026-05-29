@@ -20,6 +20,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -248,6 +249,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
     let stale_skills_list_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: true,
         })
         .await?;
@@ -298,6 +300,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
             let skills_list_request_id = mcp
                 .send_skills_list_request(SkillsListParams {
                     cwds: vec![cwd.path().to_path_buf()],
+                    environment_id: None,
                     force_reload: false,
                 })
                 .await?;
@@ -372,6 +375,7 @@ async fn skills_list_excludes_plugin_skills_when_workspace_codex_plugins_disable
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![repo_root.path().to_path_buf()],
+            environment_id: None,
             force_reload: true,
         })
         .await?;
@@ -422,6 +426,7 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: true,
         })
         .await?;
@@ -462,6 +467,7 @@ async fn skills_list_accepts_relative_cwds() -> Result<()> {
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![relative_cwd.clone()],
+            environment_id: Some(LOCAL_ENVIRONMENT_ID.to_string()),
             force_reload: true,
         })
         .await?;
@@ -493,6 +499,7 @@ async fn skills_list_preserves_requested_cwd_order() -> Result<()> {
                 first_cwd.path().to_path_buf(),
                 second_cwd.path().to_path_buf(),
             ],
+            environment_id: None,
             force_reload: true,
         })
         .await?;
@@ -527,6 +534,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     let first_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: false,
         })
         .await?;
@@ -554,6 +562,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     let second_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: false,
         })
         .await?;
@@ -574,6 +583,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     let third_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: true,
         })
         .await?;
@@ -755,6 +765,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
     let initial_skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![codex_home.path().to_path_buf()],
+            environment_id: None,
             force_reload: true,
         })
         .await?;
@@ -828,6 +839,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
     let updated_skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![codex_home.path().to_path_buf()],
+            environment_id: None,
             force_reload: false,
         })
         .await?;

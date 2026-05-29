@@ -101,11 +101,8 @@ impl SkillsWatcher {
             return WatchRegistration::default();
         }
 
-        let root_path_ref = EnvironmentPathRef::new(
-            environment_selection.environment_id.clone(),
-            environment.get_filesystem(),
-            config.cwd.clone(),
-        );
+        let root_path_ref =
+            EnvironmentPathRef::new(environment.get_filesystem(), config.cwd.clone());
         let plugins_input = config.plugins_config_input();
         let plugins_manager = thread_manager.plugins_manager();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;

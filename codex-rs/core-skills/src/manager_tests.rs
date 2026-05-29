@@ -7,8 +7,6 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
-use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
@@ -18,7 +16,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
@@ -89,11 +86,7 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
 }
 
 fn skill_root_path_ref(path: AbsolutePathBuf) -> EnvironmentPathRef {
-    EnvironmentPathRef::new(
-        LOCAL_ENVIRONMENT_ID.to_string(),
-        Arc::clone(&LOCAL_FS),
-        path,
-    )
+    EnvironmentPathRef::local(path)
 }
 
 fn local_skills_input(

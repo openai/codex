@@ -1060,11 +1060,7 @@ pub(crate) async fn skill_roots_from_layer_stack(
     cwd: &AbsolutePathBuf,
     home_dir: Option<&AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
-    let path_ref = EnvironmentPathRef::new(
-        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        fs,
-        cwd.clone(),
-    );
+    let path_ref = EnvironmentPathRef::new(fs, cwd.clone());
     skill_roots_with_home_dir(&path_ref, config_layer_stack, home_dir, Vec::new(), Vec::new())
         .await
 }

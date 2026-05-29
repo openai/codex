@@ -499,7 +499,11 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams { cwds, force_reload } = params;
+        let SkillsListParams {
+            cwds,
+            environment_id,
+            force_reload,
+        } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
         } else {
@@ -514,13 +518,23 @@ impl CatalogRequestProcessor {
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let environment_manager = self.thread_manager.environment_manager();
-        let local_fs = environment_manager
-            .try_local_environment()
-            .map(|environment| environment.get_filesystem());
+        let selected_environment = match environment_id {
+            Some(environment_id) => {
+                let environment = environment_manager
+                    .get_environment(&environment_id)
+                    .ok_or_else(|| {
+                        invalid_request(format!(
+                            "unknown skills/list environment id `{environment_id}`"
+                        ))
+                    })?;
+                Some(environment)
+            }
+            None => environment_manager.try_local_environment(),
+        };
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
-                let local_fs = local_fs.clone();
+                let selected_environment = selected_environment.clone();
                 let plugins_manager = &plugins_manager;
                 let skills_manager = &skills_manager;
                 async move {
@@ -541,14 +555,9 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let local_path_ref = local_fs.clone().map(|file_system| {
-                        codex_core::skills::EnvironmentPathRef::new(
-                            codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-                            file_system,
-                            cwd_abs.clone(),
-                        )
-                    });
-                    let Some(path_ref) = local_path_ref else {
+                    let Some(environment) = selected_environment.as_ref() else {
+                        // Legacy callers without `environmentId` remain local-only; if local is
+                        // unavailable, do not fabricate an unbound skill path.
                         return (
                             index,
                             codex_app_server_protocol::SkillsListEntry {
@@ -558,6 +567,10 @@ impl CatalogRequestProcessor {
                             },
                         );
                     };
+                    let path_ref = codex_core::skills::EnvironmentPathRef::new(
+                        environment.get_filesystem(),
+                        cwd_abs.clone(),
+                    );
                     let effective_skill_roots = if workspace_codex_plugins_enabled {
                         let plugins_input = config.plugins_config_input();
                         plugins_manager

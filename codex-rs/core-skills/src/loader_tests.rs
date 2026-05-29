@@ -4,7 +4,6 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
-use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -145,17 +144,13 @@ fn normalized(path: &Path) -> AbsolutePathBuf {
         .abs()
 }
 
-fn env_path(path: AbsolutePathBuf) -> EnvironmentPathRef {
-    EnvironmentPathRef::new(
-        LOCAL_ENVIRONMENT_ID.to_string(),
-        Arc::clone(&LOCAL_FS),
-        path,
-    )
+fn local_env_path(path: AbsolutePathBuf) -> EnvironmentPathRef {
+    EnvironmentPathRef::local(path)
 }
 
 fn local_skill_root(path: AbsolutePathBuf, scope: SkillScope) -> SkillRoot {
     SkillRoot {
-        path: env_path(path),
+        path: local_env_path(path),
         scope,
         plugin_id: None,
         plugin_root: None,
@@ -864,10 +859,10 @@ interface:
 
     let plugin_root_abs = plugin_root.abs();
     let outcome = load_skills_from_roots([SkillRoot {
-        path: env_path(plugin_root.join("skills").abs()),
+        path: local_env_path(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
         plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_root: Some(env_path(plugin_root_abs.clone())),
+        plugin_root: Some(local_env_path(plugin_root_abs.clone())),
     }])
     .await;
 
@@ -920,10 +915,10 @@ interface:
     );
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: env_path(plugin_root.join("skills").abs()),
+        path: local_env_path(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
         plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_root: Some(env_path(plugin_root.abs())),
+        plugin_root: Some(local_env_path(plugin_root.abs())),
     }])
     .await;
 
@@ -1271,10 +1266,10 @@ async fn namespaces_plugin_skills_using_plugin_name() {
     .unwrap();
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: env_path(plugin_root.join("skills").abs()),
+        path: local_env_path(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
         plugin_id: Some("sample@test".to_string()),
-        plugin_root: Some(env_path(plugin_root.abs())),
+        plugin_root: Some(local_env_path(plugin_root.abs())),
     }])
     .await;
 
@@ -1593,13 +1588,13 @@ async fn deduplicates_by_path_preferring_first_root() {
 
     let outcome = load_skills_from_roots([
         SkillRoot {
-            path: env_path(root.path().abs()),
+            path: local_env_path(root.path().abs()),
             scope: SkillScope::Repo,
             plugin_id: None,
             plugin_root: None,
         },
         SkillRoot {
-            path: env_path(root.path().abs()),
+            path: local_env_path(root.path().abs()),
             scope: SkillScope::User,
             plugin_id: None,
             plugin_root: None,
@@ -1891,7 +1886,7 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cfg = make_config(&codex_home).await;
 
-    let cwd = env_path(cfg.cwd.clone());
+    let cwd = local_env_path(cfg.cwd.clone());
     let scopes: Vec<SkillScope> =
         super::skill_roots(&cwd, &cfg.config_layer_stack, Vec::new(), Vec::new())
             .await

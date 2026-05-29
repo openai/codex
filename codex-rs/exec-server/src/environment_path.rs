@@ -10,45 +10,27 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::ExecutorFileSystem;
 use crate::FileMetadata;
 use crate::FileSystemSandboxContext;
-use crate::LOCAL_ENVIRONMENT_ID;
 use crate::LOCAL_FS;
 use crate::ReadDirectoryEntry;
 
-/// Binds an absolute path to the executor filesystem and environment that owns it.
+/// Binds an absolute path to the executor filesystem that owns it.
 #[derive(Clone)]
 pub struct EnvironmentPathRef {
-    environment_id: String,
     file_system: Arc<dyn ExecutorFileSystem>,
     path: AbsolutePathBuf,
 }
 
 impl EnvironmentPathRef {
-    pub fn new(
-        environment_id: String,
-        file_system: Arc<dyn ExecutorFileSystem>,
-        path: AbsolutePathBuf,
-    ) -> Self {
-        Self {
-            environment_id,
-            file_system,
-            path,
-        }
+    pub fn new(file_system: Arc<dyn ExecutorFileSystem>, path: AbsolutePathBuf) -> Self {
+        Self { file_system, path }
     }
 
     pub fn local(path: AbsolutePathBuf) -> Self {
-        Self::new(
-            LOCAL_ENVIRONMENT_ID.to_string(),
-            Arc::clone(&LOCAL_FS),
-            path,
-        )
+        Self::new(Arc::clone(&LOCAL_FS), path)
     }
 
     pub fn path(&self) -> &AbsolutePathBuf {
         &self.path
-    }
-
-    pub fn environment_id(&self) -> &str {
-        &self.environment_id
     }
 
     pub fn file_system(&self) -> Arc<dyn ExecutorFileSystem> {
@@ -87,19 +69,13 @@ impl EnvironmentPathRef {
     }
 
     pub fn with_path(&self, path: AbsolutePathBuf) -> Self {
-        Self::new(
-            self.environment_id.clone(),
-            Arc::clone(&self.file_system),
-            path,
-        )
+        Self::new(Arc::clone(&self.file_system), path)
     }
 }
 
 impl PartialEq for EnvironmentPathRef {
     fn eq(&self, other: &Self) -> bool {
-        self.environment_id == other.environment_id
-            && Arc::ptr_eq(&self.file_system, &other.file_system)
-            && self.path == other.path
+        Arc::ptr_eq(&self.file_system, &other.file_system) && self.path == other.path
     }
 }
 
@@ -107,7 +83,6 @@ impl Eq for EnvironmentPathRef {}
 
 impl Hash for EnvironmentPathRef {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.environment_id.hash(state);
         (Arc::as_ptr(&self.file_system) as *const () as usize).hash(state);
         self.path.hash(state);
     }
@@ -116,7 +91,6 @@ impl Hash for EnvironmentPathRef {
 impl fmt::Debug for EnvironmentPathRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EnvironmentPathRef")
-            .field("environment_id", &self.environment_id)
             .field("path", &self.path)
             .finish()
     }
@@ -272,8 +246,7 @@ mod tests {
     async fn environment_path_ref_forwards_sandbox_to_file_system_methods() {
         let path = std::env::temp_dir().join("skills/demo").abs();
         let file_system = Arc::new(RecordingFileSystem::default());
-        let path_ref =
-            EnvironmentPathRef::new("local".to_string(), file_system.clone(), path.clone());
+        let path_ref = EnvironmentPathRef::new(file_system.clone(), path.clone());
         let sandbox = restricted_sandbox();
 
         assert_eq!(
@@ -330,26 +303,23 @@ mod tests {
     }
 
     #[test]
-    fn environment_path_ref_equality_and_hash_include_environment_id_and_file_system_identity() {
+    fn environment_path_ref_equality_and_hash_include_file_system_identity() {
         let path = std::env::temp_dir().join("skills/demo").abs();
         let file_system = Arc::new(RecordingFileSystem::default());
         let same_file_system: Arc<dyn ExecutorFileSystem> = file_system.clone();
         let different_file_system: Arc<dyn ExecutorFileSystem> =
             Arc::new(RecordingFileSystem::default());
 
-        let left =
-            EnvironmentPathRef::new("local".to_string(), same_file_system.clone(), path.clone());
-        let same = EnvironmentPathRef::new("local".to_string(), same_file_system, path.clone());
-        let different_env =
-            EnvironmentPathRef::new("remote".to_string(), file_system.clone(), path.clone());
-        let different_fs =
-            EnvironmentPathRef::new("local".to_string(), different_file_system, path);
+        let left = EnvironmentPathRef::new(same_file_system.clone(), path.clone());
+        let same = EnvironmentPathRef::new(same_file_system, path.clone());
+        let different_path = EnvironmentPathRef::new(file_system.clone(), path.parent().unwrap());
+        let different_fs = EnvironmentPathRef::new(different_file_system, path);
 
         assert_eq!(left, same);
-        assert_ne!(left, different_env);
+        assert_ne!(left, different_path);
         assert_ne!(left, different_fs);
 
-        let set = HashSet::from([left, same, different_env, different_fs]);
+        let set = HashSet::from([left, same, different_path, different_fs]);
         assert_eq!(set.len(), 3);
     }
 }

@@ -1,7 +1,6 @@
 use super::input_queue::InputQueue;
 use super::*;
 use crate::config::ConstraintError;
-use crate::environment_path;
 use crate::goals::GoalRuntimeState;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
@@ -457,8 +456,7 @@ async fn warm_plugins_and_skills_for_session_init(
         .as_ref()
         .and_then(crate::environment_selection::ResolvedTurnEnvironments::primary)
         .map(|environment| {
-            environment_path(
-                environment.environment_id.clone(),
+            crate::skills::EnvironmentPathRef::new(
                 environment.environment.get_filesystem(),
                 environment.cwd.clone(),
             )
