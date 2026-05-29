@@ -783,7 +783,7 @@ fn write_session_start_hook_exporting_env(home: &Path) -> Result<()> {
     let session_start_script = r#"import os
 from pathlib import Path
 
-env_file = Path(os.environ["CODEX_ENV_FILE"])
+env_file = Path(os.environ["CLAUDE_ENV_FILE"])
 with env_file.open("a", encoding="utf-8") as handle:
     handle.write("export CODEX_SESSION_START_TEST='from-session-start'\n")
 "#;
@@ -791,7 +791,7 @@ with env_file.open("a", encoding="utf-8") as handle:
     let pre_tool_use_script = r#"import os
 from pathlib import Path
 
-env_file = os.environ.get("CODEX_ENV_FILE")
+env_file = os.environ.get("CODEX_ENV_FILE") or os.environ.get("CLAUDE_ENV_FILE")
 if env_file:
     with Path(env_file).open("a", encoding="utf-8") as handle:
         handle.write("export CODEX_SESSION_START_TEST='leaked-to-pre-tool-use'\n")
@@ -2717,7 +2717,7 @@ async fn assert_session_start_env_file_reaches_bash_surface(
 
     let server = start_mock_server().await;
     let call_id = format!("session-start-env-file-{}", surface.slug());
-    let command = "printf '%s|%s' \"$CODEX_SESSION_START_TEST\" \"${CODEX_ENV_FILE:+configured}\"";
+    let command = "printf '%s|%s|%s' \"$CODEX_SESSION_START_TEST\" \"${CODEX_ENV_FILE:+configured}\" \"${CLAUDE_ENV_FILE:+configured}\"";
     let tool_call = match surface {
         BashRewriteSurface::ExecCommand => ev_function_call(
             &call_id,
@@ -2773,12 +2773,12 @@ async fn assert_session_start_env_file_reaches_bash_surface(
         "expected hook-exported value in {surface:?} output: {output}"
     );
     assert!(
-        output.contains("from-session-start|"),
-        "expected CODEX_ENV_FILE to stay hidden from {surface:?} command: {output}"
+        output.contains("from-session-start||"),
+        "expected env-file paths to stay hidden from {surface:?} command: {output}"
     );
     assert!(
         !output.contains("leaked-to-pre-tool-use"),
-        "PreToolUse should not receive CODEX_ENV_FILE: {output}"
+        "PreToolUse should not receive env-file paths: {output}"
     );
 
     Ok(())
@@ -2795,7 +2795,7 @@ async fn session_start_env_file_exports_reach_exec_command() -> Result<()> {
 }
 
 #[tokio::test]
-async fn shell_command_hides_codex_env_file_when_hooks_are_disabled() -> Result<()> {
+async fn shell_command_hides_env_file_paths_when_hooks_are_disabled() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_windows!(Ok(()));
 
@@ -2810,7 +2810,7 @@ async fn shell_command_hides_codex_env_file_when_hooks_are_disabled() -> Result<
                     call_id,
                     "shell_command",
                     &serde_json::to_string(&serde_json::json!({
-                        "command": "printf '%s' \"${CODEX_ENV_FILE:+configured}\"",
+                        "command": "printf '%s|%s' \"${CODEX_ENV_FILE:+configured}\" \"${CLAUDE_ENV_FILE:+configured}\"",
                         "login": false,
                     }))?,
                 ),

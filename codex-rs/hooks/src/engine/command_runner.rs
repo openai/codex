@@ -8,6 +8,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 
 use super::CommandShell;
@@ -116,8 +117,9 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
         command.arg(&handler.command);
     }
     command.envs(&handler.env);
-    // Only SessionStart hooks receive CODEX_ENV_FILE.
+    // Only SessionStart hooks receive session env-file paths.
     command.env_remove(CODEX_ENV_FILE_ENV_VAR);
+    command.env_remove(CLAUDE_ENV_FILE_ENV_VAR);
     if handler.event_name == HookEventName::SessionStart {
         command.envs(&shell.env);
     }
@@ -153,6 +155,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::process::Command;
 
+    use super::CLAUDE_ENV_FILE_ENV_VAR;
     use super::CODEX_ENV_FILE_ENV_VAR;
     use super::CommandShell;
     use super::ConfiguredHandler;
@@ -162,10 +165,16 @@ mod tests {
         CommandShell {
             program: "hook-shell".to_string(),
             args: Vec::new(),
-            env: HashMap::from([(
-                CODEX_ENV_FILE_ENV_VAR.to_string(),
-                "session-owned-env-file".to_string(),
-            )]),
+            env: HashMap::from([
+                (
+                    CODEX_ENV_FILE_ENV_VAR.to_string(),
+                    "session-owned-env-file".to_string(),
+                ),
+                (
+                    CLAUDE_ENV_FILE_ENV_VAR.to_string(),
+                    "session-owned-env-file".to_string(),
+                ),
+            ]),
         }
     }
 
@@ -192,18 +201,23 @@ mod tests {
     }
 
     #[test]
-    fn non_session_start_hook_masks_inherited_codex_env_file() {
+    fn non_session_start_hook_masks_inherited_env_file_paths() {
         let command = build_command(&shell(), &handler(HookEventName::PreToolUse));
 
         assert_eq!(command_env(&command, CODEX_ENV_FILE_ENV_VAR), Some(None));
+        assert_eq!(command_env(&command, CLAUDE_ENV_FILE_ENV_VAR), Some(None));
     }
 
     #[test]
-    fn session_start_hook_receives_session_owned_codex_env_file() {
+    fn session_start_hook_receives_session_owned_env_file_paths() {
         let command = build_command(&shell(), &handler(HookEventName::SessionStart));
 
         assert_eq!(
             command_env(&command, CODEX_ENV_FILE_ENV_VAR),
+            Some(Some(OsStr::new("session-owned-env-file")))
+        );
+        assert_eq!(
+            command_env(&command, CLAUDE_ENV_FILE_ENV_VAR),
             Some(Some(OsStr::new("session-owned-env-file")))
         );
     }

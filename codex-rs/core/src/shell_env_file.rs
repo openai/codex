@@ -7,6 +7,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use codex_protocol::ThreadId;
+use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
 use tempfile::TempPath;
@@ -52,11 +53,9 @@ impl ShellEnvFile {
     }
 
     pub(crate) fn insert_path_into_env(&self, env: &mut HashMap<String, String>) {
-        insert_env_var(
-            env,
-            CODEX_ENV_FILE_ENV_VAR.to_string(),
-            self.path().to_string_lossy().to_string(),
-        );
+        let path = self.path().to_string_lossy().to_string();
+        insert_env_var(env, CODEX_ENV_FILE_ENV_VAR.to_string(), path.clone());
+        insert_env_var(env, CLAUDE_ENV_FILE_ENV_VAR.to_string(), path);
     }
 
     /// Sources the hook-writable env file once and stores the resulting
@@ -65,8 +64,8 @@ impl ShellEnvFile {
     /// The temp file remains an input channel for SessionStart hooks, but later
     /// commands receive only captured variable changes. Running both a baseline
     /// environment dump and a sourced dump lets shell syntax such as command
-    /// substitution behave naturally without keeping `CODEX_ENV_FILE` available
-    /// after hook execution.
+    /// substitution behave naturally without keeping env-file path variables
+    /// available after hook execution.
     pub(crate) async fn capture_exports(
         &self,
         shell: &Shell,
@@ -79,6 +78,7 @@ impl ShellEnvFile {
 
         let mut capture_env = base_env.clone();
         remove_env_var(&mut capture_env, CODEX_ENV_FILE_ENV_VAR);
+        remove_env_var(&mut capture_env, CLAUDE_ENV_FILE_ENV_VAR);
         self.insert_path_into_env(&mut capture_env);
 
         let baseline = self
@@ -135,6 +135,7 @@ impl ShellEnvFile {
             insert_env_var(env, CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id);
         }
         remove_env_var(env, CODEX_ENV_FILE_ENV_VAR);
+        remove_env_var(env, CLAUDE_ENV_FILE_ENV_VAR);
     }
 }
 
@@ -317,6 +318,7 @@ fn diff_env(
 fn ignored_capture_key(key: &str) -> bool {
     [
         CODEX_ENV_FILE_ENV_VAR,
+        CLAUDE_ENV_FILE_ENV_VAR,
         CODEX_THREAD_ID_ENV_VAR,
         "PWD",
         "OLDPWD",

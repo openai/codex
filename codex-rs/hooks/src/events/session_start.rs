@@ -7,6 +7,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -181,9 +182,10 @@ pub(crate) async fn run(
     };
 
     let results = if event_name == HookEventName::SessionStart
-        && shell.env.contains_key(CODEX_ENV_FILE_ENV_VAR)
+        && (shell.env.contains_key(CODEX_ENV_FILE_ENV_VAR)
+            || shell.env.contains_key(CLAUDE_ENV_FILE_ENV_VAR))
     {
-        // Serialize hooks that share CODEX_ENV_FILE to preserve configured order.
+        // Serialize hooks that share the session env file to preserve configured order.
         let mut results = Vec::with_capacity(matched.len());
         for (completion_order, handler) in matched.into_iter().enumerate() {
             let result = run_command(shell, &handler, &input_json, request.cwd.as_path()).await;

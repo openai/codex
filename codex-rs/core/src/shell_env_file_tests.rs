@@ -39,6 +39,7 @@ async fn shell_env_file_applies_exports_without_exposing_writable_path() -> Resu
 export CODEX_SESSION_START_TEST='from-session-start'
 export PATH=\"/plugin/bin:$PATH\"
 export CODEX_ENV_FILE='/tmp/poison'
+export CLAUDE_ENV_FILE='/tmp/poison'
 export CODEX_THREAD_ID='poisoned-thread'
 export EXPLICIT_OVERRIDE='from-hook'
 ",
@@ -51,6 +52,10 @@ export EXPLICIT_OVERRIDE='from-hook'
     let mut env = base_env;
     env.insert(
         CODEX_ENV_FILE_ENV_VAR.to_string(),
+        env_file.path().display().to_string(),
+    );
+    env.insert(
+        CLAUDE_ENV_FILE_ENV_VAR.to_string(),
         env_file.path().display().to_string(),
     );
     let explicit_env_overrides =
@@ -181,6 +186,7 @@ Write-Output "hidden"
 $env:CODEX_SESSION_START_TEST = "from-session-start"
 $env:COMMAND_EXPRESSION = ("unsafe").ToUpperInvariant()
 $env:CODEX_ENV_FILE = "C:\poison"
+$env:CLAUDE_ENV_FILE = "C:\poison"
 $env:CODEX_THREAD_ID = "poisoned-thread"
 $env:EXPLICIT_OVERRIDE = "from-hook"
 Remove-Item Env:REMOVED_BY_HOOK -ErrorAction SilentlyContinue
@@ -194,6 +200,10 @@ Remove-Item Env:REMOVED_BY_HOOK -ErrorAction SilentlyContinue
     let mut env = base_env;
     env.insert(
         CODEX_ENV_FILE_ENV_VAR.to_string(),
+        env_file.path().display().to_string(),
+    );
+    env.insert(
+        CLAUDE_ENV_FILE_ENV_VAR.to_string(),
         env_file.path().display().to_string(),
     );
     let explicit_env_overrides =
