@@ -22,33 +22,27 @@ use crate::shell::ShellType;
 /// values to later commands without exposing the writable path.
 pub(crate) struct ShellEnvFile {
     path: TempPath,
+    capture: ShellEnvCapture,
     exports: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl ShellEnvFile {
-    pub(crate) fn for_session(thread_id: ThreadId) -> Result<Option<Self>> {
-        #[cfg(windows)]
-        {
-            let _ = thread_id;
-            // TODO: Support a Windows shell environment persistence contract,
-            // likely with PowerShell- and cmd-compatible formats.
-            Ok(None)
-        }
-        #[cfg(not(windows))]
-        {
-            Self::new(thread_id).map(Some)
-        }
+    pub(crate) fn for_session(thread_id: ThreadId, shell: &Shell) -> Result<Option<Self>> {
+        let Some(capture) = ShellEnvCapture::for_shell_type(&shell.shell_type) else {
+            return Ok(None);
+        };
+        Self::new(thread_id, capture).map(Some)
     }
 
-    #[cfg(not(windows))]
-    fn new(thread_id: ThreadId) -> Result<Self> {
+    fn new(thread_id: ThreadId, capture: ShellEnvCapture) -> Result<Self> {
         let file = tempfile::Builder::new()
             .prefix(&format!("codex-env-{thread_id}."))
-            .suffix(".sh")
+            .suffix(capture.file_suffix())
             .tempfile()
             .context("failed to create temporary shell env file")?;
         Ok(Self {
             path: file.into_temp_path(),
+            capture,
             exports: Mutex::new(HashMap::new()),
         })
     }
@@ -58,7 +52,8 @@ impl ShellEnvFile {
     }
 
     pub(crate) fn insert_path_into_env(&self, env: &mut HashMap<String, String>) {
-        env.insert(
+        insert_env_var(
+            env,
             CODEX_ENV_FILE_ENV_VAR.to_string(),
             self.path().to_string_lossy().to_string(),
         );
@@ -78,25 +73,22 @@ impl ShellEnvFile {
         cwd: &Path,
         base_env: &HashMap<String, String>,
     ) -> Result<()> {
-        if !matches!(
-            shell.shell_type,
-            ShellType::Zsh | ShellType::Bash | ShellType::Sh
-        ) {
+        if !self.capture.supports_shell_type(&shell.shell_type) {
             return Ok(());
         }
 
         let mut capture_env = base_env.clone();
-        capture_env.remove(CODEX_ENV_FILE_ENV_VAR);
+        remove_env_var(&mut capture_env, CODEX_ENV_FILE_ENV_VAR);
         self.insert_path_into_env(&mut capture_env);
 
-        let baseline = capture_env_from_shell(shell, cwd, DUMP_ENV_SCRIPT, &capture_env).await?;
-        let captured = capture_env_from_shell(
-            shell,
-            cwd,
-            SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT,
-            &capture_env,
-        )
-        .await?;
+        let baseline = self
+            .capture
+            .capture_env_from_shell(shell, cwd, ShellEnvCaptureMode::Baseline, &capture_env)
+            .await?;
+        let captured = self
+            .capture
+            .capture_env_from_shell(shell, cwd, ShellEnvCaptureMode::SourceEnvFile, &capture_env)
+            .await?;
         let exports = diff_env(&baseline, &captured);
         *self
             .exports
@@ -117,7 +109,7 @@ impl ShellEnvFile {
         env: &mut HashMap<String, String>,
         explicit_env_overrides: &HashMap<String, String>,
     ) {
-        let thread_id = env.get(CODEX_THREAD_ID_ENV_VAR).cloned();
+        let thread_id = get_env_var(env, CODEX_THREAD_ID_ENV_VAR).cloned();
         let exports = self
             .exports
             .lock()
@@ -129,30 +121,116 @@ impl ShellEnvFile {
             }
             match value {
                 Some(value) => {
-                    env.insert(key, value);
+                    insert_env_var(env, key, value);
                 }
                 None => {
-                    env.remove(&key);
+                    remove_env_var(env, &key);
                 }
             }
         }
         for (key, value) in explicit_env_overrides {
-            env.insert(key.clone(), value.clone());
+            insert_env_var(env, key.clone(), value.clone());
         }
         if let Some(thread_id) = thread_id {
-            env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id);
+            insert_env_var(env, CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id);
         }
-        env.remove(CODEX_ENV_FILE_ENV_VAR);
+        remove_env_var(env, CODEX_ENV_FILE_ENV_VAR);
     }
 }
 
-const DUMP_ENV_SCRIPT: &str = r#"if [ -x /usr/bin/env ]; then
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShellEnvCapture {
+    Posix,
+    PowerShell,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ShellEnvCaptureMode {
+    Baseline,
+    SourceEnvFile,
+}
+
+impl ShellEnvCapture {
+    fn for_shell_type(shell_type: &ShellType) -> Option<Self> {
+        match shell_type {
+            ShellType::Zsh | ShellType::Bash | ShellType::Sh => Some(Self::Posix),
+            ShellType::PowerShell => Some(Self::PowerShell),
+            ShellType::Cmd => None,
+        }
+    }
+
+    fn supports_shell_type(self, shell_type: &ShellType) -> bool {
+        Self::for_shell_type(shell_type) == Some(self)
+    }
+
+    fn file_suffix(self) -> &'static str {
+        match self {
+            Self::Posix => ".sh",
+            Self::PowerShell => ".ps1",
+        }
+    }
+
+    async fn capture_env_from_shell(
+        self,
+        shell: &Shell,
+        cwd: &Path,
+        mode: ShellEnvCaptureMode,
+        env: &HashMap<String, String>,
+    ) -> Result<HashMap<String, String>> {
+        let script = self.capture_script(mode);
+        let output = Command::new(&shell.shell_path)
+            .current_dir(cwd)
+            .args(self.capture_args(script))
+            .env_clear()
+            .envs(env)
+            .output()
+            .await
+            .with_context(|| format!("failed to run {}", shell.shell_path.display()))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!(
+                "failed to capture shell environment with {}: {stderr}",
+                shell.shell_path.display()
+            );
+        }
+        self.parse_env_output(&output.stdout)
+    }
+
+    fn capture_script(self, mode: ShellEnvCaptureMode) -> &'static str {
+        match (self, mode) {
+            (Self::Posix, ShellEnvCaptureMode::Baseline) => POSIX_DUMP_ENV_SCRIPT,
+            (Self::Posix, ShellEnvCaptureMode::SourceEnvFile) => {
+                POSIX_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT
+            }
+            (Self::PowerShell, ShellEnvCaptureMode::Baseline) => POWERSHELL_DUMP_ENV_SCRIPT,
+            (Self::PowerShell, ShellEnvCaptureMode::SourceEnvFile) => {
+                POWERSHELL_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT
+            }
+        }
+    }
+
+    fn capture_args(self, script: &str) -> Vec<&str> {
+        match self {
+            Self::Posix => vec!["-c", script],
+            Self::PowerShell => vec!["-NoLogo", "-NoProfile", "-Command", script],
+        }
+    }
+
+    fn parse_env_output(self, output: &[u8]) -> Result<HashMap<String, String>> {
+        match self {
+            Self::Posix => parse_posix_env_output(output),
+            Self::PowerShell => parse_powershell_env_output(output),
+        }
+    }
+}
+
+const POSIX_DUMP_ENV_SCRIPT: &str = r#"if [ -x /usr/bin/env ]; then
   /usr/bin/env -0
 else
   env -0
 fi"#;
 
-const SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = r#"if [ -n "${CODEX_ENV_FILE:-}" ] && [ -f "$CODEX_ENV_FILE" ]; then
+const POSIX_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = r#"if [ -n "${CODEX_ENV_FILE:-}" ] && [ -f "$CODEX_ENV_FILE" ]; then
   if . "$CODEX_ENV_FILE" >/dev/null 2>&1; then
     :
   fi
@@ -163,32 +241,24 @@ else
   env -0
 fi"#;
 
-async fn capture_env_from_shell(
-    shell: &Shell,
-    cwd: &Path,
-    script: &str,
-    env: &HashMap<String, String>,
-) -> Result<HashMap<String, String>> {
-    let output = Command::new(&shell.shell_path)
-        .current_dir(cwd)
-        .arg("-c")
-        .arg(script)
-        .env_clear()
-        .envs(env)
-        .output()
-        .await
-        .with_context(|| format!("failed to run {}", shell.shell_path.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "failed to capture shell environment with {}: {stderr}",
-            shell.shell_path.display()
-        );
-    }
-    parse_env_output(&output.stdout)
-}
+const POWERSHELL_DUMP_ENV_SCRIPT: &str = r#"$items = @(Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
+  [PSCustomObject]@{ Name = $_.Name; Value = $_.Value }
+})
+ConvertTo-Json -InputObject $items -Compress -Depth 2"#;
 
-fn parse_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
+const POWERSHELL_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = r#"$envFile = $env:CODEX_ENV_FILE
+if (![string]::IsNullOrEmpty($envFile) -and (Test-Path -LiteralPath $envFile -PathType Leaf)) {
+  try {
+    . $envFile *> $null
+  } catch {
+  }
+}
+$items = @(Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
+  [PSCustomObject]@{ Name = $_.Name; Value = $_.Value }
+})
+ConvertTo-Json -InputObject $items -Compress -Depth 2"#;
+
+fn parse_posix_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
     let mut env = HashMap::new();
     for entry in output.split(|byte| *byte == 0) {
         if entry.is_empty() {
@@ -206,6 +276,39 @@ fn parse_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
     Ok(env)
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct PowerShellEnvEntry {
+    name: String,
+    value: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum PowerShellEnvOutput {
+    Entries(Vec<PowerShellEnvEntry>),
+    Entry(PowerShellEnvEntry),
+}
+
+fn parse_powershell_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
+    let output =
+        std::str::from_utf8(output).context("captured PowerShell environment was not UTF-8")?;
+    let output = output.trim();
+    if output.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let output: PowerShellEnvOutput =
+        serde_json::from_str(output).context("failed to parse captured PowerShell environment")?;
+    let entries = match output {
+        PowerShellEnvOutput::Entries(entries) => entries,
+        PowerShellEnvOutput::Entry(entry) => vec![entry],
+    };
+    Ok(entries
+        .into_iter()
+        .map(|entry| (entry.name, entry.value.unwrap_or_default()))
+        .collect())
+}
+
 fn diff_env(
     baseline: &HashMap<String, String>,
     captured: &HashMap<String, String>,
@@ -215,7 +318,7 @@ fn diff_env(
         if ignored_capture_key(key) {
             continue;
         }
-        if baseline.get(key) != Some(value) {
+        if get_env_var(baseline, key) != Some(value) {
             exports.insert(key.clone(), Some(value.clone()));
         }
     }
@@ -223,7 +326,7 @@ fn diff_env(
         if ignored_capture_key(key) {
             continue;
         }
-        if !captured.contains_key(key) {
+        if !contains_env_var(captured, key) {
             exports.insert(key.clone(), None);
         }
     }
@@ -231,12 +334,62 @@ fn diff_env(
 }
 
 fn ignored_capture_key(key: &str) -> bool {
-    matches!(
-        key,
-        CODEX_ENV_FILE_ENV_VAR | CODEX_THREAD_ID_ENV_VAR | "PWD" | "OLDPWD" | "SHLVL" | "_"
-    )
+    [
+        CODEX_ENV_FILE_ENV_VAR,
+        CODEX_THREAD_ID_ENV_VAR,
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "_",
+    ]
+    .iter()
+    .any(|ignored| env_key_eq(key, ignored))
 }
 
-#[cfg(all(test, not(windows)))]
+fn get_env_var<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a String> {
+    env.iter()
+        .find(|(candidate, _)| env_key_eq(candidate, key))
+        .map(|(_, value)| value)
+}
+
+fn contains_env_var(env: &HashMap<String, String>, key: &str) -> bool {
+    get_env_var(env, key).is_some()
+}
+
+fn insert_env_var(env: &mut HashMap<String, String>, key: String, value: String) {
+    if let Some(existing) = env
+        .keys()
+        .find(|candidate| env_key_eq(candidate, &key))
+        .cloned()
+    {
+        env.remove(&existing);
+    }
+
+    env.insert(key, value);
+}
+
+fn remove_env_var(env: &mut HashMap<String, String>, key: &str) {
+    if let Some(existing) = env
+        .keys()
+        .find(|candidate| env_key_eq(candidate, key))
+        .cloned()
+    {
+        env.remove(&existing);
+    }
+}
+
+fn env_key_eq(candidate: &str, key: &str) -> bool {
+    #[cfg(windows)]
+    {
+        candidate.eq_ignore_ascii_case(key)
+    }
+
+    #[cfg(not(windows))]
+    {
+        candidate == key
+    }
+}
+
+#[cfg(test)]
 #[path = "shell_env_file_tests.rs"]
 mod tests;
