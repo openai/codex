@@ -202,6 +202,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
             "resource_uri": DOCUMENT_EXTRACT_TEXT_RESOURCE_URI,
             "contains_mcp_source": true,
             "connector_id": "calendar",
+            "used_connector_ids": [],
         }))
     );
 

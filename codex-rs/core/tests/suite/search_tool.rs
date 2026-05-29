@@ -582,6 +582,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
                 "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
                 "contains_mcp_source": true,
                 "connector_id": "calendar",
+                "used_connector_ids": [],
             },
         }))
     );
@@ -604,6 +605,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
             "contains_mcp_source": true,
             "connector_id": "calendar",
+            "used_connector_ids": [],
         }))
     );
     assert_eq!(
