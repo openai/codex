@@ -19,7 +19,7 @@ index 3316604..fcdd7c7 100644
 +    let dir = scratch_dir();
      // temporary fix to avoid github workflow issue
      fs::create_dir_all(&dir).context("Failed to create scratch_path")?;
-@@ -223,6 +227,10 @@ pub fn download_webrtc() -> Result<()> {
+@@ -231,6 +235,10 @@ pub fn download_webrtc() -> Result<()> {
      Ok(())
  }
  
@@ -27,6 +27,6 @@ index 3316604..fcdd7c7 100644
 +    PathBuf::from(env::var("OUT_DIR").unwrap()).join(SCRATH_PATH)
 +}
 +
- fn android_ndk_toolchain() -> Result<path::PathBuf> {
+ pub fn android_ndk_toolchain() -> Result<path::PathBuf> {
      let ndk_home = env::var("ANDROID_NDK_HOME")
          .or_else(|_| env::var("ANDROID_NDK_ROOT"))
