@@ -7,7 +7,6 @@ use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
 use crate::mcp::McpManager;
-use crate::multi_agent_runtime::MultiAgentRuntime;
 use crate::rollout::truncation;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
@@ -638,11 +637,10 @@ impl ThreadManager {
                 ))
             })?;
         let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
-        let multi_agent_runtime = self.resolve_multi_agent_runtime(&options.config).await;
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
-            InterruptedTurnHistoryMarker::from_config(&options.config, multi_agent_runtime),
+            InterruptedTurnHistoryMarker::from_config(&options.config),
         );
         self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
             .await
@@ -897,9 +895,7 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let multi_agent_runtime = self.resolve_multi_agent_runtime(&config).await;
-        let interrupted_marker =
-            InterruptedTurnHistoryMarker::from_config(&config, multi_agent_runtime);
+        let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -926,10 +922,6 @@ impl ThreadManager {
         AgentControl::new(Arc::downgrade(&self.state))
     }
 
-    async fn resolve_multi_agent_runtime(&self, config: &Config) -> MultiAgentRuntime {
-        self.state.resolve_multi_agent_runtime(config).await
-    }
-
     #[cfg(test)]
     pub(crate) fn captured_ops(&self) -> Vec<(ThreadId, Op)> {
         self.state
@@ -941,10 +933,6 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
-    pub(crate) async fn resolve_multi_agent_runtime(&self, config: &Config) -> MultiAgentRuntime {
-        MultiAgentRuntime::resolve_for_config(&self.models_manager, config).await
-    }
-
     pub(crate) fn state_db(&self) -> Option<StateDbHandle> {
         self.state_db.clone()
     }

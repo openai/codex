@@ -27,7 +27,6 @@ use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
-use crate::multi_agent_runtime::MultiAgentRuntime;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -71,11 +70,11 @@ pub(crate) enum InterruptedTurnHistoryMarker {
 }
 
 impl InterruptedTurnHistoryMarker {
-    pub(crate) fn from_config(config: &Config, multi_agent_runtime: MultiAgentRuntime) -> Self {
+    pub(crate) fn from_config(config: &Config) -> Self {
         if !config.agent_interrupt_message_enabled {
             return Self::Disabled;
         }
-        if multi_agent_runtime.multi_agent_v2_enabled() {
+        if config.features.enabled(Feature::MultiAgentV2) {
             Self::Developer
         } else {
             Self::ContextualUser
@@ -841,11 +840,9 @@ impl Session {
             .await;
 
         if reason == TurnAbortReason::Interrupted
-            && let Some(marker) =
-                interrupted_turn_history_marker(InterruptedTurnHistoryMarker::from_config(
-                    task.turn_context.config.as_ref(),
-                    task.turn_context.multi_agent_runtime,
-                ))
+            && let Some(marker) = interrupted_turn_history_marker(
+                InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),
+            )
         {
             self.record_conversation_items(
                 task.turn_context.as_ref(),
