@@ -41,6 +41,7 @@ fn shell() -> CommandShell {
     CommandShell {
         program: String::new(),
         args: Vec::new(),
+        local_cwd: cwd(),
         environment_manager: std::sync::Arc::new(EnvironmentManager::default_for_tests()),
     }
 }
@@ -226,6 +227,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        local_cwd: cwd(),
         environment_manager: std::sync::Arc::new(EnvironmentManager::default_for_tests()),
     });
     assert!(listed.hooks[0].is_managed);
@@ -235,6 +237,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         turn_id: "turn-1".to_string(),
         subagent: None,
         cwd: cwd.clone(),
+        environment_cwds: Default::default(),
         transcript_path: None,
         model: "gpt-test".to_string(),
         permission_mode: "default".to_string(),
@@ -252,6 +255,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             turn_id: "turn-1".to_string(),
             subagent: None,
             cwd,
+            environment_cwds: Default::default(),
             transcript_path: None,
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
@@ -322,6 +326,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
             turn_id: "turn-1".to_string(),
             subagent: None,
             cwd: cwd(),
+            environment_cwds: Default::default(),
             transcript_path: None,
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
@@ -699,6 +704,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
         turn_id: "turn-1".to_string(),
         subagent: None,
         cwd,
+        environment_cwds: Default::default(),
         transcript_path: None,
         model: "gpt-test".to_string(),
         permission_mode: "default".to_string(),
@@ -1087,6 +1093,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
         turn_id: "turn-1".to_string(),
         subagent: None,
         cwd,
+        environment_cwds: Default::default(),
         transcript_path: None,
         model: "gpt-test".to_string(),
         permission_mode: "default".to_string(),
@@ -1171,6 +1178,7 @@ print(json.dumps({
         turn_id: "turn-1".to_string(),
         subagent: None,
         cwd: cwd(),
+        environment_cwds: Default::default(),
         transcript_path: None,
         model: "gpt-test".to_string(),
         permission_mode: "default".to_string(),
@@ -1191,6 +1199,7 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
+        local_cwd: cwd(),
         environment_manager: std::sync::Arc::new(EnvironmentManager::default_for_tests()),
     });
     assert_eq!(
@@ -1204,6 +1213,7 @@ print(json.dumps({
             turn_id: "turn-1".to_string(),
             subagent: None,
             cwd: cwd(),
+            environment_cwds: Default::default(),
             transcript_path: None,
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
@@ -1334,6 +1344,7 @@ fn structured_hooks_require_local_environment() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
+            local_cwd: cwd(),
             environment_manager: std::sync::Arc::new(EnvironmentManager::without_environments()),
         },
     );
@@ -1341,6 +1352,22 @@ fn structured_hooks_require_local_environment() {
     assert!(engine.handlers.is_empty());
     assert_eq!(
         engine.warnings(),
+        ["structured command hooks require a local execution environment"]
+    );
+}
+
+#[tokio::test]
+async fn list_hooks_requires_local_environment() {
+    let listed = crate::list_hooks(crate::HooksConfig {
+        feature_enabled: true,
+        local_cwd: cwd(),
+        environment_manager: std::sync::Arc::new(EnvironmentManager::without_environments()),
+        ..Default::default()
+    });
+
+    assert!(listed.hooks.is_empty());
+    assert_eq!(
+        listed.warnings,
         ["structured command hooks require a local execution environment"]
     );
 }

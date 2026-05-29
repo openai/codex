@@ -30,21 +30,40 @@ pub(crate) async fn run_command(
     shell: &CommandShell,
     handler: &ConfiguredHandler,
     input_json: &str,
-    cwd: &Path,
+    environment_cwds: &std::collections::HashMap<
+        String,
+        codex_utils_absolute_path::AbsolutePathBuf,
+    >,
 ) -> CommandRunResult {
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
-    if let Some(environment_id) = handler.environment_id.as_deref() {
-        let Some(environment) = shell.environment_manager.get_environment(environment_id) else {
+    let environment_id = handler
+        .environment_id
+        .as_deref()
+        .unwrap_or(codex_exec_server::LOCAL_ENVIRONMENT_ID);
+    let Some(environment) = shell.environment_manager.get_environment(environment_id) else {
+        return command_error(
+            started_at,
+            started,
+            format!("unknown hook environment id: {environment_id}"),
+        );
+    };
+    let cwd = if environment_id == codex_exec_server::LOCAL_ENVIRONMENT_ID {
+        environment_cwds
+            .get(environment_id)
+            .map_or_else(|| shell.local_cwd.as_path(), |cwd| cwd.as_path())
+    } else {
+        let Some(cwd) = environment_cwds.get(environment_id) else {
             return command_error(
                 started_at,
                 started,
-                format!("unknown hook environment id: {environment_id}"),
+                format!("hook environment `{environment_id}` has no selected cwd"),
             );
         };
-        if environment.is_remote() {
-            return run_remote_hook_command(handler, environment, input_json, cwd).await;
-        }
+        cwd.as_path()
+    };
+    if environment.is_remote() {
+        return run_remote_hook_command(handler, environment, input_json, cwd).await;
     }
 
     let mut command = build_command(shell, handler);
@@ -413,6 +432,7 @@ mod tests {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
+            local_cwd: test_path_buf("/tmp").abs(),
             environment_manager,
         }
     }
@@ -474,7 +494,7 @@ mod tests {
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
             &handler("printf local-hook", None),
             "{}",
-            test_path_buf("/tmp").as_path(),
+            &Default::default(),
         )
         .await;
 
@@ -484,12 +504,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn omitted_environment_id_uses_local_hook_cwd() {
+        let local_cwd = tempfile::tempdir().expect("local cwd");
+        let local_cwd =
+            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(local_cwd.path())
+                .expect("absolute local cwd");
+        let mut shell = shell(std::sync::Arc::new(EnvironmentManager::default_for_tests()));
+        shell.local_cwd = local_cwd.clone();
+        let result = run_command(
+            &shell,
+            &handler(if cfg!(windows) { "cd" } else { "pwd -P" }, None),
+            "{}",
+            &Default::default(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(
+            result.stdout.trim(),
+            std::fs::canonicalize(local_cwd.as_path())
+                .expect("canonical local cwd")
+                .display()
+                .to_string()
+        );
+        assert_eq!(result.error, None);
+    }
+
+    #[tokio::test]
     async fn explicit_local_environment_id_runs_locally() {
         let result = run_command(
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
             &handler("printf explicit-local-hook", Some("local")),
             "{}",
-            test_path_buf("/tmp").as_path(),
+            &Default::default(),
         )
         .await;
 
@@ -504,7 +551,7 @@ mod tests {
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
             &handler("cat; printf stderr >&2; exit 7", None),
             "{\"hook\":true}",
-            test_path_buf("/tmp").as_path(),
+            &Default::default(),
         )
         .await;
 
@@ -522,7 +569,7 @@ mod tests {
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
             &handler,
             "{}",
-            test_path_buf("/tmp").as_path(),
+            &Default::default(),
         )
         .await;
 
@@ -538,7 +585,7 @@ mod tests {
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
             &handler("printf local-hook", Some("missing")),
             "{}",
-            test_path_buf("/tmp").as_path(),
+            &Default::default(),
         )
         .await;
 
@@ -560,7 +607,10 @@ mod tests {
             &shell(environment_manager),
             &handler("printf local-hook", Some("remote-hook")),
             "{}",
-            test_path_buf("/tmp").as_path(),
+            &std::collections::HashMap::from([(
+                "remote-hook".to_string(),
+                test_path_buf("/tmp").abs(),
+            )]),
         )
         .await;
 
@@ -571,6 +621,28 @@ mod tests {
                 .error
                 .as_deref()
                 .is_some_and(|error| error.contains("failed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_remote_environment_requires_selected_cwd() {
+        let environment_manager = std::sync::Arc::new(EnvironmentManager::default_for_tests());
+        environment_manager
+            .upsert_environment("remote-hook".to_string(), "ws://127.0.0.1:1".to_string())
+            .expect("remote hook environment");
+        let result = run_command(
+            &shell(environment_manager),
+            &handler("printf remote-hook", Some("remote-hook")),
+            "{}",
+            &Default::default(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.stdout, "");
+        assert_eq!(
+            result.error.as_deref(),
+            Some("hook environment `remote-hook` has no selected cwd")
         );
     }
 

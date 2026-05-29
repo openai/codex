@@ -25,6 +25,7 @@ pub struct UserPromptSubmitRequest {
     pub turn_id: String,
     pub subagent: Option<common::SubagentHookContext>,
     pub cwd: AbsolutePathBuf,
+    pub environment_cwds: std::collections::HashMap<String, AbsolutePathBuf>,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
@@ -106,7 +107,7 @@ pub(crate) async fn run(
         shell,
         matched,
         input_json,
-        request.cwd.as_path(),
+        &request.environment_cwds,
         Some(request.turn_id),
         parse_completed,
     )

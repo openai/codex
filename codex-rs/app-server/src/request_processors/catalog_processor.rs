@@ -627,6 +627,8 @@ impl CatalogRequestProcessor {
                 config_layer_stack: Some(config.config_layer_stack),
                 plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
                 plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
+                local_cwd: config.cwd.clone(),
+                environment_manager: self.thread_manager.environment_manager(),
                 ..Default::default()
             });
             data.push(codex_app_server_protocol::HooksListEntry {

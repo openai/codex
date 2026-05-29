@@ -38,6 +38,7 @@ use std::sync::Arc;
 pub(crate) struct CommandShell {
     pub program: String,
     pub args: Vec<String>,
+    pub local_cwd: AbsolutePathBuf,
     pub environment_manager: Arc<EnvironmentManager>,
 }
 
