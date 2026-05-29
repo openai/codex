@@ -235,11 +235,11 @@ async fn remote_multi_agent_version_selector_overrides_feature_flags() -> Result
     assert_eq!(
         namespace_child_tool_names(&v1_body, "multi_agent_v1"),
         vec![
-            "spawn_agent".to_string(),
-            "send_input".to_string(),
-            "resume_agent".to_string(),
-            "wait_agent".to_string(),
             "close_agent".to_string(),
+            "resume_agent".to_string(),
+            "send_input".to_string(),
+            "spawn_agent".to_string(),
+            "wait_agent".to_string(),
         ]
     );
     assert_eq!(
