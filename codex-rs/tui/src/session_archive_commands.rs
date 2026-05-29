@@ -27,7 +27,6 @@ use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use color_eyre::eyre::eyre;
-use uuid::Uuid;
 
 use super::RemoteAppServerEndpoint;
 
@@ -71,25 +70,18 @@ impl SessionArchiveAction {
 pub struct SessionArchiveCommandOptions {
     pub cli: Cli,
     pub arg0_paths: Arg0DispatchPaths,
-    pub loader_overrides: LoaderOverrides,
     pub explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionArchiveCommandOutput {
-    pub action: SessionArchiveAction,
-    pub session_id: ThreadId,
-    pub session_name: Option<String>,
-}
-
-impl SessionArchiveCommandOutput {
-    pub fn success_message(&self) -> String {
-        let action = self.action.past_tense();
-        let session_id = self.session_id;
-        match self.session_name.as_deref() {
-            Some(name) => format!("{action} session {name} ({session_id})."),
-            None => format!("{action} session {session_id}."),
-        }
+fn success_message(
+    action: SessionArchiveAction,
+    session_id: ThreadId,
+    session_name: Option<&str>,
+) -> String {
+    let action = action.past_tense();
+    match session_name {
+        Some(name) => format!("{action} session {name} ({session_id})."),
+        None => format!("{action} session {session_id}."),
     }
 }
 
@@ -103,7 +95,7 @@ pub async fn run_session_archive_command(
     action: SessionArchiveAction,
     target: String,
     options: SessionArchiveCommandOptions,
-) -> Result<SessionArchiveCommandOutput> {
+) -> Result<String> {
     let mut app_server = start_app_server_for_archive_command(options).await?;
     run_session_archive_action_with_app_server(&mut app_server, action, &target).await
 }
@@ -112,24 +104,25 @@ async fn run_session_archive_action_with_app_server(
     app_server: &mut AppServerSession,
     action: SessionArchiveAction,
     target: &str,
-) -> Result<SessionArchiveCommandOutput> {
+) -> Result<String> {
     let resolved = resolve_session_target(app_server, action, target).await?;
     match action {
         SessionArchiveAction::Archive => {
             app_server.thread_archive(resolved.session_id).await?;
-            Ok(SessionArchiveCommandOutput {
+            Ok(success_message(
                 action,
-                session_id: resolved.session_id,
-                session_name: resolved.session_name,
-            })
+                resolved.session_id,
+                resolved.session_name.as_deref(),
+            ))
         }
         SessionArchiveAction::Unarchive => {
             let thread = app_server.thread_unarchive(resolved.session_id).await?;
-            Ok(SessionArchiveCommandOutput {
+            let session_name = thread.name.or(resolved.session_name);
+            Ok(success_message(
                 action,
-                session_id: resolved.session_id,
-                session_name: thread.name.or(resolved.session_name),
-            })
+                resolved.session_id,
+                session_name.as_deref(),
+            ))
         }
     }
 }
@@ -139,9 +132,7 @@ async fn resolve_session_target(
     action: SessionArchiveAction,
     target: &str,
 ) -> Result<ResolvedSessionTarget> {
-    if Uuid::parse_str(target).is_ok() {
-        let session_id = ThreadId::from_string(target)
-            .wrap_err_with(|| format!("invalid session id: {target}"))?;
+    if let Ok(session_id) = ThreadId::from_string(target) {
         return Ok(ResolvedSessionTarget {
             session_id,
             session_name: None,
@@ -266,9 +257,9 @@ async fn start_app_server_for_archive_command(
     let SessionArchiveCommandOptions {
         cli,
         arg0_paths,
-        loader_overrides,
         explicit_remote_endpoint,
     } = options;
+    let loader_overrides = LoaderOverrides::default();
     let strict_config = cli.strict_config;
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = CliConfigOverrides { raw_overrides };

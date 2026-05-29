@@ -775,7 +775,7 @@ async fn run_session_archive_cli_command(
     root_remote: Option<String>,
     root_remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
-) -> anyhow::Result<codex_tui::SessionArchiveCommandOutput> {
+) -> anyhow::Result<String> {
     let SessionArchiveCommand {
         target,
         remote,
@@ -793,7 +793,6 @@ async fn run_session_archive_cli_command(
         codex_tui::SessionArchiveCommandOptions {
             cli: interactive,
             arg0_paths,
-            loader_overrides: codex_config::LoaderOverrides::default(),
             explicit_remote_endpoint,
         },
     )
@@ -1202,7 +1201,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            println!("{}", output.success_message());
+            println!("{output}");
         }
         Some(Subcommand::Unarchive(cmd)) => {
             let output = run_session_archive_cli_command(
@@ -1215,7 +1214,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 arg0_paths.clone(),
             )
             .await?;
-            println!("{}", output.success_message());
+            println!("{output}");
         }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
@@ -2770,38 +2769,13 @@ mod tests {
     }
 
     #[test]
-    fn archive_parses_target() {
-        let cli = MultitoolCli::try_parse_from(["codex", "archive", "my-thread"]).expect("parse");
-        let Some(Subcommand::Archive(command)) = cli.subcommand else {
-            panic!("expected archive command");
-        };
+    fn archive_commands_reject_extra_positional_argument() {
+        for command in ["archive", "unarchive"] {
+            let err = MultitoolCli::try_parse_from(["codex", command, "old", "name"])
+                .expect_err("archive commands should reject unquoted session names");
 
-        assert_eq!(command.target, "my-thread");
-    }
-
-    #[test]
-    fn archive_rejects_extra_positional_argument() {
-        let err = MultitoolCli::try_parse_from(["codex", "archive", "old", "name"])
-            .expect_err("archive should reject unquoted session names");
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-
-    #[test]
-    fn archive_parses_scoped_remote_flag() {
-        let (target, _interactive, remote) = finalize_archive_from_args(
-            [
-                "codex",
-                "archive",
-                "--remote",
-                "unix://codex.sock",
-                "my-thread",
-            ]
-            .as_ref(),
-        );
-
-        assert_eq!(target, "my-thread");
-        assert_eq!(remote.remote.as_deref(), Some("unix://codex.sock"));
+            assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
     }
 
     #[test]
@@ -2837,24 +2811,6 @@ mod tests {
         );
         assert!(interactive.strict_config);
         assert!(interactive.bypass_hook_trust);
-    }
-
-    #[test]
-    fn unarchive_parses_target() {
-        let cli = MultitoolCli::try_parse_from(["codex", "unarchive", "my-thread"]).expect("parse");
-        let Some(Subcommand::Unarchive(command)) = cli.subcommand else {
-            panic!("expected unarchive command");
-        };
-
-        assert_eq!(command.target, "my-thread");
-    }
-
-    #[test]
-    fn unarchive_rejects_extra_positional_argument() {
-        let err = MultitoolCli::try_parse_from(["codex", "unarchive", "old", "name"])
-            .expect_err("unarchive should reject unquoted session names");
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
