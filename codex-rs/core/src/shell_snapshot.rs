@@ -342,9 +342,10 @@ export_lines=$(export -p | awk '
   line=$0
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
-  if (name ~ /^-T [A-Za-z_][A-Za-z0-9_]* [A-Za-z_][A-Za-z0-9_]*=/) {
-    # Zsh prints tied parameters like PATH/path as `export -T NAME tied=(...)`.
-    sub(/^-T /, "", name)
+  if (name ~ /^-[A-Za-z]*T[A-Za-z]* [A-Za-z_][A-Za-z0-9_]* [A-Za-z_][A-Za-z0-9_]*=/) {
+    # Zsh prints tied parameters like PATH/path as `export -T NAME tied=(...)`;
+    # the option group may include flags such as `-UT`.
+    sub(/^-[A-Za-z]*T[A-Za-z]* /, "", name)
     sub(/ .*/, "", name)
   } else {
     sub(/=.*/, "", name)
