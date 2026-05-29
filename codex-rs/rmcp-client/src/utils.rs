@@ -1,5 +1,8 @@
+use crate::program_resolver;
+
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_config::McpServerHttpHeadersHelperConfig;
 use codex_config::types::McpServerEnvVar;
 use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
@@ -7,7 +10,21 @@ use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use std::collections::HashMap;
 use std::env;
+use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
+
+const MAX_HTTP_HEADERS_HELPER_STDOUT_BYTES: usize = 64 * 1024;
+const MAX_HTTP_HEADERS_HELPER_STDERR_BYTES: usize = 8 * 1024;
+const MAX_HTTP_HEADERS_HELPER_HEADERS: usize = 64;
+const MAX_HTTP_HEADERS_HELPER_HEADER_VALUE_BYTES: usize = 16 * 1024;
 
 pub(crate) fn create_env_for_mcp_server(
     extra_env: Option<HashMap<OsString, OsString>>,
@@ -57,9 +74,10 @@ fn local_stdio_env_var_names(env_vars: &[McpServerEnvVar]) -> Result<impl Iterat
     Ok(env_vars.iter().map(McpServerEnvVar::name))
 }
 
-pub(crate) fn build_default_headers(
+pub(crate) async fn build_default_headers(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
 
@@ -112,7 +130,219 @@ pub(crate) fn build_default_headers(
         }
     }
 
+    if let Some(helper) = http_headers_helper {
+        let helper_headers = run_http_headers_helper(&helper).await?;
+        if helper_headers.len() > MAX_HTTP_HEADERS_HELPER_HEADERS {
+            return Err(anyhow!(
+                "MCP HTTP headers helper `{}` produced {} headers, exceeding the limit of {}",
+                helper.command,
+                helper_headers.len(),
+                MAX_HTTP_HEADERS_HELPER_HEADERS
+            ));
+        }
+        for (name, value) in helper_headers {
+            let header_name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|err| anyhow!("invalid HTTP header name `{name}` from helper: {err}"))?;
+            if value.len() > MAX_HTTP_HEADERS_HELPER_HEADER_VALUE_BYTES {
+                return Err(anyhow!(
+                    "HTTP header value from helper for `{name}` exceeds the limit of {MAX_HTTP_HEADERS_HELPER_HEADER_VALUE_BYTES} bytes"
+                ));
+            }
+            let header_value = HeaderValue::from_str(value.as_str()).map_err(|err| {
+                anyhow!("invalid HTTP header value from helper for `{name}`: {err}")
+            })?;
+            headers.insert(header_name, header_value);
+        }
+    }
+
     Ok(headers)
+}
+
+async fn run_http_headers_helper(
+    helper: &McpServerHttpHeadersHelperConfig,
+) -> Result<HashMap<String, String>> {
+    let program = resolve_http_headers_helper_program(helper)?;
+    let mut command = Command::new(program);
+    command
+        .args(&helper.args)
+        .current_dir(helper.cwd.as_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = command.spawn().map_err(|err| {
+        anyhow!(
+            "MCP HTTP headers helper `{}` failed to start: {err}",
+            helper.command
+        )
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        anyhow!(
+            "MCP HTTP headers helper `{}` failed to capture stdout",
+            helper.command
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        anyhow!(
+            "MCP HTTP headers helper `{}` failed to capture stderr",
+            helper.command
+        )
+    })?;
+    let stdout_task = tokio::spawn(read_capped(stdout, MAX_HTTP_HEADERS_HELPER_STDOUT_BYTES));
+    let stderr_task = tokio::spawn(read_capped(stderr, MAX_HTTP_HEADERS_HELPER_STDERR_BYTES));
+
+    let status = match tokio::time::timeout(helper.timeout(), child.wait()).await {
+        Ok(result) => result.map_err(|err| {
+            anyhow!(
+                "MCP HTTP headers helper `{}` failed while waiting for exit: {err}",
+                helper.command
+            )
+        })?,
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err(anyhow!(
+                "MCP HTTP headers helper `{}` timed out after {} ms",
+                helper.command,
+                helper.timeout_ms.get()
+            ));
+        }
+    };
+
+    let stdout =
+        join_capped_output(&helper.command, stdout_task, "stdout", helper.timeout()).await?;
+    let stderr =
+        join_capped_output(&helper.command, stderr_task, "stderr", helper.timeout()).await?;
+
+    if !status.success() {
+        let stderr_suffix = if stderr.bytes.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; stderr omitted ({} byte{})",
+                stderr.bytes.len(),
+                if stderr.bytes.len() == 1 { "" } else { "s" }
+            )
+        };
+        return Err(anyhow!(
+            "MCP HTTP headers helper `{}` exited with status {status}{stderr_suffix}",
+            helper.command
+        ));
+    }
+
+    if stdout.truncated {
+        return Err(anyhow!(
+            "MCP HTTP headers helper `{}` wrote more than {} bytes to stdout",
+            helper.command,
+            MAX_HTTP_HEADERS_HELPER_STDOUT_BYTES
+        ));
+    }
+
+    let stdout = String::from_utf8(stdout.bytes).map_err(|_| {
+        anyhow!(
+            "MCP HTTP headers helper `{}` wrote non-UTF-8 data to stdout",
+            helper.command
+        )
+    })?;
+    let output = stdout.trim();
+    if output.is_empty() {
+        return Err(anyhow!(
+            "MCP HTTP headers helper `{}` produced empty output",
+            helper.command
+        ));
+    }
+
+    serde_json::from_str(output).map_err(|err| {
+        anyhow!(
+            "MCP HTTP headers helper `{}` must output a JSON object with string values: {err}",
+            helper.command
+        )
+    })
+}
+
+fn resolve_http_headers_helper_program(
+    helper: &McpServerHttpHeadersHelperConfig,
+) -> Result<OsString> {
+    let command = Path::new(&helper.command);
+    if command.is_absolute() {
+        return Ok(command.as_os_str().to_os_string());
+    }
+    if has_path_separator(command.as_os_str()) {
+        return Ok(helper.cwd.as_path().join(command).into_os_string());
+    }
+
+    program_resolver::resolve(
+        command.as_os_str().to_os_string(),
+        &env::vars_os().collect(),
+        helper.cwd.as_path(),
+    )
+    .map_err(|err| {
+        anyhow!(
+            "MCP HTTP headers helper `{}` could not be resolved: {err}",
+            helper.command
+        )
+    })
+}
+
+fn has_path_separator(value: &OsStr) -> bool {
+    let path = PathBuf::from(value);
+    path.components().count() > 1
+}
+
+struct CappedOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+async fn read_capped<R>(mut reader: R, max_bytes: usize) -> io::Result<CappedOutput>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    let mut chunk = [0_u8; 8192];
+
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+
+        let remaining = max_bytes.saturating_sub(bytes.len());
+        if remaining == 0 {
+            truncated = true;
+            continue;
+        }
+
+        let to_copy = remaining.min(read);
+        bytes.extend_from_slice(&chunk[..to_copy]);
+        if to_copy < read {
+            truncated = true;
+        }
+    }
+
+    Ok(CappedOutput { bytes, truncated })
+}
+
+async fn join_capped_output(
+    command: &str,
+    mut task: tokio::task::JoinHandle<io::Result<CappedOutput>>,
+    stream_name: &str,
+    timeout: Duration,
+) -> Result<CappedOutput> {
+    tokio::select! {
+        result = &mut task => {
+            result
+                .map_err(|err| anyhow!("MCP HTTP headers helper `{command}` {stream_name} task failed: {err}"))?
+                .map_err(|err| anyhow!("MCP HTTP headers helper `{command}` failed to read {stream_name}: {err}"))
+        }
+        _ = tokio::time::sleep(timeout) => {
+            task.abort();
+            Err(anyhow!("MCP HTTP headers helper `{command}` timed out while reading {stream_name}"))
+        }
+    }
 }
 
 pub(crate) fn apply_default_headers(
@@ -148,10 +378,13 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_config::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     use serial_test::serial;
     use std::ffi::OsStr;
+    use std::path::Path;
+    use std::path::PathBuf;
 
     struct EnvVarGuard {
         key: String,
@@ -287,6 +520,229 @@ mod tests {
         assert!(
             err.to_string().contains("requires remote MCP stdio"),
             "unexpected error: {err}"
+        );
+    }
+
+    fn write_headers_helper_script(dir: &Path, name: &str, output: &str) -> PathBuf {
+        let script_path = dir.join(helper_script_name(name));
+        std::fs::write(&script_path, helper_script_contents(output))
+            .expect("headers helper script should be written");
+        make_executable(&script_path);
+        script_path
+    }
+
+    fn write_failing_headers_helper_script(dir: &Path, name: &str, stderr_output: &str) -> PathBuf {
+        let script_path = dir.join(helper_script_name(name));
+        std::fs::write(&script_path, failing_helper_script_contents(stderr_output))
+            .expect("headers helper script should be written");
+        make_executable(&script_path);
+        script_path
+    }
+
+    #[cfg(unix)]
+    fn helper_script_name(name: &str) -> String {
+        name.to_string()
+    }
+
+    #[cfg(windows)]
+    fn helper_script_name(name: &str) -> String {
+        format!("{name}.cmd")
+    }
+
+    #[cfg(unix)]
+    fn helper_script_contents(output: &str) -> String {
+        format!("#!/bin/sh\nprintf '%s\\n' '{output}'\n")
+    }
+
+    #[cfg(unix)]
+    fn failing_helper_script_contents(stderr_output: &str) -> String {
+        format!("#!/bin/sh\nprintf '%s\\n' '{stderr_output}' >&2\nexit 1\n")
+    }
+
+    #[cfg(windows)]
+    fn helper_script_contents(output: &str) -> String {
+        format!("@echo off\r\necho {output}\r\n")
+    }
+
+    #[cfg(windows)]
+    fn failing_helper_script_contents(stderr_output: &str) -> String {
+        format!("@echo off\r\necho {stderr_output} 1>&2\r\nexit /b 1\r\n")
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path)
+            .expect("headers helper script should have metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions)
+            .expect("headers helper script should be executable");
+    }
+
+    #[cfg(windows)]
+    fn make_executable(_path: &Path) {}
+
+    #[tokio::test]
+    #[serial(extra_rmcp_env)]
+    async fn build_default_headers_runs_helper_and_allows_helper_to_override() {
+        let temp_dir = tempfile::TempDir::new().expect("tempdir");
+        let script_path = write_headers_helper_script(
+            temp_dir.path(),
+            "headers-helper",
+            r#"{"Authorization":"Bearer helper","X-Static":"helper","X-Arg":"from-helper"}"#,
+        );
+        let _guard = EnvVarGuard::set("CODEX_RMCP_CLIENT_HEADER_TEST", "from-env");
+
+        let headers = build_default_headers(
+            Some(HashMap::from([
+                ("Authorization".to_string(), "Bearer static".to_string()),
+                ("X-Static".to_string(), "static".to_string()),
+            ])),
+            Some(HashMap::from([(
+                "X-Env".to_string(),
+                "CODEX_RMCP_CLIENT_HEADER_TEST".to_string(),
+            )])),
+            Some(McpServerHttpHeadersHelperConfig::new(
+                script_path.display().to_string(),
+                Vec::new(),
+            )),
+        )
+        .await
+        .expect("headers should build");
+
+        assert_eq!(
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer helper")
+        );
+        assert_eq!(
+            headers
+                .get("x-static")
+                .and_then(|value| value.to_str().ok()),
+            Some("helper")
+        );
+        assert_eq!(
+            headers.get("x-env").and_then(|value| value.to_str().ok()),
+            Some("from-env")
+        );
+        assert_eq!(
+            headers.get("x-arg").and_then(|value| value.to_str().ok()),
+            Some("from-helper")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_default_headers_resolves_relative_helper_against_cwd() {
+        let temp_dir = tempfile::TempDir::new().expect("tempdir");
+        write_headers_helper_script(
+            temp_dir.path(),
+            "headers-helper",
+            r#"{"Authorization":"Bearer helper"}"#,
+        );
+        let helper_program = format!(
+            ".{}{}",
+            std::path::MAIN_SEPARATOR,
+            helper_script_name("headers-helper")
+        );
+        let mut helper = McpServerHttpHeadersHelperConfig::new(helper_program, Vec::new());
+        helper.cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())
+            .expect("tempdir path should be absolute");
+
+        let headers = build_default_headers(
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            Some(helper),
+        )
+        .await
+        .expect("headers should build");
+
+        assert_eq!(
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer helper")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_default_headers_rejects_invalid_helper_output() {
+        let temp_dir = tempfile::TempDir::new().expect("tempdir");
+        let script_path =
+            write_headers_helper_script(temp_dir.path(), "bad-headers-helper", "not-json");
+
+        let err = build_default_headers(
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            Some(McpServerHttpHeadersHelperConfig::new(
+                script_path.display().to_string(),
+                Vec::new(),
+            )),
+        )
+        .await
+        .expect_err("invalid helper output should fail");
+
+        assert!(
+            err.to_string()
+                .contains("must output a JSON object with string values"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_default_headers_rejects_oversized_helper_output() {
+        let temp_dir = tempfile::TempDir::new().expect("tempdir");
+        let output = "x".repeat(MAX_HTTP_HEADERS_HELPER_STDOUT_BYTES + 1);
+        let script_path =
+            write_headers_helper_script(temp_dir.path(), "oversized-headers-helper", &output);
+
+        let err = build_default_headers(
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            Some(McpServerHttpHeadersHelperConfig::new(
+                script_path.display().to_string(),
+                Vec::new(),
+            )),
+        )
+        .await
+        .expect_err("oversized helper output should fail");
+
+        assert!(
+            err.to_string().contains("wrote more than"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_default_headers_omits_helper_stderr_from_error() {
+        let temp_dir = tempfile::TempDir::new().expect("tempdir");
+        let script_path = write_failing_headers_helper_script(
+            temp_dir.path(),
+            "failing-headers-helper",
+            "secret-token-value",
+        );
+
+        let err = build_default_headers(
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            Some(McpServerHttpHeadersHelperConfig::new(
+                script_path.display().to_string(),
+                Vec::new(),
+            )),
+        )
+        .await
+        .expect_err("failing helper should fail");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("stderr omitted"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !message.contains("secret-token-value"),
+            "stderr leaked in error: {err}"
         );
     }
 

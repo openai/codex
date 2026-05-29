@@ -271,6 +271,7 @@ fn deserialize_streamable_http_server_config() {
             bearer_token_env_var: None,
             http_headers: None,
             env_http_headers: None,
+            http_headers_helper: None,
         }
     );
     assert!(cfg.enabled);
@@ -293,6 +294,7 @@ fn deserialize_streamable_http_server_config_with_env_var() {
             bearer_token_env_var: Some("GITHUB_TOKEN".to_string()),
             http_headers: None,
             env_http_headers: None,
+            http_headers_helper: None,
         }
     );
     assert!(cfg.enabled);
@@ -319,7 +321,57 @@ fn deserialize_streamable_http_server_config_with_headers() {
                 "X-Token".to_string(),
                 "TOKEN_ENV".to_string()
             )])),
+            http_headers_helper: None,
         }
+    );
+}
+
+#[test]
+fn deserialize_streamable_http_server_config_with_headers_helper() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            url = "https://example.com/mcp"
+
+            [http_headers_helper]
+            command = "ocm"
+            args = ["auth", "mcp"]
+            timeout_ms = 5000
+        "#,
+    )
+    .expect("should deserialize http config with headers helper");
+
+    assert_eq!(
+        cfg.transport,
+        McpServerTransportConfig::StreamableHttp {
+            url: "https://example.com/mcp".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+            http_headers_helper: Some(McpServerHttpHeadersHelperConfig {
+                command: "ocm".to_string(),
+                args: vec!["auth".to_string(), "mcp".to_string()],
+                timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+                cwd: default_mcp_http_headers_helper_cwd(),
+            }),
+        }
+    );
+}
+
+#[test]
+fn deserialize_rejects_headers_helper_for_remote_streamable_http_server() {
+    let err = toml::from_str::<McpServerConfig>(
+        r#"
+            url = "https://example.com/mcp"
+            environment_id = "remote"
+            http_headers_helper = { command = "helper" }
+        "#,
+    )
+    .expect_err("should reject headers helper for remote http transport");
+
+    assert!(
+        err.to_string()
+            .contains("http_headers_helper is only supported for local streamable_http"),
+        "unexpected error: {err}"
     );
 }
 
@@ -519,6 +571,20 @@ fn deserialize_rejects_headers_for_stdio() {
     let err = toml::from_str::<McpServerConfig>(
         r#"
             command = "echo"
+            http_headers_helper = { command = "helper" }
+        "#,
+    )
+    .expect_err("should reject http_headers_helper for stdio transport");
+
+    assert!(
+        err.to_string()
+            .contains("http_headers_helper is not supported for stdio"),
+        "unexpected error: {err}"
+    );
+
+    let err = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
             oauth = { client_id = "eci-prd-pub-codex-123" }
         "#,
     )
@@ -540,6 +606,23 @@ fn deserialize_rejects_headers_for_stdio() {
     assert!(
         err.to_string()
             .contains("oauth_resource is not supported for stdio"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn deserialize_rejects_empty_headers_helper_command() {
+    let err = toml::from_str::<McpServerConfig>(
+        r#"
+            url = "https://example.com"
+            http_headers_helper = { command = "   " }
+        "#,
+    )
+    .expect_err("should reject empty http_headers_helper command");
+
+    assert!(
+        err.to_string()
+            .contains("http_headers_helper.command must not be empty"),
         "unexpected error: {err}"
     );
 }

@@ -4,9 +4,11 @@
 // definitions that do not contain business logic.
 
 pub use crate::mcp_types::AppToolApproval;
+pub use crate::mcp_types::DEFAULT_MCP_HTTP_HEADERS_HELPER_TIMEOUT_MS;
 pub use crate::mcp_types::McpServerConfig;
 pub use crate::mcp_types::McpServerDisabledReason;
 pub use crate::mcp_types::McpServerEnvVar;
+pub use crate::mcp_types::McpServerHttpHeadersHelperConfig;
 pub use crate::mcp_types::McpServerOAuthConfig;
 pub use crate::mcp_types::McpServerToolConfig;
 pub use crate::mcp_types::McpServerTransportConfig;

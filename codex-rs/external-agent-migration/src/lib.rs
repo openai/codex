@@ -388,11 +388,73 @@ fn mcp_server_toml_table(
         if let Some(headers) = server_config.get("headers").and_then(JsonValue::as_object) {
             append_header_config(&mut table, headers)?;
         }
+        if let Some(headers_helper) = server_config.get("headersHelper") {
+            append_headers_helper_config(&mut table, headers_helper)?;
+        }
     } else {
         return None;
     }
 
     Some(table)
+}
+
+fn append_headers_helper_config(
+    table: &mut toml::map::Map<String, TomlValue>,
+    headers_helper: &JsonValue,
+) -> Option<()> {
+    let (command, args, timeout_ms) = match headers_helper {
+        JsonValue::String(command) => (command.clone(), Vec::new(), None),
+        JsonValue::Object(helper) => {
+            let command = helper.get("command").and_then(json_string)?;
+            let args = helper.get("args").map(json_string_vec).unwrap_or_default();
+            let timeout_ms = helper
+                .get("timeout_ms")
+                .or_else(|| helper.get("timeoutMs"))
+                .and_then(json_u64);
+            (command, args, timeout_ms)
+        }
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::Array(_) => {
+            return None;
+        }
+    };
+
+    let command = command.trim();
+    if command.is_empty()
+        || contains_env_placeholder(command)
+        || is_relative_path_command(command)
+        || args.iter().any(|arg| contains_env_placeholder(arg))
+    {
+        return None;
+    }
+
+    let mut helper_table = toml::map::Map::new();
+    helper_table.insert(
+        "command".to_string(),
+        TomlValue::String(command.to_string()),
+    );
+    if !args.is_empty() {
+        helper_table.insert(
+            "args".to_string(),
+            TomlValue::Array(args.into_iter().map(TomlValue::String).collect()),
+        );
+    }
+    if let Some(timeout_ms) = timeout_ms {
+        let timeout_ms = i64::try_from(timeout_ms).ok()?;
+        if timeout_ms == 0 {
+            return None;
+        }
+        helper_table.insert("timeout_ms".to_string(), TomlValue::Integer(timeout_ms));
+    }
+
+    table.insert(
+        "http_headers_helper".to_string(),
+        TomlValue::Table(helper_table),
+    );
+    Some(())
+}
+
+fn is_relative_path_command(command: &str) -> bool {
+    (command.contains('/') || command.contains('\\')) && !Path::new(command).is_absolute()
 }
 
 fn mcp_server_is_disabled(
@@ -1483,6 +1545,111 @@ bearer_token_env_var = "VAULT_TOKEN"
 "#
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn mcp_migration_converts_headers_helper() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        fs::write(
+            root.path().join(".mcp.json"),
+            r#"{
+              "mcpServers": {
+                "litellm": {
+                  "url": "https://llm.atko.ai/mcp",
+                  "headersHelper": {
+                    "command": "ocm",
+                    "args": ["auth", "litellm", "--site", "llm.atko.ai"],
+                    "timeoutMs": 5000
+                  }
+                }
+              }
+            }"#,
+        )
+        .expect("write mcp");
+
+        assert_eq!(
+            build_mcp_config_from_external(
+                root.path(),
+                /*external_agent_home*/ None,
+                /*settings*/ None,
+            )
+            .unwrap(),
+            toml::from_str(
+                r#"
+[mcp_servers.litellm]
+url = "https://llm.atko.ai/mcp"
+
+[mcp_servers.litellm.http_headers_helper]
+command = "ocm"
+args = ["auth", "litellm", "--site", "llm.atko.ai"]
+timeout_ms = 5000
+"#
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn mcp_migration_converts_string_headers_helper() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        fs::write(
+            root.path().join(".mcp.json"),
+            r#"{
+              "mcpServers": {
+                "authed": {
+                  "url": "https://example.invalid/mcp",
+                  "headersHelper": "/usr/local/bin/mcp-headers"
+                }
+              }
+            }"#,
+        )
+        .expect("write mcp");
+
+        assert_eq!(
+            build_mcp_config_from_external(
+                root.path(),
+                /*external_agent_home*/ None,
+                /*settings*/ None,
+            )
+            .unwrap(),
+            toml::from_str(
+                r#"
+[mcp_servers.authed]
+url = "https://example.invalid/mcp"
+
+[mcp_servers.authed.http_headers_helper]
+command = "/usr/local/bin/mcp-headers"
+"#
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn mcp_migration_skips_relative_path_headers_helper() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        fs::write(
+            root.path().join(".mcp.json"),
+            r#"{
+              "mcpServers": {
+                "authed": {
+                  "url": "https://example.invalid/mcp",
+                  "headersHelper": "./scripts/mcp-headers"
+                }
+              }
+            }"#,
+        )
+        .expect("write mcp");
+
+        assert_eq!(
+            build_mcp_config_from_external(
+                root.path(),
+                /*external_agent_home*/ None,
+                /*settings*/ None,
+            )
+            .unwrap(),
+            toml::Value::Table(Default::default())
         );
     }
 

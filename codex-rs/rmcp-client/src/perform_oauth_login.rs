@@ -29,11 +29,13 @@ use crate::oauth::compute_expires_at_millis;
 use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use codex_config::McpServerHttpHeadersHelperConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 
 struct OauthHeaders {
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
 }
 
 struct CallbackServerGuard {
@@ -83,6 +85,7 @@ pub async fn perform_oauth_login(
     store_mode: OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
@@ -95,6 +98,7 @@ pub async fn perform_oauth_login(
         store_mode,
         http_headers,
         env_http_headers,
+        http_headers_helper,
         scopes,
         oauth_client_id,
         oauth_resource,
@@ -112,6 +116,7 @@ pub async fn perform_oauth_login_silent(
     store_mode: OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
@@ -124,6 +129,7 @@ pub async fn perform_oauth_login_silent(
         store_mode,
         http_headers,
         env_http_headers,
+        http_headers_helper,
         scopes,
         oauth_client_id,
         oauth_resource,
@@ -141,6 +147,7 @@ async fn perform_oauth_login_with_browser_output(
     store_mode: OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
@@ -151,6 +158,7 @@ async fn perform_oauth_login_with_browser_output(
     let headers = OauthHeaders {
         http_headers,
         env_http_headers,
+        http_headers_helper,
     };
     OauthLoginFlow::new(
         server_name,
@@ -177,6 +185,7 @@ pub async fn perform_oauth_login_return_url(
     store_mode: OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
@@ -187,6 +196,7 @@ pub async fn perform_oauth_login_return_url(
     let headers = OauthHeaders {
         http_headers,
         env_http_headers,
+        http_headers_helper,
     };
     let flow = OauthLoginFlow::new(
         server_name,
@@ -479,8 +489,10 @@ impl OauthLoginFlow {
         let OauthHeaders {
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } = headers;
-        let default_headers = build_default_headers(http_headers, env_http_headers)?;
+        let default_headers =
+            build_default_headers(http_headers, env_http_headers, http_headers_helper).await?;
         let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
 
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();

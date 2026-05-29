@@ -201,8 +201,10 @@ pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) ->
 // TODO(jif) move to a dedicated file
 mod document_helpers {
     use codex_config::types::AppToolApproval;
+    use codex_config::types::DEFAULT_MCP_HTTP_HEADERS_HELPER_TIMEOUT_MS;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerEnvVar;
+    use codex_config::types::McpServerHttpHeadersHelperConfig;
     use codex_config::types::McpServerToolConfig;
     use codex_config::types::McpServerTransportConfig;
     use codex_config::types::ToolSuggestDisabledTool;
@@ -279,6 +281,7 @@ mod document_helpers {
                 bearer_token_env_var,
                 http_headers,
                 env_http_headers,
+                http_headers_helper,
             } => {
                 entry["url"] = value(url.clone());
                 if let Some(env_var) = bearer_token_env_var {
@@ -293,6 +296,9 @@ mod document_helpers {
                     && !headers.is_empty()
                 {
                     entry["env_http_headers"] = table_from_pairs(headers.iter());
+                }
+                if let Some(helper) = http_headers_helper {
+                    entry["http_headers_helper"] = http_headers_helper_table(helper);
                 }
             }
         }
@@ -494,6 +500,24 @@ mod document_helpers {
             }
         }
         TomlItem::Value(array.into())
+    }
+
+    fn http_headers_helper_table(helper: &McpServerHttpHeadersHelperConfig) -> TomlItem {
+        let mut table = TomlTable::new();
+        table.set_implicit(false);
+        table["command"] = value(helper.command.clone());
+        if !helper.args.is_empty() {
+            table["args"] = array_from_iter(helper.args.iter().cloned());
+        }
+        if helper.timeout_ms.get() != DEFAULT_MCP_HTTP_HEADERS_HELPER_TIMEOUT_MS
+            && let Ok(timeout_ms) = i64::try_from(helper.timeout_ms.get())
+        {
+            table["timeout_ms"] = value(timeout_ms);
+        }
+        if !helper.is_default_cwd() {
+            table["cwd"] = value(helper.cwd.to_string_lossy().to_string());
+        }
+        TomlItem::Table(table)
     }
 
     fn table_from_pairs<'a, I>(pairs: I) -> TomlItem

@@ -1912,6 +1912,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
+                    http_headers_helper: None,
                 },
                 TestMcpServerOptions {
                     environment_id: remote_aware_environment_id(),
@@ -2098,6 +2099,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
+                    http_headers_helper: None,
                 },
                 TestMcpServerOptions {
                     environment_id: remote_aware_environment_id(),

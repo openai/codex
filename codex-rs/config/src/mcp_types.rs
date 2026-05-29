@@ -2,9 +2,11 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -15,6 +17,7 @@ use crate::RequirementSource;
 
 /// Effective MCP environment id when config omits `environment_id`.
 pub const DEFAULT_MCP_SERVER_ENVIRONMENT_ID: &str = "local";
+pub const DEFAULT_MCP_HTTP_HEADERS_HELPER_TIMEOUT_MS: u64 = 10_000;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -126,6 +129,49 @@ pub struct McpServerOAuthConfig {
     pub client_id: Option<String>,
 }
 
+/// Command that prints a JSON object of HTTP headers for a streamable HTTP MCP server.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct McpServerHttpHeadersHelperConfig {
+    /// Command to execute. Bare names are resolved via `PATH`; paths are resolved against `cwd`.
+    pub command: String,
+
+    /// Command arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Maximum time to wait for the helper command to exit successfully.
+    #[serde(default = "default_mcp_http_headers_helper_timeout_ms")]
+    pub timeout_ms: NonZeroU64,
+
+    /// Working directory used when running the helper command.
+    #[serde(
+        default = "default_mcp_http_headers_helper_cwd",
+        skip_serializing_if = "is_default_mcp_http_headers_helper_cwd"
+    )]
+    #[schemars(skip_serializing_if = "is_default_mcp_http_headers_helper_cwd")]
+    pub cwd: AbsolutePathBuf,
+}
+
+impl McpServerHttpHeadersHelperConfig {
+    pub fn new(command: String, args: Vec<String>) -> Self {
+        Self {
+            command,
+            args,
+            timeout_ms: default_mcp_http_headers_helper_timeout_ms(),
+            cwd: default_mcp_http_headers_helper_cwd(),
+        }
+    }
+
+    pub fn timeout(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms.get())
+    }
+
+    pub fn is_default_cwd(&self) -> bool {
+        is_default_mcp_http_headers_helper_cwd(&self.cwd)
+    }
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
@@ -228,6 +274,8 @@ pub struct RawMcpServerConfig {
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub env_http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
 
     // streamable_http
     pub url: Option<String>,
@@ -282,6 +330,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             cwd,
             http_headers,
             env_http_headers,
+            http_headers_helper,
             url,
             bearer_token,
             bearer_token_env_var,
@@ -317,6 +366,9 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             Err(format!("{field} is not supported for {transport}"))
         }
 
+        let environment_id =
+            environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
+
         let transport = if let Some(command) = command {
             throw_if_set("stdio", "url", url.as_ref())?;
             throw_if_set(
@@ -327,6 +379,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
             throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
             throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
+            throw_if_set("stdio", "http_headers_helper", http_headers_helper.as_ref())?;
             throw_if_set("stdio", "oauth", oauth.as_ref())?;
             throw_if_set("stdio", "oauth_resource", oauth_resource.as_ref())?;
             let env_vars = env_vars.unwrap_or_default();
@@ -346,18 +399,29 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             throw_if_set("streamable_http", "env_vars", env_vars.as_ref())?;
             throw_if_set("streamable_http", "cwd", cwd.as_ref())?;
             throw_if_set("streamable_http", "bearer_token", bearer_token.as_ref())?;
+            if let Some(helper) = http_headers_helper.as_ref()
+                && helper.command.trim().is_empty()
+            {
+                return Err("http_headers_helper.command must not be empty".to_string());
+            }
+            if http_headers_helper.is_some() && environment_id != DEFAULT_MCP_SERVER_ENVIRONMENT_ID
+            {
+                return Err(
+                    "http_headers_helper is only supported for local streamable_http MCP servers"
+                        .to_string(),
+                );
+            }
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
                 http_headers,
                 env_http_headers,
+                http_headers_helper,
             }
         } else {
             return Err("invalid transport".to_string());
         };
 
-        let environment_id =
-            environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
         validate_remote_stdio_cwd(&transport, &environment_id)?;
 
         Ok(Self {
@@ -448,7 +512,33 @@ pub enum McpServerTransportConfig {
         /// HTTP headers where the value is sourced from an environment variable.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         env_http_headers: Option<HashMap<String, String>>,
+        /// Command that prints a JSON object of HTTP headers to include in requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
     },
+}
+
+fn default_mcp_http_headers_helper_timeout_ms() -> NonZeroU64 {
+    match NonZeroU64::new(DEFAULT_MCP_HTTP_HEADERS_HELPER_TIMEOUT_MS) {
+        Some(value) => value,
+        None => panic!("DEFAULT_MCP_HTTP_HEADERS_HELPER_TIMEOUT_MS must be non-zero"),
+    }
+}
+
+fn default_mcp_http_headers_helper_cwd() -> AbsolutePathBuf {
+    let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(".");
+    if let Ok(cwd) = AbsolutePathBuf::deserialize(deserializer) {
+        return cwd;
+    }
+
+    match AbsolutePathBuf::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => panic!("http_headers_helper cwd must resolve: {err}"),
+    }
+}
+
+fn is_default_mcp_http_headers_helper_cwd(path: &AbsolutePathBuf) -> bool {
+    path == &default_mcp_http_headers_helper_cwd()
 }
 
 mod option_duration_secs {

@@ -916,6 +916,7 @@ fn blocking_replace_mcp_servers_round_trips() {
                         .collect(),
                 ),
                 env_http_headers: None,
+                http_headers_helper: None,
             },
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: false,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::McpServerHttpHeadersHelperConfig;
 use crate::McpServerOAuthConfig;
 use crate::McpServerToolConfig;
 use pretty_assertions::assert_eq;
@@ -100,6 +101,7 @@ async fn replace_mcp_servers_serializes_oauth_client_id() -> anyhow::Result<()> 
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
+                http_headers_helper: None,
             },
             environment_id: crate::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,
@@ -134,6 +136,69 @@ url = "https://example.com/mcp"
 
 [mcp_servers.maas_outlook.oauth]
 client_id = "eci-prd-pub-codex-123"
+"#
+    );
+
+    let loaded = load_global_mcp_servers(&codex_home).await?;
+    assert_eq!(loaded, servers);
+
+    std::fs::remove_dir_all(&codex_home)?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn replace_mcp_servers_serializes_http_headers_helper() -> anyhow::Result<()> {
+    let unique_suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let codex_home = std::env::temp_dir().join(format!(
+        "codex-config-mcp-headers-helper-edit-test-{}-{unique_suffix}",
+        std::process::id()
+    ));
+    let servers = BTreeMap::from([(
+        "auth_mcp".to_string(),
+        McpServerConfig {
+            transport: McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+                http_headers_helper: Some(McpServerHttpHeadersHelperConfig::new(
+                    "ocm".to_string(),
+                    vec!["auth".to_string(), "mcp".to_string()],
+                )),
+            },
+            environment_id: crate::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    )]);
+
+    ConfigEditsBuilder::new(&codex_home)
+        .replace_mcp_servers(&servers)
+        .apply()
+        .await?;
+
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = std::fs::read_to_string(&config_path)?;
+    assert_eq!(
+        serialized,
+        r#"[mcp_servers.auth_mcp]
+url = "https://example.com/mcp"
+
+[mcp_servers.auth_mcp.http_headers_helper]
+command = "ocm"
+args = ["auth", "mcp"]
 "#
     );
 

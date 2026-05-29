@@ -161,6 +161,7 @@ mod tests {
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
+                http_headers_helper: None,
             },
             environment_id: environment_id.to_string(),
             ..stdio_server(environment_id)

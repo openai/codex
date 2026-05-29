@@ -1255,6 +1255,43 @@
         }
       ]
     },
+    "McpServerHttpHeadersHelperConfig": {
+      "additionalProperties": false,
+      "description": "Command that prints a JSON object of HTTP headers for a streamable HTTP MCP server.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Command arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Command to execute. Bare names are resolved via `PATH`; paths are resolved against `cwd`.",
+          "type": "string"
+        },
+        "cwd": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Working directory used when running the helper command."
+        },
+        "timeout_ms": {
+          "default": 10000,
+          "description": "Maximum time to wait for the helper command to exit successfully.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
     "McpServerOAuthConfig": {
       "additionalProperties": false,
       "description": "OAuth client settings used when Codex launches an MCP OAuth flow.",
@@ -2318,6 +2355,14 @@
             "type": "string"
           },
           "type": "object"
+        },
+        "http_headers_helper": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpServerHttpHeadersHelperConfig"
+            }
+          ],
+          "default": null
         },
         "name": {
           "default": null,

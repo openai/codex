@@ -144,11 +144,13 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } => {
             assert_eq!(url, "https://example.com/mcp");
             assert!(bearer_token_env_var.is_none());
             assert!(http_headers.is_none());
             assert!(env_http_headers.is_none());
+            assert!(http_headers_helper.is_none());
         }
         other => panic!("unexpected transport: {other:?}"),
     }
@@ -156,6 +158,82 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
 
     assert!(!codex_home.path().join(".credentials.json").exists());
     assert!(!codex_home.path().join(".env").exists());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_streamable_http_with_headers_helper() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .args([
+            "mcp",
+            "add",
+            "litellm",
+            "--url",
+            "https://llm.atko.ai/mcp",
+            "--http-headers-helper",
+            "ocm",
+            "--http-headers-helper-arg",
+            "auth",
+            "--http-headers-helper-arg",
+            "litellm",
+            "--http-headers-helper-arg",
+            "--site",
+            "--http-headers-helper-arg",
+            "llm.atko.ai",
+        ])
+        .assert()
+        .success()
+        .stdout(contains(
+            "Skipping automatic OAuth discovery so the helper is not run during add.",
+        ));
+
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let litellm = servers.get("litellm").expect("litellm server should exist");
+    match &litellm.transport {
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers,
+            env_http_headers,
+            http_headers_helper,
+        } => {
+            assert_eq!(url, "https://llm.atko.ai/mcp");
+            assert!(bearer_token_env_var.is_none());
+            assert!(http_headers.is_none());
+            assert!(env_http_headers.is_none());
+            assert_eq!(
+                http_headers_helper
+                    .as_ref()
+                    .map(|helper| (helper.command.as_str(), helper.args.as_slice())),
+                Some((
+                    "ocm",
+                    &[
+                        "auth".to_string(),
+                        "litellm".to_string(),
+                        "--site".to_string(),
+                        "llm.atko.ai".to_string()
+                    ][..],
+                ))
+            );
+        }
+        other => panic!("unexpected transport: {other:?}"),
+    }
+
+    let serialized = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert_eq!(
+        serialized,
+        r#"[mcp_servers.litellm]
+url = "https://llm.atko.ai/mcp"
+
+[mcp_servers.litellm.http_headers_helper]
+command = "ocm"
+args = ["auth", "litellm", "--site", "llm.atko.ai"]
+"#
+    );
 
     Ok(())
 }
@@ -186,11 +264,13 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } => {
             assert_eq!(url, "https://example.com/issues");
             assert_eq!(bearer_token_env_var.as_deref(), Some("GITHUB_TOKEN"));
             assert!(http_headers.is_none());
             assert!(env_http_headers.is_none());
+            assert!(http_headers_helper.is_none());
         }
         other => panic!("unexpected transport: {other:?}"),
     }

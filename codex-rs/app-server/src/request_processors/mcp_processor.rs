@@ -131,13 +131,19 @@ impl McpRequestProcessor {
             )));
         };
 
-        let (url, http_headers, env_http_headers) = match &server.transport {
+        let (url, http_headers, env_http_headers, http_headers_helper) = match &server.transport {
             McpServerTransportConfig::StreamableHttp {
                 url,
                 http_headers,
                 env_http_headers,
+                http_headers_helper,
                 ..
-            } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
+            } => (
+                url.clone(),
+                http_headers.clone(),
+                env_http_headers.clone(),
+                http_headers_helper.clone(),
+            ),
             _ => {
                 return Err(invalid_request(
                     "OAuth login is only supported for streamable HTTP servers.",
@@ -159,6 +165,7 @@ impl McpRequestProcessor {
             config.mcp_oauth_credentials_store_mode,
             http_headers,
             env_http_headers,
+            http_headers_helper,
             &resolved_scopes.scopes,
             server.oauth_client_id(),
             server.oauth_resource.as_deref(),

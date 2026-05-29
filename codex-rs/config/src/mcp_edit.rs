@@ -13,8 +13,10 @@ use toml_edit::value;
 
 use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
+use crate::DEFAULT_MCP_HTTP_HEADERS_HELPER_TIMEOUT_MS;
 use crate::McpServerConfig;
 use crate::McpServerEnvVar;
+use crate::McpServerHttpHeadersHelperConfig;
 use crate::McpServerTransportConfig;
 
 pub async fn load_global_mcp_servers(
@@ -154,6 +156,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } => {
             entry["url"] = value(url.clone());
             if let Some(env_var) = bearer_token_env_var {
@@ -168,6 +171,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
                 && !headers.is_empty()
             {
                 entry["env_http_headers"] = table_from_pairs(headers.iter());
+            }
+            if let Some(helper) = http_headers_helper {
+                entry["http_headers_helper"] = http_headers_helper_table(helper);
             }
         }
     }
@@ -255,6 +261,24 @@ fn array_from_strings(values: &[String]) -> TomlItem {
         array.push(value.clone());
     }
     TomlItem::Value(array.into())
+}
+
+fn http_headers_helper_table(helper: &McpServerHttpHeadersHelperConfig) -> TomlItem {
+    let mut table = TomlTable::new();
+    table.set_implicit(false);
+    table["command"] = value(helper.command.clone());
+    if !helper.args.is_empty() {
+        table["args"] = array_from_strings(&helper.args);
+    }
+    if helper.timeout_ms.get() != DEFAULT_MCP_HTTP_HEADERS_HELPER_TIMEOUT_MS
+        && let Ok(timeout_ms) = i64::try_from(helper.timeout_ms.get())
+    {
+        table["timeout_ms"] = value(timeout_ms);
+    }
+    if !helper.is_default_cwd() {
+        table["cwd"] = value(helper.cwd.to_string_lossy().to_string());
+    }
+    TomlItem::Table(table)
 }
 
 fn array_from_env_vars(env_vars: &[McpServerEnvVar]) -> TomlItem {

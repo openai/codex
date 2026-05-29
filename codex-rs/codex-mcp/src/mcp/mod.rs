@@ -457,6 +457,7 @@ fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
             http_headers,
             env_http_headers: None,
+            http_headers_helper: None,
         },
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,

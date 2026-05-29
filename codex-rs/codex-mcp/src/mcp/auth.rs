@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use codex_config::McpServerConfig;
+use codex_config::McpServerHttpHeadersHelperConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
@@ -21,12 +22,13 @@ pub struct McpOAuthLoginConfig {
     pub url: String,
     pub http_headers: Option<HashMap<String, String>>,
     pub env_http_headers: Option<HashMap<String, String>>,
+    pub http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
     pub discovered_scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
 pub enum McpOAuthLoginSupport {
-    Supported(McpOAuthLoginConfig),
+    Supported(Box<McpOAuthLoginConfig>),
     Unsupported,
     Unknown(anyhow::Error),
 }
@@ -57,6 +59,7 @@ pub async fn oauth_login_support(transport: &McpServerTransportConfig) -> McpOAu
         bearer_token_env_var,
         http_headers,
         env_http_headers,
+        http_headers_helper,
     } = transport
     else {
         return McpOAuthLoginSupport::Unsupported;
@@ -66,14 +69,21 @@ pub async fn oauth_login_support(transport: &McpServerTransportConfig) -> McpOAu
         return McpOAuthLoginSupport::Unsupported;
     }
 
-    match discover_streamable_http_oauth(url, http_headers.clone(), env_http_headers.clone()).await
+    match discover_streamable_http_oauth(
+        url,
+        http_headers.clone(),
+        env_http_headers.clone(),
+        http_headers_helper.clone(),
+    )
+    .await
     {
-        Ok(Some(discovery)) => McpOAuthLoginSupport::Supported(McpOAuthLoginConfig {
+        Ok(Some(discovery)) => McpOAuthLoginSupport::Supported(Box::new(McpOAuthLoginConfig {
             url: url.clone(),
             http_headers: http_headers.clone(),
             env_http_headers: env_http_headers.clone(),
+            http_headers_helper: http_headers_helper.clone(),
             discovered_scopes: discovery.scopes_supported,
-        }),
+        })),
         Ok(None) => McpOAuthLoginSupport::Unsupported,
         Err(err) => McpOAuthLoginSupport::Unknown(err),
     }
@@ -196,6 +206,7 @@ async fn compute_auth_status(
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } => {
             determine_streamable_http_auth_status(
                 server_name,
@@ -203,6 +214,7 @@ async fn compute_auth_status(
                 bearer_token_env_var.as_deref(),
                 http_headers.clone(),
                 env_http_headers.clone(),
+                http_headers_helper.clone(),
                 store_mode,
             )
             .await

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -6,8 +7,10 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use clap::ArgGroup;
+use codex_config::AbsolutePathBuf;
 use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerHttpHeadersHelperConfig;
 use codex_config::types::McpServerOAuthConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::McpManager;
@@ -143,6 +146,27 @@ pub struct AddMcpStreamableHttpArgs {
     /// Optional OAuth resource parameter to include during MCP login.
     #[arg(long = "oauth-resource", value_name = "RESOURCE", requires = "url")]
     pub oauth_resource: Option<String>,
+
+    /// Command that prints a JSON object of HTTP headers for this MCP server.
+    #[arg(long = "http-headers-helper", value_name = "COMMAND", requires = "url")]
+    pub http_headers_helper: Option<String>,
+
+    /// Argument to pass to --http-headers-helper. May be specified multiple times.
+    #[arg(
+        long = "http-headers-helper-arg",
+        value_name = "ARG",
+        requires = "http_headers_helper",
+        allow_hyphen_values = true
+    )]
+    pub http_headers_helper_args: Vec<String>,
+
+    /// Working directory for --http-headers-helper. Relative paths are resolved from the current directory.
+    #[arg(
+        long = "http-headers-helper-cwd",
+        value_name = "CWD",
+        requires = "http_headers_helper"
+    )]
+    pub http_headers_helper_cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -213,6 +237,7 @@ async fn perform_oauth_login_retry_without_scopes(
     store_mode: codex_config::types::OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
     resolved_scopes: &ResolvedMcpOAuthScopes,
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
@@ -225,6 +250,7 @@ async fn perform_oauth_login_retry_without_scopes(
         store_mode,
         http_headers.clone(),
         env_http_headers.clone(),
+        http_headers_helper.clone(),
         &resolved_scopes.scopes,
         oauth_client_id,
         oauth_resource,
@@ -242,6 +268,7 @@ async fn perform_oauth_login_retry_without_scopes(
                 store_mode,
                 http_headers,
                 env_http_headers,
+                http_headers_helper,
                 &[],
                 oauth_client_id,
                 oauth_resource,
@@ -325,18 +352,38 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                     bearer_token_env_var,
                     oauth_client_id,
                     oauth_resource,
+                    http_headers_helper,
+                    http_headers_helper_args,
+                    http_headers_helper_cwd,
                 }),
             ..
-        } => (
-            McpServerTransportConfig::StreamableHttp {
-                url,
-                bearer_token_env_var,
-                http_headers: None,
-                env_http_headers: None,
-            },
-            oauth_client_id,
-            oauth_resource,
-        ),
+        } => {
+            let http_headers_helper = http_headers_helper
+                .map(|command| {
+                    if command.trim().is_empty() {
+                        bail!("--http-headers-helper command must not be empty");
+                    }
+                    let mut helper =
+                        McpServerHttpHeadersHelperConfig::new(command, http_headers_helper_args);
+                    if let Some(cwd) = http_headers_helper_cwd {
+                        helper.cwd = AbsolutePathBuf::relative_to_current_dir(cwd)
+                            .context("failed to resolve --http-headers-helper-cwd")?;
+                    }
+                    Ok(helper)
+                })
+                .transpose()?;
+            (
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env_var,
+                    http_headers: None,
+                    env_http_headers: None,
+                    http_headers_helper,
+                },
+                oauth_client_id,
+                oauth_resource,
+            )
+        }
         AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
     };
 
@@ -372,8 +419,22 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     println!("Added global MCP server '{name}'.");
 
+    if matches!(
+        &transport,
+        McpServerTransportConfig::StreamableHttp {
+            http_headers_helper: Some(_),
+            ..
+        }
+    ) {
+        println!(
+            "Stored HTTP headers helper. Skipping automatic OAuth discovery so the helper is not run during add. Run `codex mcp login {name}` to run the helper and complete OAuth if required."
+        );
+        return Ok(());
+    }
+
     match oauth_login_support(&transport).await {
         McpOAuthLoginSupport::Supported(oauth_config) => {
+            let oauth_config = *oauth_config;
             println!("Detected OAuth support. Starting OAuth flow…");
             let resolved_scopes = resolve_oauth_scopes(
                 /*explicit_scopes*/ None,
@@ -386,6 +447,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 config.mcp_oauth_credentials_store_mode,
                 oauth_config.http_headers,
                 oauth_config.env_http_headers,
+                oauth_config.http_headers_helper,
                 &resolved_scopes,
                 oauth_client_id.as_deref(),
                 oauth_resource.as_deref(),
@@ -455,13 +517,19 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         bail!("No MCP server named '{name}' found.");
     };
 
-    let (url, http_headers, env_http_headers) = match &server.transport {
+    let (url, http_headers, env_http_headers, http_headers_helper) = match &server.transport {
         McpServerTransportConfig::StreamableHttp {
             url,
             http_headers,
             env_http_headers,
+            http_headers_helper,
             ..
-        } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
+        } => (
+            url.clone(),
+            http_headers.clone(),
+            env_http_headers.clone(),
+            http_headers_helper.clone(),
+        ),
         _ => bail!("OAuth login is only supported for streamable HTTP servers."),
     };
 
@@ -480,6 +548,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         config.mcp_oauth_credentials_store_mode,
         http_headers,
         env_http_headers,
+        http_headers_helper,
         &resolved_scopes,
         server.oauth_client_id(),
         server.oauth_resource.as_deref(),
@@ -573,6 +642,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                         bearer_token_env_var,
                         http_headers,
                         env_http_headers,
+                        http_headers_helper,
                     } => {
                         serde_json::json!({
                             "type": "streamable_http",
@@ -580,6 +650,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                             "bearer_token_env_var": bearer_token_env_var,
                             "http_headers": http_headers,
                             "env_http_headers": env_http_headers,
+                            "http_headers_helper": http_headers_helper,
                         })
                     }
                 };
@@ -610,7 +681,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     let mut stdio_rows: Vec<[String; 7]> = Vec::new();
-    let mut http_rows: Vec<[String; 5]> = Vec::new();
+    let mut http_rows: Vec<[String; 6]> = Vec::new();
 
     for (name, cfg) in entries {
         match &cfg.transport {
@@ -651,6 +722,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
+                http_headers_helper,
                 ..
             } => {
                 let status = format_mcp_status(cfg);
@@ -661,10 +733,15 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     .to_string();
                 let bearer_token_display =
                     bearer_token_env_var.as_deref().unwrap_or("-").to_string();
+                let headers_helper_display = http_headers_helper
+                    .as_ref()
+                    .map(|helper| helper.command.clone())
+                    .unwrap_or_else(|| "-".to_string());
                 http_rows.push([
                     name.clone(),
                     url.clone(),
                     bearer_token_display,
+                    headers_helper_display,
                     status,
                     auth_status,
                 ]);
@@ -736,6 +813,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             "Name".len(),
             "Url".len(),
             "Bearer Token Env Var".len(),
+            "Headers Helper".len(),
             "Status".len(),
             "Auth".len(),
         ];
@@ -746,32 +824,36 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         }
 
         println!(
-            "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {status:<status_w$}  {auth:<auth_w$}",
+            "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {helper:<helper_w$}  {status:<status_w$}  {auth:<auth_w$}",
             name = "Name",
             url = "Url",
             token = "Bearer Token Env Var",
+            helper = "Headers Helper",
             status = "Status",
             auth = "Auth",
             name_w = widths[0],
             url_w = widths[1],
             token_w = widths[2],
-            status_w = widths[3],
-            auth_w = widths[4],
+            helper_w = widths[3],
+            status_w = widths[4],
+            auth_w = widths[5],
         );
 
         for row in &http_rows {
             println!(
-                "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {status:<status_w$}  {auth:<auth_w$}",
+                "{name:<name_w$}  {url:<url_w$}  {token:<token_w$}  {helper:<helper_w$}  {status:<status_w$}  {auth:<auth_w$}",
                 name = row[0].as_str(),
                 url = row[1].as_str(),
                 token = row[2].as_str(),
-                status = row[3].as_str(),
-                auth = row[4].as_str(),
+                helper = row[3].as_str(),
+                status = row[4].as_str(),
+                auth = row[5].as_str(),
                 name_w = widths[0],
                 url_w = widths[1],
                 token_w = widths[2],
-                status_w = widths[3],
-                auth_w = widths[4],
+                helper_w = widths[3],
+                status_w = widths[4],
+                auth_w = widths[5],
             );
         }
     }
@@ -816,12 +898,14 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                 bearer_token_env_var,
                 http_headers,
                 env_http_headers,
+                http_headers_helper,
             } => serde_json::json!({
                 "type": "streamable_http",
                 "url": url,
                 "bearer_token_env_var": bearer_token_env_var,
                 "http_headers": http_headers,
                 "env_http_headers": env_http_headers,
+                "http_headers_helper": http_headers_helper,
             }),
         };
         let output = serde_json::to_string_pretty(&serde_json::json!({
@@ -898,6 +982,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            http_headers_helper,
         } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
@@ -929,6 +1014,12 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                 _ => "-".to_string(),
             };
             println!("  env_http_headers: {env_headers_display}");
+            let helper_display = match http_headers_helper {
+                Some(helper) if helper.args.is_empty() => helper.command.clone(),
+                Some(helper) => format!("{} {}", helper.command, helper.args.join(" ")),
+                None => "-".to_string(),
+            };
+            println!("  http_headers_helper: {helper_display}");
         }
     }
     if let Some(timeout) = server.startup_timeout_sec {

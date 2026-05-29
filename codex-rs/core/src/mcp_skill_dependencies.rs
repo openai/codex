@@ -138,7 +138,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
 
     for (name, server_config) in added {
         let oauth_config = match oauth_login_support(&server_config.transport).await {
-            McpOAuthLoginSupport::Supported(config) => config,
+            McpOAuthLoginSupport::Supported(config) => *config,
             McpOAuthLoginSupport::Unsupported => continue,
             McpOAuthLoginSupport::Unknown(err) => {
                 warn!("MCP server may or may not require login for dependency {name}: {err}");
@@ -158,6 +158,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             config.mcp_oauth_credentials_store_mode,
             oauth_config.http_headers.clone(),
             oauth_config.env_http_headers.clone(),
+            oauth_config.http_headers_helper.clone(),
             &resolved_scopes.scopes,
             oauth_client_id,
             server_config.oauth_resource.as_deref(),
@@ -174,6 +175,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
                     config.mcp_oauth_credentials_store_mode,
                     oauth_config.http_headers,
                     oauth_config.env_http_headers,
+                    oauth_config.http_headers_helper,
                     &[],
                     oauth_client_id,
                     server_config.oauth_resource.as_deref(),
@@ -360,6 +362,7 @@ fn mcp_dependency_to_server_config(
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
+                http_headers_helper: None,
             },
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
             enabled: true,

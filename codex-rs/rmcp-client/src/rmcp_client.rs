@@ -13,6 +13,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
 use codex_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_config::McpServerHttpHeadersHelperConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::HttpClient;
 use futures::FutureExt;
@@ -116,6 +117,7 @@ enum TransportRecipe {
         bearer_token: Option<String>,
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
+        http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
         store_mode: OAuthCredentialsStoreMode,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
@@ -344,6 +346,7 @@ impl RmcpClient {
         bearer_token: Option<String>,
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
+        http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
         store_mode: OAuthCredentialsStoreMode,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
@@ -354,6 +357,7 @@ impl RmcpClient {
             bearer_token,
             http_headers,
             env_http_headers,
+            http_headers_helper,
             store_mode,
             http_client,
             auth_provider,
@@ -726,12 +730,17 @@ impl RmcpClient {
                 bearer_token,
                 http_headers,
                 env_http_headers,
+                http_headers_helper,
                 store_mode,
                 http_client,
                 auth_provider,
             } => {
-                let default_headers =
-                    build_default_headers(http_headers.clone(), env_http_headers.clone())?;
+                let default_headers = build_default_headers(
+                    http_headers.clone(),
+                    env_http_headers.clone(),
+                    http_headers_helper.clone(),
+                )
+                .await?;
 
                 let initial_oauth_tokens = if bearer_token.is_none()
                     && auth_provider.is_none()

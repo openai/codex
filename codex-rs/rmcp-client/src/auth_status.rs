@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Error;
 use anyhow::Result;
+use codex_config::McpServerHttpHeadersHelperConfig;
 use codex_protocol::protocol::McpAuthStatus;
 use reqwest::Client;
 use reqwest::StatusCode;
@@ -33,13 +34,19 @@ pub async fn determine_streamable_http_auth_status(
     bearer_token_env_var: Option<&str>,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    _http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<McpAuthStatus> {
     if bearer_token_env_var.is_some() {
         return Ok(McpAuthStatus::BearerToken);
     }
 
-    let default_headers = build_default_headers(http_headers, env_http_headers)?;
+    let default_headers = build_default_headers(
+        http_headers,
+        env_http_headers,
+        /*http_headers_helper*/ None,
+    )
+    .await?;
     if default_headers.contains_key(AUTHORIZATION) {
         return Ok(McpAuthStatus::BearerToken);
     }
@@ -64,6 +71,7 @@ pub async fn determine_streamable_http_auth_status(
 pub async fn supports_oauth_login(url: &str) -> Result<bool> {
     Ok(discover_streamable_http_oauth(
         url, /*http_headers*/ None, /*env_http_headers*/ None,
+        /*http_headers_helper*/ None,
     )
     .await?
     .is_some())
@@ -73,8 +81,10 @@ pub async fn discover_streamable_http_oauth(
     url: &str,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    http_headers_helper: Option<McpServerHttpHeadersHelperConfig>,
 ) -> Result<Option<StreamableHttpOAuthDiscovery>> {
-    let default_headers = build_default_headers(http_headers, env_http_headers)?;
+    let default_headers =
+        build_default_headers(http_headers, env_http_headers, http_headers_helper).await?;
     discover_streamable_http_oauth_with_headers(url, &default_headers).await
 }
 
@@ -196,11 +206,15 @@ mod tests {
     use super::*;
     use axum::Json;
     use axum::Router;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
     use axum::routing::get;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     use std::collections::HashMap;
     use std::ffi::OsString;
+    use std::path::Path;
+    use std::path::PathBuf;
     use tokio::task::JoinHandle;
 
     struct TestServer {
@@ -226,6 +240,45 @@ mod tests {
                 move || {
                     let metadata = metadata.clone();
                     async move { Json(metadata) }
+                }
+            }),
+        );
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("server should run");
+        });
+
+        TestServer {
+            url: format!("http://{address}/mcp"),
+            handle,
+        }
+    }
+
+    async fn spawn_oauth_discovery_server_requiring_header(
+        metadata: serde_json::Value,
+        header_name: &'static str,
+        header_value: &'static str,
+    ) -> TestServer {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server/mcp",
+            get({
+                let metadata = metadata.clone();
+                move |headers: axum::http::HeaderMap| {
+                    let metadata = metadata.clone();
+                    async move {
+                        if headers
+                            .get(header_name)
+                            .and_then(|value| value.to_str().ok())
+                            == Some(header_value)
+                        {
+                            Json(metadata).into_response()
+                        } else {
+                            StatusCode::UNAUTHORIZED.into_response()
+                        }
+                    }
                 }
             }),
         );
@@ -271,6 +324,49 @@ mod tests {
         }
     }
 
+    fn write_headers_helper_script(dir: &Path, output: &str) -> PathBuf {
+        let script_path = dir.join(helper_script_name());
+        std::fs::write(&script_path, helper_script_contents(output))
+            .expect("headers helper script should be written");
+        make_executable(&script_path);
+        script_path
+    }
+
+    #[cfg(unix)]
+    fn helper_script_name() -> &'static str {
+        "headers-helper"
+    }
+
+    #[cfg(windows)]
+    fn helper_script_name() -> &'static str {
+        "headers-helper.cmd"
+    }
+
+    #[cfg(unix)]
+    fn helper_script_contents(output: &str) -> String {
+        format!("#!/bin/sh\nprintf '%s\\n' '{output}'\n")
+    }
+
+    #[cfg(windows)]
+    fn helper_script_contents(output: &str) -> String {
+        format!("@echo off\r\necho {output}\r\n")
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path)
+            .expect("headers helper script should have metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions)
+            .expect("headers helper script should be executable");
+    }
+
+    #[cfg(windows)]
+    fn make_executable(_path: &Path) {}
+
     #[tokio::test]
     async fn determine_auth_status_uses_bearer_token_when_authorization_header_present() {
         let status = determine_streamable_http_auth_status(
@@ -282,6 +378,7 @@ mod tests {
                 "Bearer token".to_string(),
             )])),
             /*env_http_headers*/ None,
+            /*http_headers_helper*/ None,
             OAuthCredentialsStoreMode::Keyring,
         )
         .await
@@ -303,12 +400,33 @@ mod tests {
                 "Authorization".to_string(),
                 "CODEX_RMCP_CLIENT_AUTH_STATUS_TEST_TOKEN".to_string(),
             )])),
+            /*http_headers_helper*/ None,
             OAuthCredentialsStoreMode::Keyring,
         )
         .await
         .expect("status should compute");
 
         assert_eq!(status, McpAuthStatus::BearerToken);
+    }
+
+    #[tokio::test]
+    async fn determine_auth_status_does_not_treat_headers_helper_as_bearer_token() {
+        let status = determine_streamable_http_auth_status(
+            "server",
+            "not-a-url",
+            /*bearer_token_env_var*/ None,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            Some(McpServerHttpHeadersHelperConfig::new(
+                "does-not-need-to-exist".to_string(),
+                Vec::new(),
+            )),
+            OAuthCredentialsStoreMode::Keyring,
+        )
+        .await
+        .expect("status should compute without running helper");
+
+        assert_eq!(status, McpAuthStatus::Unsupported);
     }
 
     #[tokio::test]
@@ -324,6 +442,7 @@ mod tests {
             &server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
+            /*http_headers_helper*/ None,
         )
         .await
         .expect("discovery should succeed")
@@ -332,6 +451,41 @@ mod tests {
         assert_eq!(
             discovery.scopes_supported,
             Some(vec!["profile".to_string(), "email".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_streamable_http_oauth_uses_headers_helper() {
+        let server = spawn_oauth_discovery_server_requiring_header(
+            serde_json::json!({
+                "authorization_endpoint": "https://example.com/authorize",
+                "token_endpoint": "https://example.com/token",
+                "scopes_supported": ["mcp.read"],
+            }),
+            "authorization",
+            "Bearer helper",
+        )
+        .await;
+        let temp_dir = tempfile::TempDir::new().expect("tempdir");
+        let script_path =
+            write_headers_helper_script(temp_dir.path(), r#"{"Authorization":"Bearer helper"}"#);
+
+        let discovery = discover_streamable_http_oauth(
+            &server.url,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            Some(McpServerHttpHeadersHelperConfig::new(
+                script_path.display().to_string(),
+                Vec::new(),
+            )),
+        )
+        .await
+        .expect("discovery should succeed")
+        .expect("oauth support should be detected");
+
+        assert_eq!(
+            discovery.scopes_supported,
+            Some(vec!["mcp.read".to_string()])
         );
     }
 
@@ -348,6 +502,7 @@ mod tests {
             &server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
+            /*http_headers_helper*/ None,
         )
         .await
         .expect("discovery should succeed")
