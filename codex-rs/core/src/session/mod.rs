@@ -514,7 +514,6 @@ impl Codex {
             )
         };
 
-        let config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -557,6 +556,7 @@ impl Codex {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
         }
+        let config = Arc::new(config);
         let base_instructions = config
             .base_instructions
             .clone()
