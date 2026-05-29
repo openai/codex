@@ -13,7 +13,6 @@ use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
@@ -25,7 +24,7 @@ use crate::tools::parallel::ToolCallRuntime;
 pub(super) struct CodeModeDispatchBroker {
     dispatch_tx: async_channel::Sender<DispatchMessage>,
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
-    dispatch_gates: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
+    dispatch_gates: Arc<Mutex<HashMap<CellId, watch::Sender<bool>>>>,
 }
 
 impl CodeModeDispatchBroker {
@@ -39,7 +38,11 @@ impl CodeModeDispatchBroker {
     }
 
     pub(super) fn mark_cell_ready_for_dispatch(&self, cell_id: &CellId) {
-        dispatch_gate(&self.dispatch_gates, cell_id.as_str()).send_replace(true);
+        dispatch_gate(&self.dispatch_gates, cell_id).send_replace(true);
+    }
+
+    pub(super) fn close_cell(&self, cell_id: &CellId) {
+        remove_dispatch_gate(&self.dispatch_gates, cell_id);
     }
 
     pub(super) fn start_turn_worker(
@@ -72,24 +75,48 @@ impl CodeModeDispatchBroker {
                         call_id,
                         cell_id,
                         text,
+                        cancellation_token,
+                        response_tx,
                     } => {
-                        wait_until_cell_ready_for_dispatch(&dispatch_gates, &cell_id).await;
-                        if let Err(err) = host.notify(call_id, cell_id.clone(), text).await {
-                            warn!(
-                                "failed to deliver code mode notification for cell {cell_id}: {err}"
-                            );
-                        }
+                        let response = if wait_until_cell_ready_for_dispatch(
+                            &dispatch_gates,
+                            &cell_id,
+                            &cancellation_token,
+                        )
+                        .await
+                        {
+                            host.notify(call_id, cell_id, text).await
+                        } else {
+                            remove_dispatch_gate(&dispatch_gates, &cell_id);
+                            Err("code mode notification cancelled".to_string())
+                        };
+                        let _ = response_tx.send(response);
                     }
                     DispatchMessage::InvokeTool {
                         invocation,
                         cancellation_token,
                         response_tx,
                     } => {
-                        wait_until_cell_ready_for_dispatch(&dispatch_gates, &invocation.cell_id)
-                            .await;
+                        let cell_id = invocation.cell_id.clone();
+                        if !wait_until_cell_ready_for_dispatch(
+                            &dispatch_gates,
+                            &cell_id,
+                            &cancellation_token,
+                        )
+                        .await
+                        {
+                            remove_dispatch_gate(&dispatch_gates, &cell_id);
+                            continue;
+                        }
                         let host = Arc::clone(&host);
                         tokio::spawn(async move {
-                            let response = host.invoke_tool(invocation, cancellation_token).await;
+                            let response = tokio::select! {
+                                response = host.invoke_tool(
+                                    invocation,
+                                    cancellation_token.clone(),
+                                ) => response,
+                                _ = cancellation_token.cancelled() => return,
+                            };
                             let _ = response_tx.send(response);
                         });
                     }
@@ -103,25 +130,52 @@ impl CodeModeDispatchBroker {
 }
 
 fn dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<String, watch::Sender<bool>>>,
-    cell_id: &str,
+    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    cell_id: &CellId,
 ) -> watch::Sender<bool> {
     let mut dispatch_gates = match dispatch_gates.lock() {
         Ok(dispatch_gates) => dispatch_gates,
         Err(poisoned) => poisoned.into_inner(),
     };
     dispatch_gates
-        .entry(cell_id.to_string())
+        .entry(cell_id.clone())
         .or_insert_with(|| watch::channel(false).0)
         .clone()
 }
 
-async fn wait_until_cell_ready_for_dispatch(
-    dispatch_gates: &Mutex<HashMap<String, watch::Sender<bool>>>,
-    cell_id: &str,
+fn remove_dispatch_gate(
+    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    cell_id: &CellId,
 ) {
+    let mut dispatch_gates = match dispatch_gates.lock() {
+        Ok(dispatch_gates) => dispatch_gates,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    dispatch_gates.remove(cell_id);
+}
+
+async fn wait_until_cell_ready_for_dispatch(
+    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    cell_id: &CellId,
+    cancellation_token: &CancellationToken,
+) -> bool {
+    if cancellation_token.is_cancelled() {
+        return false;
+    }
     let mut ready_rx = dispatch_gate(dispatch_gates, cell_id).subscribe();
-    while !*ready_rx.borrow_and_update() && ready_rx.changed().await.is_ok() {}
+    loop {
+        if *ready_rx.borrow_and_update() {
+            return true;
+        }
+        tokio::select! {
+            changed = ready_rx.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+            }
+            _ = cancellation_token.cancelled() => return false,
+        }
+    }
 }
 
 impl CodeModeSessionDelegate for CodeModeDispatchBroker {
@@ -131,6 +185,9 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
         cancellation_token: CancellationToken,
     ) -> ToolInvocationFuture<'a> {
         Box::pin(async move {
+            if cancellation_token.is_cancelled() {
+                return Err("code mode nested tool call cancelled".to_string());
+            }
             let (response_tx, response_rx) = oneshot::channel();
             self.dispatch_tx
                 .send(DispatchMessage::InvokeTool {
@@ -155,17 +212,35 @@ impl CodeModeSessionDelegate for CodeModeDispatchBroker {
         call_id: String,
         cell_id: CellId,
         text: String,
+        cancellation_token: CancellationToken,
     ) -> NotificationFuture<'a> {
         Box::pin(async move {
+            if cancellation_token.is_cancelled() {
+                return Err("code mode notification cancelled".to_string());
+            }
+            let (response_tx, response_rx) = oneshot::channel();
             self.dispatch_tx
                 .send(DispatchMessage::Notify {
                     call_id,
-                    cell_id: cell_id.to_string(),
+                    cell_id,
                     text,
+                    cancellation_token: cancellation_token.clone(),
+                    response_tx,
                 })
                 .await
-                .map_err(|_| "code mode notification dispatcher is unavailable".to_string())
+                .map_err(|_| "code mode notification dispatcher is unavailable".to_string())?;
+            tokio::select! {
+                response = response_rx => response
+                    .map_err(|_| "code mode notification dispatcher stopped".to_string())?,
+                _ = cancellation_token.cancelled() => {
+                    Err("code mode notification cancelled".to_string())
+                }
+            }
         })
+    }
+
+    fn cell_closed(&self, cell_id: &CellId) {
+        self.close_cell(cell_id);
     }
 }
 
@@ -177,8 +252,10 @@ enum DispatchMessage {
     },
     Notify {
         call_id: String,
-        cell_id: String,
+        cell_id: CellId,
         text: String,
+        cancellation_token: CancellationToken,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
 }
 
@@ -215,7 +292,7 @@ impl CoreTurnHost {
         .map_err(|error| error.to_string())
     }
 
-    async fn notify(&self, call_id: String, cell_id: String, text: String) -> Result<(), String> {
+    async fn notify(&self, call_id: String, cell_id: CellId, text: String) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
         }

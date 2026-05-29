@@ -8,6 +8,7 @@ pub(crate) mod wait_spec;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeToolKind;
@@ -88,7 +89,7 @@ impl CodeModeService {
 
     pub(crate) async fn terminate(
         &self,
-        cell_id: String,
+        cell_id: CellId,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
         self.session()?.terminate(cell_id).await
     }
@@ -102,6 +103,10 @@ impl CodeModeService {
 
     pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
         self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
+    }
+
+    pub(crate) fn finish_cell_dispatch(&self, cell_id: &CellId) {
+        self.dispatch_broker.close_cell(cell_id);
     }
 
     pub(crate) fn start_turn_worker(
@@ -261,7 +266,7 @@ async fn call_nested_tool(
         .handle_tool_call_with_source(
             call,
             ToolCallSource::CodeMode {
-                cell_id,
+                cell_id: cell_id.to_string(),
                 runtime_tool_call_id,
             },
             cancellation_token,

@@ -52,7 +52,8 @@ impl CodeModeExecuteHandler {
             })
             .await
             .map_err(FunctionCallError::RespondToModel)?;
-        let runtime_cell_id = started_cell.cell_id.to_string();
+        let cell_id = started_cell.cell_id.clone();
+        let runtime_cell_id = cell_id.to_string();
         let code_cell_trace = exec
             .session
             .services
@@ -66,7 +67,7 @@ impl CodeModeExecuteHandler {
         exec.session
             .services
             .code_mode_service
-            .mark_cell_ready_for_dispatch(&started_cell.cell_id);
+            .mark_cell_ready_for_dispatch(&cell_id);
         let response = started_cell
             .initial_response()
             .await
@@ -79,6 +80,10 @@ impl CodeModeExecuteHandler {
         // here when the first response also ended the runtime.
         if !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. }) {
             code_cell_trace.record_ended(&response);
+            exec.session
+                .services
+                .code_mode_service
+                .finish_cell_dispatch(&cell_id);
         }
         handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
             .await

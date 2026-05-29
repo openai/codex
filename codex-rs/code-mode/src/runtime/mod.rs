@@ -19,6 +19,7 @@ use crate::description::EnabledToolMetadata;
 use crate::description::ToolDefinition;
 use crate::description::enabled_tool_metadata;
 use crate::response::FunctionCallOutputContentItem;
+use crate::service::CellId;
 
 pub const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
@@ -36,13 +37,13 @@ pub struct ExecuteRequest {
 
 #[derive(Clone, Debug)]
 pub struct WaitRequest {
-    pub cell_id: String,
+    pub cell_id: CellId,
     pub yield_time_ms: u64,
 }
 
 #[derive(Clone, Debug)]
 pub struct WaitToPendingRequest {
-    pub cell_id: String,
+    pub cell_id: CellId,
 }
 
 /// Result of waiting on a code-mode cell.
@@ -67,7 +68,7 @@ pub enum ExecuteToPendingOutcome {
     /// The cell is waiting for more runtime input after draining the runtime
     /// input queue that was ready at the pending boundary.
     Pending {
-        cell_id: String,
+        cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
         /// Runtime tool-call ids emitted before this paused execution frontier
         /// sealed. Hosts can use these ids to drain their tool-call transport
@@ -99,15 +100,15 @@ impl From<WaitOutcome> for RuntimeResponse {
 #[derive(Debug, PartialEq, Serialize)]
 pub enum RuntimeResponse {
     Yielded {
-        cell_id: String,
+        cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
     },
     Terminated {
-        cell_id: String,
+        cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
     },
     Result {
-        cell_id: String,
+        cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
         error_text: Option<String>,
     },
@@ -120,7 +121,7 @@ pub enum RuntimeResponse {
 /// if their tool-call graph requires globally unique ids.
 #[derive(Debug)]
 pub struct CodeModeNestedToolCall {
-    pub cell_id: String,
+    pub cell_id: CellId,
     pub runtime_tool_call_id: String,
     pub tool_name: ToolName,
     pub tool_kind: CodeModeToolKind,
