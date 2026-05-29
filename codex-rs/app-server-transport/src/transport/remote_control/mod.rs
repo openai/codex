@@ -31,6 +31,8 @@ use std::io;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -57,8 +59,23 @@ pub struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
-    pairing_client: Arc<StdMutex<Option<RemoteControlPairingClient>>>,
+    pairing: PairingClientState,
     auth_change_rx: Arc<StdMutex<watch::Receiver<u64>>>,
+}
+
+#[derive(Clone)]
+pub(super) struct PairingClientState {
+    client: Arc<StdMutex<Option<RemoteControlPairingClient>>>,
+    generation: Arc<AtomicU64>,
+}
+
+impl PairingClientState {
+    fn new() -> Self {
+        Self {
+            client: Arc::new(StdMutex::new(None)),
+            generation: Arc::new(AtomicU64::new(0)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,7 +132,7 @@ impl RemoteControlHandle {
             *state = false;
             changed
         });
-        clear_pairing_client(&self.pairing_client);
+        clear_pairing_client(&self.pairing);
 
         let status = self.status();
         info!(
@@ -147,11 +164,15 @@ impl RemoteControlHandle {
                 "remote control pairing requires remote control to be enabled",
             ));
         }
+        if self.status().status != RemoteControlConnectionStatus::Connected {
+            return Err(Self::pairing_unavailable_error());
+        }
 
         let auth_change_revision = self.auth_change_revision();
         let pairing_client = {
             let mut pairing_client = self
-                .pairing_client
+                .pairing
+                .client
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let current_pairing_client = pairing_client
@@ -174,6 +195,9 @@ impl RemoteControlHandle {
         if self.auth_change_revision() != auth_change_revision {
             return Err(Self::pairing_unavailable_error());
         }
+        if pairing_response.is_ok() && !self.pairing_client_is_current(&pairing_client) {
+            return Err(Self::pairing_unavailable_error());
+        }
         pairing_response
     }
 
@@ -190,6 +214,20 @@ impl RemoteControlHandle {
             io::ErrorKind::InvalidInput,
             "remote control pairing is unavailable until enrollment completes",
         )
+    }
+
+    fn pairing_client_is_current(&self, pairing_client: &RemoteControlPairingClient) -> bool {
+        *self.enabled_tx.borrow()
+            && self.status().status == RemoteControlConnectionStatus::Connected
+            && self
+                .pairing
+                .client
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(|current_pairing_client| {
+                    current_pairing_client.generation() == pairing_client.generation()
+                })
     }
 
     fn publish_status(
@@ -239,10 +277,12 @@ fn remote_control_status_with_connection_status(
     }
 }
 
-fn clear_pairing_client(pairing_client: &Arc<StdMutex<Option<RemoteControlPairingClient>>>) {
-    *pairing_client
+fn clear_pairing_client(pairing: &PairingClientState) {
+    *pairing
+        .client
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    pairing.generation.fetch_add(1, Ordering::Relaxed);
 }
 
 pub async fn start_remote_control(
@@ -267,8 +307,8 @@ pub async fn start_remote_control(
     };
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
-    let pairing_client = Arc::new(StdMutex::new(None));
-    let websocket_pairing_client = Arc::clone(&pairing_client);
+    let pairing = PairingClientState::new();
+    let websocket_pairing = pairing.clone();
     let auth_change_rx = Arc::new(StdMutex::new(auth_manager.auth_change_receiver()));
     let server_name = gethostname().to_string_lossy().trim().to_string();
     let remote_control_url = config.remote_control_url;
@@ -317,7 +357,7 @@ pub async fn start_remote_control(
             RemoteControlChannels {
                 transport_event_tx,
                 status_publisher,
-                pairing_client: websocket_pairing_client,
+                pairing: websocket_pairing,
             },
             shutdown_token,
             enabled_rx,
@@ -362,7 +402,7 @@ pub async fn start_remote_control(
             enabled_tx: Arc::new(enabled_tx),
             status_tx: Arc::new(status_tx),
             state_db_available,
-            pairing_client,
+            pairing,
             auth_change_rx,
         },
     ))
