@@ -133,6 +133,17 @@ pub type FileSystemResult<T> = io::Result<T>;
 /// a remote environment.
 #[async_trait]
 pub trait ExecutorFileSystem: Send + Sync {
+    /// Resolves a path within this filesystem when supported.
+    ///
+    /// Implementations that cannot resolve bound paths may return
+    /// [`io::ErrorKind::Unsupported`].
+    fn canonicalize(&self, _path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "filesystem does not support canonicalization",
+        ))
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,

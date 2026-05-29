@@ -365,6 +365,18 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
         .await
         .with_context(|| format!("mode={use_remote}"))?;
 
+    let source_link = tmp.path().join("source-link");
+    symlink(&source_dir, &source_link)?;
+    let canonical_nested = file_system
+        .canonicalize(&absolute_path(source_link.join("nested").join("note.txt")))
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(
+        canonical_nested,
+        absolute_path(std::fs::canonicalize(
+            source_dir.join("nested").join("note.txt")
+        )?)
+    );
+
     let nested_file_contents = file_system
         .read_file(&absolute_path(nested_file.clone()), /*sandbox*/ None)
         .await
