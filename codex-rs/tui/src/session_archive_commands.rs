@@ -206,51 +206,6 @@ fn session_target_from_app_server_thread(thread: AppServerThread) -> Result<Reso
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_app_server_protocol::SessionSource;
-    use codex_app_server_protocol::ThreadStatus;
-    use codex_utils_absolute_path::AbsolutePathBuf;
-
-    fn app_server_thread(id: &str) -> AppServerThread {
-        AppServerThread {
-            id: id.to_string(),
-            session_id: id.to_string(),
-            forked_from_id: None,
-            preview: String::new(),
-            ephemeral: false,
-            model_provider: "mock_provider".to_string(),
-            created_at: 0,
-            updated_at: 0,
-            status: ThreadStatus::NotLoaded,
-            path: None,
-            cwd: AbsolutePathBuf::from_absolute_path(std::env::current_dir().expect("cwd"))
-                .expect("absolute cwd"),
-            cli_version: String::new(),
-            source: SessionSource::Cli,
-            thread_source: None,
-            agent_nickname: None,
-            agent_role: None,
-            git_info: None,
-            name: Some("saved-thread".to_string()),
-            turns: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn session_target_from_app_server_thread_reports_invalid_ids() {
-        let err = session_target_from_app_server_thread(app_server_thread("not-a-thread-id"))
-            .expect_err("invalid ids should be reported as normal errors");
-
-        assert!(
-            err.to_string()
-                .contains("app server returned invalid session id `not-a-thread-id`"),
-            "unexpected error: {err}"
-        );
-    }
-}
-
 async fn start_app_server_for_archive_command(
     options: SessionArchiveCommandOptions,
 ) -> Result<AppServerSession> {
@@ -388,4 +343,49 @@ async fn start_app_server_for_archive_command(
         AppServerSession::new(app_server, app_server_target.thread_params_mode())
             .with_remote_cwd_override(remote_cwd_override),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::SessionSource;
+    use codex_app_server_protocol::ThreadStatus;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+
+    fn app_server_thread(id: &str) -> AppServerThread {
+        AppServerThread {
+            id: id.to_string(),
+            session_id: id.to_string(),
+            forked_from_id: None,
+            preview: String::new(),
+            ephemeral: false,
+            model_provider: "mock_provider".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            status: ThreadStatus::NotLoaded,
+            path: None,
+            cwd: AbsolutePathBuf::from_absolute_path(std::env::current_dir().expect("cwd"))
+                .expect("absolute cwd"),
+            cli_version: String::new(),
+            source: SessionSource::Cli,
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: Some("saved-thread".to_string()),
+            turns: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn session_target_from_app_server_thread_reports_invalid_ids() {
+        let err = session_target_from_app_server_thread(app_server_thread("not-a-thread-id"))
+            .expect_err("invalid ids should be reported as normal errors");
+
+        assert!(
+            err.to_string()
+                .contains("app server returned invalid session id `not-a-thread-id`"),
+            "unexpected error: {err}"
+        );
+    }
 }
