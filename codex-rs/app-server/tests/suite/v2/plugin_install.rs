@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -13,6 +14,7 @@ use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
 use axum::Router;
+use axum::extract::Path as AxumPath;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
@@ -802,6 +804,56 @@ async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
 }
 
 #[tokio::test]
+async fn remote_plugin_install_resolves_template_app_ids() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    let bundle_url = mount_remote_plugin_bundle(
+        &server,
+        /*status_code*/ 200,
+        remote_plugin_bundle_tar_gz_bytes_with_contents(
+            r#"{"name":"linear"}"#,
+            Some(r#"{"apps":{"databricks":{"id":"templated_apps_Databricks"}}}"#),
+        )?,
+    )
+    .await;
+    configure_remote_plugin_test(codex_home.path(), &server)?;
+    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_empty_remote_installed_plugins(&server).await;
+    mount_remote_plugin_install(&server, REMOTE_PLUGIN_ID).await;
+    mount_remote_template_connector_ids(
+        &server,
+        "templated_apps_Databricks",
+        &["asdk_app_databricks_workspace"],
+    )
+    .await;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = send_remote_plugin_install_request(&mut mcp, REMOTE_PLUGIN_ID).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+    assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
+
+    wait_for_remote_plugin_request_count(
+        &server,
+        "GET",
+        "/ps/connectors/by_template_id/templated_apps_Databricks",
+        /*expected_count*/ 1,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_errors_when_remote_bundle_download_fails() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -943,6 +995,100 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
                 name: "Alpha".to_string(),
                 description: Some("Alpha connector".to_string()),
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+                needs_auth: true,
+            }],
+        }
+    );
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_resolves_template_apps_for_apps_needing_auth() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "asdk_app_databricks_workspace".to_string(),
+        name: "Databricks".to_string(),
+        description: Some("Workspace Databricks connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let (server_url, server_handle) = start_apps_server_with_template_connector_ids(
+        connectors,
+        Vec::new(),
+        HashMap::from([(
+            "templated_apps_Databricks".to_string(),
+            vec!["asdk_app_databricks_workspace".to_string()],
+        )]),
+    )
+    .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        /*install_policy*/ None,
+        /*auth_policy*/ None,
+    )?;
+    write_plugin_source(
+        repo_root.path(),
+        "sample-plugin",
+        &["templated_apps_Databricks"],
+    )?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginInstallResponse {
+            auth_policy: PluginAuthPolicy::OnInstall,
+            apps_needing_auth: vec![AppSummary {
+                id: "asdk_app_databricks_workspace".to_string(),
+                name: "Databricks".to_string(),
+                description: Some("Workspace Databricks connector".to_string()),
+                install_url: Some(
+                    "https://chatgpt.com/apps/databricks/asdk_app_databricks_workspace".to_string(),
+                ),
                 needs_auth: true,
             }],
         }
@@ -1113,6 +1259,7 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
 #[derive(Clone)]
 struct AppsServerState {
     response: Arc<StdMutex<serde_json::Value>>,
+    template_connector_ids: Arc<StdMutex<HashMap<String, Vec<String>>>>,
 }
 
 #[derive(Clone)]
@@ -1150,10 +1297,19 @@ async fn start_apps_server(
     connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
 ) -> Result<(String, JoinHandle<()>)> {
+    start_apps_server_with_template_connector_ids(connectors, tools, HashMap::new()).await
+}
+
+async fn start_apps_server_with_template_connector_ids(
+    connectors: Vec<AppInfo>,
+    tools: Vec<Tool>,
+    template_connector_ids: HashMap<String, Vec<String>>,
+) -> Result<(String, JoinHandle<()>)> {
     let state = Arc::new(AppsServerState {
         response: Arc::new(StdMutex::new(
             json!({ "apps": connectors, "next_token": null }),
         )),
+        template_connector_ids: Arc::new(StdMutex::new(template_connector_ids)),
     });
     let tools = Arc::new(StdMutex::new(tools));
 
@@ -1177,6 +1333,10 @@ async fn start_apps_server(
             "/connectors/directory/list_workspace",
             get(list_directory_connectors),
         )
+        .route(
+            "/ps/connectors/by_template_id/{template_id}",
+            get(template_connector_ids_response),
+        )
         .with_state(state)
         .nest_service("/api/codex/apps", mcp_service);
 
@@ -1185,6 +1345,33 @@ async fn start_apps_server(
     });
 
     Ok((format!("http://{addr}"), handle))
+}
+
+async fn template_connector_ids_response(
+    State(state): State<Arc<AppsServerState>>,
+    AxumPath(template_id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    let bearer_ok = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "Bearer chatgpt-token");
+    let account_ok = headers
+        .get("chatgpt-account-id")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "account-123");
+    if !bearer_ok || !account_ok {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let connector_ids = state
+        .template_connector_ids
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&template_id)
+        .cloned()
+        .unwrap_or_default();
+    Ok(Json(json!({ "connector_ids": connector_ids })))
 }
 
 async fn list_directory_connectors(
@@ -1488,6 +1675,24 @@ async fn mount_remote_plugin_install(server: &MockServer, remote_plugin_id: &str
             ResponseTemplate::new(200)
                 .set_body_string(format!(r#"{{"id":"{remote_plugin_id}","enabled":true}}"#)),
         )
+        .mount(server)
+        .await;
+}
+
+async fn mount_remote_template_connector_ids(
+    server: &MockServer,
+    template_id: &str,
+    connector_ids: &[&str],
+) {
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/backend-api/ps/connectors/by_template_id/{template_id}"
+        )))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "connector_ids": connector_ids,
+        })))
         .mount(server)
         .await;
 }

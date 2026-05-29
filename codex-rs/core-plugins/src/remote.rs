@@ -8,6 +8,7 @@ use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::SkillInterface;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
+use codex_plugin::AppConnectorId;
 use codex_plugin::PluginId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::RequestBuilder;
@@ -19,6 +20,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
+use tracing::warn;
 use url::Url;
 
 mod remote_installed_plugin_sync;
@@ -65,6 +67,7 @@ const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const TEMPLATE_APP_ID_PREFIX: &str = "templated_apps_";
 const REMOTE_INSTALLED_MARKETPLACE_DISPLAY_ORDER: [(&str, &str); 5] = [
     (
         REMOTE_GLOBAL_MARKETPLACE_NAME,
@@ -485,6 +488,12 @@ struct RemotePluginMutationResponse {
     enabled: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RemoteTemplateConnectorIdsResponse {
+    #[serde(default)]
+    connector_ids: Vec<String>,
+}
+
 pub async fn fetch_remote_marketplaces(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
@@ -701,6 +710,67 @@ pub(crate) async fn fetch_remote_installed_plugins(
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(installed_plugins)
+}
+
+pub async fn resolve_remote_plugin_app_ids(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    app_ids: &[AppConnectorId],
+) -> Vec<AppConnectorId> {
+    let mut resolved_app_ids = Vec::new();
+    let mut seen_app_ids = HashSet::new();
+    let mut template_connector_ids = BTreeMap::<String, Option<Vec<String>>>::new();
+
+    for app_id in app_ids {
+        if !app_id.0.starts_with(TEMPLATE_APP_ID_PREFIX) {
+            if seen_app_ids.insert(app_id.clone()) {
+                resolved_app_ids.push(app_id.clone());
+            }
+            continue;
+        }
+
+        let connector_ids = if let Some(connector_ids) = template_connector_ids.get(&app_id.0) {
+            connector_ids.clone()
+        } else {
+            let connector_ids = match ensure_chatgpt_auth(auth) {
+                Ok(auth) => {
+                    match fetch_template_connector_ids(config, auth, app_id.0.as_str()).await {
+                        Ok(connector_ids) => Some(connector_ids),
+                        Err(err) => {
+                            warn!(
+                                template_app_id = %app_id.0,
+                                error = %err,
+                                "failed to resolve remote plugin template app id; dropping it"
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        template_app_id = %app_id.0,
+                        error = %err,
+                        "cannot resolve remote plugin template app id without ChatGPT auth; dropping it"
+                    );
+                    None
+                }
+            };
+            template_connector_ids.insert(app_id.0.clone(), connector_ids.clone());
+            connector_ids
+        };
+
+        let Some(connector_ids) = connector_ids else {
+            continue;
+        };
+        for connector_id in connector_ids {
+            let connector_id = AppConnectorId(connector_id);
+            if seen_app_ids.insert(connector_id.clone()) {
+                resolved_app_ids.push(connector_id);
+            }
+        }
+    }
+
+    resolved_app_ids
 }
 
 pub fn group_remote_installed_plugins_by_marketplaces(
@@ -1378,6 +1448,18 @@ async fn fetch_plugin_detail(
     send_and_decode(request, &url).await
 }
 
+async fn fetch_template_connector_ids(
+    config: &RemotePluginServiceConfig,
+    auth: &CodexAuth,
+    template_id: &str,
+) -> Result<Vec<String>, RemotePluginCatalogError> {
+    let url = remote_template_connector_ids_url(config, template_id)?;
+    let client = build_reqwest_client();
+    let request = authenticated_request(client.get(&url), auth)?;
+    let response: RemoteTemplateConnectorIdsResponse = send_and_decode(request, &url).await?;
+    Ok(response.connector_ids)
+}
+
 fn remote_plugin_skill_detail_url(
     config: &RemotePluginServiceConfig,
     plugin_id: &str,
@@ -1395,6 +1477,25 @@ fn remote_plugin_skill_detail_url(
         segments.push(plugin_id);
         segments.push("skills");
         segments.push(skill_name);
+    }
+    Ok(url.to_string())
+}
+
+fn remote_template_connector_ids_url(
+    config: &RemotePluginServiceConfig,
+    template_id: &str,
+) -> Result<String, RemotePluginCatalogError> {
+    let mut url = Url::parse(config.chatgpt_base_url.trim_end_matches('/'))
+        .map_err(RemotePluginCatalogError::InvalidBaseUrl)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|()| RemotePluginCatalogError::InvalidBaseUrlPath)?;
+        segments.pop_if_empty();
+        segments.push("ps");
+        segments.push("connectors");
+        segments.push("by_template_id");
+        segments.push(template_id);
     }
     Ok(url.to_string())
 }
@@ -1444,3 +1545,6 @@ async fn send_and_decode<T: for<'de> Deserialize<'de>>(
         source,
     })
 }
+
+#[cfg(test)]
+mod tests;

@@ -10,7 +10,10 @@ use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST as TOOL_SUGGEST_DISCOVERABLE_PLUGIN_FALLBACK_ALLOWLIST;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
+use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_plugin::AppConnectorId;
 use codex_tools::DiscoverablePluginInfo;
 
 const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
@@ -20,6 +23,7 @@ const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
 
 pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
+    auth: Option<&CodexAuth>,
     loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     if !config.features.enabled(Feature::Plugins) {
@@ -46,15 +50,32 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .list_marketplaces_for_config(&plugins_input, &[])
         .context("failed to list plugin marketplaces for tool suggestions")?
         .marketplaces;
-    let mut installed_app_connector_ids = plugins_manager
+    let installed_app_connector_ids = plugins_manager
         .plugins_for_config(&plugins_input)
         .await
         .capability_summaries()
         .iter()
         .flat_map(|plugin| plugin.app_connector_ids.iter())
-        .map(|connector_id| connector_id.0.clone())
-        .collect::<HashSet<_>>();
-    installed_app_connector_ids.extend(loaded_plugin_app_connector_ids.iter().cloned());
+        .cloned()
+        .chain(
+            loaded_plugin_app_connector_ids
+                .iter()
+                .cloned()
+                .map(AppConnectorId),
+        )
+        .collect::<Vec<_>>();
+    let remote_plugin_service_config = RemotePluginServiceConfig {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+    };
+    let installed_app_connector_ids = codex_core_plugins::remote::resolve_remote_plugin_app_ids(
+        &remote_plugin_service_config,
+        auth,
+        &installed_app_connector_ids,
+    )
+    .await
+    .into_iter()
+    .map(|connector_id| connector_id.0)
+    .collect::<HashSet<_>>();
 
     let mut discoverable_plugins = Vec::<DiscoverablePluginInfo>::new();
     for marketplace in marketplaces {
@@ -86,10 +107,16 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             {
                 Ok(plugin) => {
                     let plugin: PluginCapabilitySummary = plugin.into();
-                    let matches_installed_app =
-                        plugin.app_connector_ids.iter().any(|connector_id| {
-                            installed_app_connector_ids.contains(connector_id.0.as_str())
-                        });
+                    let app_connector_ids =
+                        codex_core_plugins::remote::resolve_remote_plugin_app_ids(
+                            &remote_plugin_service_config,
+                            auth,
+                            &plugin.app_connector_ids,
+                        )
+                        .await;
+                    let matches_installed_app = app_connector_ids.iter().any(|connector_id| {
+                        installed_app_connector_ids.contains(connector_id.0.as_str())
+                    });
                     if !is_configured_plugin && !is_fallback_plugin && !matches_installed_app {
                         continue;
                     }
@@ -100,8 +127,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
                         description: plugin.description,
                         has_skills: plugin.has_skills,
                         mcp_server_names: plugin.mcp_server_names,
-                        app_connector_ids: plugin
-                            .app_connector_ids
+                        app_connector_ids: app_connector_ids
                             .into_iter()
                             .map(|connector_id| connector_id.0)
                             .collect(),
