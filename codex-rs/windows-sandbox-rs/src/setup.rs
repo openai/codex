@@ -46,6 +46,7 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+const CODEX_CLI_PATH_ENV_VAR: &str = "CODEX_CLI_PATH";
 const SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-setup.exe";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
@@ -663,6 +664,11 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
+    if let Some(path) = std::env::var_os(CODEX_CLI_PATH_ENV_VAR)
+        && let Some(setup_exe) = find_setup_exe_for_current_exe(Path::new(&path))
+    {
+        return setup_exe;
+    }
     if let Ok(exe) = std::env::current_exe()
         && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
     {
@@ -1094,8 +1100,10 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::CODEX_CLI_PATH_ENV_VAR;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
+    use super::find_setup_exe;
     use super::find_setup_exe_for_current_exe;
     use super::gather_full_read_roots_for_permissions;
     use super::gather_read_roots;
@@ -1297,6 +1305,30 @@ mod tests {
         let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
 
         assert_eq!(resolved, setup_exe);
+    }
+
+    #[test]
+    fn setup_exe_lookup_prefers_packaged_cli_path_env_var() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let codex_exe = bin_dir.join("codex.exe");
+        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&codex_exe, b"codex").expect("write exe");
+        fs::write(&setup_exe, b"setup").expect("write setup");
+
+        let previous = std::env::var_os(CODEX_CLI_PATH_ENV_VAR);
+        unsafe { std::env::set_var(CODEX_CLI_PATH_ENV_VAR, &codex_exe) };
+
+        assert_eq!(find_setup_exe(), setup_exe);
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var(CODEX_CLI_PATH_ENV_VAR, value) },
+            None => unsafe { std::env::remove_var(CODEX_CLI_PATH_ENV_VAR) },
+        }
     }
 
     #[test]
