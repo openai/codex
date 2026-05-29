@@ -208,14 +208,16 @@ async fn run_remote_compact_task_inner_impl(
     .await?;
     let mut input = prompt_input.clone();
     input.push(ResponseItem::CompactionTrigger);
+    let tools = tool_router.model_visible_specs();
     let usage_attribution = crate::usage::UsagePromptAttribution::from_prompt(
         &input,
+        &tools,
         &tool_router,
         base_instructions.text.as_str(),
     );
     let prompt = Prompt {
         input,
-        tools: tool_router.model_visible_specs(),
+        tools,
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         usage_attribution,
         base_instructions,
