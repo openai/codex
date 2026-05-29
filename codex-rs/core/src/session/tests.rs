@@ -7319,9 +7319,7 @@ async fn build_initial_context_qualifies_skills_only_when_skill_envs_are_ambiguo
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md"))
-            .abs()
-            .clone(),
+        path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
         source_path: codex_exec_server::EnvironmentPathRef::local(
             test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
         ),

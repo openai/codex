@@ -624,6 +624,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
     let skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: false,
         })
         .await?;
@@ -659,6 +660,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
     let skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: false,
         })
         .await?;
@@ -692,6 +694,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
     let skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: false,
         })
         .await?;
@@ -716,6 +719,7 @@ async fn skills_extra_roots_set_updates_process_runtime_roots() -> Result<()> {
     let skills_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
+            environment_id: None,
             force_reload: false,
         })
         .await?;
