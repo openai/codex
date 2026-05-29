@@ -21,6 +21,8 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(25);
@@ -60,7 +62,29 @@ pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
     exec_server_with_env(std::iter::empty::<(&str, &str)>()).await
 }
 
+pub(crate) async fn exec_server_with_connection_token(
+    connection_token: &str,
+) -> anyhow::Result<ExecServerHarness> {
+    exec_server_with_env_and_connection_token(
+        [("CODEX_EXEC_SERVER_CONNECTION_TOKEN", connection_token)],
+        Some(connection_token),
+    )
+    .await
+}
+
 pub(crate) async fn exec_server_with_env<I, K, V>(env: I) -> anyhow::Result<ExecServerHarness>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<std::ffi::OsStr>,
+    V: AsRef<std::ffi::OsStr>,
+{
+    exec_server_with_env_and_connection_token(env, /*connection_token*/ None).await
+}
+
+async fn exec_server_with_env_and_connection_token<I, K, V>(
+    env: I,
+    connection_token: Option<&str>,
+) -> anyhow::Result<ExecServerHarness>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<std::ffi::OsStr>,
@@ -79,7 +103,13 @@ where
     let mut child = child.spawn()?;
 
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;
-    let (websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
+    let (websocket, _) = match connection_token {
+        Some(connection_token) => {
+            connect_websocket_with_connection_token_when_ready(&websocket_url, connection_token)
+                .await?
+        }
+        None => connect_websocket_when_ready(&websocket_url).await?,
+    };
     Ok(ExecServerHarness {
         _codex_home: codex_home,
         _helper_paths: helper_paths,
@@ -213,15 +243,18 @@ impl ExecServerHarness {
     }
 }
 
-async fn connect_websocket_when_ready(
-    websocket_url: &str,
+pub(crate) async fn connect_websocket_when_ready<R>(
+    request: R,
 ) -> anyhow::Result<(
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     tokio_tungstenite::tungstenite::handshake::client::Response,
-)> {
+)>
+where
+    R: IntoClientRequest + Clone + Unpin,
+{
     let deadline = Instant::now() + CONNECT_TIMEOUT;
     loop {
-        match connect_async(websocket_url).await {
+        match connect_async(request.clone()).await {
             Ok(websocket) => return Ok(websocket),
             Err(err)
                 if Instant::now() < deadline
@@ -236,6 +269,21 @@ async fn connect_websocket_when_ready(
             Err(err) => return Err(err.into()),
         }
     }
+}
+
+async fn connect_websocket_with_connection_token_when_ready(
+    websocket_url: &str,
+    connection_token: &str,
+) -> anyhow::Result<(
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    tokio_tungstenite::tungstenite::handshake::client::Response,
+)> {
+    let mut request = websocket_url.into_client_request()?;
+    request.headers_mut().insert(
+        tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {connection_token}"))?,
+    );
+    connect_websocket_when_ready(request).await
 }
 
 async fn read_listen_url_from_stdout(child: &mut Child) -> anyhow::Result<String> {
