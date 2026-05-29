@@ -144,9 +144,13 @@ impl RemoteEnvironmentConfig {
         Ok(self)
     }
 
-    pub fn with_runtime(mut self, runtime: ExecServerRuntimeConfig) -> Self {
+    pub fn with_runtime(
+        mut self,
+        runtime: ExecServerRuntimeConfig,
+    ) -> Result<Self, ExecServerError> {
+        runtime.validate()?;
         self.runtime = runtime;
-        self
+        Ok(self)
     }
 }
 
@@ -157,6 +161,7 @@ pub async fn run_remote_environment(
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), ExecServerError> {
     ensure_rustls_crypto_provider();
+    config.runtime.validate()?;
     let client =
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
     let processor = ConnectionProcessor::new_with_config(runtime_paths, config.runtime.clone());
@@ -180,8 +185,12 @@ pub async fn run_remote_environment(
         }
 
         sleep(backoff).await;
-        backoff = (backoff * 2).min(config.reconnect_max_backoff);
+        backoff = next_reconnect_backoff(backoff, config.reconnect_max_backoff);
     }
+}
+
+fn next_reconnect_backoff(backoff: Duration, reconnect_max_backoff: Duration) -> Duration {
+    backoff.saturating_mul(2).min(reconnect_max_backoff)
 }
 
 fn normalize_environment_id(environment_id: String) -> Result<String, ExecServerError> {
@@ -389,5 +398,13 @@ mod tests {
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("workspace-123"));
+    }
+
+    #[test]
+    fn next_reconnect_backoff_saturates_before_capping() {
+        assert_eq!(
+            next_reconnect_backoff(Duration::MAX, Duration::MAX),
+            Duration::MAX
+        );
     }
 }

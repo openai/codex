@@ -31,5 +31,6 @@ pub async fn run_main_with_config(
     runtime_paths: ExecServerRuntimePaths,
     config: ExecServerRuntimeConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    config.validate()?;
     transport::run_transport(listen_url, runtime_paths, config).await
 }

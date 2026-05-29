@@ -131,7 +131,15 @@ impl SessionRegistry {
     }
 
     async fn expire_if_detached(&self, session_id: String, connection_id: ConnectionId) {
-        tokio::time::sleep(self.session_config.detached_session_ttl).await;
+        let Some(detached_expires_at) = ({
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(&session_id)
+                .and_then(|entry| entry.detached_expires_at_for(connection_id))
+        }) else {
+            return;
+        };
+        tokio::time::sleep_until(detached_expires_at).await;
 
         let removed = {
             let mut sessions = self.sessions.lock().await;
@@ -197,11 +205,15 @@ impl SessionEntry {
         if attachment.current_connection_id != Some(connection_id) {
             return false;
         }
+        let Some(detached_expires_at) =
+            tokio::time::Instant::now().checked_add(self.detached_session_ttl)
+        else {
+            return false;
+        };
 
         attachment.current_connection_id = None;
         attachment.detached_connection_id = Some(connection_id);
-        attachment.detached_expires_at =
-            Some(tokio::time::Instant::now() + self.detached_session_ttl);
+        attachment.detached_expires_at = Some(detached_expires_at);
         true
     }
 
@@ -243,6 +255,18 @@ impl SessionEntry {
             && attachment
                 .detached_expires_at
                 .is_some_and(|deadline| now >= deadline)
+    }
+
+    fn detached_expires_at_for(&self, connection_id: ConnectionId) -> Option<tokio::time::Instant> {
+        let attachment = self
+            .attachment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if attachment.detached_connection_id == Some(connection_id) {
+            attachment.detached_expires_at
+        } else {
+            None
+        }
     }
 }
 

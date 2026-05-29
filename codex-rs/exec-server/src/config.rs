@@ -45,8 +45,8 @@ impl ExecServerConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteExecServerConfig {
-    pub url: String,
-    pub environment_id: String,
+    pub url: Option<String>,
+    pub environment_id: Option<String>,
     pub name: Option<String>,
     pub use_agent_identity_auth: bool,
     pub reconnect_initial_backoff: Duration,
@@ -60,6 +60,12 @@ pub struct ExecServerRuntimeConfig {
     pub filesystem: LocalFileSystemConfig,
 }
 
+impl ExecServerRuntimeConfig {
+    pub(crate) fn validate(&self) -> Result<(), ExecServerError> {
+        self.sessions.validate()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRegistryConfig {
     pub detached_session_ttl: Duration,
@@ -70,6 +76,12 @@ impl Default for SessionRegistryConfig {
         Self {
             detached_session_ttl: default_detached_session_ttl(),
         }
+    }
+}
+
+impl SessionRegistryConfig {
+    fn validate(&self) -> Result<(), ExecServerError> {
+        validate_detached_session_ttl(self.detached_session_ttl)
     }
 }
 
@@ -134,8 +146,8 @@ struct ExecServerToml {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RemoteExecServerToml {
-    url: String,
-    environment_id: String,
+    url: Option<String>,
+    environment_id: Option<String>,
     name: Option<String>,
     use_agent_identity_auth: Option<bool>,
     reconnect_initial_backoff_sec: Option<u64>,
@@ -182,7 +194,9 @@ impl TryFrom<ExecServerToml> for ExecServerConfig {
         if let Some(sessions) = sessions
             && let Some(detached_ttl_sec) = sessions.detached_ttl_sec
         {
-            runtime.sessions.detached_session_ttl = Duration::from_secs(detached_ttl_sec);
+            let detached_session_ttl = Duration::from_secs(detached_ttl_sec);
+            validate_detached_session_ttl(detached_session_ttl)?;
+            runtime.sessions.detached_session_ttl = detached_session_ttl;
         }
         if let Some(processes) = processes {
             if let Some(retained_output_bytes_per_process) =
@@ -201,6 +215,8 @@ impl TryFrom<ExecServerToml> for ExecServerConfig {
         {
             runtime.filesystem.max_read_file_bytes = max_read_file_bytes;
         }
+
+        runtime.validate()?;
 
         Ok(Self {
             listen,
@@ -249,6 +265,18 @@ pub(crate) fn validate_reconnect_backoff(
     if reconnect_initial_backoff > reconnect_max_backoff {
         return Err(ExecServerError::Protocol(
             "remote reconnect initial backoff must not exceed max backoff".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_detached_session_ttl(detached_session_ttl: Duration) -> Result<(), ExecServerError> {
+    if std::time::Instant::now()
+        .checked_add(detached_session_ttl)
+        .is_none()
+    {
+        return Err(ExecServerError::Protocol(
+            "session detached TTL is too large".to_string(),
         ));
     }
     Ok(())
@@ -304,8 +332,8 @@ max_read_file_bytes = 14
             ExecServerConfig {
                 listen: None,
                 remote: Some(RemoteExecServerConfig {
-                    url: "https://chatgpt.com".to_string(),
-                    environment_id: "devbox-123".to_string(),
+                    url: Some("https://chatgpt.com".to_string()),
+                    environment_id: Some("devbox-123".to_string()),
                     name: Some("remote-name".to_string()),
                     use_agent_identity_auth: true,
                     reconnect_initial_backoff: Duration::from_secs(2),
@@ -324,6 +352,34 @@ max_read_file_bytes = 14
                     },
                 },
             }
+        );
+    }
+
+    #[test]
+    fn file_loads_partial_remote_settings() {
+        let codex_home = tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join(EXEC_SERVER_TOML_FILE),
+            r#"
+[remote]
+environment_id = "devbox-123"
+name = "remote-name"
+"#,
+        )
+        .expect("write config");
+
+        let config = ExecServerConfig::from_codex_home(codex_home.path()).expect("config");
+
+        assert_eq!(
+            config.remote,
+            Some(RemoteExecServerConfig {
+                url: None,
+                environment_id: Some("devbox-123".to_string()),
+                name: Some("remote-name".to_string()),
+                use_agent_identity_auth: false,
+                reconnect_initial_backoff: Duration::from_secs(1),
+                reconnect_max_backoff: Duration::from_secs(30),
+            })
         );
     }
 
@@ -376,8 +432,8 @@ environment_id = "devbox-123"
         ] {
             let config = ExecServerToml {
                 remote: Some(RemoteExecServerToml {
-                    url: "https://chatgpt.com".to_string(),
-                    environment_id: "devbox-123".to_string(),
+                    url: Some("https://chatgpt.com".to_string()),
+                    environment_id: Some("devbox-123".to_string()),
                     name: None,
                     use_agent_identity_auth: None,
                     reconnect_initial_backoff_sec: Some(initial),
@@ -393,5 +449,39 @@ environment_id = "devbox-123"
                 format!("exec-server protocol error: {expected}")
             );
         }
+    }
+
+    #[test]
+    fn file_rejects_invalid_detached_session_ttl() {
+        let config = ExecServerToml {
+            sessions: Some(SessionsToml {
+                detached_ttl_sec: Some(u64::MAX),
+            }),
+            ..Default::default()
+        };
+
+        let err = ExecServerConfig::try_from(config).expect_err("invalid config");
+
+        assert_eq!(
+            err.to_string(),
+            "exec-server protocol error: session detached TTL is too large"
+        );
+    }
+
+    #[test]
+    fn runtime_rejects_invalid_detached_session_ttl() {
+        let config = ExecServerRuntimeConfig {
+            sessions: SessionRegistryConfig {
+                detached_session_ttl: Duration::MAX,
+            },
+            ..Default::default()
+        };
+
+        let err = config.validate().expect_err("invalid config");
+
+        assert_eq!(
+            err.to_string(),
+            "exec-server protocol error: session detached TTL is too large"
+        );
     }
 }
