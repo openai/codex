@@ -8,29 +8,11 @@
     "write-hooks-schema": "cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures"
   },
   "devDependencies": {
-    "prettier": "^3.5.3"
-  },
-  "resolutions": {
-    "@modelcontextprotocol/sdk": "1.26.0",
-    "braces": "^3.0.3",
-    "flatted": "3.4.2",
-    "glob@10.4.5": "10.5.0",
-    "handlebars": "4.7.9",
-    "micromatch": "^4.0.8",
-    "minimatch@3.1.2": "3.1.4",
-    "minimatch@9.0.5": "9.0.7",
-    "path-to-regexp": "8.4.0",
-    "picomatch@2.3.1": "2.3.2",
-    "picomatch@4.0.3": "4.0.4",
-    "rollup": "4.59.0",
-    "semver": "^7.7.1"
-  },
-  "overrides": {
-    "punycode": "^2.3.1"
+    "prettier": "3.5.3"
   },
   "engines": {
     "node": ">=22",
-    "pnpm": ">=10.33.0"
+    "pnpm": "11.4.0"
   },
-  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
+  "packageManager": "pnpm@11.4.0+sha512.f0febc7e37552ab485494a914241b338e0b3580b93d54ce31f00933015880863129038a1b4ae4e414a0ee63ac35bf21197e990172c4a68256450b5636310968f"
 }

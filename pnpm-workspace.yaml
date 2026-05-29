@@ -3,10 +3,17 @@ packages:
   - codex-rs/responses-api-proxy/npm
   - sdk/typescript
 
-ignoredBuiltDependencies:
-  - esbuild
+# pnpm 11 reads project settings from pnpm-workspace.yaml rather than .npmrc.
+shamefullyHoist: true
+strictPeerDependencies: false
+nodeLinker: hoisted
+preferWorkspacePackages: true
+saveExact: true
+savePrefix: ''
 
 minimumReleaseAge: 10080
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeExclude: []
 
 blockExoticSubdeps: true
@@ -14,4 +21,21 @@ strictDepBuilds: true
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 10080
 trustPolicyExclude: []
-allowBuilds: {}
+allowBuilds:
+  esbuild: false
+
+overrides:
+  '@modelcontextprotocol/sdk': 1.26.0
+  braces: 3.0.3
+  flatted: 3.4.2
+  glob@10.4.5: 10.5.0
+  handlebars: 4.7.9
+  micromatch: 4.0.8
+  minimatch@3.1.2: 3.1.4
+  minimatch@9.0.5: 9.0.7
+  path-to-regexp: 8.4.0
+  picomatch@2.3.1: 2.3.2
+  picomatch@4.0.3: 4.0.4
+  punycode: 2.3.1
+  rollup: 4.59.0
+  semver: 7.7.2
