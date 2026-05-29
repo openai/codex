@@ -17,11 +17,13 @@ use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::TurnAbortInput;
+use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
@@ -247,6 +249,22 @@ where
             return;
         }
         runtime.accounting_state().finish_turn(turn_id);
+    }
+
+    async fn on_turn_error(&self, input: TurnErrorInput<'_>) {
+        if input.error != CodexErrorInfo::UsageLimitExceeded {
+            return;
+        }
+        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+            return;
+        };
+
+        if let Err(err) = runtime
+            .usage_limit_active_goal_for_turn(input.turn_id)
+            .await
+        {
+            tracing::warn!("failed to usage-limit active goal after usage-limit error: {err}");
+        }
     }
 }
 
