@@ -307,7 +307,10 @@ fn local_skill_roots(
                 // compatibility. These are client-local absolute paths even when the active repo
                 // environment is remote, so bind them to the available local filesystem only.
                 roots.push(SkillRoot {
-                    path: local_path_ref(local_file_system, config_folder.join(SKILLS_DIR_NAME)),
+                    path: EnvironmentPathRef::new(
+                        Arc::clone(local_file_system),
+                        config_folder.join(SKILLS_DIR_NAME),
+                    ),
                     scope: SkillScope::User,
                     plugin_id: None,
                     plugin_root: None,
@@ -316,8 +319,8 @@ fn local_skill_roots(
                 // `$HOME/.agents/skills` (user-installed skills).
                 if let Some(home_dir) = home_dir {
                     roots.push(SkillRoot {
-                        path: local_path_ref(
-                            local_file_system,
+                        path: EnvironmentPathRef::new(
+                            Arc::clone(local_file_system),
                             home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
                         ),
                         scope: SkillScope::User,
@@ -329,7 +332,10 @@ fn local_skill_roots(
                 // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
                 // special case (not a config layer).
                 roots.push(SkillRoot {
-                    path: local_path_ref(local_file_system, system_cache_root_dir(&config_folder)),
+                    path: EnvironmentPathRef::new(
+                        Arc::clone(local_file_system),
+                        system_cache_root_dir(&config_folder),
+                    ),
                     scope: SkillScope::System,
                     plugin_id: None,
                     plugin_root: None,
@@ -339,7 +345,10 @@ fn local_skill_roots(
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
                 // `/etc/codex/skills` as admin-scoped skills.
                 roots.push(SkillRoot {
-                    path: local_path_ref(local_file_system, config_folder.join(SKILLS_DIR_NAME)),
+                    path: EnvironmentPathRef::new(
+                        Arc::clone(local_file_system),
+                        config_folder.join(SKILLS_DIR_NAME),
+                    ),
                     scope: SkillScope::Admin,
                     plugin_id: None,
                     plugin_root: None,
@@ -355,10 +364,13 @@ fn local_skill_roots(
     roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
         // Plugin discovery is currently local-only; multi-env plugin skill loading should be an
         // explicit future change rather than inheriting the selected repo environment here.
-        path: local_path_ref(local_file_system, root.path),
+        path: EnvironmentPathRef::new(Arc::clone(local_file_system), root.path),
         scope: SkillScope::User,
         plugin_id: Some(root.plugin_id),
-        plugin_root: Some(local_path_ref(local_file_system, root.plugin_root)),
+        plugin_root: Some(EnvironmentPathRef::new(
+            Arc::clone(local_file_system),
+            root.plugin_root,
+        )),
     }));
     roots.extend(extra_skill_roots.into_iter().map(|path| SkillRoot {
         path: local_path_ref(local_file_system, path),
@@ -374,8 +386,9 @@ fn repo_config_skill_roots(
     env_path: &EnvironmentPathRef,
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
-    // Project config layers describe workspace-local skill directories. Their absolute paths only
-    // make sense inside the selected environment, so keep them bound to `env_path`.
+    // Project config layers describe workspace-local `.codex/skills` directories. Their absolute
+    // paths only make sense inside the selected environment, so keep them bound to `env_path`
+    // rather than the optional local filesystem used for client-local system/user/plugin roots.
     config_layer_stack
         .get_layers(
             ConfigLayerStackOrdering::HighestPrecedenceFirst,
@@ -433,13 +446,6 @@ async fn repo_agents_skill_roots(
         }
     }
     roots
-}
-
-fn local_path_ref(
-    file_system: &Arc<dyn ExecutorFileSystem>,
-    path: AbsolutePathBuf,
-) -> EnvironmentPathRef {
-    EnvironmentPathRef::new(Arc::clone(file_system), path)
 }
 
 fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
