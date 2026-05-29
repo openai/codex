@@ -230,6 +230,8 @@ async fn remote_multi_agent_version_selector_overrides_feature_flags() -> Result
             .features
             .enable(Feature::MultiAgentV2)
             .expect("test config should allow feature update");
+        config.multi_agent_v2.root_agent_usage_hint_text =
+            Some("V2 guidance must not reach v1 models.".to_string());
     })
     .await?;
     assert_eq!(
@@ -246,6 +248,12 @@ async fn remote_multi_agent_version_selector_overrides_feature_flags() -> Result
         selected_tool_names(&v1_body, &["send_message", "followup_task", "list_agents"]),
         Vec::<String>::new()
     );
+    assert!(
+        !v1_body
+            .to_string()
+            .contains("V2 guidance must not reach v1 models."),
+        "v1 models should not receive v2 usage hints: {v1_body:?}"
+    );
 
     let mut v2_model = remote_model("test-multi-agent-v2");
     v2_model.multi_agent_version = Some(MultiAgentVersion::V2);
@@ -259,6 +267,8 @@ async fn remote_multi_agent_version_selector_overrides_feature_flags() -> Result
             .disable(Feature::MultiAgentV2)
             .expect("test config should allow feature update");
         config.multi_agent_v2.max_concurrent_threads_per_session = 17;
+        config.multi_agent_v2.root_agent_usage_hint_text =
+            Some("V2 guidance should reach v2 models.".to_string());
     })
     .await?;
     assert_eq!(
@@ -291,6 +301,12 @@ async fn remote_multi_agent_version_selector_overrides_feature_flags() -> Result
             |description| description.contains("max_concurrent_threads_per_session = 17")
         ),
         "v2 spawn_agent should advertise the configured concurrency cap: {v2_body:?}"
+    );
+    assert!(
+        v2_body
+            .to_string()
+            .contains("V2 guidance should reach v2 models."),
+        "v2 models should receive v2 usage hints: {v2_body:?}"
     );
 
     Ok(())
