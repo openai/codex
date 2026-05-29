@@ -561,7 +561,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: user_skill_path.clone().clone(),
+            path_to_skills_md: user_skill_path.clone(),
             source_path: codex_exec_server::EnvironmentPathRef::local(user_skill_path.clone()),
             environment_id: "local".to_string(),
             scope: crate::test_support::skill_scope_user(),

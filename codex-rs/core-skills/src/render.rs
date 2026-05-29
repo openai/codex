@@ -980,9 +980,7 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md"))
-                .abs()
-                .clone(),
+            path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
             source_path: codex_exec_server::EnvironmentPathRef::local(
                 test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
             ),
@@ -1356,7 +1354,7 @@ mod tests {
         let root = test_path_buf("/tmp/repo/.agents/skills").abs();
         let mut skill = skill_with_path("gh-fix-ci", &root.join("gh-fix-ci/SKILL.md"));
         skill.environment_id = "devbox".to_string();
-        let outcome = outcome_with_roots(vec![skill.clone()], vec![root.clone()]);
+        let outcome = outcome_with_roots(vec![skill.clone()], vec![root]);
 
         let absolute = build_available_skills(
             &outcome,
@@ -1392,7 +1390,10 @@ mod tests {
         );
         assert_eq!(
             aliased.skill_lines,
-            vec!["- gh-fix-ci: desc (env: devbox, file: r0/gh-fix-ci/SKILL.md)"]
+            vec![format!(
+                "- gh-fix-ci: desc (env: devbox, file: r0{separator}gh-fix-ci{separator}SKILL.md)",
+                separator = std::path::MAIN_SEPARATOR
+            )]
         );
     }
 

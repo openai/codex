@@ -16,7 +16,7 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: test_path_buf(path).abs().clone(),
+        path_to_skills_md: test_path_buf(path).abs(),
         source_path: codex_exec_server::EnvironmentPathRef::local(test_path_buf(path).abs()),
         environment_id: "local".to_string(),
         scope: codex_protocol::protocol::SkillScope::User,
