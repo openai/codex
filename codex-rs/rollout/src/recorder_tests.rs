@@ -85,6 +85,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
         meta: SessionMeta {
             id: thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             timestamp: "2026-01-27T12:34:56Z".to_string(),
             cwd: home.path().to_path_buf(),
             originator: "test".to_string(),
@@ -369,6 +370,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         RolloutRecorderParams::new(
             thread_id,
             /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
             BaseInstructions::default(),
@@ -449,6 +451,7 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
         RolloutRecorderParams::new(
             thread_id,
             /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
             BaseInstructions::default(),
@@ -974,6 +977,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("filesystem-sha".to_string()),
         git_origin_url: Some("https://example.com/filesystem.git".to_string()),
         source: None,
+        parent_thread_id: None,
         agent_nickname: None,
         agent_role: None,
         model_provider: None,
@@ -991,6 +995,7 @@ fn fill_missing_thread_item_metadata_preserves_identity_and_prefers_state_git_fi
         git_sha: Some("state-sha".to_string()),
         git_origin_url: Some("https://example.com/state.git".to_string()),
         source: Some(SessionSource::Exec),
+        parent_thread_id: None,
         agent_nickname: Some("state-agent".to_string()),
         agent_role: Some("state-role".to_string()),
         model_provider: Some("state-provider".to_string()),

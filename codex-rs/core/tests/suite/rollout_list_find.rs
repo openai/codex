@@ -184,6 +184,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
         RolloutRecorderParams::new(
             thread_id,
             /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
             SessionSource::Exec,
             /*thread_source*/ None,
             BaseInstructions::default(),

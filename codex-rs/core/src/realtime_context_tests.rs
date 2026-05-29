@@ -32,6 +32,7 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
         thread_id: ThreadId::new(),
         rollout_path: Some(PathBuf::from("/tmp/rollout.jsonl")),
         forked_from_id: None,
+        parent_thread_id: None,
         preview: first_user_message.to_string(),
         name: (!title.is_empty()).then(|| title.to_string()),
         model_provider: "test-provider".to_string(),

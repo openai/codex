@@ -1070,6 +1070,7 @@ fn session_configured_from_thread_start_response(
     session_configured_from_thread_response(
         &response.thread.session_id,
         &response.thread.id,
+        response.thread.parent_thread_id.as_deref(),
         response.thread.thread_source.map(Into::into),
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -1092,6 +1093,7 @@ fn session_configured_from_thread_resume_response(
     session_configured_from_thread_response(
         &response.thread.session_id,
         &response.thread.id,
+        response.thread.parent_thread_id.as_deref(),
         response.thread.thread_source.map(Into::into),
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -1123,6 +1125,7 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
 fn session_configured_from_thread_response(
     session_id: &str,
     thread_id: &str,
+    parent_thread_id: Option<&str>,
     thread_source: Option<codex_protocol::protocol::ThreadSource>,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
@@ -1140,11 +1143,16 @@ fn session_configured_from_thread_response(
         .map_err(|err| format!("session id `{session_id}` is invalid: {err}"))?;
     let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
+    let parent_thread_id = parent_thread_id
+        .map(ThreadId::from_string)
+        .transpose()
+        .map_err(|err| format!("parent thread id is invalid: {err}"))?;
 
     Ok(SessionConfiguredEvent {
         session_id,
         thread_id,
         forked_from_id: None,
+        parent_thread_id,
         thread_source,
         thread_name,
         model,
