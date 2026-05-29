@@ -1385,7 +1385,10 @@ mod tests {
             SkillEnvironmentRender::Include,
         )
         .expect("skills should render");
-        assert_eq!(plan.aliases.skill_root_lines, vec![expected_alias_root_line]);
+        assert_eq!(
+            plan.aliases.skill_root_lines,
+            vec![expected_alias_root_line]
+        );
         assert_eq!(
             aliased.skill_lines,
             vec![format!(
