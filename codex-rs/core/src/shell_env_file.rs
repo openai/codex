@@ -7,6 +7,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use codex_protocol::ThreadId;
+use codex_protocol::exec_output::bytes_to_string_smart;
 use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
@@ -141,6 +142,7 @@ impl ShellEnvFile {
 enum ShellEnvCapture {
     Posix,
     PowerShell,
+    Cmd,
 }
 
 impl ShellEnvCapture {
@@ -148,7 +150,7 @@ impl ShellEnvCapture {
         match shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => Some(Self::Posix),
             ShellType::PowerShell => Some(Self::PowerShell),
-            ShellType::Cmd => None,
+            ShellType::Cmd => Some(Self::Cmd),
         }
     }
 
@@ -156,6 +158,7 @@ impl ShellEnvCapture {
         match self {
             Self::Posix => ".sh",
             Self::PowerShell => ".ps1",
+            Self::Cmd => ".cmd",
         }
     }
 
@@ -169,6 +172,7 @@ impl ShellEnvCapture {
                 POWERSHELL_DUMP_ENV_SCRIPT,
                 POWERSHELL_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT,
             ),
+            Self::Cmd => (CMD_DUMP_ENV_SCRIPT, CMD_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT),
         }
     }
 
@@ -201,6 +205,7 @@ impl ShellEnvCapture {
         match self {
             Self::Posix => vec!["-c", script],
             Self::PowerShell => vec!["-NoLogo", "-NoProfile", "-Command", script],
+            Self::Cmd => vec!["/d", "/c", script],
         }
     }
 
@@ -208,6 +213,7 @@ impl ShellEnvCapture {
         match self {
             Self::Posix => parse_posix_env_output(output),
             Self::PowerShell => parse_powershell_env_output(output),
+            Self::Cmd => Ok(parse_cmd_env_output(output)),
         }
     }
 }
@@ -248,6 +254,10 @@ Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
 }
 ConvertTo-Json -InputObject $items -Compress -Depth 2"#;
 
+const CMD_DUMP_ENV_SCRIPT: &str = "set";
+
+const CMD_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = "if defined CODEX_ENV_FILE if exist \"%CODEX_ENV_FILE%\" call \"%CODEX_ENV_FILE%\" >nul 2>&1\r\nset";
+
 fn parse_posix_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
     let mut env = HashMap::new();
     for entry in output.split(|byte| *byte == 0) {
@@ -276,6 +286,16 @@ fn parse_powershell_env_output(output: &[u8]) -> Result<HashMap<String, String>>
     let output: HashMap<String, String> =
         serde_json::from_str(output).context("failed to parse captured PowerShell environment")?;
     Ok(output)
+}
+
+fn parse_cmd_env_output(output: &[u8]) -> HashMap<String, String> {
+    bytes_to_string_smart(output)
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (!key.is_empty()).then(|| (key.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 fn diff_env(

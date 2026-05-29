@@ -114,14 +114,15 @@ fn shell_env_file_for_session_uses_powershell_script_suffix() -> Result<()> {
 }
 
 #[test]
-fn shell_env_file_for_session_skips_cmd() -> Result<()> {
-    let shell = Shell {
-        shell_type: ShellType::Cmd,
-        shell_path: PathBuf::from("cmd.exe"),
-        shell_snapshot: empty_shell_snapshot_receiver(),
-    };
+fn shell_env_file_for_session_uses_cmd_script_suffix() -> Result<()> {
+    let shell = test_cmd_shell();
+    let env_file = ShellEnvFile::for_session(ThreadId::new(), &shell)?
+        .expect("cmd should support a session env file");
 
-    assert!(ShellEnvFile::for_session(ThreadId::new(), &shell)?.is_none());
+    assert_eq!(
+        env_file.path().extension().and_then(|ext| ext.to_str()),
+        Some("cmd")
+    );
 
     Ok(())
 }
@@ -137,6 +138,18 @@ fn powershell_env_output_parser_accepts_json_object() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[test]
+fn cmd_env_output_parser_accepts_set_output() {
+    assert_eq!(
+        parse_cmd_env_output(b"=C:=C:\\worktree\r\nEMPTY=\r\nONLY=one\r\nWITH_EQUALS=a=b\r\n"),
+        HashMap::from([
+            ("EMPTY".to_string(), "".to_string()),
+            ("ONLY".to_string(), "one".to_string()),
+            ("WITH_EQUALS".to_string(), "a=b".to_string()),
+        ])
+    );
 }
 
 #[cfg(windows)]
@@ -203,10 +216,80 @@ Remove-Item Env:REMOVED_BY_HOOK -ErrorAction SilentlyContinue
     Ok(())
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn cmd_env_file_applies_exports_without_exposing_writable_path() -> Result<()> {
+    let env_file = ShellEnvFile::new(ThreadId::new(), ShellEnvCapture::Cmd)?;
+    let base_env = HashMap::from([
+        ("BASE".to_string(), "keep".to_string()),
+        (
+            CODEX_THREAD_ID_ENV_VAR.to_string(),
+            "real-thread".to_string(),
+        ),
+        ("REMOVED_BY_HOOK".to_string(), "remove-me".to_string()),
+    ]);
+    std::fs::write(
+        env_file.path(),
+        "\
+@echo off\r
+set CODEX_SESSION_START_TEST=from-session-start\r
+set CODEX_ENV_FILE=C:\\poison\r
+set CLAUDE_ENV_FILE=C:\\poison\r
+set CODEX_THREAD_ID=poisoned-thread\r
+set EXPLICIT_OVERRIDE=from-hook\r
+set REMOVED_BY_HOOK=\r
+",
+    )?;
+    let cwd = std::env::current_dir()?;
+    env_file
+        .capture_exports(&test_cmd_shell(), cwd.as_path(), &base_env)
+        .await?;
+
+    let mut env = base_env;
+    env.insert(
+        CODEX_ENV_FILE_ENV_VAR.to_string(),
+        env_file.path().display().to_string(),
+    );
+    env.insert(
+        CLAUDE_ENV_FILE_ENV_VAR.to_string(),
+        env_file.path().display().to_string(),
+    );
+    let explicit_env_overrides =
+        HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]);
+
+    env_file.apply_exports(&mut env, &explicit_env_overrides);
+
+    assert_eq!(
+        env,
+        HashMap::from([
+            ("BASE".to_string(), "keep".to_string()),
+            (
+                "CODEX_SESSION_START_TEST".to_string(),
+                "from-session-start".to_string(),
+            ),
+            (
+                CODEX_THREAD_ID_ENV_VAR.to_string(),
+                "real-thread".to_string(),
+            ),
+            ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
+        ])
+    );
+
+    Ok(())
+}
+
 fn test_powershell_shell() -> Shell {
     Shell {
         shell_type: ShellType::PowerShell,
         shell_path: PathBuf::from("powershell.exe"),
+        shell_snapshot: empty_shell_snapshot_receiver(),
+    }
+}
+
+fn test_cmd_shell() -> Shell {
+    Shell {
+        shell_type: ShellType::Cmd,
+        shell_path: PathBuf::from("cmd.exe"),
         shell_snapshot: empty_shell_snapshot_receiver(),
     }
 }
