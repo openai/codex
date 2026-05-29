@@ -1215,7 +1215,7 @@ impl ChatWidget {
             if self.review.is_review_mode {
                 return;
             }
-            let mention_bindings = items
+            let mut mention_bindings: Vec<MentionBinding> = items
                 .iter()
                 .filter_map(|item| match item {
                     UserInput::Skill { name, path } => Some(MentionBinding {
@@ -1244,6 +1244,23 @@ impl ChatWidget {
                     | UserInput::LocalImage { .. } => None,
                 })
                 .collect();
+            let message = display.message.as_str();
+            mention_bindings.sort_by_key(|binding| {
+                let token = format!("${}", binding.mention);
+                message
+                    .match_indices(&token)
+                    .find_map(|(start, _)| {
+                        let end = start + token.len();
+                        message
+                            .as_bytes()
+                            .get(end)
+                            .is_none_or(|byte| {
+                                !byte.is_ascii_alphanumeric() && !matches!(byte, b'_' | b'-')
+                            })
+                            .then_some(start)
+                    })
+                    .unwrap_or(usize::MAX)
+            });
             self.bottom_pane
                 .record_replayed_user_message_history(HistoryEntry {
                     text: display.message.clone(),
