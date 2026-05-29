@@ -38,7 +38,7 @@ pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
-    env_path: EnvironmentPathRef,
+    env_path: Option<EnvironmentPathRef>,
     local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     effective_skill_roots: Vec<PluginSkillRoot>,
 ) -> SkillsLoadInput {
@@ -57,10 +57,17 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     command: &str,
     workdir: &AbsolutePathBuf,
 ) {
+    let workdir = turn_context
+        .environments
+        .primary()
+        .map(|environment| {
+            EnvironmentPathRef::new(environment.environment.get_filesystem(), workdir.clone())
+        })
+        .unwrap_or_else(|| EnvironmentPathRef::local(workdir.clone()));
     let Some(candidate) = detect_implicit_skill_invocation_for_command(
         turn_context.turn_skills.outcome.as_ref(),
         command,
-        workdir,
+        &workdir,
     ) else {
         return;
     };

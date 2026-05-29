@@ -23,10 +23,6 @@ pub struct SkillsListParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
 
-    /// Environment whose filesystem should be used for all requested cwd values.
-    #[ts(optional = nullable)]
-    pub environment_id: Option<String>,
-
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,

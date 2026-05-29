@@ -71,6 +71,10 @@ fn plugin_skill_root_for_skill_path(skill_path: &Path, plugin_id: &str) -> Plugi
 }
 
 fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
+    let path = path
+        .abs()
+        .canonicalize()
+        .expect("skill path should canonicalize");
     SkillMetadata {
         name: name.to_string(),
         description: "test".to_string(),
@@ -78,10 +82,8 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize"),
+        source_path: EnvironmentPathRef::local(path.clone()),
+        path_to_skills_md: path,
         scope: SkillScope::User,
         plugin_id: None,
     }
@@ -98,7 +100,7 @@ fn local_skills_input(
 ) -> SkillsLoadInput {
     let path_ref = skill_root_path_ref(cwd);
     SkillsLoadInput::new(
-        path_ref,
+        Some(path_ref),
         Some(Arc::clone(&LOCAL_FS)),
         effective_skill_roots,
         config_layer_stack.clone(),
@@ -381,7 +383,7 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         .abs();
 
     assert_eq!(skill.path_to_skills_md, skill_path);
-    assert!(outcome.disabled_paths.contains(&skill.path_to_skills_md));
+    assert!(outcome.disabled_paths.contains(&skill.source_path));
     assert!(
         !outcome
             .allowed_skills_for_implicit_invocation()
@@ -475,7 +477,7 @@ async fn skills_for_cwd_without_local_fs_skips_local_roots() {
     )
     .expect("valid config layer stack");
     let skills_input = SkillsLoadInput::new(
-        skill_root_path_ref(cwd.path().abs()),
+        Some(skill_root_path_ref(cwd.path().abs())),
         /*local_file_system*/ None,
         Vec::new(),
         config_layer_stack.clone(),
@@ -502,6 +504,66 @@ async fn skills_for_cwd_without_local_fs_skips_local_roots() {
         .collect::<HashSet<_>>();
     assert!(!loaded_names.contains("user-skill"));
     assert!(loaded_names.contains("repo-skill"));
+}
+
+#[tokio::test]
+async fn skills_for_cwd_without_env_path_still_loads_local_roots() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let repo_dot_codex = cwd.path().join(".codex");
+    fs::create_dir_all(&repo_dot_codex).expect("create repo config dir");
+
+    write_user_skill(&codex_home, "user", "user-skill", "from local user root");
+    let repo_skill_dir = repo_dot_codex.join("skills/repo");
+    fs::create_dir_all(&repo_skill_dir).expect("create repo skill dir");
+    fs::write(
+        repo_skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: from repo root\n---\n\n# Body\n",
+    )
+    .expect("write repo skill");
+
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![
+            user_config_layer(&codex_home, ""),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: repo_dot_codex.abs(),
+                },
+                toml::Value::Table(toml::map::Map::new()),
+            ),
+        ],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+    let skills_input = SkillsLoadInput::new(
+        /*env_path*/ None,
+        Some(Arc::clone(&LOCAL_FS)),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
+    let skills_manager = SkillsManager::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let outcome = skills_manager
+        .skills_for_cwd(&skills_input, /*force_reload*/ true)
+        .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    let loaded_names = outcome
+        .skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(loaded_names.contains("user-skill"));
+    assert!(!loaded_names.contains("repo-skill"));
 }
 
 #[tokio::test]
@@ -656,10 +718,12 @@ fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill(
     let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
-        HashSet::from([skill_path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize")])
+        HashSet::from([EnvironmentPathRef::local(
+            skill_path
+                .abs()
+                .canonicalize()
+                .expect("skill path should canonicalize"),
+        )])
     );
 }
 
@@ -689,10 +753,12 @@ fn disabled_paths_for_skills_disables_matching_name_selectors() {
     let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
-        HashSet::from([skill_path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize")])
+        HashSet::from([EnvironmentPathRef::local(
+            skill_path
+                .abs()
+                .canonicalize()
+                .expect("skill path should canonicalize"),
+        )])
     );
 }
 
@@ -728,6 +794,44 @@ fn disabled_paths_for_skills_allows_name_selector_to_override_path_selector() {
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
         HashSet::new()
+    );
+}
+
+#[cfg_attr(windows, ignore)]
+#[test]
+fn disabled_paths_for_skills_disables_same_raw_path_in_each_file_system() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_demo_skill(&tempdir);
+    let mut second_skill = test_skill("demo-skill", skill_path.clone());
+    second_skill.source_path = EnvironmentPathRef::new(
+        Arc::new(codex_exec_server::LocalFileSystem::unsandboxed()),
+        second_skill.path_to_skills_md.clone(),
+    );
+    let local_skill = test_skill("demo-skill", skill_path.clone());
+    let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
+        .expect("user config path should be absolute");
+    let user_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        },
+        toml::from_str(&path_toggle_config(&skill_path, /*enabled*/ false))
+            .expect("user layer toml"),
+    );
+    let stack = ConfigLayerStack::new(
+        vec![user_layer],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
+    assert_eq!(
+        resolve_disabled_skill_paths(
+            &[second_skill.clone(), local_skill.clone()],
+            &skill_config_rules
+        ),
+        HashSet::from([second_skill.source_path, local_skill.source_path])
     );
 }
 

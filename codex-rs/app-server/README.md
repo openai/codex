@@ -1504,14 +1504,13 @@ Example:
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
-Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, `environmentId`, and `forceReload`).
+Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 Use `skills/extraRoots/set` to replace additional standalone skill roots for the current app-server process. These roots use the same layout as other standalone skill roots: each root contains skill directories, and each skill directory contains `SKILL.md`. Missing roots are accepted and load no skills until they exist. This setting is lost when app-server exits.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
-    "environmentId": "local",
     "cwds": ["/Users/me/project", "/Users/me/other-project"],
     "forceReload": true
 } }
