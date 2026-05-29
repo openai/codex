@@ -262,6 +262,29 @@ fn collect_explicit_skill_mentions_uses_structured_name_to_disambiguate_same_pat
 }
 
 #[test]
+fn collect_explicit_skill_mentions_uses_linked_name_to_disambiguate_same_path() {
+    let first = make_skill("alpha-skill", "/tmp/shared");
+    let second = SkillMetadata {
+        name: "beta-skill".to_string(),
+        source_path: EnvironmentPathRef::new(
+            std::sync::Arc::new(LocalFileSystem::unsandboxed()),
+            first.path_to_skills_md.clone(),
+        ),
+        ..first.clone()
+    };
+    let skills = vec![first, second.clone()];
+    let inputs = vec![UserInput::Text {
+        text: linked_skill_mention("beta-skill", "/tmp/shared"),
+        text_elements: Vec::new(),
+    }];
+    let connector_counts = HashMap::new();
+
+    let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
+
+    assert_eq!(selected, vec![second]);
+}
+
+#[test]
 fn collect_explicit_skill_mentions_dedupes_by_path() {
     let alpha = make_skill("alpha-skill", "/tmp/alpha");
     let skills = vec![alpha.clone()];

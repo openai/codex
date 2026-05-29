@@ -98,7 +98,8 @@ fn emit_skill_injected_metric(
 /// Structured `UserInput::Skill` selections are resolved first by path against
 /// enabled skills. Text inputs are then scanned to extract `$skill-name` tokens, and we
 /// iterate `skills` in their existing order to preserve prior ordering semantics.
-/// Explicit links are resolved by path and plain names are only used when the match
+/// Explicit links are resolved by path, using the linked name only when duplicate
+/// filesystem-bound copies share the same raw path. Plain names are only used when the match
 /// is unambiguous.
 ///
 /// Complexity: `O(T + (N_s + N_t) * S)` time, `O(S + M)` space, where:
@@ -179,6 +180,7 @@ pub struct ToolMentions<'a> {
     names: HashSet<&'a str>,
     paths: HashSet<&'a str>,
     plain_names: HashSet<&'a str>,
+    linked_mentions: HashSet<LinkedToolMention<'a>>,
 }
 
 impl<'a> ToolMentions<'a> {
@@ -193,6 +195,16 @@ impl<'a> ToolMentions<'a> {
     pub fn paths(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.paths.iter().copied()
     }
+
+    fn linked_mentions(&self) -> impl Iterator<Item = LinkedToolMention<'a>> + '_ {
+        self.linked_mentions.iter().copied()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct LinkedToolMention<'a> {
+    name: &'a str,
+    path: &'a str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,6 +269,7 @@ pub fn extract_tool_mentions_with_sigil(text: &str, sigil: char) -> ToolMentions
     let mut mentioned_names: HashSet<&str> = HashSet::new();
     let mut mentioned_paths: HashSet<&str> = HashSet::new();
     let mut plain_names: HashSet<&str> = HashSet::new();
+    let mut linked_mentions: HashSet<LinkedToolMention<'_>> = HashSet::new();
 
     let mut index = 0;
     while index < text_bytes.len() {
@@ -273,6 +286,7 @@ pub fn extract_tool_mentions_with_sigil(text: &str, sigil: char) -> ToolMentions
                     mentioned_names.insert(name);
                 }
                 mentioned_paths.insert(path);
+                linked_mentions.insert(LinkedToolMention { name, path });
             }
             index = end_index;
             continue;
@@ -312,6 +326,7 @@ pub fn extract_tool_mentions_with_sigil(text: &str, sigil: char) -> ToolMentions
         names: mentioned_names,
         paths: mentioned_paths,
         plain_names,
+        linked_mentions,
     }
 }
 
@@ -338,6 +353,19 @@ fn select_skills_from_mentions(
         })
         .map(normalize_skill_path)
         .collect();
+    let mention_skill_links: HashSet<LinkedToolMention<'_>> = mentions
+        .linked_mentions()
+        .filter(|mention| {
+            !matches!(
+                tool_kind_for_path(mention.path),
+                ToolMentionKind::App | ToolMentionKind::Mcp | ToolMentionKind::Plugin
+            )
+        })
+        .map(|mention| LinkedToolMention {
+            name: mention.name,
+            path: normalize_skill_path(mention.path),
+        })
+        .collect();
 
     let mention_skill_path_counts = selection_context
         .skills
@@ -357,6 +385,27 @@ fn select_skills_from_mentions(
             *counts.entry(path).or_insert(0usize) += 1;
             counts
         });
+    let mention_skill_link_counts = selection_context
+        .skills
+        .iter()
+        .filter(|skill| {
+            !selection_context
+                .disabled_paths
+                .contains(&skill.source_path)
+        })
+        .filter_map(|skill| {
+            let path = skill.path_to_skills_md.to_string_lossy();
+            mention_skill_links
+                .contains(&LinkedToolMention {
+                    name: skill.name.as_str(),
+                    path: path.as_ref(),
+                })
+                .then_some((skill.name.clone(), path.into_owned()))
+        })
+        .fold(HashMap::new(), |mut counts, link| {
+            *counts.entry(link).or_insert(0usize) += 1;
+            counts
+        });
 
     for skill in selection_context.skills {
         if selection_context
@@ -368,8 +417,16 @@ fn select_skills_from_mentions(
         }
 
         let path_str = skill.path_to_skills_md.to_string_lossy();
-        if mention_skill_paths.contains(path_str.as_ref())
-            && mention_skill_path_counts.get(path_str.as_ref()) == Some(&1)
+        let path = path_str.as_ref();
+        let linked_mention = LinkedToolMention {
+            name: skill.name.as_str(),
+            path,
+        };
+        let linked_mention_key = (skill.name.clone(), path.to_string());
+        if mention_skill_paths.contains(path)
+            && (mention_skill_path_counts.get(path) == Some(&1)
+                || (mention_skill_links.contains(&linked_mention)
+                    && mention_skill_link_counts.get(&linked_mention_key) == Some(&1)))
         {
             seen_paths.insert(skill.source_path.clone());
             seen_names.insert(skill.name.clone());
