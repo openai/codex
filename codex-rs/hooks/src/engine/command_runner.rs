@@ -43,7 +43,7 @@ pub(crate) async fn run_command(
             );
         };
         if environment.is_remote() {
-            return run_remote_command(handler, environment, input_json, cwd).await;
+            return run_remote_hook_command(handler, environment, input_json, cwd).await;
         }
     }
 
@@ -97,7 +97,7 @@ pub(crate) async fn run_command(
     }
 }
 
-async fn run_remote_command(
+async fn run_remote_hook_command(
     handler: &ConfiguredHandler,
     environment: std::sync::Arc<codex_exec_server::Environment>,
     input_json: &str,
@@ -122,6 +122,16 @@ async fn run_remote_command(
         Ok(started) => started.process,
         Err(err) => return command_error(started_at, started, err.to_string()),
     };
+    run_started_remote_hook_command(process, handler, input_json, started_at, started).await
+}
+
+async fn run_started_remote_hook_command(
+    process: std::sync::Arc<dyn ExecProcess>,
+    handler: &ConfiguredHandler,
+    input_json: &str,
+    started_at: i64,
+    started: Instant,
+) -> CommandRunResult {
     if let Err(error) = write_remote_stdin(&process, input_json).await {
         let _ = process.terminate().await;
         return command_error(started_at, started, error);
@@ -279,16 +289,125 @@ fn default_shell_command() -> Command {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::future::pending;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::time::Instant;
+
+    use async_trait::async_trait;
     use codex_exec_server::EnvironmentManager;
+    use codex_exec_server::ExecProcessEventReceiver;
+    use codex_exec_server::ExecServerError;
+    use codex_exec_server::ProcessOutputChunk;
+    use codex_exec_server::ReadResponse;
+    use codex_exec_server::WriteResponse;
+    use codex_exec_server::WriteStatus;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
+    use tokio::sync::Mutex;
+    use tokio::sync::watch;
 
     use super::CommandShell;
     use super::ConfiguredHandler;
+    use super::collect_output;
     use super::run_command;
+    use super::run_started_remote_hook_command;
+    use super::write_remote_stdin;
+
+    struct MockExecProcess {
+        process_id: codex_exec_server::ProcessId,
+        write_response: WriteResponse,
+        read_responses: Mutex<VecDeque<Result<ReadResponse, ExecServerError>>>,
+        block_reads: bool,
+        writes: Mutex<Vec<(Option<Vec<u8>>, bool)>>,
+        terminate_calls: AtomicUsize,
+        wake_tx: watch::Sender<u64>,
+    }
+
+    impl MockExecProcess {
+        fn new(
+            write_status: WriteStatus,
+            read_responses: Vec<Result<ReadResponse, ExecServerError>>,
+        ) -> Arc<Self> {
+            let (wake_tx, _wake_rx) = watch::channel(0);
+            Arc::new(Self {
+                process_id: "hook-process".to_string().into(),
+                write_response: WriteResponse {
+                    status: write_status,
+                },
+                read_responses: Mutex::new(VecDeque::from(read_responses)),
+                block_reads: false,
+                writes: Mutex::new(Vec::new()),
+                terminate_calls: AtomicUsize::new(0),
+                wake_tx,
+            })
+        }
+
+        fn blocking() -> Arc<Self> {
+            let (wake_tx, _wake_rx) = watch::channel(0);
+            Arc::new(Self {
+                process_id: "hook-process".to_string().into(),
+                write_response: WriteResponse {
+                    status: WriteStatus::Accepted,
+                },
+                read_responses: Mutex::new(VecDeque::new()),
+                block_reads: true,
+                writes: Mutex::new(Vec::new()),
+                terminate_calls: AtomicUsize::new(0),
+                wake_tx,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl codex_exec_server::ExecProcess for MockExecProcess {
+        fn process_id(&self) -> &codex_exec_server::ProcessId {
+            &self.process_id
+        }
+
+        fn subscribe_wake(&self) -> watch::Receiver<u64> {
+            self.wake_tx.subscribe()
+        }
+
+        fn subscribe_events(&self) -> ExecProcessEventReceiver {
+            ExecProcessEventReceiver::empty()
+        }
+
+        async fn read(
+            &self,
+            _after_seq: Option<u64>,
+            _max_bytes: Option<usize>,
+            _wait_ms: Option<u64>,
+        ) -> Result<ReadResponse, ExecServerError> {
+            if self.block_reads {
+                return pending().await;
+            }
+            self.read_responses
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or_else(|| Ok(closed_read_response(Vec::new(), Some(0))))
+        }
+
+        async fn write(
+            &self,
+            chunk: Option<Vec<u8>>,
+            close_stdin: bool,
+        ) -> Result<WriteResponse, ExecServerError> {
+            self.writes.lock().await.push((chunk, close_stdin));
+            Ok(self.write_response.clone())
+        }
+
+        async fn terminate(&self) -> Result<(), ExecServerError> {
+            self.terminate_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     fn shell(environment_manager: std::sync::Arc<EnvironmentManager>) -> CommandShell {
         CommandShell {
@@ -313,6 +432,42 @@ mod tests {
         }
     }
 
+    fn read_response(
+        chunks: Vec<ProcessOutputChunk>,
+        next_seq: u64,
+        exited: bool,
+        exit_code: Option<i32>,
+        closed: bool,
+    ) -> ReadResponse {
+        ReadResponse {
+            chunks,
+            next_seq,
+            exited,
+            exit_code,
+            closed,
+            failure: None,
+        }
+    }
+
+    fn closed_read_response(
+        chunks: Vec<ProcessOutputChunk>,
+        exit_code: Option<i32>,
+    ) -> ReadResponse {
+        read_response(chunks, 4, true, exit_code, true)
+    }
+
+    fn output_chunk(
+        seq: u64,
+        stream: codex_exec_server::ExecOutputStream,
+        chunk: &[u8],
+    ) -> ProcessOutputChunk {
+        ProcessOutputChunk {
+            seq,
+            stream,
+            chunk: chunk.to_vec().into(),
+        }
+    }
+
     #[tokio::test]
     async fn omitted_environment_id_runs_locally() {
         let result = run_command(
@@ -326,6 +481,55 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
         assert_eq!(result.stdout, "local-hook");
         assert_eq!(result.error, None);
+    }
+
+    #[tokio::test]
+    async fn explicit_local_environment_id_runs_locally() {
+        let result = run_command(
+            &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
+            &handler("printf explicit-local-hook", Some("local")),
+            "{}",
+            test_path_buf("/tmp").as_path(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.stdout, "explicit-local-hook");
+        assert_eq!(result.error, None);
+    }
+
+    #[tokio::test]
+    async fn local_hook_receives_stdin_and_captures_stderr_and_exit_code() {
+        let result = run_command(
+            &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
+            &handler("cat; printf stderr >&2; exit 7", None),
+            "{\"hook\":true}",
+            test_path_buf("/tmp").as_path(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, Some(7));
+        assert_eq!(result.stdout, "{\"hook\":true}");
+        assert_eq!(result.stderr, "stderr");
+        assert_eq!(result.error, None);
+    }
+
+    #[tokio::test]
+    async fn local_hook_timeout_returns_error() {
+        let mut handler = handler("sleep 5", None);
+        handler.timeout_sec = 1;
+        let result = run_command(
+            &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
+            &handler,
+            "{}",
+            test_path_buf("/tmp").as_path(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.stdout, "");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.error.as_deref(), Some("hook timed out after 1s"));
     }
 
     #[tokio::test]
@@ -368,5 +572,131 @@ mod tests {
                 .as_deref()
                 .is_some_and(|error| error.contains("failed"))
         );
+    }
+
+    #[tokio::test]
+    async fn remote_hook_stdin_writes_payload_and_closes_stdin() {
+        let process = MockExecProcess::new(WriteStatus::Accepted, Vec::new());
+
+        write_remote_stdin(
+            &(process.clone() as Arc<dyn codex_exec_server::ExecProcess>),
+            "{\"hook\":true}",
+        )
+        .await
+        .expect("remote hook stdin should be accepted");
+
+        assert_eq!(
+            process.writes.lock().await.as_slice(),
+            &[(Some(b"{\"hook\":true}".to_vec()), true)]
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_hook_stdin_rejects_non_accepted_write_status() {
+        let process = MockExecProcess::new(WriteStatus::StdinClosed, Vec::new());
+
+        let err = write_remote_stdin(
+            &(process.clone() as Arc<dyn codex_exec_server::ExecProcess>),
+            "{}",
+        )
+        .await
+        .expect_err("closed stdin should fail");
+
+        assert_eq!(err, "failed to write hook stdin: StdinClosed");
+    }
+
+    #[tokio::test]
+    async fn remote_hook_collects_stdout_stderr_and_pty_output() {
+        let process = MockExecProcess::new(
+            WriteStatus::Accepted,
+            vec![Ok(closed_read_response(
+                vec![
+                    output_chunk(1, codex_exec_server::ExecOutputStream::Stdout, b"stdout"),
+                    output_chunk(2, codex_exec_server::ExecOutputStream::Stderr, b"stderr"),
+                    output_chunk(3, codex_exec_server::ExecOutputStream::Pty, b"pty"),
+                ],
+                Some(0),
+            ))],
+        );
+
+        let actual = collect_output(process as Arc<dyn codex_exec_server::ExecProcess>)
+            .await
+            .expect("remote output should collect");
+
+        assert_eq!(
+            actual,
+            ("stdoutpty".to_string(), "stderr".to_string(), Some(0))
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_hook_collect_output_surfaces_process_failure() {
+        let mut response = closed_read_response(Vec::new(), None);
+        response.failure = Some("transport disconnected".to_string());
+        let process = MockExecProcess::new(WriteStatus::Accepted, vec![Ok(response)]);
+
+        let err = collect_output(process as Arc<dyn codex_exec_server::ExecProcess>)
+            .await
+            .expect_err("remote output failure should surface");
+
+        assert_eq!(err, "transport disconnected");
+    }
+
+    #[tokio::test]
+    async fn remote_hook_write_failure_terminates_process() {
+        let process = MockExecProcess::new(WriteStatus::StdinClosed, Vec::new());
+        let result = run_started_remote_hook_command(
+            process.clone() as Arc<dyn codex_exec_server::ExecProcess>,
+            &handler("printf ignored", Some("remote-hook")),
+            "{}",
+            chrono::Utc::now().timestamp(),
+            Instant::now(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, None);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("failed to write hook stdin: StdinClosed")
+        );
+        assert_eq!(process.terminate_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn remote_hook_read_failure_terminates_process() {
+        let mut response = closed_read_response(Vec::new(), None);
+        response.failure = Some("transport disconnected".to_string());
+        let process = MockExecProcess::new(WriteStatus::Accepted, vec![Ok(response)]);
+        let result = run_started_remote_hook_command(
+            process.clone() as Arc<dyn codex_exec_server::ExecProcess>,
+            &handler("printf ignored", Some("remote-hook")),
+            "{}",
+            chrono::Utc::now().timestamp(),
+            Instant::now(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.error.as_deref(), Some("transport disconnected"));
+        assert_eq!(process.terminate_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn remote_hook_timeout_terminates_process() {
+        let process = MockExecProcess::blocking();
+        let mut handler = handler("printf ignored", Some("remote-hook"));
+        handler.timeout_sec = 0;
+        let result = run_started_remote_hook_command(
+            process.clone() as Arc<dyn codex_exec_server::ExecProcess>,
+            &handler,
+            "{}",
+            chrono::Utc::now().timestamp(),
+            Instant::now(),
+        )
+        .await;
+
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.error.as_deref(), Some("hook timed out after 0s"));
+        assert_eq!(process.terminate_calls.load(Ordering::SeqCst), 1);
     }
 }

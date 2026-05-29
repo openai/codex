@@ -16,6 +16,7 @@ workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-config = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -30,6 +31,7 @@ tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

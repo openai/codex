@@ -169,6 +169,12 @@
                 "null"
               ]
             },
+            "environmentId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "statusMessage": {
               "type": [
                 "string",

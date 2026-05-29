@@ -385,7 +385,7 @@ async fn structured_hook_routes_to_explicit_remote_environment() -> Result<()> {
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     );
     let hook_input_path_for_config = hook_input_path.clone();
-    let builder = test_codex()
+    let mut builder = test_codex()
         .with_pre_build_hook(move |home| {
             let hooks = json!({
                 "hooks": {
