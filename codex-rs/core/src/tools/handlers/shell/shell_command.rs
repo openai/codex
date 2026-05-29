@@ -167,6 +167,16 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         #[allow(deprecated)]
         let workdir = turn.resolve_path(params.workdir.clone());
+        let workdir = turn
+            .environments
+            .primary()
+            .map(|environment| {
+                crate::skills::EnvironmentPathRef::new(
+                    environment.environment.get_filesystem(),
+                    workdir.clone(),
+                )
+            })
+            .unwrap_or_else(|| crate::skills::EnvironmentPathRef::local(workdir.clone()));
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
