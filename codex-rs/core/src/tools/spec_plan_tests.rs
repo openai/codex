@@ -840,14 +840,27 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
     })
     .await;
 
-    v1.assert_visible_contains(&[
+    v1.assert_visible_contains(&[MULTI_AGENT_V1_NAMESPACE]);
+    v1.assert_visible_lacks(&[
         "spawn_agent",
         "send_input",
         "resume_agent",
         "wait_agent",
         "close_agent",
+        "send_message",
+        "followup_task",
+        "list_agents",
     ]);
-    v1.assert_visible_lacks(&["send_message", "followup_task", "list_agents"]);
+    assert_eq!(
+        v1.namespace_function_names(MULTI_AGENT_V1_NAMESPACE),
+        &[
+            "close_agent".to_string(),
+            "resume_agent".to_string(),
+            "send_input".to_string(),
+            "spawn_agent".to_string(),
+            "wait_agent".to_string(),
+        ]
+    );
 
     let v2 = probe(|turn| {
         set_feature(turn, Feature::Collab, /*enabled*/ false);
