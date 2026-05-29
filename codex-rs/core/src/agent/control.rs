@@ -217,7 +217,7 @@ impl AgentControl {
         config: crate::config::Config,
         initial_operation: Op,
         session_source: Option<SessionSource>,
-        options: SpawnAgentOptions,
+        mut options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
         let state = self.upgrade()?;
         let multi_agent_version = options.multi_agent_version.or_else(|| {
@@ -229,6 +229,7 @@ impl AgentControl {
                 None
             }
         });
+        options.multi_agent_version = multi_agent_version;
         let max_threads = if multi_agent_version == Some(MultiAgentVersion::V2) {
             Some(
                 config
@@ -277,7 +278,6 @@ impl AgentControl {
                     config,
                     session_source,
                     &options,
-                    multi_agent_version,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
                 ))
@@ -389,7 +389,6 @@ impl AgentControl {
         config: crate::config::Config,
         session_source: SessionSource,
         options: &SpawnAgentOptions,
-        multi_agent_version: Option<MultiAgentVersion>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<crate::thread_manager::NewThread> {
@@ -440,6 +439,7 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
+        let multi_agent_version = options.multi_agent_version;
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
                 if multi_agent_version == Some(MultiAgentVersion::V2) {
