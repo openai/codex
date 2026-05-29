@@ -225,11 +225,22 @@ impl App {
         current_cwd: &Path,
         resume_cwd: PathBuf,
     ) -> Result<Config> {
-        if !crate::session_resume::cwds_differ(current_cwd, &resume_cwd) {
-            return Ok(self.config.clone());
+        match self.rebuild_config_for_cwd(resume_cwd.clone()).await {
+            Ok(config) => Ok(config),
+            Err(err) => {
+                if crate::session_resume::cwds_differ(current_cwd, &resume_cwd) {
+                    Err(err)
+                } else {
+                    let resume_cwd_display = resume_cwd.display().to_string();
+                    tracing::warn!(
+                        error = %err,
+                        cwd = %resume_cwd_display,
+                        "failed to rebuild config for same-cwd resume; using current in-memory config"
+                    );
+                    Ok(self.config.clone())
+                }
+            }
         }
-
-        self.rebuild_config_for_cwd(resume_cwd).await
     }
 
     pub(super) fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
@@ -1209,16 +1220,31 @@ terminal_resize_reflow_max_rows = 9000
     }
 
     #[tokio::test]
-    async fn rebuild_config_for_resume_or_fallback_reuses_current_config_on_same_cwd() -> Result<()>
-    {
+    async fn rebuild_config_for_resume_or_fallback_reloads_same_cwd_config() -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
-        app.config.model = Some("already-loaded-model".to_string());
         std::fs::write(
             codex_home.path().join("config.toml"),
             "model = \"freshly-loaded-model\"",
         )?;
+        let current_cwd = app.config.cwd.clone();
+
+        let resume_config = app
+            .rebuild_config_for_resume_or_fallback(&current_cwd, current_cwd.to_path_buf())
+            .await?;
+
+        assert_eq!(resume_config.model.as_deref(), Some("freshly-loaded-model"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rebuild_config_for_resume_or_fallback_uses_current_config_on_same_cwd_error()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
         let current_config = app.config.clone();
         let current_cwd = current_config.cwd.clone();
 

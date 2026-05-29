@@ -1,5 +1,7 @@
 use std::fs;
 use std::fs::FileTimes;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -105,6 +107,87 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn compression_preserves_rollout_permissions() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(6);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "restricted transcript")?;
+    fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o600))?;
+    set_old_mtime(&rollout_path)?;
+
+    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+
+    let compressed_path = compressed_rollout_path(&rollout_path);
+    assert!(!rollout_path.exists());
+    assert_eq!(
+        fs::metadata(&compressed_path)?.permissions().mode() & 0o777,
+        0o600
+    );
+
+    append_rollout_item_to_path(
+        &rollout_path,
+        &RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "materialize restricted transcript".to_string(),
+            ..Default::default()
+        })),
+    )
+    .await?;
+
+    assert!(rollout_path.exists());
+    assert!(!compressed_path.exists());
+    assert_eq!(
+        fs::metadata(&rollout_path)?.permissions().mode() & 0o777,
+        0o600
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn compression_preserves_read_only_rollout_permissions() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(7);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "read-only transcript")?;
+    set_old_mtime(&rollout_path)?;
+    fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o400))?;
+    let source_modified = fs::metadata(&rollout_path)?.modified()?;
+
+    run_rollout_compression_worker(home.path().to_path_buf()).await?;
+
+    let compressed_path = compressed_rollout_path(&rollout_path);
+    let compressed_metadata = fs::metadata(&compressed_path)?;
+    assert!(!rollout_path.exists());
+    assert_eq!(compressed_metadata.permissions().mode() & 0o777, 0o400);
+    assert_eq!(compressed_metadata.modified()?, source_modified);
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_thread_path_by_id_handles_compressed_rollout_filenames() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(8);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "compressed filename lookup")?;
+    compress_now(&rollout_path)?;
+    let compressed_path = compressed_rollout_path(&rollout_path);
+
+    assert_eq!(
+        crate::find_thread_path_by_id_str(home.path(), &uuid.to_string(), None).await?,
+        Some(compressed_path)
+    );
+    assert_eq!(
+        crate::find_thread_path_by_id_str(home.path(), "not-a-uuid", None).await?,
+        None
+    );
+    Ok(())
+}
+
 fn rollout_path(home: &std::path::Path, ts: &str, uuid: Uuid) -> std::path::PathBuf {
     home.join("sessions/2025/01/03")
         .join(format!("rollout-{ts}-{uuid}.jsonl"))
@@ -157,7 +240,8 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
 
 fn compress_now(path: &std::path::Path) -> anyhow::Result<()> {
     let compressed_path = compressed_rollout_path(path);
-    encode_zstd(path, compressed_path.as_path())?;
+    let permissions = fs::metadata(path)?.permissions();
+    encode_zstd(path, compressed_path.as_path(), &permissions)?;
     fs::remove_file(path)?;
     Ok(())
 }

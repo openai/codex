@@ -1404,7 +1404,9 @@ async fn find_rollout_path_by_id_from_filenames(
     root: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
-    let target = Uuid::parse_str(id_str).map_err(io::Error::other)?;
+    let Ok(target) = Uuid::parse_str(id_str) else {
+        return Ok(None);
+    };
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let mut read_dir = match tokio::fs::read_dir(dir.as_path()).await {
@@ -1422,10 +1424,11 @@ async fn find_rollout_path_by_id_from_filenames(
             if !file_type.is_file() || compression::should_skip_compressed_sibling(path.as_path()) {
                 continue;
             }
-            let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
                 continue;
             };
-            let Some((_ts, id)) = parse_timestamp_uuid_from_filename(name.as_str()) else {
+            let Some((_ts, id)) = parse_timestamp_uuid_from_filename(name) else {
                 continue;
             };
             if id == target {

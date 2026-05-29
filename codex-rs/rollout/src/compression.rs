@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::FileTimes;
+use std::fs::Permissions;
 use std::io;
 use std::io::Read;
 use std::io::Write;
@@ -12,6 +13,10 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use tokio::io::AsyncBufReadExt;
 use tracing::debug;
 use tracing::info;
@@ -126,9 +131,10 @@ pub(crate) fn materialize_rollout_for_append_blocking(path: &Path) -> io::Result
         std::fs::create_dir_all(parent)?;
     }
     let result = (|| {
+        let permissions = std::fs::metadata(compressed_path.as_path())?.permissions();
         let input = File::open(compressed_path.as_path())?;
         let mut decoder = zstd::stream::read::Decoder::new(input)?;
-        let mut output = File::create(temp_path.as_path())?;
+        let mut output = create_file_with_permissions(temp_path.as_path(), &permissions)?;
         io::copy(&mut decoder, &mut output)?;
         output.flush()?;
         match std::fs::hard_link(temp_path.as_path(), plain_path.as_path()) {
@@ -360,7 +366,7 @@ fn compress_rollout_if_cold_blocking(path: &Path) -> io::Result<bool> {
     let compressed_path = compressed_rollout_path(path);
     let temp_path = temp_path_for(compressed_path.as_path(), "compress");
     let result = (|| {
-        encode_zstd(path, temp_path.as_path())?;
+        encode_zstd(path, temp_path.as_path(), &before.permissions)?;
         verify_zstd(temp_path.as_path())?;
         if !same_file_state(path, &before)? {
             return Ok(false);
@@ -385,10 +391,10 @@ fn compress_rollout_if_cold_blocking(path: &Path) -> io::Result<bool> {
     result
 }
 
-#[derive(Clone, Copy)]
 struct FileState {
     len: u64,
     modified: SystemTime,
+    permissions: Permissions,
 }
 
 fn cold_file_state(path: &Path) -> io::Result<Option<FileState>> {
@@ -410,26 +416,48 @@ fn cold_file_state(path: &Path) -> io::Result<Option<FileState>> {
     Ok(Some(FileState {
         len: metadata.len(),
         modified,
+        permissions: metadata.permissions(),
     }))
 }
 
 fn same_file_state(path: &Path, expected: &FileState) -> io::Result<bool> {
     match std::fs::metadata(path) {
-        Ok(metadata) => {
-            Ok(metadata.len() == expected.len && metadata.modified()? == expected.modified)
-        }
+        Ok(metadata) => Ok(metadata.len() == expected.len
+            && metadata.modified()? == expected.modified
+            && metadata.permissions() == expected.permissions),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err),
     }
 }
 
-fn encode_zstd(source: &Path, temp_path: &Path) -> io::Result<()> {
+fn encode_zstd(source: &Path, temp_path: &Path, permissions: &Permissions) -> io::Result<()> {
     let mut input = File::open(source)?;
-    let output = File::create(temp_path)?;
+    let output = create_file_with_permissions(temp_path, permissions)?;
     let mut encoder = zstd::stream::write::Encoder::new(output, COMPRESSION_LEVEL)?;
     io::copy(&mut input, &mut encoder)?;
     encoder.finish()?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn create_file_with_permissions(path: &Path, permissions: &Permissions) -> io::Result<File> {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(permissions.mode() & 0o7777)
+        .open(path)?;
+    file.set_permissions(permissions.clone())?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn create_file_with_permissions(path: &Path, permissions: &Permissions) -> io::Result<File> {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.set_permissions(permissions.clone())?;
+    Ok(file)
 }
 
 fn verify_zstd(path: &Path) -> io::Result<()> {
@@ -443,7 +471,7 @@ fn verify_zstd(path: &Path) -> io::Result<()> {
 fn set_modified_time(path: &Path, modified: SystemTime) -> io::Result<()> {
     let times = FileTimes::new().set_modified(modified);
     std::fs::OpenOptions::new()
-        .write(true)
+        .read(true)
         .open(path)?
         .set_times(times)
 }
