@@ -34,7 +34,8 @@ impl App {
             .codex_home(self.config.codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
-            .loader_overrides(self.loader_overrides.clone());
+            .loader_overrides(self.loader_overrides.clone())
+            .cloud_requirements(self.cloud_requirements.clone());
         build_config_on_runtime_worker(
             builder,
             format!("Failed to rebuild config for cwd {cwd_display}"),
@@ -55,7 +56,8 @@ impl App {
             .codex_home(self.config.codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
-            .loader_overrides(self.loader_overrides.clone());
+            .loader_overrides(self.loader_overrides.clone())
+            .cloud_requirements(self.cloud_requirements.clone());
         build_config_on_runtime_worker(
             builder,
             format!("Failed to rebuild config for permission profile {profile_id}"),
@@ -1120,6 +1122,60 @@ mod tests {
             app_enabled_in_effective_config(&app.config, &app_id),
             Some(false)
         );
+        Ok(())
+    }
+
+    // Regression coverage for `/new` and `/clear`: cloud requirements
+    // must survive the config refresh that runs before thread transitions.
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_keeps_cloud_requirements_for_thread_transitions()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        let required_policy = AskForApproval::Never;
+        let cloud_requirements = CloudRequirementsLoader::new(async move {
+            Ok(Some(codex_config::ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![required_policy]),
+                ..Default::default()
+            }))
+        });
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .cloud_requirements(cloud_requirements.clone())
+            .build()
+            .await?;
+        app.config = config;
+        app.cloud_requirements = cloud_requirements;
+
+        let assert_cloud_requirements = |app: &App| {
+            let config = app.fresh_session_config();
+            assert_eq!(
+                config
+                    .config_layer_stack
+                    .requirements_toml()
+                    .allowed_approval_policies
+                    .clone(),
+                Some(vec![required_policy])
+            );
+            assert_eq!(config.permissions.approval_policy.value(), required_policy);
+        };
+
+        assert_cloud_requirements(&app);
+
+        // These are the config-refresh paths used by `/new`, `/clear`, `/fork`,
+        // side conversations, and leaving the session picker.
+        for action in [
+            "starting a new thread",
+            "forking the thread",
+            "starting a side conversation",
+            "closing the session picker",
+        ] {
+            app.refresh_in_memory_config_from_disk_best_effort(action)
+                .await;
+            assert_cloud_requirements(&app);
+        }
         Ok(())
     }
 

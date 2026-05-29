@@ -1168,8 +1168,17 @@ impl ConfigBuilder {
     }
 
     pub async fn build(self) -> std::io::Result<Config> {
-        // Keep the large config-loading future off small runtime thread stacks.
-        Box::pin(self.build_inner()).await
+        // Keep the large config-loading future off the caller's stack. This is
+        // particularly important for the TUI, where config can be reloaded from
+        // a deep event-dispatch stack while the Tokio worker threads have a
+        // larger configured stack.
+        match tokio::spawn(async move { Box::pin(self.build_inner()).await }).await {
+            Ok(result) => result,
+            Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+            Err(err) => Err(std::io::Error::other(format!(
+                "config build task failed: {err}"
+            ))),
+        }
     }
 
     async fn build_inner(self) -> std::io::Result<Config> {

@@ -1848,6 +1848,7 @@ async fn run_ratatui_app(
         cli_kv_overrides.clone(),
         overrides.clone(),
         loader_overrides.clone(),
+        cloud_requirements,
         prompt,
         images,
         session_selection,
