@@ -18,6 +18,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 use toml::Value as TomlValue;
 
@@ -390,6 +392,35 @@ async fn skill_roots_bind_project_config_roots_to_primary_environment_only() -> 
         &repo_roots[0].path.file_system(),
         &primary_file_system
     ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_roots_stop_repo_agents_walk_when_environment_probe_fails() -> anyhow::Result<()> {
+    let codex_home = tempfile::tempdir()?;
+    let cfg = make_config(&codex_home).await;
+    let remote_environment =
+        codex_exec_server::Environment::create_for_tests(Some("ws://127.0.0.1:1".to_string()))?;
+    let started = Instant::now();
+
+    let roots = super::skill_roots(
+        &[super::SkillEnvironment {
+            environment_id: "remote".to_string(),
+            path: EnvironmentPathRef::new(remote_environment.get_filesystem(), cfg.cwd.clone()),
+        }],
+        /*local_file_system*/ None,
+        &cfg.config_layer_stack,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await;
+
+    assert!(roots.is_empty());
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "repo agents discovery should stop after the first unavailable environment probe"
+    );
 
     Ok(())
 }

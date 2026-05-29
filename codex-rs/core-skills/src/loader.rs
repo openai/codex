@@ -435,7 +435,9 @@ async fn repo_agents_skill_roots(
     // Discover repo `.agents/skills` folders by walking from the selected environment's project
     // root to its cwd; this must never consult the local filesystem for remote workspaces.
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
-    let project_root = find_project_root(&env_path.path, &project_root_markers).await;
+    let Some(project_root) = find_project_root(&env_path.path, &project_root_markers).await else {
+        return Vec::new();
+    };
     let dirs = dirs_between_project_root_and_cwd(env_path.path.path(), project_root.path());
     let mut roots = Vec::new();
     for dir in dirs {
@@ -488,28 +490,29 @@ fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec
 async fn find_project_root(
     cwd: &EnvironmentPathRef,
     project_root_markers: &[String],
-) -> EnvironmentPathRef {
+) -> Option<EnvironmentPathRef> {
     if project_root_markers.is_empty() {
-        return cwd.clone();
+        return Some(cwd.clone());
     }
 
     for ancestor in cwd.path().ancestors() {
         for marker in project_root_markers {
             let marker_path = cwd.with_path(ancestor.join(marker));
             match marker_path.metadata(/*sandbox*/ None).await {
-                Ok(_) => return cwd.with_path(ancestor),
+                Ok(_) => return Some(cwd.with_path(ancestor)),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(err) => {
                     tracing::warn!(
                         "failed to stat project root marker {}: {err:#}",
                         marker_path.path().display()
                     );
+                    return None;
                 }
             }
         }
     }
 
-    cwd.clone()
+    Some(cwd.clone())
 }
 
 fn dirs_between_project_root_and_cwd(
