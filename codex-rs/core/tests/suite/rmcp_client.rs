@@ -327,7 +327,9 @@ fn stdio_transport(
     env: Option<HashMap<String, String>>,
     env_vars: Vec<McpServerEnvVar>,
 ) -> McpServerTransportConfig {
-    stdio_transport_with_cwd(command, env, env_vars, /*cwd*/ None)
+    let cwd = std::env::var_os(remote_env_env_var())
+        .map(|_| PathBuf::from("/tmp/codex-remote-env"));
+    stdio_transport_with_cwd(command, env, env_vars, cwd)
 }
 
 fn stdio_transport_with_cwd(
