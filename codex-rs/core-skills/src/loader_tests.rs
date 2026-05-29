@@ -146,11 +146,14 @@ fn normalized(path: &Path) -> AbsolutePathBuf {
         .abs()
 }
 
+fn local_env_path(path: AbsolutePathBuf) -> EnvironmentPathRef {
+    EnvironmentPathRef::local(path)
+}
+
 fn local_skill_root(path: AbsolutePathBuf, scope: SkillScope) -> SkillRoot {
     SkillRoot {
-        path,
+        path: local_env_path(path),
         scope,
-        file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
         plugin_root: None,
     }
@@ -199,7 +202,7 @@ async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_sys
     )
     .await
     .into_iter()
-    .map(|root| (root.scope, root.path.to_path_buf()))
+    .map(|root| (root.scope, root.path.path().to_path_buf()))
     .collect::<Vec<_>>();
 
     assert_eq!(
@@ -268,7 +271,7 @@ async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyh
     )
     .await
     .into_iter()
-    .map(|root| (root.scope, root.path.to_path_buf()))
+    .map(|root| (root.scope, root.path.path().to_path_buf()))
     .collect::<Vec<_>>();
 
     assert_eq!(
@@ -285,6 +288,57 @@ async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyh
                 user_folder.join("skills").join(".system")
             ),
         ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_roots_bind_repo_and_local_roots_to_their_own_file_systems() -> anyhow::Result<()> {
+    let codex_home = tempfile::tempdir()?;
+    let project_root = codex_home.path().join("workspace");
+    fs::create_dir_all(project_root.join(".git"))?;
+    fs::create_dir_all(project_root.join(REPO_ROOT_CONFIG_DIR_NAME))?;
+    let cfg = make_config_for_cwd(&codex_home, project_root.clone()).await;
+
+    let env_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+    let local_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+    let env_path = EnvironmentPathRef::new(env_file_system.clone(), cfg.cwd.clone());
+    let roots = super::skill_roots(
+        Some(&env_path),
+        Some(&local_file_system),
+        &cfg.config_layer_stack,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await;
+
+    let repo_root = roots
+        .iter()
+        .find(|root| root.scope == SkillScope::Repo)
+        .expect("repo root");
+    let user_root = roots
+        .iter()
+        .find(|root| root.scope == SkillScope::User)
+        .expect("user root");
+    assert!(Arc::ptr_eq(&repo_root.path.file_system(), &env_file_system));
+    assert!(Arc::ptr_eq(
+        &user_root.path.file_system(),
+        &local_file_system
+    ));
+
+    let roots_without_local = super::skill_roots(
+        Some(&env_path),
+        /*local_file_system*/ None,
+        &cfg.config_layer_stack,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await;
+    assert!(
+        roots_without_local
+            .iter()
+            .all(|root| root.scope == SkillScope::Repo)
     );
 
     Ok(())
@@ -867,11 +921,10 @@ interface:
 
     let plugin_root_abs = plugin_root.abs();
     let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
+        path: local_env_path(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_root: Some(plugin_root_abs.clone()),
+        plugin_root: Some(local_env_path(plugin_root_abs.clone())),
     }])
     .await;
 
@@ -925,11 +978,10 @@ interface:
     );
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
+        path: local_env_path(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("twilio-developer-kit@test".to_string()),
-        plugin_root: Some(plugin_root.abs()),
+        plugin_root: Some(local_env_path(plugin_root.abs())),
     }])
     .await;
 
@@ -1293,11 +1345,10 @@ async fn namespaces_plugin_skills_using_plugin_name() {
     .unwrap();
 
     let outcome = load_skills_from_roots([SkillRoot {
-        path: plugin_root.join("skills").abs(),
+        path: local_env_path(plugin_root.join("skills").abs()),
         scope: SkillScope::User,
-        file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
-        plugin_root: Some(plugin_root.abs()),
+        plugin_root: Some(local_env_path(plugin_root.abs())),
     }])
     .await;
 
@@ -1663,16 +1714,14 @@ async fn preserves_same_absolute_skill_path_from_distinct_file_systems() {
 
     let outcome = load_skills_from_roots([
         SkillRoot {
-            path: shared_path.clone(),
+            path: EnvironmentPathRef::new(first_file_system, shared_path.clone()),
             scope: SkillScope::Repo,
-            file_system: first_file_system,
             plugin_id: None,
             plugin_root: None,
         },
         SkillRoot {
-            path: shared_path,
+            path: EnvironmentPathRef::new(second_file_system, shared_path),
             scope: SkillScope::Repo,
-            file_system: second_file_system,
             plugin_id: None,
             plugin_root: None,
         },
@@ -1698,16 +1747,14 @@ fn dedupe_skill_roots_preserves_same_path_from_distinct_file_systems() {
     let second_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
     let mut roots = vec![
         SkillRoot {
-            path: shared_path.clone(),
+            path: EnvironmentPathRef::new(first_file_system, shared_path.clone()),
             scope: SkillScope::Repo,
-            file_system: first_file_system,
             plugin_id: None,
             plugin_root: None,
         },
         SkillRoot {
-            path: shared_path,
+            path: EnvironmentPathRef::new(second_file_system, shared_path),
             scope: SkillScope::Repo,
-            file_system: second_file_system,
             plugin_id: None,
             plugin_root: None,
         },
@@ -1991,10 +2038,12 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cfg = make_config(&codex_home).await;
 
+    let cwd = local_env_path(cfg.cwd.clone());
+    let local_file_system = cwd.file_system();
     let scopes: Vec<SkillScope> = super::skill_roots(
-        Some(Arc::clone(&LOCAL_FS)),
+        Some(&cwd),
+        Some(&local_file_system),
         &cfg.config_layer_stack,
-        &cfg.cwd,
         Vec::new(),
         Vec::new(),
     )

@@ -115,7 +115,7 @@ impl SkillsWatcher {
             .await
             .into_iter()
             .map(|root| WatchPath {
-                path: root.path.into_path_buf(),
+                path: root.path.path().to_path_buf(),
                 recursive: true,
             })
             .collect();

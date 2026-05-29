@@ -1419,8 +1419,10 @@ impl PluginsManager {
             manifest.interface.clone(),
             marketplace_category,
         );
+        // TODO: Support multi-env plugin skill loading. Marketplace plugins are installed and
+        // scanned locally today, so bind plugin skill reads to the local environment.
         let resolved_skills = load_plugin_skills(
-            &source_path,
+            codex_exec_server::EnvironmentPathRef::local(source_path.clone()),
             &plugin_id,
             &manifest.paths,
             self.restriction_product,
