@@ -5,7 +5,6 @@ use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::model_info::model_info_from_slug;
-use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
@@ -34,7 +33,6 @@ use tokio::time::sleep;
 
 fn remote_model(slug: &str) -> ModelInfo {
     ModelInfo {
-        shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
         used_fallback_model_metadata: false,
         ..model_info_from_slug(slug)
@@ -152,10 +150,6 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
     })
     .await?;
     let direct_tools = tool_names(&direct_body);
-    assert!(
-        direct_tools.iter().any(|name| name == "shell_command"),
-        "direct mode should retain shell_command: {direct_tools:?}"
-    );
     assert!(
         direct_tools
             .iter()
