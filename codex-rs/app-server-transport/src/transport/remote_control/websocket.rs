@@ -11,6 +11,7 @@ use crate::transport::remote_control::enroll::refresh_remote_control_server;
 use crate::transport::remote_control::enroll::update_persisted_remote_control_enrollment;
 use crate::transport::remote_control::pairing::RemoteControlPairingClient;
 
+use super::clear_pairing_client;
 use super::protocol::ClientEnvelope;
 use super::protocol::ClientEvent;
 use super::protocol::ClientId;
@@ -1513,12 +1514,6 @@ fn set_pairing_client(
             expires_at,
         ));
     Ok(())
-}
-
-fn clear_pairing_client(pairing_client: &Arc<StdMutex<Option<RemoteControlPairingClient>>>) {
-    *pairing_client
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 async fn enroll_remote_control_server_if_missing(

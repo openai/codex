@@ -114,6 +114,7 @@ impl RemoteControlHandle {
             *state = false;
             changed
         });
+        clear_pairing_client(&self.pairing_client);
 
         let status = self.status();
         info!(
@@ -209,6 +210,12 @@ fn remote_control_status_with_connection_status(
             status.environment_id.clone()
         },
     }
+}
+
+fn clear_pairing_client(pairing_client: &Arc<StdMutex<Option<RemoteControlPairingClient>>>) {
+    *pairing_client
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 pub async fn start_remote_control(

@@ -20,6 +20,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
+use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -39,7 +40,9 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tempfile::TempDir;
+use time::OffsetDateTime;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -893,6 +896,48 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
 
     shutdown_token.cancel();
     let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn remote_control_handle_disable_clears_stale_pairing_client() {
+    let (enabled_tx, _enabled_rx) = watch::channel(/*init*/ true);
+    let (status_tx, _status_rx) = watch::channel(RemoteControlStatusChangedNotification {
+        status: RemoteControlConnectionStatus::Connected,
+        server_name: test_server_name(),
+        installation_id: TEST_INSTALLATION_ID.to_string(),
+        environment_id: Some("env_test".to_string()),
+    });
+    let pairing_client = Arc::new(StdMutex::new(Some(RemoteControlPairingClient::new(
+        &normalize_remote_control_url("http://127.0.0.1:1/backend-api/wham/remote/control")
+            .expect("remote control target should normalize"),
+        TEST_REMOTE_CONTROL_SERVER_TOKEN.to_string(),
+        OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
+    ))));
+    let remote_handle = RemoteControlHandle {
+        enabled_tx: Arc::new(enabled_tx),
+        status_tx: Arc::new(status_tx),
+        state_db_available: true,
+        pairing_client,
+    };
+
+    assert_eq!(
+        remote_handle.disable(),
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Disabled,
+            server_name: test_server_name(),
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+            environment_id: None,
+        }
+    );
+    remote_handle.enable().expect("enable should succeed");
+    assert_eq!(
+        remote_handle
+            .start_pairing(RemoteControlPairingStartParams { manual_code: false })
+            .await
+            .expect_err("re-enabled remote control should wait for refreshed pairing auth")
+            .to_string(),
+        "remote control pairing is unavailable until enrollment completes"
+    );
 }
 
 #[tokio::test]
