@@ -352,6 +352,49 @@ async fn skill_roots_bind_repo_and_local_roots_to_their_own_file_systems() -> an
 }
 
 #[tokio::test]
+async fn skill_roots_bind_project_config_roots_to_primary_environment_only() -> anyhow::Result<()> {
+    let codex_home = tempfile::tempdir()?;
+    let project_root = codex_home.path().join("workspace");
+    fs::create_dir_all(project_root.join(".git"))?;
+    fs::create_dir_all(project_root.join(REPO_ROOT_CONFIG_DIR_NAME))?;
+    let cfg = make_config_for_cwd(&codex_home, project_root.clone()).await;
+
+    let primary_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+    let secondary_file_system: Arc<dyn ExecutorFileSystem> =
+        Arc::new(LocalFileSystem::unsandboxed());
+    let roots = super::skill_roots(
+        &[
+            super::SkillEnvironment {
+                environment_id: "primary".to_string(),
+                path: EnvironmentPathRef::new(primary_file_system.clone(), cfg.cwd.clone()),
+            },
+            super::SkillEnvironment {
+                environment_id: "secondary".to_string(),
+                path: EnvironmentPathRef::new(secondary_file_system, cfg.cwd.clone()),
+            },
+        ],
+        /*local_file_system*/ None,
+        &cfg.config_layer_stack,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await;
+
+    let repo_roots = roots
+        .iter()
+        .filter(|root| root.scope == SkillScope::Repo)
+        .collect::<Vec<_>>();
+    assert_eq!(repo_roots.len(), 1);
+    assert_eq!(repo_roots[0].environment_id, "primary");
+    assert!(Arc::ptr_eq(
+        &repo_roots[0].path.file_system(),
+        &primary_file_system
+    ));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
 

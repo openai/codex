@@ -706,7 +706,7 @@ impl Session {
                 .plugins_for_config(&plugins_input)
                 .await;
             let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-            let skills_input = crate::skills::skills_load_input_from_environments(
+            let skills_input = crate::skills::skills_load_input(
                 &per_turn_config,
                 skill_env_paths,
                 local_file_system,

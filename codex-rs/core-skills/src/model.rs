@@ -91,16 +91,16 @@ pub struct SkillError {
 pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
-    pub disabled_paths: HashSet<AbsolutePathBuf>,
+    pub disabled_paths: HashSet<EnvironmentPathRef>,
     pub(crate) skill_roots: Vec<EnvironmentPathRef>,
     pub(crate) skill_root_by_path: Arc<HashMap<EnvironmentPathRef, EnvironmentPathRef>>,
-    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
-    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
+    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<EnvironmentPathRef, SkillMetadata>>,
+    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<EnvironmentPathRef, SkillMetadata>>,
 }
 
 impl SkillLoadOutcome {
     pub fn is_skill_enabled(&self, skill: &SkillMetadata) -> bool {
-        !self.disabled_paths.contains(&skill.path_to_skills_md)
+        !self.disabled_paths.contains(&skill.source_path)
     }
 
     pub fn is_skill_allowed_for_implicit_invocation(&self, skill: &SkillMetadata) -> bool {
@@ -119,6 +119,15 @@ impl SkillLoadOutcome {
         self.skills
             .iter()
             .map(|skill| (skill, self.is_skill_enabled(skill)))
+    }
+
+    pub fn has_multiple_environments(&self) -> bool {
+        self.skills
+            .iter()
+            .map(|skill| skill.environment_id.as_str())
+            .collect::<HashSet<_>>()
+            .len()
+            > 1
     }
 }
 

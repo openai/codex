@@ -262,7 +262,8 @@ async fn skill_roots_with_home_dir(
     // Assemble one precedence-ordered root list from the two authorities above, then dedupe before
     // any reads happen so downstream loading stays oblivious to local-vs-selected-env routing.
     let mut roots = env_paths
-        .iter()
+        .first()
+        .into_iter()
         .flat_map(|env_path| repo_config_skill_roots(env_path, config_layer_stack))
         .collect::<Vec<_>>();
     roots.extend(local_skill_roots(
@@ -383,6 +384,7 @@ fn local_skill_roots(
     }));
     roots.extend(extra_skill_roots.into_iter().map(|path| SkillRoot {
         path: EnvironmentPathRef::new(Arc::clone(local_file_system), path),
+        environment_id: "local".to_string(),
         scope: SkillScope::User,
         plugin_id: None,
         plugin_root: None,
@@ -395,9 +397,9 @@ fn repo_config_skill_roots(
     env_path: &SkillEnvironment,
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
-    // Project config layers describe workspace-local `.codex/skills` directories. Their absolute
-    // paths only make sense inside the selected environment, so keep them bound to `env_path`
-    // rather than the optional local filesystem used for client-local system/user/plugin roots.
+    // Project config layers come from the one config stack for this turn/cwd. Bind them to the
+    // primary selected environment only; rebinding those same absolute folders into every
+    // secondary environment would attribute the primary cwd's `.codex/skills` to the wrong env.
     config_layer_stack
         .get_layers(
             ConfigLayerStackOrdering::HighestPrecedenceFirst,

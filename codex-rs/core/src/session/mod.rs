@@ -36,7 +36,6 @@ use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
-use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -2744,7 +2743,9 @@ impl Session {
             let available_skills = build_available_skills(
                 &turn_context.turn_skills.outcome,
                 default_skill_metadata_budget(turn_context.model_info.context_window),
-                if turn_context.environments.turn_environments.len() > 1 {
+                if turn_context.environments.turn_environments.len() > 1
+                    || turn_context.turn_skills.outcome.has_multiple_environments()
+                {
                     crate::skills::render::SkillEnvironmentRender::Include
                 } else {
                     crate::skills::render::SkillEnvironmentRender::Omit

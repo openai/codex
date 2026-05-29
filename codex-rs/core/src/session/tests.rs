@@ -8,6 +8,7 @@ use crate::context::TurnAborted;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
+use crate::skills::render::SkillEnvironmentRender;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
@@ -4127,13 +4128,15 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .services
         .skills_manager
         .skills_for_cwd(
-            &crate::skills_load_input_from_config(
+            &crate::skills_load_input(
                 &parent_config,
-                codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-                crate::skills::EnvironmentPathRef::new(
-                    Arc::clone(&skill_fs),
-                    parent_config.cwd.clone(),
-                ),
+                vec![codex_core_skills::loader::SkillEnvironment {
+                    environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                    path: crate::skills::EnvironmentPathRef::new(
+                        Arc::clone(&skill_fs),
+                        parent_config.cwd.clone(),
+                    ),
+                }],
                 session
                     .services
                     .environment_manager
@@ -4708,10 +4711,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         environment.get_filesystem(),
         per_turn_config.cwd.clone(),
     );
-    let skills_input = crate::skills_load_input_from_config(
+    let skills_input = crate::skills_load_input(
         &per_turn_config,
-        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd,
+        vec![codex_core_skills::loader::SkillEnvironment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            path: cwd,
+        }],
         services
             .environment_manager
             .try_local_environment()
@@ -6562,10 +6567,12 @@ where
         environment.get_filesystem(),
         per_turn_config.cwd.clone(),
     );
-    let skills_input = crate::skills_load_input_from_config(
+    let skills_input = crate::skills_load_input(
         &per_turn_config,
-        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd,
+        vec![codex_core_skills::loader::SkillEnvironment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            path: cwd,
+        }],
         services
             .environment_manager
             .try_local_environment()
@@ -7300,6 +7307,68 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             .all(|text| !text.contains("- admin-skill:") && !text.contains("- repo-skill:")),
         "expected no skill metadata entries to fit the tiny budget, got {developer_texts:?}"
     );
+}
+
+#[tokio::test]
+async fn build_initial_context_qualifies_skills_only_when_skill_envs_are_ambiguous() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let make_skill = |name: &str, environment_id: &str| SkillMetadata {
+        name: name.to_string(),
+        description: "desc".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md"))
+            .abs()
+            .clone(),
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
+        ),
+        environment_id: environment_id.to_string(),
+        scope: SkillScope::Repo,
+        plugin_id: None,
+    };
+
+    let mut single_env_outcome = SkillLoadOutcome::default();
+    single_env_outcome.skills = vec![make_skill("repo-skill", "local")];
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(single_env_outcome));
+    let single_env_context = session.build_initial_context(&turn_context).await;
+    let single_env_texts = developer_input_texts(&single_env_context);
+    assert!(
+        single_env_texts
+            .iter()
+            .any(|text| text.contains("- repo-skill: desc (file: /tmp/repo-skill/SKILL.md)"))
+    );
+    assert!(single_env_texts.iter().all(|text| !text.contains("env:")));
+
+    let mut secondary_environment = turn_context.environments.turn_environments[0].clone();
+    secondary_environment.environment_id = "devbox".to_string();
+    turn_context
+        .environments
+        .turn_environments
+        .push(secondary_environment);
+    let multi_turn_env_context = session.build_initial_context(&turn_context).await;
+    let multi_turn_env_texts = developer_input_texts(&multi_turn_env_context);
+    assert!(multi_turn_env_texts.iter().any(|text| {
+        text.contains("- repo-skill: desc (env: local, file: /tmp/repo-skill/SKILL.md)")
+    }));
+    turn_context.environments.turn_environments.truncate(1);
+
+    let mut mixed_env_outcome = SkillLoadOutcome::default();
+    mixed_env_outcome.skills = vec![
+        make_skill("repo-skill", "devbox"),
+        make_skill("user-skill", "local"),
+    ];
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(mixed_env_outcome));
+    let mixed_env_context = session.build_initial_context(&turn_context).await;
+    let mixed_env_texts = developer_input_texts(&mixed_env_context);
+    assert!(mixed_env_texts.iter().any(|text| {
+        text.contains("- repo-skill: desc (env: devbox, file: /tmp/repo-skill/SKILL.md)")
+    }));
+    assert!(mixed_env_texts.iter().any(|text| {
+        text.contains("- user-skill: desc (env: local, file: /tmp/user-skill/SKILL.md)")
+    }));
 }
 
 #[test]

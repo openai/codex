@@ -36,26 +36,7 @@ pub use codex_core_skills::render;
 pub use codex_core_skills::render::SkillRenderSideEffects;
 pub use codex_core_skills::system;
 
-pub(crate) fn skills_load_input_from_config(
-    config: &Config,
-    environment_id: String,
-    env_path: EnvironmentPathRef,
-    local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
-    effective_skill_roots: Vec<PluginSkillRoot>,
-) -> SkillsLoadInput {
-    SkillsLoadInput::new(
-        vec![codex_core_skills::loader::SkillEnvironment {
-            environment_id,
-            path: env_path,
-        }],
-        local_file_system,
-        effective_skill_roots,
-        config.config_layer_stack.clone(),
-        config.bundled_skills_enabled(),
-    )
-}
-
-pub(crate) fn skills_load_input_from_environments(
+pub(crate) fn skills_load_input(
     config: &Config,
     env_paths: Vec<codex_core_skills::loader::SkillEnvironment>,
     local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
@@ -76,13 +57,20 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     command: &str,
     workdir: &AbsolutePathBuf,
 ) {
+    let Some(turn_environment) = turn_context.environments.primary() else {
+        return;
+    };
     let Some(candidate) = detect_implicit_skill_invocation_for_command(
         turn_context.turn_skills.outcome.as_ref(),
         command,
-        workdir,
+        &EnvironmentPathRef::new(
+            turn_environment.environment.get_filesystem(),
+            workdir.clone(),
+        ),
     ) else {
         return;
     };
+    let environment_id = candidate.environment_id.clone();
     let invocation = SkillInvocation {
         skill_name: candidate.name,
         skill_scope: candidate.scope,
@@ -98,7 +86,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     };
     let skill_path = invocation.skill_path.to_string_lossy();
     let skill_name = invocation.skill_name.clone();
-    let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
+    let seen_key = format!("{environment_id}:{skill_scope}:{skill_path}:{skill_name}");
     let inserted = {
         let mut seen_skills = turn_context
             .turn_skills

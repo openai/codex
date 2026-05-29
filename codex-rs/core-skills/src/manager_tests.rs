@@ -387,7 +387,7 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         .abs();
 
     assert_eq!(skill.path_to_skills_md, skill_path);
-    assert!(outcome.disabled_paths.contains(&skill.path_to_skills_md));
+    assert!(outcome.disabled_paths.contains(&skill.source_path));
     assert!(
         !outcome
             .allowed_skills_for_implicit_invocation()
@@ -665,10 +665,12 @@ fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill(
     let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
-        HashSet::from([skill_path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize")])
+        HashSet::from([EnvironmentPathRef::local(
+            skill_path
+                .abs()
+                .canonicalize()
+                .expect("skill path should canonicalize"),
+        )])
     );
 }
 
@@ -698,10 +700,12 @@ fn disabled_paths_for_skills_disables_matching_name_selectors() {
     let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
-        HashSet::from([skill_path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize")])
+        HashSet::from([EnvironmentPathRef::local(
+            skill_path
+                .abs()
+                .canonicalize()
+                .expect("skill path should canonicalize"),
+        )])
     );
 }
 
@@ -737,6 +741,45 @@ fn disabled_paths_for_skills_allows_name_selector_to_override_path_selector() {
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
         HashSet::new()
+    );
+}
+
+#[cfg_attr(windows, ignore)]
+#[test]
+fn disabled_paths_for_skills_disables_same_raw_path_in_each_environment() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_demo_skill(&tempdir);
+    let mut devbox_skill = test_skill("demo-skill", skill_path.clone());
+    devbox_skill.environment_id = "devbox".to_string();
+    devbox_skill.source_path = EnvironmentPathRef::new(
+        Arc::new(codex_exec_server::LocalFileSystem::unsandboxed()),
+        devbox_skill.path_to_skills_md.clone(),
+    );
+    let local_skill = test_skill("demo-skill", skill_path.clone());
+    let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
+        .expect("user config path should be absolute");
+    let user_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        },
+        toml::from_str(&path_toggle_config(&skill_path, /*enabled*/ false))
+            .expect("user layer toml"),
+    );
+    let stack = ConfigLayerStack::new(
+        vec![user_layer],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
+    assert_eq!(
+        resolve_disabled_skill_paths(
+            &[devbox_skill.clone(), local_skill.clone()],
+            &skill_config_rules
+        ),
+        HashSet::from([devbox_skill.source_path, local_skill.source_path])
     );
 }
 
