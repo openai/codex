@@ -492,7 +492,7 @@ fn usage_bar_filled_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
 
 fn usage_bar_empty_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
     let Some(bg) = terminal_bg else {
-        return Style::default().fg(Color::DarkGray);
+        return Style::default().fg(Color::DarkGray).dim();
     };
     if is_light(bg) {
         Style::default().fg(usage_best_color(
@@ -500,10 +500,12 @@ fn usage_bar_empty_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
             Color::Gray,
         ))
     } else {
-        Style::default().fg(usage_best_color(
-            /*target*/ blend(/*fg*/ (255, 255, 255), bg, /*alpha*/ 0.22),
-            Color::DarkGray,
-        ))
+        let color = best_color(blend(/*fg*/ (255, 255, 255), bg, /*alpha*/ 0.10));
+        if color == Color::default() {
+            Style::default().fg(Color::DarkGray).dim()
+        } else {
+            Style::default().fg(color)
+        }
     }
 }
 
