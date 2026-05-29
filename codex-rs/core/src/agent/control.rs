@@ -21,6 +21,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -55,6 +56,8 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub(crate) parent_multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) child_multi_agent_version: Option<MultiAgentVersion>,
 }
 
 #[derive(Clone, Debug)]
@@ -218,7 +221,35 @@ impl AgentControl {
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
         let state = self.upgrade()?;
-        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let parent_multi_agent_version = options.parent_multi_agent_version.or_else(|| {
+            if config.features.enabled(Feature::MultiAgentV2) {
+                Some(MultiAgentVersion::V2)
+            } else if config.features.enabled(Feature::Collab) {
+                Some(MultiAgentVersion::V1)
+            } else {
+                None
+            }
+        });
+        let child_multi_agent_version = options.child_multi_agent_version.or_else(|| {
+            if config.features.enabled(Feature::MultiAgentV2) {
+                Some(MultiAgentVersion::V2)
+            } else if config.features.enabled(Feature::Collab) {
+                Some(MultiAgentVersion::V1)
+            } else {
+                None
+            }
+        });
+        let max_threads = if parent_multi_agent_version == Some(MultiAgentVersion::V2) {
+            Some(
+                config
+                    .multi_agent_v2
+                    .max_concurrent_threads_per_session
+                    .saturating_sub(1),
+            )
+        } else {
+            config.agent_max_threads
+        };
+        let mut reservation = self.state.reserve_spawn_slot(max_threads)?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
@@ -339,7 +370,9 @@ impl AgentControl {
 
         self.send_input(new_thread.thread_id, initial_operation)
             .await?;
-        if !new_thread.thread.enabled(Feature::MultiAgentV2) {
+        if child_multi_agent_version != Some(MultiAgentVersion::V2)
+            || agent_metadata.agent_path.is_none()
+        {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -416,9 +449,27 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
+        let parent_multi_agent_version = options.parent_multi_agent_version.or_else(|| {
+            if config.features.enabled(Feature::MultiAgentV2) {
+                Some(MultiAgentVersion::V2)
+            } else if config.features.enabled(Feature::Collab) {
+                Some(MultiAgentVersion::V1)
+            } else {
+                None
+            }
+        });
+        let child_multi_agent_version = options.child_multi_agent_version.or_else(|| {
+            if config.features.enabled(Feature::MultiAgentV2) {
+                Some(MultiAgentVersion::V2)
+            } else if config.features.enabled(Feature::Collab) {
+                Some(MultiAgentVersion::V1)
+            } else {
+                None
+            }
+        });
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
-                if parent_thread.enabled(Feature::MultiAgentV2) {
+                if parent_multi_agent_version == Some(MultiAgentVersion::V2) {
                     let parent_config = parent_thread.codex.session.get_config().await;
                     [
                         parent_config
@@ -436,7 +487,7 @@ impl AgentControl {
                 } else {
                     Vec::new()
                 }
-            } else if config.features.enabled(Feature::MultiAgentV2) {
+            } else if parent_multi_agent_version == Some(MultiAgentVersion::V2) {
                 [
                     config.multi_agent_v2.root_agent_usage_hint_text.clone(),
                     config.multi_agent_v2.subagent_usage_hint_text.clone(),
@@ -472,7 +523,7 @@ impl AgentControl {
             }
         }
         if preserve_reference_context_item
-            && config.features.enabled(Feature::MultiAgentV2)
+            && child_multi_agent_version == Some(MultiAgentVersion::V2)
             && let Some(subagent_usage_hint_text) =
                 config.multi_agent_v2.subagent_usage_hint_text.clone()
             && let Some(subagent_usage_hint_message) =
@@ -505,12 +556,14 @@ impl AgentControl {
         config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<ThreadId> {
         let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
         let resumed_thread_id = Box::pin(self.resume_single_agent_from_rollout(
             config.clone(),
             thread_id,
             session_source,
+            multi_agent_version,
         ))
         .await?;
         let state = self.upgrade()?;
@@ -556,6 +609,7 @@ impl AgentControl {
                         config.clone(),
                         child_thread_id,
                         child_session_source,
+                        multi_agent_version,
                     ))
                     .await
                     {
@@ -580,17 +634,37 @@ impl AgentControl {
         mut config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<ThreadId> {
+        let multi_agent_version = multi_agent_version.or_else(|| {
+            if config.features.enabled(Feature::MultiAgentV2) {
+                Some(MultiAgentVersion::V2)
+            } else if config.features.enabled(Feature::Collab) {
+                Some(MultiAgentVersion::V1)
+            } else {
+                None
+            }
+        });
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
             && *depth >= config.agent_max_depth
-            && !config.features.enabled(Feature::MultiAgentV2)
+            && multi_agent_version != Some(MultiAgentVersion::V2)
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
         }
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
-        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let max_threads = if multi_agent_version == Some(MultiAgentVersion::V2) {
+            Some(
+                config
+                    .multi_agent_v2
+                    .max_concurrent_threads_per_session
+                    .saturating_sub(1),
+            )
+        } else {
+            config.agent_max_threads
+        };
+        let mut reservation = self.state.reserve_spawn_slot(max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -659,7 +733,8 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        if !resumed_thread.thread.enabled(Feature::MultiAgentV2) {
+        if multi_agent_version != Some(MultiAgentVersion::V2) || agent_metadata.agent_path.is_none()
+        {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -1042,14 +1117,8 @@ impl AgentControl {
             let Ok(state) = control.upgrade() else {
                 return;
             };
-            let child_thread = state.get_thread(child_thread_id).await.ok();
             let message = format_subagent_notification_message(child_reference.as_str(), &status);
-            if child_agent_path.is_some()
-                && child_thread
-                    .as_ref()
-                    .map(|thread| thread.enabled(Feature::MultiAgentV2))
-                    .unwrap_or(true)
-            {
+            if child_agent_path.is_some() {
                 let Some(child_agent_path) = child_agent_path.clone() else {
                     return;
                 };

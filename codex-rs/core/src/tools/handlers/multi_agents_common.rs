@@ -15,6 +15,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::CollabAgentRef;
@@ -216,7 +217,7 @@ pub(crate) fn build_agent_resume_config(
     child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
+    apply_spawn_agent_overrides(&mut config, child_depth, turn.multi_agent_version);
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     Ok(config)
@@ -280,11 +281,40 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     Ok(())
 }
 
-pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    if child_depth >= config.agent_max_depth && !config.features.enabled(Feature::MultiAgentV2) {
+pub(crate) fn apply_spawn_agent_overrides(
+    config: &mut Config,
+    child_depth: i32,
+    multi_agent_version: Option<MultiAgentVersion>,
+) {
+    if child_depth >= config.agent_max_depth && multi_agent_version != Some(MultiAgentVersion::V2) {
         let _ = config.features.disable(Feature::SpawnCsv);
         let _ = config.features.disable(Feature::Collab);
     }
+}
+
+pub(crate) async fn resolve_multi_agent_version_for_config(
+    session: &Session,
+    config: &Config,
+) -> Result<Option<MultiAgentVersion>, FunctionCallError> {
+    let model = config.model.as_deref().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent could not resolve the child model runtime".to_string(),
+        )
+    })?;
+    let model_info = session
+        .services
+        .models_manager
+        .get_model_info(model, &config.to_models_manager_config())
+        .await;
+    Ok(model_info.multi_agent_version.or_else(|| {
+        if config.features.enabled(Feature::MultiAgentV2) {
+            Some(MultiAgentVersion::V2)
+        } else if config.features.enabled(Feature::Collab) {
+            Some(MultiAgentVersion::V1)
+        } else {
+            None
+        }
+    }))
 }
 
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(

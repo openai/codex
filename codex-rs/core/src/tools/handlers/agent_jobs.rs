@@ -10,6 +10,7 @@ use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -89,6 +90,7 @@ struct ReportAgentJobResultToolResult {
 struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
+    multi_agent_version: Option<MultiAgentVersion>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,18 +121,28 @@ async fn build_runner_options(
             "agent depth limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    if turn.config.agent_max_threads == Some(0) {
+    let max_threads = if turn.multi_agent_version == Some(MultiAgentVersion::V2) {
+        Some(
+            turn.config
+                .multi_agent_v2
+                .max_concurrent_threads_per_session
+                .saturating_sub(1),
+        )
+    } else {
+        turn.config.agent_max_threads
+    };
+    if max_threads == Some(0) {
         return Err(FunctionCallError::RespondToModel(
             "agent thread limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    let max_concurrency =
-        normalize_concurrency(requested_concurrency, turn.config.agent_max_threads);
+    let max_concurrency = normalize_concurrency(requested_concurrency, max_threads);
     let base_instructions = session.get_base_instructions().await;
     let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref())?;
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
+        multi_agent_version: turn.multi_agent_version,
     })
 }
 
@@ -212,6 +224,8 @@ async fn run_agent_job_loop(
                         )))),
                         SpawnAgentOptions {
                             environments: Some(turn.environments.to_selections()),
+                            parent_multi_agent_version: options.multi_agent_version,
+                            child_multi_agent_version: options.multi_agent_version,
                             ..Default::default()
                         },
                     )

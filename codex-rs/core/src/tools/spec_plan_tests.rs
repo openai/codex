@@ -8,6 +8,7 @@ use codex_mcp::ToolInfo;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
@@ -31,6 +32,7 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
@@ -878,6 +880,50 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
         "close_agent",
         "list_agents",
     ]);
+
+    let review = probe(|turn| {
+        turn.multi_agent_version = Some(MultiAgentVersion::V2);
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::Review);
+    })
+    .await;
+    review.assert_visible_lacks(&[
+        MULTI_AGENT_V1_NAMESPACE,
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+    ]);
+
+    let guardian_review = probe(|turn| {
+        turn.multi_agent_version = Some(MultiAgentVersion::V2);
+        turn.session_source =
+            SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()));
+    })
+    .await;
+    guardian_review.assert_visible_lacks(&[
+        MULTI_AGENT_V1_NAMESPACE,
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+    ]);
+
+    let max_depth_v1 = probe(|turn| {
+        turn.multi_agent_version = Some(MultiAgentVersion::V1);
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: turn.config.agent_max_depth,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+    })
+    .await;
+    max_depth_v1.assert_visible_lacks(&[MULTI_AGENT_V1_NAMESPACE]);
 }
 
 #[tokio::test]

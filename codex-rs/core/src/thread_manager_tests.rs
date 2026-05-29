@@ -14,6 +14,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
@@ -62,6 +63,23 @@ fn contextual_user_interrupted_marker() -> ResponseItem {
 fn developer_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer)
         .expect("developer interrupted marker should be enabled")
+}
+
+#[tokio::test]
+async fn interrupted_turn_history_marker_uses_resolved_multi_agent_version() {
+    let mut config = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+
+    assert_eq!(
+        (
+            InterruptedTurnHistoryMarker::from_config(&config, Some(MultiAgentVersion::V1),),
+            InterruptedTurnHistoryMarker::from_config(&config, Some(MultiAgentVersion::V2),),
+        ),
+        (
+            InterruptedTurnHistoryMarker::ContextualUser,
+            InterruptedTurnHistoryMarker::Developer,
+        )
+    );
 }
 
 #[test]
