@@ -1,5 +1,7 @@
 use super::*;
 use crate::error_code::method_not_found;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -599,6 +601,24 @@ impl ThreadRequestProcessor {
         params: ThreadLoadedListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_loaded_list_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_subagents_list(
+        &self,
+        params: ThreadSubagentsListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_subagents_list_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_subagents_read(
+        &self,
+        params: ThreadSubagentsReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_subagents_read_response_inner(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -2040,6 +2060,89 @@ impl ThreadRequestProcessor {
             .await
             .map_err(thread_read_view_error)?;
         Ok(ThreadReadResponse { thread })
+    }
+
+    async fn thread_subagents_list_response_inner(
+        &self,
+        params: ThreadSubagentsListParams,
+    ) -> Result<ThreadSubagentsListResponse, JSONRPCErrorError> {
+        let ThreadSubagentsListParams {
+            parent_thread_id,
+            cursor,
+            limit,
+            lifecycle_statuses,
+        } = params;
+        let parent_thread_id = ThreadId::from_string(&parent_thread_id)
+            .map_err(|err| invalid_request(format!("invalid parent thread id: {err}")))?;
+        let cursor = cursor
+            .as_deref()
+            .map(|cursor| {
+                URL_SAFE_NO_PAD
+                    .decode(cursor)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .and_then(|child_thread_id| ThreadId::from_string(&child_thread_id).ok())
+                    .ok_or_else(|| invalid_request(format!("invalid cursor: {cursor}")))
+            })
+            .transpose()?;
+        let page_size = limit.unwrap_or(THREAD_LIST_DEFAULT_LIMIT as u32);
+        if !(1..=THREAD_LIST_MAX_LIMIT as u32).contains(&page_size) {
+            return Err(invalid_request(format!(
+                "limit must be between 1 and {THREAD_LIST_MAX_LIMIT}"
+            )));
+        }
+        let lifecycle_statuses = lifecycle_statuses.map(|statuses| {
+            statuses
+                .into_iter()
+                .map(|status| match status {
+                    ThreadSubagentLifecycleStatus::Open => {
+                        codex_state::DirectionalThreadSpawnEdgeStatus::Open
+                    }
+                    ThreadSubagentLifecycleStatus::Closed => {
+                        codex_state::DirectionalThreadSpawnEdgeStatus::Closed
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        let state_db = self.state_db.as_ref().ok_or_else(|| {
+            internal_error("sqlite state db unavailable for thread/subagents/list")
+        })?;
+        let page = state_db
+            .list_thread_spawn_children_page(
+                parent_thread_id,
+                cursor,
+                page_size as usize,
+                lifecycle_statuses.as_deref(),
+            )
+            .await
+            .map_err(|err| internal_error(format!("failed to list thread subagents: {err}")))?;
+        Ok(ThreadSubagentsListResponse {
+            data: page
+                .items
+                .into_iter()
+                .map(thread_subagent_from_edge)
+                .collect(),
+            next_cursor: page
+                .next_cursor
+                .map(|child_thread_id| URL_SAFE_NO_PAD.encode(child_thread_id.to_string())),
+        })
+    }
+
+    async fn thread_subagents_read_response_inner(
+        &self,
+        params: ThreadSubagentsReadParams,
+    ) -> Result<ThreadSubagentsReadResponse, JSONRPCErrorError> {
+        let child_thread_id = ThreadId::from_string(&params.child_thread_id)
+            .map_err(|err| invalid_request(format!("invalid child thread id: {err}")))?;
+        let state_db = self.state_db.as_ref().ok_or_else(|| {
+            internal_error("sqlite state db unavailable for thread/subagents/read")
+        })?;
+        let subagent = state_db
+            .get_thread_spawn_edge(child_thread_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to read thread subagent: {err}")))?
+            .map(thread_subagent_from_edge);
+        Ok(ThreadSubagentsReadResponse { subagent })
     }
 
     /// Builds the API view for `thread/read` from persisted metadata plus optional live state.
@@ -3806,6 +3909,21 @@ fn normalize_thread_turns_status(
         if matches!(turn.status, TurnStatus::InProgress) {
             turn.status = TurnStatus::Interrupted;
         }
+    }
+}
+
+fn thread_subagent_from_edge(edge: codex_state::ThreadSpawnEdge) -> ThreadSubagent {
+    ThreadSubagent {
+        child_thread_id: edge.child_thread_id.to_string(),
+        parent_thread_id: edge.parent_thread_id.to_string(),
+        lifecycle_status: match edge.status {
+            codex_state::DirectionalThreadSpawnEdgeStatus::Open => {
+                ThreadSubagentLifecycleStatus::Open
+            }
+            codex_state::DirectionalThreadSpawnEdgeStatus::Closed => {
+                ThreadSubagentLifecycleStatus::Closed
+            }
+        },
     }
 }
 

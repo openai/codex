@@ -115,6 +115,78 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
         Ok(())
     }
 
+    /// Look up a spawned thread's incoming edge by child id.
+    pub async fn get_thread_spawn_edge(
+        &self,
+        child_thread_id: ThreadId,
+    ) -> anyhow::Result<Option<crate::ThreadSpawnEdge>> {
+        let row = sqlx::query(
+            r#"
+SELECT parent_thread_id, child_thread_id, status
+FROM thread_spawn_edges
+WHERE child_thread_id = ?
+            "#,
+        )
+        .bind(child_thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        row.map(thread_spawn_edge_from_row).transpose()
+    }
+
+    /// List a page of direct spawned children ordered by child id.
+    ///
+    /// `statuses = None` includes every persisted lifecycle status. An empty
+    /// status slice intentionally matches no edges.
+    pub async fn list_thread_spawn_children_page(
+        &self,
+        parent_thread_id: ThreadId,
+        cursor: Option<ThreadId>,
+        page_size: usize,
+        statuses: Option<&[crate::DirectionalThreadSpawnEdgeStatus]>,
+    ) -> anyhow::Result<crate::ThreadSpawnEdgesPage> {
+        if statuses.is_some_and(<[crate::DirectionalThreadSpawnEdgeStatus]>::is_empty) {
+            return Ok(crate::ThreadSpawnEdgesPage {
+                items: Vec::new(),
+                next_cursor: None,
+            });
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT parent_thread_id, child_thread_id, status FROM thread_spawn_edges WHERE parent_thread_id = ",
+        );
+        builder.push_bind(parent_thread_id.to_string());
+        if let Some(cursor) = cursor {
+            builder
+                .push(" AND child_thread_id > ")
+                .push_bind(cursor.to_string());
+        }
+        if let Some(statuses) = statuses {
+            builder.push(" AND status IN (");
+            let mut separated = builder.separated(", ");
+            for status in statuses {
+                separated.push_bind(status.as_ref());
+            }
+            separated.push_unseparated(")");
+        }
+        builder
+            .push(" ORDER BY child_thread_id LIMIT ")
+            .push_bind(page_size.saturating_add(1) as i64);
+
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+        let mut items = rows
+            .into_iter()
+            .map(thread_spawn_edge_from_row)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let has_more = items.len() > page_size;
+        items.truncate(page_size);
+        let next_cursor = if has_more {
+            items.last().map(|edge| edge.child_thread_id)
+        } else {
+            None
+        };
+        Ok(crate::ThreadSpawnEdgesPage { items, next_cursor })
+    }
+
     /// List direct spawned children of `parent_thread_id` whose edge matches `status`.
     pub async fn list_thread_spawn_children_with_status(
         &self,
@@ -1085,6 +1157,18 @@ fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {
         .unwrap_or_default()
 }
 
+fn thread_spawn_edge_from_row(
+    row: sqlx::sqlite::SqliteRow,
+) -> anyhow::Result<crate::ThreadSpawnEdge> {
+    Ok(crate::ThreadSpawnEdge {
+        parent_thread_id: ThreadId::try_from(row.try_get::<String, _>("parent_thread_id")?)?,
+        child_thread_id: ThreadId::try_from(row.try_get::<String, _>("child_thread_id")?)?,
+        status: row
+            .try_get::<String, _>("status")?
+            .parse::<crate::DirectionalThreadSpawnEdgeStatus>()?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2032,6 +2116,92 @@ INSERT INTO thread_spawn_edges (
                 closed_child_thread_id,
                 future_child_thread_id,
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_spawn_children_page_uses_child_id_keyset() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let parent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000920").expect("valid thread id");
+        let child_a_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000921").expect("valid thread id");
+        let child_b_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000922").expect("valid thread id");
+        let child_c_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000923").expect("valid thread id");
+        for (child_thread_id, status) in [
+            (child_a_thread_id, DirectionalThreadSpawnEdgeStatus::Open),
+            (child_b_thread_id, DirectionalThreadSpawnEdgeStatus::Closed),
+            (child_c_thread_id, DirectionalThreadSpawnEdgeStatus::Open),
+        ] {
+            runtime
+                .upsert_thread_spawn_edge(parent_thread_id, child_thread_id, status)
+                .await
+                .expect("child edge insert should succeed");
+        }
+        let first_page = runtime
+            .list_thread_spawn_children_page(
+                parent_thread_id,
+                /*cursor*/ None,
+                /*page_size*/ 2,
+                /*statuses*/ None,
+            )
+            .await
+            .expect("first page should load");
+        assert_eq!(
+            first_page,
+            crate::ThreadSpawnEdgesPage {
+                items: vec![
+                    crate::ThreadSpawnEdge {
+                        parent_thread_id,
+                        child_thread_id: child_a_thread_id,
+                        status: DirectionalThreadSpawnEdgeStatus::Open,
+                    },
+                    crate::ThreadSpawnEdge {
+                        parent_thread_id,
+                        child_thread_id: child_b_thread_id,
+                        status: DirectionalThreadSpawnEdgeStatus::Closed,
+                    },
+                ],
+                next_cursor: Some(child_b_thread_id),
+            }
+        );
+
+        let second_page = runtime
+            .list_thread_spawn_children_page(
+                parent_thread_id,
+                first_page.next_cursor,
+                /*page_size*/ 2,
+                /*statuses*/ None,
+            )
+            .await
+            .expect("second page should load");
+        assert_eq!(
+            second_page,
+            crate::ThreadSpawnEdgesPage {
+                items: vec![crate::ThreadSpawnEdge {
+                    parent_thread_id,
+                    child_thread_id: child_c_thread_id,
+                    status: DirectionalThreadSpawnEdgeStatus::Open,
+                }],
+                next_cursor: None,
+            }
+        );
+
+        assert_eq!(
+            runtime
+                .get_thread_spawn_edge(child_b_thread_id)
+                .await
+                .expect("edge lookup should succeed"),
+            Some(crate::ThreadSpawnEdge {
+                parent_thread_id,
+                child_thread_id: child_b_thread_id,
+                status: DirectionalThreadSpawnEdgeStatus::Closed,
+            })
         );
     }
 }

@@ -422,6 +422,8 @@ export type { ThreadStartSource } from "./ThreadStartSource";
 export type { ThreadStartedNotification } from "./ThreadStartedNotification";
 export type { ThreadStatus } from "./ThreadStatus";
 export type { ThreadStatusChangedNotification } from "./ThreadStatusChangedNotification";
+export type { ThreadSubagent } from "./ThreadSubagent";
+export type { ThreadSubagentLifecycleStatus } from "./ThreadSubagentLifecycleStatus";
 export type { ThreadTokenUsage } from "./ThreadTokenUsage";
 export type { ThreadTokenUsageUpdatedNotification } from "./ThreadTokenUsageUpdatedNotification";
 export type { ThreadUnarchiveParams } from "./ThreadUnarchiveParams";

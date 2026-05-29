@@ -15905,6 +15905,32 @@
       "title": "ThreadStatusChangedNotification",
       "type": "object"
     },
+    "ThreadSubagent": {
+      "properties": {
+        "childThreadId": {
+          "type": "string"
+        },
+        "lifecycleStatus": {
+          "$ref": "#/definitions/ThreadSubagentLifecycleStatus"
+        },
+        "parentThreadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "childThreadId",
+        "lifecycleStatus",
+        "parentThreadId"
+      ],
+      "type": "object"
+    },
+    "ThreadSubagentLifecycleStatus": {
+      "enum": [
+        "open",
+        "closed"
+      ],
+      "type": "string"
+    },
     "ThreadTokenUsage": {
       "properties": {
         "last": {

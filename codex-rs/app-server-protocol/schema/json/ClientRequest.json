@@ -3898,6 +3898,13 @@
       ],
       "type": "string"
     },
+    "ThreadSubagentLifecycleStatus": {
+      "enum": [
+        "open",
+        "closed"
+      ],
+      "type": "string"
+    },
     "ThreadUnarchiveParams": {
       "properties": {
         "threadId": {

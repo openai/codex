@@ -63,6 +63,7 @@ mod thread_settings_update;
 mod thread_shell_command;
 mod thread_start;
 mod thread_status;
+mod thread_subagents;
 mod thread_unarchive;
 mod thread_unsubscribe;
 mod turn_interrupt;

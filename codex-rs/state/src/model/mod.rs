@@ -16,6 +16,8 @@ pub use agent_job::AgentJobStatus;
 pub use backfill_state::BackfillState;
 pub use backfill_state::BackfillStatus;
 pub use graph::DirectionalThreadSpawnEdgeStatus;
+pub use graph::ThreadSpawnEdge;
+pub use graph::ThreadSpawnEdgesPage;
 pub use log::LogEntry;
 pub use log::LogQuery;
 pub use log::LogRow;
