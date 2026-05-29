@@ -1563,7 +1563,8 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             },
         )
         .await
-        .expect("worker spawn should succeed");
+        .expect("worker spawn should succeed")
+        .thread_id;
     let tester_path = worker_path.join("tester").expect("tester path");
     let tester_thread_id = harness
         .control
@@ -1583,7 +1584,8 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             },
         )
         .await
-        .expect("tester spawn should succeed");
+        .expect("tester spawn should succeed")
+        .thread_id;
     harness
         .control
         .shutdown_live_agent(worker_thread_id)
