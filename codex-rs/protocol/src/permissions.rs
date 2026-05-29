@@ -845,17 +845,16 @@ impl FileSystemSandboxPolicy {
 
         let read_deny_matcher = ReadDenyMatcher::new(&self, cwd);
         if let Some(path) = required_readable_roots.iter().find(|path| {
-            !self.can_read_path_with_cwd(path.as_path(), cwd)
-                && (read_deny_matcher
-                    .as_ref()
-                    .is_some_and(|matcher| matcher.is_read_denied(path.as_path()))
-                    || resolve_candidate_path(path.as_path(), cwd).is_some_and(|path| {
-                        self.resolved_entries_with_cwd(cwd)
-                            .into_iter()
-                            .filter(|entry| path.as_path().starts_with(entry.path.as_path()))
-                            .max_by_key(resolved_entry_precedence)
-                            .is_some_and(|entry| entry.access == FileSystemAccessMode::Deny)
-                    }))
+            read_deny_matcher
+                .as_ref()
+                .is_some_and(|matcher| matcher.is_read_denied(path.as_path()))
+                || resolve_candidate_path(path.as_path(), cwd).is_some_and(|path| {
+                    self.resolved_entries_with_cwd(cwd)
+                        .into_iter()
+                        .filter(|entry| path.as_path().starts_with(entry.path.as_path()))
+                        .max_by_key(resolved_entry_precedence)
+                        .is_some_and(|entry| entry.access == FileSystemAccessMode::Deny)
+                })
         }) {
             return Err(io::Error::other(format!(
                 "required readable root is denied by filesystem policy: {}",
@@ -3070,38 +3069,6 @@ mod tests {
             }),
             "expected explicit deny entry to be preserved"
         );
-    }
-
-    #[test]
-    fn required_readable_roots_honor_explicit_read_carveouts() {
-        let temp = TempDir::new().expect("tempdir");
-        let denied_dir = temp.path().join("private");
-        let required_path = denied_dir.join("ca-bundle.pem");
-        std::fs::create_dir_all(&denied_dir).expect("create denied dir");
-        std::fs::write(&required_path, "bundle").expect("write required path");
-        let required_path =
-            AbsolutePathBuf::from_absolute_path(required_path).expect("absolute required path");
-        let policy = FileSystemSandboxPolicy::restricted(vec![
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: AbsolutePathBuf::from_absolute_path(&denied_dir)
-                        .expect("absolute denied dir"),
-                },
-                access: FileSystemAccessMode::Deny,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: required_path.clone(),
-                },
-                access: FileSystemAccessMode::Read,
-            },
-        ]);
-
-        let actual = policy
-            .with_required_readable_roots(temp.path(), std::slice::from_ref(&required_path))
-            .expect("explicit read carveout should allow required path");
-
-        assert!(actual.can_read_path_with_cwd(required_path.as_path(), temp.path()));
     }
 
     #[test]

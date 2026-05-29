@@ -17,7 +17,6 @@ use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
-use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -59,14 +58,6 @@ pub(crate) fn exec_env_for_sandbox_permissions(
     {
         for key in PROXY_ENV_KEYS {
             env.remove(*key);
-        }
-        for key in MITM_CA_ENV_KEYS {
-            if env
-                .get(*key)
-                .is_some_and(|value| is_managed_mitm_ca_trust_bundle_path(value))
-            {
-                env.remove(*key);
-            }
         }
         // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
         #[cfg(target_os = "macos")]
