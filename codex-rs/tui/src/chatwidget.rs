@@ -169,6 +169,8 @@ use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::resume_hint;
+use codex_utils_plugins::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
+use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -274,6 +276,7 @@ use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::GoalStatusIndicator;
+use crate::bottom_pane::HistoryEntry;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -1223,9 +1226,75 @@ impl ChatWidget {
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
-            if !self.review.is_review_mode {
-                self.on_user_message_display(display);
+            if self.review.is_review_mode {
+                return;
             }
+            let message = display.message.as_str();
+            let mention_start = |sigil: char, mention: &str| {
+                let token = format!("{sigil}{mention}");
+                message.match_indices(&token).find_map(|(start, _)| {
+                    let end = start + token.len();
+                    message
+                        .as_bytes()
+                        .get(end)
+                        .is_none_or(|byte| {
+                            !byte.is_ascii_alphanumeric() && !matches!(byte, b'_' | b'-')
+                        })
+                        .then_some(start)
+                })
+            };
+            let mut mention_bindings: Vec<MentionBinding> = items
+                .iter()
+                .filter_map(|item| match item {
+                    UserInput::Skill { name, path } => Some(MentionBinding {
+                        sigil: TOOL_MENTION_SIGIL,
+                        mention: name.clone(),
+                        path: path.to_string_lossy().into_owned(),
+                    }),
+                    UserInput::Mention { name, path } => {
+                        let plugin_id = path.strip_prefix("plugin://");
+                        let mention = if let Some(plugin_id) = plugin_id {
+                            plugin_id
+                                .split_once('@')
+                                .map(|(plugin_name, _)| plugin_name)
+                                .unwrap_or(plugin_id)
+                                .to_string()
+                        } else if path.starts_with("app://") {
+                            codex_connectors::metadata::connector_mention_slug_from_name(name)
+                        } else {
+                            name.clone()
+                        };
+                        let sigil = if plugin_id.is_some()
+                            && mention_start(PLUGIN_TEXT_MENTION_SIGIL, &mention).is_some()
+                        {
+                            PLUGIN_TEXT_MENTION_SIGIL
+                        } else {
+                            TOOL_MENTION_SIGIL
+                        };
+                        Some(MentionBinding {
+                            sigil,
+                            mention,
+                            path: path.clone(),
+                        })
+                    }
+                    UserInput::Text { .. }
+                    | UserInput::Image { .. }
+                    | UserInput::LocalImage { .. } => None,
+                })
+                .collect();
+            mention_bindings.sort_by_key(|binding| {
+                mention_start(binding.sigil, &binding.mention).unwrap_or(usize::MAX)
+            });
+            self.bottom_pane
+                .record_replayed_user_message_history(HistoryEntry {
+                    text: display.message.clone(),
+                    text_elements: display.text_elements.clone(),
+                    local_image_paths: display.local_images.clone(),
+                    remote_image_urls: display.remote_image_urls.clone(),
+                    mention_bindings,
+                    pending_pastes: Vec::new(),
+                });
+            self.on_user_message_display(display);
             return;
         }
 

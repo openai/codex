@@ -518,7 +518,7 @@ fn format_network_unix_socket_permission(
 ) -> &'static str {
     match permission {
         NetworkUnixSocketPermissionToml::Allow => "allow",
-        NetworkUnixSocketPermissionToml::None => "none",
+        NetworkUnixSocketPermissionToml::Deny => "deny",
     }
 }
 
@@ -837,7 +837,7 @@ mod tests {
                             ),
                             (
                                 "/tmp/blocked.sock".to_string(),
-                                NetworkUnixSocketPermissionToml::None,
+                                NetworkUnixSocketPermissionToml::Deny,
                             ),
                         ]),
                     }),
@@ -854,7 +854,7 @@ mod tests {
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         assert!(rendered.contains(
-            "experimental_network: unix_sockets={/tmp/blocked.sock=none, /tmp/codex.sock=allow} (source: cloud requirements)"
+            "experimental_network: unix_sockets={/tmp/blocked.sock=deny, /tmp/codex.sock=allow} (source: cloud requirements)"
         ));
     }
 

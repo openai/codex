@@ -147,6 +147,7 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
     app.handle_mcp_inventory_result(
         Ok(vec![McpServerStatus {
             name: "docs".to_string(),
+            server_info: None,
             tools: HashMap::new(),
             resources: Vec::new(),
             resource_templates: Vec::new(),
@@ -338,6 +339,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
             TurnStatus::Completed,
             vec![ThreadItem::UserMessage {
                 id: "user-1".to_string(),
+                client_id: None,
                 content: vec![AppServerUserInput::Text {
                     text: "earlier prompt".to_string(),
                     text_elements: Vec::new(),
@@ -3263,6 +3265,7 @@ async fn side_thread_snapshot_hides_forked_parent_transcript() {
         TurnStatus::Completed,
         vec![ThreadItem::UserMessage {
             id: "parent-user".to_string(),
+            client_id: None,
             content: vec![AppServerUserInput::Text {
                 text: "parent prompt should stay hidden".to_string(),
                 text_elements: Vec::new(),
@@ -4689,6 +4692,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                     items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![ThreadItem::UserMessage {
                         id: "user-1".to_string(),
+                        client_id: None,
                         content: vec![AppServerUserInput::Text {
                             text: "first prompt".to_string(),
                             text_elements: Vec::new(),
@@ -4706,6 +4710,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                     items: vec![
                         ThreadItem::UserMessage {
                             id: "user-2".to_string(),
+                            client_id: None,
                             content: vec![AppServerUserInput::Text {
                                 text: "third prompt".to_string(),
                                 text_elements: Vec::new(),
@@ -4853,6 +4858,7 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
         TurnStatus::Completed,
         vec![ThreadItem::UserMessage {
             id: "user-1".to_string(),
+            client_id: None,
             content: vec![AppServerUserInput::Text {
                 text: "restored prompt".to_string(),
                 text_elements: Vec::new(),

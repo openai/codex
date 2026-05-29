@@ -78,6 +78,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "run sleep".to_string(),
                 text_elements: Vec::new(),
@@ -159,6 +160,7 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "say done".to_string(),
                 text_elements: Vec::new(),
@@ -253,6 +255,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "run python".to_string(),
                 text_elements: Vec::new(),

@@ -137,11 +137,14 @@ pub(super) async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input = vec![TurnInput::UserInput(vec![UserInput::Text {
-        text: review_prompt,
-        // Review prompt is synthesized; no UI element ranges to preserve.
-        text_elements: Vec::new(),
-    }])];
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: review_prompt,
+            // Review prompt is synthesized; no UI element ranges to preserve.
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
     let tc = Arc::new(review_turn_context);
     tc.turn_metadata_state.spawn_git_enrichment_task();
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not

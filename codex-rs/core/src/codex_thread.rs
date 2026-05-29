@@ -229,6 +229,17 @@ impl CodexThread {
         self.codex.submit_with_trace(op, trace).await
     }
 
+    pub async fn submit_user_input_with_client_user_message_id(
+        &self,
+        op: Op,
+        trace: Option<W3cTraceContext>,
+        client_user_message_id: Option<String>,
+    ) -> CodexResult<String> {
+        self.codex
+            .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
+            .await
+    }
+
     /// Persist whether this thread is eligible for future memory generation.
     pub async fn set_thread_memory_mode(&self, mode: ThreadMemoryMode) -> anyhow::Result<()> {
         self.codex.set_thread_memory_mode(mode).await
@@ -239,6 +250,7 @@ impl CodexThread {
         input: Vec<UserInput>,
         additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
+        client_user_message_id: Option<String>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.codex
@@ -246,6 +258,7 @@ impl CodexThread {
                 input,
                 additional_context,
                 expected_turn_id,
+                client_user_message_id,
                 responsesapi_client_metadata,
             )
             .await

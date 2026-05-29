@@ -176,8 +176,8 @@ pub(crate) fn apply_network_proxy_feature_config(
                             NetworkProxyUnixSocketPermissionToml::Allow => {
                                 NetworkUnixSocketPermissionToml::Allow
                             }
-                            NetworkProxyUnixSocketPermissionToml::None => {
-                                NetworkUnixSocketPermissionToml::None
+                            NetworkProxyUnixSocketPermissionToml::Deny => {
+                                NetworkUnixSocketPermissionToml::Deny
                             }
                         };
                         (path.clone(), permission)

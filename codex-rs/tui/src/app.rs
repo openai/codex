@@ -1045,11 +1045,13 @@ See the Codex keymap documentation for supported actions and examples."
                     .unwrap_or(false);
             if should_check {
                 let cwd = app.config.cwd.clone();
+                let workspace_roots = app.config.effective_workspace_roots();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 Self::spawn_world_writable_scan(
                     cwd,
+                    workspace_roots,
                     env_map,
                     logs_base_dir,
                     startup_permission_profile,

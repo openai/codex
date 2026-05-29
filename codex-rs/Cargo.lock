@@ -1928,6 +1928,7 @@ dependencies = [
  "codex-git-utils",
  "codex-guardian",
  "codex-hooks",
+ "codex-image-generation-extension",
  "codex-login",
  "codex-mcp",
  "codex-memories-extension",
@@ -3037,6 +3038,31 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "codex-image-generation-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "codex-api",
+ "codex-core",
+ "codex-extension-api",
+ "codex-features",
+ "codex-login",
+ "codex-model-provider",
+ "codex-model-provider-info",
+ "codex-protocol",
+ "codex-tools",
+ "http 1.4.0",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

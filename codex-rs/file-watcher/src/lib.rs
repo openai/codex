@@ -253,6 +253,49 @@ impl ThrottledWatchReceiver {
     }
 }
 
+/// Coalesces file watcher notifications that arrive within a fixed debounce
+/// window after the first event in each batch.
+pub struct DebouncedWatchReceiver {
+    rx: Receiver,
+    interval: Duration,
+    changed_paths: BTreeSet<PathBuf>,
+}
+
+impl DebouncedWatchReceiver {
+    /// Creates a debouncing wrapper around a raw watcher [`Receiver`].
+    pub fn new(rx: Receiver, interval: Duration) -> Self {
+        Self {
+            rx,
+            interval,
+            changed_paths: BTreeSet::new(),
+        }
+    }
+
+    /// Receives the next debounced event batch.
+    pub async fn recv(&mut self) -> Option<FileWatcherEvent> {
+        while self.changed_paths.is_empty() {
+            self.changed_paths.extend(self.rx.recv().await?.paths);
+        }
+        let deadline = Instant::now() + self.interval;
+
+        loop {
+            tokio::select! {
+                event = self.rx.recv() => match event {
+                    Some(event) => self.changed_paths.extend(event.paths),
+                    None => break,
+                },
+                _ = sleep_until(deadline) => break,
+            }
+        }
+
+        Some(FileWatcherEvent {
+            paths: std::mem::take(&mut self.changed_paths)
+                .into_iter()
+                .collect(),
+        })
+    }
+}
+
 /// Handle used to register watched paths for one logical consumer.
 pub struct FileWatcherSubscriber {
     id: SubscriberId,

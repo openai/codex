@@ -263,6 +263,7 @@ fn sample_thread_resume_response_with_source(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        initial_turns_page: None,
     })
 }
 
@@ -271,6 +272,7 @@ fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest 
         request_id: RequestId::Integer(request_id),
         params: TurnStartParams {
             thread_id: thread_id.to_string(),
+            client_user_message_id: None,
             input: vec![
                 UserInput::Text {
                     text: "hello".to_string(),
@@ -390,6 +392,7 @@ fn sample_turn_steer_request(
         params: TurnSteerParams {
             thread_id: thread_id.to_string(),
             expected_turn_id: expected_turn_id.to_string(),
+            client_user_message_id: None,
             input: vec![
                 UserInput::Text {
                     text: "more".to_string(),
