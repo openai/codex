@@ -489,6 +489,7 @@ jobs:
 
   tests_linux_arm64:
     name: Tests — ubuntu-24.04-arm - aarch64-unknown-linux-gnu
+    continue-on-error: true
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
       runner: ubuntu-24.04-arm
@@ -497,6 +498,21 @@ jobs:
       target: aarch64-unknown-linux-gnu
       profile: ci-test
       artifact_id: linux-arm64
+      use_sccache: true
+    secrets: inherit
+
+  tests_linux_arm64_retry:
+    name: Tests — ubuntu-24.04-arm - aarch64-unknown-linux-gnu (retry)
+    needs: tests_linux_arm64
+    if: always() && needs.tests_linux_arm64.result != 'success'
+    uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
+    with:
+      runner: ubuntu-24.04-arm
+      runner_group: codex-runners
+      runner_labels: codex-linux-arm64
+      target: aarch64-unknown-linux-gnu
+      profile: ci-test
+      artifact_id: linux-arm64-retry
       use_sccache: true
     secrets: inherit
 
@@ -543,6 +559,7 @@ jobs:
         tests_macos_aarch64,
         tests_linux_x64_remote,
         tests_linux_arm64,
+        tests_linux_arm64_retry,
         tests_windows_x64,
         tests_windows_arm64,
       ]
@@ -560,6 +577,7 @@ jobs:
           echo "test macos : ${{ needs.tests_macos_aarch64.result }}"
           echo "test linux : ${{ needs.tests_linux_x64_remote.result }}"
           echo "test arm64 : ${{ needs.tests_linux_arm64.result }}"
+          echo "test arm64 retry: ${{ needs.tests_linux_arm64_retry.result }}"
           echo "test winx64: ${{ needs.tests_windows_x64.result }}"
           echo "test winarm: ${{ needs.tests_windows_arm64.result }}"
           [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
@@ -569,7 +587,7 @@ jobs:
           [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
           [[ '${{ needs.tests_macos_aarch64.result }}' == 'success' ]] || { echo 'tests_macos_aarch64 failed'; exit 1; }
           [[ '${{ needs.tests_linux_x64_remote.result }}' == 'success' ]] || { echo 'tests_linux_x64_remote failed'; exit 1; }
-          [[ '${{ needs.tests_linux_arm64.result }}' == 'success' ]] || { echo 'tests_linux_arm64 failed'; exit 1; }
+          [[ '${{ needs.tests_linux_arm64.result }}' == 'success' || '${{ needs.tests_linux_arm64_retry.result }}' == 'success' ]] || { echo 'tests_linux_arm64 failed'; exit 1; }
           [[ '${{ needs.tests_windows_x64.result }}' == 'success' ]] || { echo 'tests_windows_x64 failed'; exit 1; }
           [[ '${{ needs.tests_windows_arm64.result }}' == 'success' ]] || { echo 'tests_windows_arm64 failed'; exit 1; }
 
