@@ -37,6 +37,7 @@ use crate::rpc::invalid_request;
 use crate::rpc::not_found;
 
 pub const CODEX_FS_HELPER_ARG1: &str = "--codex-run-as-fs-helper";
+pub(crate) const FS_HELPER_READY_MESSAGE: &[u8] = b"ready\n";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "params")]

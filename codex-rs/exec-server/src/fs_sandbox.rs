@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_protocol::models::PermissionProfile;
@@ -15,12 +16,15 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::ExecServerRuntimePaths;
 use crate::FileSystemSandboxContext;
 use crate::fs_helper::CODEX_FS_HELPER_ARG1;
+use crate::fs_helper::FS_HELPER_READY_MESSAGE;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_helper::FsHelperResponse;
@@ -29,6 +33,7 @@ use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
 const FS_HELPER_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP"];
+const FS_HELPER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(debug_assertions)]
 const FS_HELPER_BAZEL_BWRAP_ENV_ALLOWLIST: &[&str] = &[
     "CARGO_BIN_EXE_bwrap",
@@ -249,6 +254,7 @@ async fn run_command(
     request_json: Vec<u8>,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
     let mut child = spawn_command(command)?;
+    wait_for_ready(&mut child, FS_HELPER_STARTUP_TIMEOUT).await?;
     let mut stdin = child
         .stdin
         .take()
@@ -270,6 +276,36 @@ async fn run_command(
         FsHelperResponse::Ok(payload) => Ok(payload),
         FsHelperResponse::Error(error) => Err(error),
     }
+}
+
+async fn wait_for_ready(
+    child: &mut tokio::process::Child,
+    startup_timeout: Duration,
+) -> Result<(), JSONRPCErrorError> {
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| internal_error("failed to open fs sandbox helper stdout".to_string()))?;
+    let mut ready_message = [0; FS_HELPER_READY_MESSAGE.len()];
+    timeout(startup_timeout, stdout.read_exact(&mut ready_message))
+        .await
+        .map_err(|_| {
+            internal_error(format!(
+                "fs sandbox helper did not signal readiness within {startup_timeout:?}"
+            ))
+        })?
+        .map_err(|err| {
+            internal_error(format!(
+                "failed to read fs sandbox helper readiness message: {err}"
+            ))
+        })?;
+    if ready_message != FS_HELPER_READY_MESSAGE {
+        return Err(internal_error(
+            "fs sandbox helper returned invalid readiness message".to_string(),
+        ));
+    }
+    child.stdout = Some(stdout);
+    Ok(())
 }
 
 fn spawn_command(
@@ -316,6 +352,10 @@ fn json_error(err: serde_json::Error) -> JSONRPCErrorError {
 mod tests {
     use std::collections::HashMap;
     use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::process::Stdio;
+    #[cfg(unix)]
+    use std::time::Duration;
 
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::FileSystemAccessMode;
@@ -326,6 +366,8 @@ mod tests {
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
+    use tokio::process::Command;
 
     use crate::ExecServerRuntimePaths;
 
@@ -336,6 +378,8 @@ mod tests {
     use super::helper_env_key_is_allowed;
     use super::helper_read_roots;
     use super::sandbox_cwd;
+    #[cfg(unix)]
+    use super::wait_for_ready;
 
     #[test]
     fn helper_permissions_enable_minimal_reads_for_restricted_profile() {
@@ -565,6 +609,43 @@ mod tests {
 
         assert!(policy.can_read_path_with_cwd(codex_parent.as_path(), cwd.as_path()));
         assert!(policy.can_read_path_with_cwd(alias_parent.as_path(), cwd.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn helper_ready_message_preserves_remaining_stdout() {
+        let mut child = shell_command("printf 'ready\\npayload'");
+
+        wait_for_ready(&mut child, Duration::from_secs(1))
+            .await
+            .expect("ready message");
+        let output = child.wait_with_output().await.expect("helper output");
+
+        assert_eq!(output.stdout, b"payload");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn helper_ready_message_times_out() {
+        let mut child = shell_command("exec sleep 30");
+
+        let err = wait_for_ready(&mut child, Duration::from_millis(50))
+            .await
+            .expect_err("missing ready message should time out");
+
+        assert_eq!(
+            err.message,
+            "fs sandbox helper did not signal readiness within 50ms"
+        );
+    }
+
+    #[cfg(unix)]
+    fn shell_command(script: &str) -> tokio::process::Child {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]);
+        command.stdout(Stdio::piped());
+        command.kill_on_drop(true);
+        command.spawn().expect("spawn helper")
     }
 
     fn restricted_policy(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxPolicy {
