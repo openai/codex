@@ -577,3 +577,161 @@ async fn remote_control_schedules_server_token_refresh_while_connected() {
     shutdown_token.cancel();
     let _ = remote_task.await;
 }
+
+#[tokio::test]
+async fn remote_control_connected_refresh_rejection_clears_pairing_auth() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let enroll_request = accept_http_request(&listener).await;
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    let mut first_websocket = accept_remote_control_connection(&listener).await;
+
+    remote_handle.request_pairing_auth_refresh();
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    respond_with_status(refresh_request.stream, "401 Unauthorized", "stale token").await;
+    expect_remote_control_connection_closed(
+        &mut first_websocket,
+        "rejected refresh should close the websocket",
+    )
+    .await;
+    assert!(
+        remote_handle
+            .pairing
+            .client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none(),
+        "rejected refresh should clear cached pairing auth"
+    );
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn remote_control_auth_change_cancels_connected_refresh() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(Some("account_id")),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("initial auth should save");
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(remote_control_state_runtime(&codex_home).await),
+        auth_manager.clone(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let enroll_request = accept_http_request(&listener).await;
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            "srv_e_initial",
+            "env_initial",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    let mut first_websocket = accept_remote_control_connection(&listener).await;
+
+    remote_handle.request_pairing_auth_refresh();
+    let stalled_refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        stalled_refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+
+    save_auth(
+        codex_home.path(),
+        &remote_control_auth_dot_json(Some("next_account_id")),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("next auth should save");
+    auth_manager.reload().await;
+    expect_remote_control_connection_closed(
+        &mut first_websocket,
+        "auth change should close websocket while refresh is stalled",
+    )
+    .await;
+    drop(stalled_refresh_request);
+
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(
+        enroll_request.request_line,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            "srv_e_next",
+            "env_next",
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    let mut second_websocket = accept_remote_control_connection(&listener).await;
+    second_websocket
+        .close(None)
+        .await
+        .expect("second websocket should close");
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
