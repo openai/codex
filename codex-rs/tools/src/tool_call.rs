@@ -87,6 +87,7 @@ pub struct ToolCall {
     pub turn_id: String,
     pub call_id: String,
     pub tool_name: ToolName,
+    pub model: String,
     pub truncation_policy: TruncationPolicy,
     pub conversation_history: ConversationHistory,
     pub turn_item_emitter: Arc<dyn TurnItemEmitter>,
@@ -99,6 +100,7 @@ impl std::fmt::Debug for ToolCall {
             .field("turn_id", &self.turn_id)
             .field("call_id", &self.call_id)
             .field("tool_name", &self.tool_name)
+            .field("model", &self.model)
             .field("truncation_policy", &self.truncation_policy)
             .field("conversation_history", &self.conversation_history)
             .field("turn_item_emitter", &"<host turn item emitter>")
