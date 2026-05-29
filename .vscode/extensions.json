@@ -1,5 +1,6 @@
 {
     "recommendations": [
+        "BazelBuild.vscode-bazel",
         "rust-lang.rust-analyzer",
         "charliermarsh.ruff",
         "tamasfe.even-better-toml",
