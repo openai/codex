@@ -27,6 +27,21 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 
 #[tokio::test]
+async fn memories_startup_creates_memory_root() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let memory_root = home.path().join("memories");
+    let test = build_test_codex(&server, home).await?;
+
+    assert!(!memory_root.exists());
+    trigger_memories_startup(&test).await;
+    wait_for_dir(&memory_root).await?;
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
@@ -402,6 +417,21 @@ async fn wait_for_file_removed(path: &Path) -> anyhow::Result<()> {
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {} to be removed",
+            path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_for_dir(path: &Path) -> anyhow::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if tokio::fs::try_exists(path).await? && path.is_dir() {
+            return Ok(());
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {} to be created",
             path.display()
         );
         tokio::time::sleep(Duration::from_millis(50)).await;

@@ -4,6 +4,8 @@ use futures::StreamExt;
 
 #[derive(Clone)]
 pub(crate) struct CatalogRequestProcessor {
+    pub(super) outgoing: Arc<OutgoingMessageSender>,
+    pub(super) skills_watcher: Arc<SkillsWatcher>,
     pub(super) auth_manager: Arc<AuthManager>,
     pub(super) thread_manager: Arc<ThreadManager>,
     pub(super) config: Arc<Config>,
@@ -96,6 +98,8 @@ fn errors_to_info(
 
 impl CatalogRequestProcessor {
     pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        skills_watcher: Arc<SkillsWatcher>,
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         config: Arc<Config>,
@@ -103,6 +107,8 @@ impl CatalogRequestProcessor {
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
     ) -> Self {
         Self {
+            outgoing,
+            skills_watcher,
             auth_manager,
             thread_manager,
             config,
@@ -134,6 +140,15 @@ impl CatalogRequestProcessor {
         params: SkillsConfigWriteParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.skills_config_write_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn skills_extra_roots_set(
+        &self,
+        params: SkillsExtraRootsSetParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.skills_extra_roots_set_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -565,6 +580,24 @@ impl CatalogRequestProcessor {
         data.sort_unstable_by_key(|(index, _)| *index);
         let data = data.into_iter().map(|(_, entry)| entry).collect();
         Ok(SkillsListResponse { data })
+    }
+
+    async fn skills_extra_roots_set_response(
+        &self,
+        params: SkillsExtraRootsSetParams,
+    ) -> Result<SkillsExtraRootsSetResponse, JSONRPCErrorError> {
+        let SkillsExtraRootsSetParams { extra_roots } = params;
+        self.skills_watcher
+            .register_runtime_extra_roots(&extra_roots);
+        self.thread_manager
+            .skills_manager()
+            .set_extra_roots(extra_roots);
+        self.outgoing
+            .send_server_notification(ServerNotification::SkillsChanged(
+                codex_app_server_protocol::SkillsChangedNotification {},
+            ))
+            .await;
+        Ok(SkillsExtraRootsSetResponse {})
     }
 
     /// Handle `hooks/list` by resolving hooks for each requested cwd.

@@ -5,6 +5,36 @@
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
 
+use std::fmt;
+use std::sync::Arc;
+
+/// Cancellation hook used by Windows sandbox capture backends.
+#[derive(Clone)]
+pub struct WindowsSandboxCancellationToken {
+    is_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl WindowsSandboxCancellationToken {
+    /// Creates a token backed by a cancellation predicate.
+    pub fn new(is_cancelled: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            is_cancelled: Arc::new(is_cancelled),
+        }
+    }
+
+    /// Returns whether the caller has requested cancellation.
+    pub fn is_cancelled(&self) -> bool {
+        (self.is_cancelled)()
+    }
+}
+
+impl fmt::Debug for WindowsSandboxCancellationToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowsSandboxCancellationToken")
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod acl;
 #[cfg(target_os = "windows")]
@@ -211,6 +241,8 @@ pub use setup::SandboxSetupRequest;
 #[cfg(target_os = "windows")]
 pub use setup::SetupRootOverrides;
 #[cfg(target_os = "windows")]
+pub use setup::run_elevated_provisioning_setup;
+#[cfg(target_os = "windows")]
 pub use setup::run_elevated_setup;
 #[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh;
@@ -287,6 +319,7 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use super::WindowsSandboxCancellationToken;
     use super::logging::log_failure;
     use super::logging::log_success;
     use super::process::create_process_as_user;
@@ -306,6 +339,8 @@ mod windows_impl {
     use std::io;
     use std::path::Path;
     use std::ptr;
+    use std::time::Duration;
+    use std::time::Instant;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::Foundation::HANDLE;
@@ -317,6 +352,50 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
+
+    enum WaitOutcome {
+        Exited,
+        TimedOut,
+        Cancelled,
+    }
+
+    fn wait_for_process(
+        process: HANDLE,
+        timeout_ms: Option<u64>,
+        cancellation: Option<&WindowsSandboxCancellationToken>,
+    ) -> WaitOutcome {
+        let Some(cancellation) = cancellation else {
+            let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
+            let res = unsafe { WaitForSingleObject(process, timeout) };
+            return if res == 0x0000_0102 {
+                WaitOutcome::TimedOut
+            } else {
+                WaitOutcome::Exited
+            };
+        };
+
+        let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        loop {
+            if cancellation.is_cancelled() {
+                return WaitOutcome::Cancelled;
+            }
+            let wait_ms = match deadline {
+                Some(deadline) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return WaitOutcome::TimedOut;
+                    }
+                    remaining.min(Duration::from_millis(50)).as_millis() as u32
+                }
+                None => 50,
+            };
+            let res = unsafe { WaitForSingleObject(process, wait_ms) };
+            if res == 0x0000_0102 {
+                continue;
+            }
+            return WaitOutcome::Exited;
+        }
+    }
 
     unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {
         let mut in_r: HANDLE = 0;
@@ -356,22 +435,24 @@ mod windows_impl {
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         permission_profile: &PermissionProfile,
-        permission_profile_cwd: &Path,
+        workspace_roots: &[AbsolutePathBuf],
         codex_home: &Path,
         command: Vec<String>,
         cwd: &Path,
         env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        cancellation: Option<WindowsSandboxCancellationToken>,
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         run_windows_sandbox_capture_with_filesystem_overrides(
             permission_profile,
-            permission_profile_cwd,
+            workspace_roots,
             codex_home,
             command,
             cwd,
             env_map,
             timeout_ms,
+            cancellation,
             &[],
             &[],
             use_private_desktop,
@@ -381,12 +462,13 @@ mod windows_impl {
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture_with_filesystem_overrides(
         permission_profile: &PermissionProfile,
-        permission_profile_cwd: &Path,
+        workspace_roots: &[AbsolutePathBuf],
         codex_home: &Path,
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        cancellation: Option<WindowsSandboxCancellationToken>,
         additional_deny_read_paths: &[AbsolutePathBuf],
         additional_deny_write_paths: &[AbsolutePathBuf],
         use_private_desktop: bool,
@@ -401,7 +483,7 @@ mod windows_impl {
             .collect::<Vec<_>>();
         let common = prepare_legacy_spawn_context(
             permission_profile,
-            permission_profile_cwd,
+            workspace_roots,
             codex_home,
             cwd,
             &mut env_map,
@@ -531,11 +613,11 @@ mod windows_impl {
             let _ = tx_err.send(buf);
         });
 
-        let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
-        let res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
-        let timed_out = res == 0x0000_0102;
+        let wait_outcome = wait_for_process(pi.hProcess, timeout_ms, cancellation.as_ref());
+        let timed_out = matches!(wait_outcome, WaitOutcome::TimedOut);
+        let cancelled = matches!(wait_outcome, WaitOutcome::Cancelled);
         let mut exit_code_u32: u32 = 1;
-        if !timed_out {
+        if !timed_out && !cancelled {
             unsafe {
                 GetExitCodeProcess(pi.hProcess, &mut exit_code_u32);
             }
@@ -580,14 +662,14 @@ mod windows_impl {
 
     pub fn run_windows_sandbox_legacy_preflight(
         permission_profile: &PermissionProfile,
-        permission_profile_cwd: &Path,
+        workspace_roots: &[AbsolutePathBuf],
         codex_home: &Path,
         cwd: &Path,
         env_map: &HashMap<String, String>,
     ) -> Result<()> {
-        let Ok(permissions) = super::resolved_permissions::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
+        let Ok(permissions) = super::resolved_permissions::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
             permission_profile,
-            permission_profile_cwd,
+            workspace_roots,
         ) else {
             return Ok(());
         };
@@ -635,9 +717,9 @@ mod windows_impl {
         }
 
         fn should_apply_network_block(permission_profile: &PermissionProfile) -> bool {
-            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
                 permission_profile,
-                Path::new("."),
+                &[],
             )
             .expect("managed permissions")
             .should_apply_network_block()
@@ -672,7 +754,7 @@ mod windows_impl {
             ] {
                 super::run_windows_sandbox_legacy_preflight(
                     &permission_profile,
-                    Path::new("."),
+                    &[],
                     Path::new("."),
                     Path::new("."),
                     &HashMap::new(),
@@ -685,9 +767,11 @@ mod windows_impl {
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
+    use super::WindowsSandboxCancellationToken;
     use anyhow::Result;
     use anyhow::bail;
     use codex_protocol::models::PermissionProfile;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -702,12 +786,13 @@ mod stub {
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         _permission_profile: &PermissionProfile,
-        _permission_profile_cwd: &Path,
+        _workspace_roots: &[AbsolutePathBuf],
         _codex_home: &Path,
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
+        _cancellation: Option<WindowsSandboxCancellationToken>,
         _use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
@@ -715,7 +800,7 @@ mod stub {
 
     pub fn run_windows_sandbox_legacy_preflight(
         _permission_profile: &PermissionProfile,
-        _permission_profile_cwd: &Path,
+        _workspace_roots: &[AbsolutePathBuf],
         _codex_home: &Path,
         _cwd: &Path,
         _env_map: &HashMap<String, String>,

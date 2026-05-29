@@ -461,6 +461,7 @@ url = "{mcp_server_url}/mcp"
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Call the large MCP tool".to_string(),
                 text_elements: Vec::new(),

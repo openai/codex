@@ -216,25 +216,8 @@ def _rewrite_project_name(pyproject_text: str, name: str) -> str:
     return updated
 
 
-def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -> str:
-    match = re.search(r"^dependencies = \[(.*?)\]$", pyproject_text, flags=re.MULTILINE)
-    if match is None:
-        raise RuntimeError("Could not find dependencies array in sdk/python/pyproject.toml")
-
-    raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
-    raw_items = [
-        item
-        for item in raw_items
-        if RUNTIME_DISTRIBUTION_NAME.removeprefix("openai-") not in item
-        and RUNTIME_DISTRIBUTION_NAME not in item
-    ]
-    raw_items.append(f'"{RUNTIME_DISTRIBUTION_NAME}=={runtime_version}"')
-    replacement = "dependencies = [\n  " + ",\n  ".join(raw_items) + ",\n]"
-    return pyproject_text[: match.start()] + replacement + pyproject_text[match.end() :]
-
-
-def stage_python_sdk_package(staging_dir: Path, codex_version: str) -> Path:
-    package_version = normalize_codex_version(codex_version)
+def stage_python_sdk_package(staging_dir: Path, sdk_version: str) -> Path:
+    package_version = normalize_codex_version(sdk_version)
     _copy_package_tree(sdk_root(), staging_dir)
     sdk_bin_dir = staging_dir / "src" / "openai_codex" / "bin"
     if sdk_bin_dir.exists():
@@ -244,7 +227,6 @@ def stage_python_sdk_package(staging_dir: Path, codex_version: str) -> Path:
     pyproject_text = pyproject_path.read_text()
     pyproject_text = _rewrite_project_name(pyproject_text, SDK_DISTRIBUTION_NAME)
     pyproject_text = _rewrite_project_version(pyproject_text, package_version)
-    pyproject_text = _rewrite_sdk_runtime_dependency(pyproject_text, package_version)
     pyproject_path.write_text(pyproject_text)
     return staging_dir
 
@@ -936,6 +918,7 @@ def _render_codex_block(
         *_approval_mode_start_signature_lines(),
         *_kw_signature_lines(thread_start_fields),
         "    ) -> Thread:",
+        '        """Create a new Codex conversation thread."""',
         _approval_mode_assignment_line("_approval_mode_settings"),
         "        params = ThreadStartParams(",
         *_approval_mode_model_arg_lines(),
@@ -949,6 +932,7 @@ def _render_codex_block(
         "        *,",
         *_kw_signature_lines(thread_list_fields),
         "    ) -> ThreadListResponse:",
+        '        """List saved conversation threads."""',
         "        params = ThreadListParams(",
         *_model_arg_lines(thread_list_fields),
         "        )",
@@ -961,6 +945,7 @@ def _render_codex_block(
         *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(resume_fields),
         "    ) -> Thread:",
+        '        """Resume an existing conversation thread by ID."""',
         _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = ThreadResumeParams(",
         "            thread_id=thread_id,",
@@ -977,6 +962,7 @@ def _render_codex_block(
         *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(fork_fields),
         "    ) -> Thread:",
+        '        """Create a new thread from an existing thread."""',
         _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = ThreadForkParams(",
         "            thread_id=thread_id,",
@@ -987,9 +973,11 @@ def _render_codex_block(
         "        return Thread(self._client, forked.thread.id)",
         "",
         "    def thread_archive(self, thread_id: str) -> ThreadArchiveResponse:",
+        '        """Archive a stored conversation thread."""',
         "        return self._client.thread_archive(thread_id)",
         "",
         "    def thread_unarchive(self, thread_id: str) -> Thread:",
+        '        """Restore an archived conversation thread."""',
         "        unarchived = self._client.thread_unarchive(thread_id)",
         "        return Thread(self._client, unarchived.thread.id)",
     ]
@@ -1009,6 +997,7 @@ def _render_async_codex_block(
         *_approval_mode_start_signature_lines(),
         *_kw_signature_lines(thread_start_fields),
         "    ) -> AsyncThread:",
+        '        """Create a new Codex conversation thread."""',
         "        await self._ensure_initialized()",
         _approval_mode_assignment_line("_approval_mode_settings"),
         "        params = ThreadStartParams(",
@@ -1023,6 +1012,7 @@ def _render_async_codex_block(
         "        *,",
         *_kw_signature_lines(thread_list_fields),
         "    ) -> ThreadListResponse:",
+        '        """List saved conversation threads."""',
         "        await self._ensure_initialized()",
         "        params = ThreadListParams(",
         *_model_arg_lines(thread_list_fields),
@@ -1036,6 +1026,7 @@ def _render_async_codex_block(
         *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(resume_fields),
         "    ) -> AsyncThread:",
+        '        """Resume an existing conversation thread by ID."""',
         "        await self._ensure_initialized()",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = ThreadResumeParams(",
@@ -1053,6 +1044,7 @@ def _render_async_codex_block(
         *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(fork_fields),
         "    ) -> AsyncThread:",
+        '        """Create a new thread from an existing thread."""',
         "        await self._ensure_initialized()",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = ThreadForkParams(",
@@ -1064,10 +1056,12 @@ def _render_async_codex_block(
         "        return AsyncThread(self, forked.thread.id)",
         "",
         "    async def thread_archive(self, thread_id: str) -> ThreadArchiveResponse:",
+        '        """Archive a stored conversation thread."""',
         "        await self._ensure_initialized()",
         "        return await self._client.thread_archive(thread_id)",
         "",
         "    async def thread_unarchive(self, thread_id: str) -> AsyncThread:",
+        '        """Restore an archived conversation thread."""',
         "        await self._ensure_initialized()",
         "        unarchived = await self._client.thread_unarchive(thread_id)",
         "        return AsyncThread(self, unarchived.thread.id)",
@@ -1086,6 +1080,7 @@ def _render_thread_block(
         *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(turn_fields),
         "    ) -> TurnHandle:",
+        '        """Start a turn and return a handle for streaming or control."""',
         "        wire_input = _to_wire_input(_normalize_run_input(input))",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
         "        params = TurnStartParams(",
@@ -1111,6 +1106,7 @@ def _render_async_thread_block(
         *_approval_mode_override_signature_lines(),
         *_kw_signature_lines(turn_fields),
         "    ) -> AsyncTurnHandle:",
+        '        """Start a turn and return a handle for streaming or control."""',
         "        await self._codex._ensure_initialized()",
         "        wire_input = _to_wire_input(_normalize_run_input(input))",
         _approval_mode_assignment_line("_approval_mode_override_settings"),
@@ -1229,7 +1225,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     stage_sdk_parser = subparsers.add_parser(
         "stage-sdk",
-        help="Stage a releasable SDK package pinned to a runtime version",
+        help="Stage a releasable SDK package while preserving its reviewed runtime pin",
     )
     stage_sdk_parser.add_argument(
         "staging_dir",
@@ -1237,20 +1233,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory for the staged SDK package",
     )
     stage_sdk_parser.add_argument(
-        "--codex-version",
-        help=(
-            "Codex release version to write into the staged SDK package and exact "
-            f"{RUNTIME_DISTRIBUTION_NAME} dependency. Accepts PEP 440 versions "
-            "or release tags such as rust-v0.116.0-alpha.1."
-        ),
-    )
-    stage_sdk_parser.add_argument(
-        "--runtime-version",
-        help=argparse.SUPPRESS,
-    )
-    stage_sdk_parser.add_argument(
         "--sdk-version",
-        help=argparse.SUPPRESS,
+        required=True,
+        help=(
+            "Python SDK release version to write into the staged package. "
+            "Accepts PEP 440 versions such as 0.1.0b1."
+        ),
     )
 
     stage_runtime_parser = subparsers.add_parser(
@@ -1269,14 +1257,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stage_runtime_parser.add_argument(
         "--codex-version",
+        required=True,
         help=(
             "Codex release version to write into the staged runtime package. "
             "Accepts PEP 440 versions or release tags such as rust-v0.116.0-alpha.1."
         ),
-    )
-    stage_runtime_parser.add_argument(
-        "--runtime-version",
-        help=argparse.SUPPRESS,
     )
     stage_runtime_parser.add_argument(
         "--platform-tag",
@@ -1301,40 +1286,19 @@ def default_cli_ops() -> CliOps:
     )
 
 
-def _resolve_codex_version(args: argparse.Namespace) -> str:
-    versions = [
-        value
-        for value in (
-            getattr(args, "codex_version", None),
-            getattr(args, "runtime_version", None),
-            getattr(args, "sdk_version", None),
-        )
-        if value is not None
-    ]
-    if not versions:
-        raise RuntimeError("Pass --codex-version to stage Python release artifacts")
-
-    normalized_versions = [normalize_codex_version(version) for version in versions]
-    if len(set(normalized_versions)) != 1:
-        raise RuntimeError("SDK and runtime package versions must match; pass one --codex-version")
-    return normalized_versions[0]
-
-
 def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
         ops.generate_types()
     elif args.command == "stage-sdk":
-        codex_version = _resolve_codex_version(args)
         ops.generate_types()
         ops.stage_python_sdk_package(
             args.staging_dir,
-            codex_version,
+            normalize_codex_version(args.sdk_version),
         )
     elif args.command == "stage-runtime":
-        codex_version = _resolve_codex_version(args)
         ops.stage_python_runtime_package(
             args.staging_dir,
-            codex_version,
+            normalize_codex_version(args.codex_version),
             args.package_archive.resolve(),
             args.platform_tag,
         )

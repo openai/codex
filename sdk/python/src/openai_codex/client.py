@@ -172,6 +172,12 @@ def _resolve_codex_bin(config: "CodexConfig") -> Path:
 
 @dataclass(slots=True)
 class CodexConfig:
+    """Configuration for launching and identifying the local Codex runtime.
+
+    Most callers can use ``Codex()`` without configuration. Set ``codex_bin``
+    only when intentionally using a specific local Codex executable.
+    """
+
     codex_bin: str | None = None
     launch_args_override: tuple[str, ...] | None = None
     config_overrides: tuple[str, ...] = ()

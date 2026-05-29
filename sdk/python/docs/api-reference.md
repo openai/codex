@@ -1,8 +1,8 @@
-# OpenAI Codex SDK — API Reference
+# OpenAI Codex Python SDK (Beta) - API Reference
 
 Public surface of `openai_codex` for Codex workflows.
 
-This SDK surface is experimental. Turn streams are routed by turn ID so one client can consume multiple active turns concurrently.
+This SDK is in beta. Public APIs may change before `1.0`. Turn streams are routed by turn ID so one client can consume multiple active turns concurrently.
 Thread starts default to `ApprovalMode.auto_review`; turn starts accept an optional `approval_mode` override.
 
 ## Package Entry

@@ -72,8 +72,8 @@ impl SessionTask for ReviewTask {
         let mut user_input = Vec::new();
         for item in input {
             match item {
-                TurnInput::UserInput(mut content) => user_input.append(&mut content),
-                TurnInput::ResponseInputItem(_) => {}
+                TurnInput::UserInput { mut content, .. } => user_input.append(&mut content),
+                TurnInput::ResponseItem(_) => {}
             }
         }
 

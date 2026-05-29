@@ -145,7 +145,10 @@ pub(crate) async fn run_turn(
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
     if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
-        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+        let error = err.to_codex_protocol_error();
+        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+            .await;
+        if error == CodexErrorInfo::UsageLimitExceeded
             && let Err(err) = sess
                 .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                     turn_context: turn_context.as_ref(),
@@ -295,7 +298,10 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        if err.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                        let error = err.to_codex_protocol_error();
+                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                            .await;
+                        if error == CodexErrorInfo::UsageLimitExceeded
                             && let Err(err) = sess
                                 .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                                     turn_context: turn_context.as_ref(),
@@ -374,17 +380,23 @@ pub(crate) async fn run_turn(
                     }
                 }
 
+                let error = CodexErrorInfo::BadRequest;
+                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                    .await;
                 let event = EventMsg::Error(ErrorEvent {
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
-                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    codex_error_info: Some(error),
                 });
                 sess.send_event(&turn_context, event).await;
                 break;
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                if e.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded
+                let error = e.to_codex_protocol_error();
+                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
+                    .await;
+                if error == CodexErrorInfo::UsageLimitExceeded
                     && let Err(err) = sess
                         .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
                             turn_context: turn_context.as_ref(),
@@ -417,7 +429,7 @@ async fn run_hooks_and_record_inputs(
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            if matches!(input_item, TurnInput::UserInput(items) if !items.is_empty()) {
+            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
                 accepted_user_input = true;
             }
             record_pending_input(
@@ -445,8 +457,8 @@ async fn build_skills_and_plugins(
     let user_input = input
         .iter()
         .filter_map(|item| match item {
-            TurnInput::UserInput(content) => Some(content.as_slice()),
-            TurnInput::ResponseInputItem(_) => None,
+            TurnInput::UserInput { content, .. } => Some(content.as_slice()),
+            TurnInput::ResponseItem(_) => None,
         })
         .flatten()
         .cloned()
@@ -598,8 +610,8 @@ async fn track_turn_resolved_config_analytics(
             num_input_images: input
                 .iter()
                 .filter_map(|item| match item {
-                    TurnInput::UserInput(content) => Some(content.as_slice()),
-                    TurnInput::ResponseInputItem(_) => None,
+                    TurnInput::UserInput { content, .. } => Some(content.as_slice()),
+                    TurnInput::ResponseItem(_) => None,
                 })
                 .flatten()
                 .filter(|item| {

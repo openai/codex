@@ -1,6 +1,7 @@
 #![cfg(target_os = "windows")]
 
 use super::spawn_windows_sandbox_session_legacy;
+use crate::WindowsSandboxCancellationToken;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
@@ -16,8 +17,10 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -74,6 +77,10 @@ fn sandbox_log(codex_home: &Path) -> String {
     let log_path = crate::current_log_file_path(&codex_home.join(".sandbox"));
     fs::read_to_string(&log_path)
         .unwrap_or_else(|err| format!("failed to read {}: {err}", log_path.display()))
+}
+
+fn workspace_roots_for(root: &Path) -> Vec<AbsolutePathBuf> {
+    vec![AbsolutePathBuf::from_absolute_path(root).expect("absolute workspace root")]
 }
 
 fn wait_for_frame_count(frames_path: &Path, expected_frames: usize) -> Vec<Message> {
@@ -153,7 +160,7 @@ fn legacy_non_tty_cmd_emits_output() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
@@ -194,7 +201,7 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
         let permission_profile = PermissionProfile::workspace_write();
         let err = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
@@ -234,7 +241,7 @@ fn legacy_non_tty_powershell_emits_output() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 pwsh.display().to_string(),
@@ -420,7 +427,7 @@ fn legacy_capture_powershell_emits_output() {
     let permission_profile = PermissionProfile::workspace_write();
     let result = run_windows_sandbox_capture(
         &permission_profile,
-        cwd.as_path(),
+        workspace_roots_for(cwd.as_path()).as_slice(),
         codex_home.path(),
         vec![
             pwsh.display().to_string(),
@@ -431,6 +438,7 @@ fn legacy_capture_powershell_emits_output() {
         cwd.as_path(),
         HashMap::new(),
         Some(10_000),
+        /*cancellation*/ None,
         /*use_private_desktop*/ true,
     )
     .expect("run legacy capture powershell");
@@ -447,6 +455,57 @@ fn legacy_capture_powershell_emits_output() {
 }
 
 #[test]
+fn legacy_capture_cancellation_is_not_reported_as_timeout() {
+    let Some(pwsh) = pwsh_path() else {
+        eprintln!("skipping cancellation regression test: PowerShell 7 is not installed");
+        return;
+    };
+    let _guard = legacy_process_test_guard();
+    let cwd = sandbox_cwd();
+    let codex_home = sandbox_home("legacy-capture-cancel");
+    let permission_profile = PermissionProfile::workspace_write();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_for_token = Arc::clone(&cancelled);
+    let cancellation =
+        WindowsSandboxCancellationToken::new(move || cancelled_for_token.load(Ordering::SeqCst));
+    let cancelled_for_thread = Arc::clone(&cancelled);
+    let cancel_thread = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        cancelled_for_thread.store(true, Ordering::SeqCst);
+    });
+
+    let started_at = Instant::now();
+    let result = run_windows_sandbox_capture(
+        &permission_profile,
+        workspace_roots_for(cwd.as_path()).as_slice(),
+        codex_home.path(),
+        vec![
+            pwsh.display().to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 30".to_string(),
+        ],
+        cwd.as_path(),
+        HashMap::new(),
+        Some(30_000),
+        /*cancellation*/ Some(cancellation),
+        /*use_private_desktop*/ true,
+    )
+    .expect("run legacy capture powershell with cancellation");
+    cancel_thread.join().expect("cancel thread should finish");
+
+    assert!(
+        started_at.elapsed() < Duration::from_secs(10),
+        "cancellation should end capture before the timeout"
+    );
+    assert!(
+        !result.timed_out,
+        "cancellation should not be reported as a timeout"
+    );
+    assert_ne!(result.exit_code, 0);
+}
+
+#[test]
 fn legacy_tty_powershell_emits_output_and_accepts_input() {
     let Some(pwsh) = pwsh_path() else {
         return;
@@ -460,7 +519,7 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 pwsh.display().to_string(),
@@ -514,7 +573,7 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
@@ -568,7 +627,7 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
         let permission_profile = PermissionProfile::workspace_write();
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            cwd.as_path(),
+            workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
             vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),

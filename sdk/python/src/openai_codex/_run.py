@@ -20,6 +20,8 @@ from .models import Notification
 
 @dataclass(slots=True)
 class TurnResult:
+    """Collected result returned after a turn completes."""
+
     id: str
     status: TurnStatus
     error: TurnError | None

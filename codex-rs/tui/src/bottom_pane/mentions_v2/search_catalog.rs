@@ -50,6 +50,7 @@ fn plugin_candidate(plugin: &PluginCapabilitySummary) -> Candidate {
         .config_name
         .split_once('@')
         .unwrap_or((plugin.config_name.as_str(), ""));
+    let mention_name = plugin_mention_name(plugin_name, plugin.display_name.as_str());
     let mut search_terms = vec![plugin_name.to_string(), plugin.config_name.clone()];
     if plugin.display_name != plugin_name {
         search_terms.push(plugin.display_name.clone());
@@ -64,10 +65,86 @@ fn plugin_candidate(plugin: &PluginCapabilitySummary) -> Candidate {
         search_terms,
         mention_type: MentionType::Plugin,
         selection: Selection::Tool {
-            insert_text: format!("${plugin_name}"),
+            insert_text: format!("@{mention_name}"),
             path: Some(format!("plugin://{}", plugin.config_name)),
         },
     }
+}
+
+fn plugin_mention_name(plugin_name: &str, display_name: &str) -> String {
+    let plugin_segments = split_plugin_name_segments(plugin_name);
+    let display_segments = split_display_name_segments(display_name);
+
+    if plugin_segments.len() == display_segments.len()
+        && plugin_segments.iter().zip(&display_segments).all(
+            |((plugin_segment, _), display_segment)| {
+                plugin_segment.eq_ignore_ascii_case(display_segment.as_str())
+            },
+        )
+    {
+        let mut result = String::new();
+        for ((_, separator), display_segment) in plugin_segments.into_iter().zip(display_segments) {
+            result.push_str(display_segment.as_str());
+            if let Some(separator) = separator {
+                result.push(separator);
+            }
+        }
+        return result;
+    }
+
+    title_case_plugin_name(plugin_name)
+}
+
+fn split_plugin_name_segments(plugin_name: &str) -> Vec<(String, Option<char>)> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+
+    for ch in plugin_name.chars() {
+        if matches!(ch, '-' | '_') {
+            if !current.is_empty() {
+                segments.push((std::mem::take(&mut current), Some(ch)));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        segments.push((current, None));
+    }
+
+    segments
+}
+
+fn split_display_name_segments(display_name: &str) -> Vec<String> {
+    display_name
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn title_case_plugin_name(plugin_name: &str) -> String {
+    let mut result = String::with_capacity(plugin_name.len());
+    let mut capitalize_next = true;
+
+    for ch in plugin_name.chars() {
+        if matches!(ch, '-' | '_') {
+            capitalize_next = true;
+            result.push(ch);
+            continue;
+        }
+
+        if capitalize_next && ch.is_ascii_alphabetic() {
+            result.push(ch.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+            capitalize_next = false;
+        }
+    }
+
+    result
 }
 
 fn plugin_description(plugin: &PluginCapabilitySummary) -> Option<String> {
@@ -108,4 +185,31 @@ fn plugin_capability_labels(plugin: &PluginCapabilitySummary) -> Vec<String> {
 fn optional_skill_description(skill: &SkillMetadata) -> Option<String> {
     let description = skill_description(skill).trim();
     (!description.is_empty()).then(|| description.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn plugin_mention_name_uses_display_segments_when_they_match_plugin_name() {
+        assert_eq!(
+            plugin_mention_name("mcp-search", "MCP Search"),
+            "MCP-Search"
+        );
+        assert_eq!(
+            plugin_mention_name("google_calendar", "Google Calendar"),
+            "Google_Calendar"
+        );
+    }
+
+    #[test]
+    fn plugin_mention_name_falls_back_to_title_cased_plugin_name() {
+        assert_eq!(plugin_mention_name("sample", "Sample Plugin"), "Sample");
+        assert_eq!(
+            plugin_mention_name("browser-use", "Browser Use"),
+            "Browser-Use"
+        );
+    }
 }

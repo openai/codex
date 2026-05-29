@@ -44,6 +44,7 @@ async fn spawn_command_under_sandbox(
         },
         permission_profile,
         sandbox_cwd,
+        std::slice::from_ref(sandbox_cwd),
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
     )

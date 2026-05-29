@@ -26,6 +26,7 @@ pub use tool_lifecycle::ToolFinishInput;
 pub use tool_lifecycle::ToolLifecycleFuture;
 pub use tool_lifecycle::ToolStartInput;
 pub use turn_lifecycle::TurnAbortInput;
+pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
 
@@ -79,6 +80,9 @@ pub trait TurnLifecycleContributor: Send + Sync {
 
     /// Called after the host aborts a running turn.
     async fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
+
+    /// Called when the host observes an error for a running turn.
+    async fn on_turn_error(&self, _input: TurnErrorInput<'_>) {}
 }
 
 /// Contributor for host-owned configuration changes.

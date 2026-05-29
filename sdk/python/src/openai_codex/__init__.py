@@ -1,3 +1,17 @@
+"""Python SDK for running Codex workflows.
+
+Start with :class:`Codex` for synchronous applications or
+:class:`AsyncCodex` for async applications. Most programs create a thread and
+run a turn::
+
+    from openai_codex import Codex, Sandbox
+
+    with Codex() as codex:
+        thread = codex.thread_start(sandbox=Sandbox.workspace_write)
+        result = thread.run("Describe this project.")
+        print(result.final_response)
+"""
+
 from ._version import __version__
 from .api import (
     ApprovalMode,

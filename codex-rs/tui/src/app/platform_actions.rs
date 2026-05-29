@@ -16,15 +16,16 @@ impl App {
     #[cfg(target_os = "windows")]
     pub(super) fn spawn_world_writable_scan(
         cwd: AbsolutePathBuf,
+        workspace_roots: Vec<AbsolutePathBuf>,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: AbsolutePathBuf,
         permission_profile: PermissionProfile,
         tx: AppEventSender,
     ) {
         let Ok(permissions) =
-            codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
+            codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
                 &permission_profile,
-                cwd.as_path(),
+                workspace_roots.as_slice(),
             )
         else {
             return;

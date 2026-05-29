@@ -1124,6 +1124,7 @@ fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
 fn completed_legacy_event_history_is_not_mid_turn() {
     let completed_history = InitialHistory::Forked(vec![
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "hello".to_string(),
             images: None,
             text_elements: Vec::new(),
@@ -1152,6 +1153,7 @@ fn mixed_response_and_legacy_user_event_history_is_mid_turn() {
     let mixed_history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("hello")),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "hello".to_string(),
             images: None,
             text_elements: Vec::new(),

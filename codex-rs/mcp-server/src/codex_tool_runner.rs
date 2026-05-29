@@ -114,6 +114,7 @@ pub async fn run_codex_tool_session(
             additional_context: Default::default(),
             thread_settings: Default::default(),
         },
+        client_user_message_id: None,
         trace: None,
     };
 

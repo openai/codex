@@ -211,6 +211,30 @@ def test_package_and_default_client_versions_follow_project_version() -> None:
     assert CodexConfig().client_version == openai_codex.__version__
 
 
+def test_curated_public_api_has_builtin_help_documentation() -> None:
+    """The package's normal ``help()`` surface should explain common first-use APIs."""
+    documented = {
+        "module": openai_codex,
+        "Codex": Codex,
+        "AsyncCodex": AsyncCodex,
+        "CodexConfig": CodexConfig,
+        "Thread": Thread,
+        "AsyncThread": AsyncThread,
+        "TurnHandle": TurnHandle,
+        "AsyncTurnHandle": AsyncTurnHandle,
+        "TurnResult": TurnResult,
+        "Sandbox": Sandbox,
+        "thread_start": Codex.thread_start,
+        "thread_resume": Codex.thread_resume,
+        "thread_run": Thread.run,
+        "thread_turn": Thread.turn,
+    }
+
+    assert {name: inspect.getdoc(value) is not None for name, value in documented.items()} == (
+        dict.fromkeys(documented, True)
+    )
+
+
 def test_package_includes_py_typed_marker() -> None:
     """The wheel should advertise that inline type information is available."""
     marker = resources.files("openai_codex").joinpath("py.typed")
