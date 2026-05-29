@@ -102,6 +102,22 @@ class RustyV8BazelTest(unittest.TestCase):
                     "//third_party/v8:release",
                 ),
             )
+        with patch.dict(environ, {"BUILDBUDDY_API_KEY": "token"}, clear=True):
+            self.assertEqual(
+                [
+                    "bazel",
+                    "build",
+                    "--config=ci-v8",
+                    "//third_party/v8:release",
+                    "--config=buildbuddy-generic-rbe",
+                    "--remote_header=x-buildbuddy-api-key=token",
+                ],
+                rusty_v8_bazel.bazel_command(
+                    "build",
+                    "--config=ci-v8",
+                    "//third_party/v8:release",
+                ),
+            )
 
     def test_release_pair_labels_and_staged_names_distinguish_sandbox_artifacts(
         self,

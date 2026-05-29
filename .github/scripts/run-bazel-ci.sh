@@ -385,8 +385,6 @@ bazel_run_args=(
 )
 if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   echo "BuildBuddy API key is available; using remote Bazel configuration."
-  # Work around Bazel 9 remote repo contents cache / overlay materialization
-  # failures seen in CI. BuildBuddy still handles remote cache/execution.
   bazel_run_args+=("--config=${ci_config}")
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
@@ -395,6 +393,10 @@ if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")
 fi
 set +e
+# Work around Bazel 9 remote repo contents cache / overlay materialization
+# failures seen in CI (for example "is not a symlink" or permission errors
+# while materializing external repos such as rules_perl). This only disables
+# the startup-level repo contents cache; keyed runs still use BuildBuddy.
 run_bazel_with_startup_args \
   --noexperimental_remote_repo_contents_cache \
   "${bazel_run_args[@]}" \

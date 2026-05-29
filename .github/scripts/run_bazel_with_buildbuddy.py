@@ -15,10 +15,9 @@ OPENAI_REPOSITORY = "openai/codex"
 # also select the matching remote executor endpoint.
 GENERIC_REMOTE_CONFIG = "buildbuddy-generic"
 OPENAI_REMOTE_CONFIG = "buildbuddy-openai"
-# These configurations select remote build execution. The wrapper applies an
-# RBE endpoint configuration when one is already part of the Bazel invocation.
+# These CI configurations require remote build execution. The wrapper supplies
+# an RBE configuration, which also includes the common `remote` settings.
 REMOTE_EXECUTION_CONFIGS = {
-    "--config=remote",
     "--config=ci-linux",
     "--config=ci-macos",
     "--config=ci-v8",
@@ -31,11 +30,15 @@ QUERY_COMMANDS = {"query", "cquery"}
 # OpenAI BuildBuddy host. A pull request event without proof that its head is
 # in the upstream repository fails closed to the generic host.
 def is_trusted_upstream_run(env: Mapping[str, str]) -> bool:
+    # `GITHUB_REPOSITORY` is easy to set locally. Requiring GitHub's workflow
+    # marker prevents a local command from opting itself into the OpenAI host.
     if (
         env.get("GITHUB_ACTIONS") != "true"
         or env.get("GITHUB_REPOSITORY") != OPENAI_REPOSITORY
     ):
         return False
+    # The workflows using this helper run non-PR events from upstream refs;
+    # untrusted fork code reaches them only through `pull_request` events.
     if env.get("GITHUB_EVENT_NAME") != "pull_request":
         return True
 
@@ -75,25 +78,25 @@ def remote_config(args: Sequence[str], env: Mapping[str, str]) -> str | None:
     return config
 
 
+def bazel_args_without_remote_execution(args: Sequence[str]) -> list[str]:
+    # Remote CI configs require BuildBuddy credentials. Removing them preserves
+    # the local fallback used for fork pull requests.
+    try:
+        separator_idx = args.index("--")
+    except ValueError:
+        separator_idx = len(args)
+    return [
+        *(arg for arg in args[:separator_idx] if arg not in REMOTE_EXECUTION_CONFIGS),
+        *args[separator_idx:],
+    ]
+
+
 def bazel_args_with_remote_config(
     args: Sequence[str], env: Mapping[str, str]
 ) -> list[str]:
     config = remote_config(args, env)
     if config is None:
-        # Remote CI configs require BuildBuddy credentials. Removing them
-        # preserves the local fallback used for fork pull requests.
-        try:
-            separator_idx = args.index("--")
-        except ValueError:
-            separator_idx = len(args)
-        return [
-            *(
-                arg
-                for arg in args[:separator_idx]
-                if arg not in REMOTE_EXECUTION_CONFIGS
-            ),
-            *args[separator_idx:],
-        ]
+        return bazel_args_without_remote_execution(args)
 
     api_key = env["BUILDBUDDY_API_KEY"]
     remote_args = [
@@ -141,6 +144,8 @@ def main() -> None:
         )
 
     command = bazel_command(*sys.argv[1:])
+    # Replace the wrapper so Bazel receives signals directly and supplies the
+    # command exit status; a subprocess parent would have no remaining work.
     os.execvp(command[0], command)
 
 

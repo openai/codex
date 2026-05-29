@@ -38,8 +38,10 @@ common:windows --test_env=WINDIR
 common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
 
 common --test_output=errors
-common --remote_download_toplevel
 common --nobuild_runfile_links
+# These settings tune BuildBuddy/RBE behavior but do not contact a remote
+# service unless a `buildbuddy-*` configuration below supplies an endpoint.
+common --remote_download_toplevel
 common --remote_timeout=3600
 common --noexperimental_throttle_remote_action_building
 common --experimental_remote_execution_keepalive
@@ -54,6 +56,7 @@ common:buildbuddy-generic --remote_cache=grpcs://remote.buildbuddy.io
 common:buildbuddy-generic --experimental_remote_downloader=grpcs://remote.buildbuddy.io
 
 common:buildbuddy-generic-rbe --config=buildbuddy-generic
+common:buildbuddy-generic-rbe --config=remote
 common:buildbuddy-generic-rbe --remote_executor=grpcs://remote.buildbuddy.io
 
 common:buildbuddy-openai --bes_backend=grpcs://openai.buildbuddy.io
@@ -62,6 +65,7 @@ common:buildbuddy-openai --remote_cache=grpcs://openai.buildbuddy.io
 common:buildbuddy-openai --experimental_remote_downloader=grpcs://openai.buildbuddy.io
 
 common:buildbuddy-openai-rbe --config=buildbuddy-openai
+common:buildbuddy-openai-rbe --config=remote
 common:buildbuddy-openai-rbe --remote_executor=grpcs://openai.buildbuddy.io
 
 # This limits both in-flight executions and concurrent downloads. Even with high number
@@ -160,14 +164,12 @@ common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
 # Linux crossbuilds don't work until we untangle the libc constraint mess.
 common:ci-linux --config=ci-bazel
 common:ci-linux --build_metadata=TAG_os=linux
-common:ci-linux --config=remote
 common:ci-linux --strategy=remote
 common:ci-linux --platforms=//:rbe
 
 # On mac, we can run all the build actions remotely but test actions locally.
 common:ci-macos --config=ci-bazel
 common:ci-macos --build_metadata=TAG_os=macos
-common:ci-macos --config=remote
 common:ci-macos --strategy=remote
 common:ci-macos --strategy=TestRunner=darwin-sandbox,local
 
@@ -176,7 +178,6 @@ common:ci-macos --strategy=TestRunner=darwin-sandbox,local
 # still run against Windows binaries.
 common:ci-windows-cross --config=ci-windows
 common:ci-windows-cross --build_metadata=TAG_windows_cross_compile=true
-common:ci-windows-cross --config=remote
 common:ci-windows-cross --host_platform=//:rbe
 common:ci-windows-cross --strategy=remote
 common:ci-windows-cross --strategy=TestRunner=local
@@ -194,7 +195,6 @@ common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host
 common:ci-v8 --config=ci
 common:ci-v8 --build_metadata=TAG_workflow=v8
 common:ci-v8 --build_metadata=TAG_os=linux
-common:ci-v8 --config=remote
 common:ci-v8 --strategy=remote
 
 # Source-built Bazel V8 artifacts use the in-process sandbox by default. This

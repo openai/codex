@@ -9,11 +9,6 @@ set -euo pipefail
 query_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --windows-cross-compile)
-      # Retained for existing callers; platform selection affects the later
-      # build, not this loading-phase label query.
-      shift
-      ;;
     --)
       shift
       break
@@ -26,7 +21,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 [--windows-cross-compile] [<bazel query args>...] -- <query expression>" >&2
+  echo "Usage: $0 [<bazel query args>...] -- <query expression>" >&2
   exit 1
 fi
 
