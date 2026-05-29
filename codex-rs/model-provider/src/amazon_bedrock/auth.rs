@@ -20,6 +20,8 @@ use super::mantle::aws_auth_config;
 use super::mantle::region_from_config;
 
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
+const AWS_REGION_ENV_VAR: &str = "AWS_REGION";
+const AWS_DEFAULT_REGION_ENV_VAR: &str = "AWS_DEFAULT_REGION";
 
 pub(super) enum BedrockAuthMethod {
     EnvBearerToken { token: String, region: String },
@@ -29,8 +31,8 @@ pub(super) enum BedrockAuthMethod {
 pub(super) async fn resolve_auth_method(
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<BedrockAuthMethod> {
-    if let Some(token) = bearer_token_from_env() {
-        let region = bearer_token_region_from_config(aws)?;
+    if let Some(token) = non_empty_env_var(AWS_BEARER_TOKEN_BEDROCK_ENV_VAR) {
+        let region = bearer_token_region(aws)?;
         return Ok(BedrockAuthMethod::EnvBearerToken { token, region });
     }
 
@@ -56,21 +58,24 @@ pub(super) async fn resolve_provider_auth(
     }
 }
 
-fn bearer_token_from_env() -> Option<String> {
-    std::env::var(AWS_BEARER_TOKEN_BEDROCK_ENV_VAR)
+fn non_empty_env_var(name: &str) -> Option<String> {
+    std::env::var(name)
         .ok()
-        .map(|token| token.trim().to_string())
-        .filter(|token| !token.is_empty())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
-fn bearer_token_region_from_config(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
-    region_from_config(aws).ok_or_else(|| {
-        CodexErr::Fatal(
-            "Amazon Bedrock bearer token auth requires \
-`model_providers.amazon-bedrock.aws.region`"
-                .to_string(),
-        )
-    })
+fn bearer_token_region(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
+    region_from_config(aws)
+        .or_else(|| non_empty_env_var(AWS_REGION_ENV_VAR))
+        .or_else(|| non_empty_env_var(AWS_DEFAULT_REGION_ENV_VAR))
+        .ok_or_else(|| {
+            CodexErr::Fatal(
+                "Amazon Bedrock bearer token auth requires \
+`model_providers.amazon-bedrock.aws.region`, `AWS_REGION`, or `AWS_DEFAULT_REGION`"
+                    .to_string(),
+            )
+        })
 }
 
 fn aws_auth_error_to_codex_error(error: AwsAuthError) -> CodexErr {
@@ -141,16 +146,78 @@ impl AuthProvider for BedrockMantleSigV4AuthProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::sync::MutexGuard;
+
     use codex_api::AuthProvider;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
 
     use super::*;
 
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard<'a> {
+        _lock: MutexGuard<'a, ()>,
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl<'a> EnvVarGuard<'a> {
+        fn new(vars: Vec<(&'static str, Option<&str>)>) -> Self {
+            let lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
+            let saved = vars
+                .iter()
+                .map(|(name, _)| (*name, std::env::var(name).ok()))
+                .collect::<Vec<_>>();
+            for (name, value) in vars {
+                match value {
+                    Some(value) => {
+                        // SAFETY: Tests using this guard hold ENV_LOCK while
+                        // mutating the process environment and restore the
+                        // prior values on drop.
+                        unsafe { std::env::set_var(name, value) };
+                    }
+                    None => {
+                        // SAFETY: Tests using this guard hold ENV_LOCK while
+                        // mutating the process environment and restore the
+                        // prior values on drop.
+                        unsafe { std::env::remove_var(name) };
+                    }
+                }
+            }
+            Self { _lock: lock, saved }
+        }
+    }
+
+    impl Drop for EnvVarGuard<'_> {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => {
+                        // SAFETY: Tests using this guard hold ENV_LOCK while
+                        // mutating the process environment and restore the
+                        // prior values on drop.
+                        unsafe { std::env::set_var(name, value) };
+                    }
+                    None => {
+                        // SAFETY: Tests using this guard hold ENV_LOCK while
+                        // mutating the process environment and restore the
+                        // prior values on drop.
+                        unsafe { std::env::remove_var(name) };
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
-    fn bedrock_bearer_auth_uses_configured_region_and_header() {
+    fn bedrock_bearer_auth_prefers_configured_region_and_uses_header() {
+        let _env = EnvVarGuard::new(vec![
+            (AWS_REGION_ENV_VAR, Some("eu-west-1")),
+            (AWS_DEFAULT_REGION_ENV_VAR, /*value*/ None),
+        ]);
         let token = "bedrock-api-key-test".to_string();
-        let region = bearer_token_region_from_config(&ModelProviderAwsAuthInfo {
+        let region = bearer_token_region(&ModelProviderAwsAuthInfo {
             profile: None,
             region: Some(" us-west-2 ".to_string()),
         })
@@ -174,8 +241,42 @@ mod tests {
     }
 
     #[test]
+    fn bedrock_bearer_auth_uses_aws_region_env() {
+        let _env = EnvVarGuard::new(vec![
+            (AWS_REGION_ENV_VAR, Some(" eu-central-1 ")),
+            (AWS_DEFAULT_REGION_ENV_VAR, /*value*/ None),
+        ]);
+        let region = bearer_token_region(&ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+        })
+        .expect("AWS_REGION should resolve");
+
+        assert_eq!(region, "eu-central-1");
+    }
+
+    #[test]
+    fn bedrock_bearer_auth_uses_aws_default_region_env() {
+        let _env = EnvVarGuard::new(vec![
+            (AWS_REGION_ENV_VAR, /*value*/ None),
+            (AWS_DEFAULT_REGION_ENV_VAR, Some("ap-northeast-1")),
+        ]);
+        let region = bearer_token_region(&ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+        })
+        .expect("AWS_DEFAULT_REGION should resolve");
+
+        assert_eq!(region, "ap-northeast-1");
+    }
+
+    #[test]
     fn bedrock_bearer_auth_rejects_missing_configured_region() {
-        let err = bearer_token_region_from_config(&ModelProviderAwsAuthInfo {
+        let _env = EnvVarGuard::new(vec![
+            (AWS_REGION_ENV_VAR, /*value*/ None),
+            (AWS_DEFAULT_REGION_ENV_VAR, /*value*/ None),
+        ]);
+        let err = bearer_token_region(&ModelProviderAwsAuthInfo {
             profile: None,
             region: None,
         })
@@ -184,7 +285,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Fatal error: Amazon Bedrock bearer token auth requires \
-`model_providers.amazon-bedrock.aws.region`"
+`model_providers.amazon-bedrock.aws.region`, `AWS_REGION`, or `AWS_DEFAULT_REGION`"
         );
     }
 
