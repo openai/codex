@@ -4372,6 +4372,32 @@ fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
 }
 
 #[test]
+fn session_start_error_surfaces_archived_guidance_without_rollout_path() {
+    let thread_id =
+        ThreadId::from_string("019e72f4-e09a-70f2-b2c2-a153a57b8cc0").expect("thread id");
+    let target_session = SessionTarget {
+        path: Some(std::path::PathBuf::from(
+            "/Users/me/.codex/archived_sessions/rollout.jsonl",
+        )),
+        thread_id,
+    };
+    let expected = format!(
+        "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
+    );
+
+    for action in ["resume", "fork"] {
+        let err = color_eyre::eyre::eyre!(
+            "thread/{action} failed during TUI bootstrap: thread/{action} failed: {expected} (code -32600)"
+        );
+
+        assert_eq!(
+            session_start_error(action, &target_session, err).to_string(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn active_turn_steer_race_detects_missing_active_turn() {
     let error = TypedRequestError::Server {
         method: "turn/steer".to_string(),

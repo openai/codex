@@ -652,6 +652,31 @@ fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRa
     Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
+fn session_start_error(
+    action: &str,
+    target_session: &SessionTarget,
+    err: color_eyre::eyre::Report,
+) -> color_eyre::eyre::Report {
+    if let Some(message) = archived_session_guidance(&err) {
+        return color_eyre::eyre::eyre!("{message}");
+    }
+
+    let target_label = target_session.display_label();
+    color_eyre::eyre::eyre!("Failed to {action} session from {target_label}: {err}")
+}
+
+fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
+    let err = err.to_string();
+    let message = &err[err.find("session ")?..];
+    if !message.contains(" is archived. Run `codex unarchive ") {
+        return None;
+    }
+    let message = message
+        .split_once(" (code ")
+        .map_or(message, |(message, _)| message);
+    Some(message.to_string())
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -872,10 +897,7 @@ impl App {
                 let resumed = app_server
                     .resume_thread(config.clone(), target_session.thread_id)
                     .await
-                    .wrap_err_with(|| {
-                        let target_label = target_session.display_label();
-                        format!("Failed to resume session from {target_label}")
-                    })?;
+                    .map_err(|err| session_start_error("resume", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -913,10 +935,7 @@ impl App {
                 let forked = app_server
                     .fork_thread(config.clone(), target_session.thread_id)
                     .await
-                    .wrap_err_with(|| {
-                        let target_label = target_session.display_label();
-                        format!("Failed to fork session from {target_label}")
-                    })?;
+                    .map_err(|err| session_start_error("fork", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
