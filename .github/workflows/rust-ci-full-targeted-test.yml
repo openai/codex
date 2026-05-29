@@ -32,6 +32,7 @@ jobs:
       nextest_filterset: ${{ inputs.nextest_filterset }}
       partition_tests: false
       require_single_test: true
+      run_tests_in_place: true
     secrets: inherit
 
   tests_linux_x64_remote:
@@ -50,6 +51,7 @@ jobs:
       nextest_filterset: ${{ inputs.nextest_filterset }}
       partition_tests: false
       require_single_test: true
+      run_tests_in_place: true
     secrets: inherit
 
   tests_linux_arm64:
@@ -67,6 +69,7 @@ jobs:
       nextest_filterset: ${{ inputs.nextest_filterset }}
       partition_tests: false
       require_single_test: true
+      run_tests_in_place: true
     secrets: inherit
 
   tests_windows_x64:
@@ -84,6 +87,7 @@ jobs:
       nextest_filterset: ${{ inputs.nextest_filterset }}
       partition_tests: false
       require_single_test: true
+      run_tests_in_place: true
     secrets: inherit
 
   tests_windows_arm64:
