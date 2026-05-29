@@ -1180,7 +1180,7 @@ discoverables = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config, &[]).await,
+        tool_suggest_connector_ids(&config, &[]),
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
     );
 }
@@ -1209,7 +1209,7 @@ disabled_tools = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config, &[]).await,
+        tool_suggest_connector_ids(&config, &[]),
         HashSet::from(["connector_gmail".to_string()])
     );
 }
