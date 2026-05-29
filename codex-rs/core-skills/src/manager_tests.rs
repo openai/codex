@@ -462,6 +462,66 @@ async fn skills_for_cwd_loads_repo_and_user_roots_with_local_fs() {
 }
 
 #[tokio::test]
+async fn skills_for_cwd_without_local_fs_skips_local_roots() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let repo_dot_codex = cwd.path().join(".codex");
+    fs::create_dir_all(&repo_dot_codex).expect("create repo config dir");
+
+    write_user_skill(&codex_home, "user", "user-skill", "from local user root");
+    let repo_skill_dir = repo_dot_codex.join("skills/repo");
+    fs::create_dir_all(&repo_skill_dir).expect("create repo skill dir");
+    fs::write(
+        repo_skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: from repo root\n---\n\n# Body\n",
+    )
+    .expect("write repo skill");
+
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![
+            user_config_layer(&codex_home, ""),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: repo_dot_codex.abs(),
+                },
+                toml::Value::Table(toml::map::Map::new()),
+            ),
+        ],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+    let skills_input = SkillsLoadInput::new(
+        skill_root_path_ref(cwd.path().abs()),
+        /*local_file_system*/ None,
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
+    let skills_manager = SkillsManager::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let outcome = skills_manager
+        .skills_for_cwd(&skills_input, /*force_reload*/ true)
+        .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    let loaded_names = outcome
+        .skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(!loaded_names.contains("user-skill"));
+    assert!(loaded_names.contains("repo-skill"));
+}
+
+#[tokio::test]
 async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
