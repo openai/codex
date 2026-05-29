@@ -24,13 +24,14 @@ pub(super) async fn delete_thread(
     params: DeleteThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    let thread_id_str = thread_id.to_string();
     let state_db_ctx = store.state_db().await;
     let mut rollout_paths = Vec::new();
     let mut path_lookup_errors = Vec::new();
 
     match find_thread_path_by_id_str(
         store.config.codex_home.as_path(),
-        &thread_id.to_string(),
+        thread_id_str.as_str(),
         state_db_ctx.as_deref(),
     )
     .await
@@ -44,13 +45,13 @@ pub(super) async fn delete_thread(
 
     match find_archived_thread_path_by_id_str(
         store.config.codex_home.as_path(),
-        &thread_id.to_string(),
+        thread_id_str.as_str(),
         state_db_ctx.as_deref(),
     )
     .await
     {
         Ok(Some(path)) => {
-            if !rollout_paths.iter().any(|existing| existing == &path) {
+            if !rollout_paths.contains(&path) {
                 rollout_paths.push(path);
             }
         }
