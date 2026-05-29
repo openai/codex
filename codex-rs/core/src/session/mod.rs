@@ -3326,9 +3326,9 @@ async fn build_hooks_for_config(
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let plugin_hook_sources = plugin_outcome.effective_plugin_hook_sources();
     let plugin_hook_load_warnings = plugin_outcome.effective_plugin_hook_warnings();
-    let mut command_env = HashMap::new();
+    let mut session_start_env = HashMap::new();
     if let Some(shell_env_file) = shell_env_file {
-        shell_env_file.insert_path_into_env(&mut command_env);
+        shell_env_file.insert_path_into_env(&mut session_start_env);
     }
     Hooks::new(HooksConfig {
         legacy_notify_argv: config.notify.clone(),
@@ -3339,7 +3339,7 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
-        command_env,
+        session_start_env,
     })
 }
 

@@ -182,8 +182,10 @@ pub(crate) async fn run(
     };
 
     let results = if event_name == HookEventName::SessionStart
-        && (shell.env.contains_key(CODEX_ENV_FILE_ENV_VAR)
-            || shell.env.contains_key(CLAUDE_ENV_FILE_ENV_VAR))
+        && (shell.session_start_env.contains_key(CODEX_ENV_FILE_ENV_VAR)
+            || shell
+                .session_start_env
+                .contains_key(CLAUDE_ENV_FILE_ENV_VAR))
     {
         // Serialize hooks that share the session env file to preserve configured order.
         let mut results = Vec::with_capacity(matched.len());
@@ -544,7 +546,7 @@ mod tests {
         let shell = CommandShell {
             program: "sh".to_string(),
             args: vec!["-c".to_string()],
-            env: HashMap::from([(
+            session_start_env: HashMap::from([(
                 CODEX_ENV_FILE_ENV_VAR.to_string(),
                 env_file.path().display().to_string(),
             )]),

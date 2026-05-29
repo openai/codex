@@ -72,7 +72,7 @@ impl ShellEnvFile {
         cwd: &Path,
         base_env: &HashMap<String, String>,
     ) -> Result<()> {
-        if !self.capture.supports_shell_type(&shell.shell_type) {
+        if ShellEnvCapture::for_shell_type(&shell.shell_type) != Some(self.capture) {
             return Ok(());
         }
 
@@ -81,13 +81,14 @@ impl ShellEnvFile {
         remove_env_var(&mut capture_env, CLAUDE_ENV_FILE_ENV_VAR);
         self.insert_path_into_env(&mut capture_env);
 
+        let (baseline_script, source_script) = self.capture.scripts();
         let baseline = self
             .capture
-            .capture_env_from_shell(shell, cwd, ShellEnvCaptureMode::Baseline, &capture_env)
+            .capture_env_from_shell(shell, cwd, baseline_script, &capture_env)
             .await?;
         let captured = self
             .capture
-            .capture_env_from_shell(shell, cwd, ShellEnvCaptureMode::SourceEnvFile, &capture_env)
+            .capture_env_from_shell(shell, cwd, source_script, &capture_env)
             .await?;
         let exports = diff_env(&baseline, &captured);
         *self
@@ -110,21 +111,18 @@ impl ShellEnvFile {
         explicit_env_overrides: &HashMap<String, String>,
     ) {
         let thread_id = get_env_var(env, CODEX_THREAD_ID_ENV_VAR).cloned();
-        let exports = self
-            .exports
-            .lock()
-            .map(|exports| exports.clone())
-            .unwrap_or_default();
-        for (key, value) in exports {
-            if ignored_capture_key(&key) {
-                continue;
-            }
-            match value {
-                Some(value) => {
-                    insert_env_var(env, key, value);
+        if let Ok(exports) = self.exports.lock() {
+            for (key, value) in exports.iter() {
+                if ignored_capture_key(key) {
+                    continue;
                 }
-                None => {
-                    remove_env_var(env, &key);
+                match value {
+                    Some(value) => {
+                        insert_env_var(env, key.clone(), value.clone());
+                    }
+                    None => {
+                        remove_env_var(env, key);
+                    }
                 }
             }
         }
@@ -145,12 +143,6 @@ enum ShellEnvCapture {
     PowerShell,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum ShellEnvCaptureMode {
-    Baseline,
-    SourceEnvFile,
-}
-
 impl ShellEnvCapture {
     fn for_shell_type(shell_type: &ShellType) -> Option<Self> {
         match shell_type {
@@ -160,10 +152,6 @@ impl ShellEnvCapture {
         }
     }
 
-    fn supports_shell_type(self, shell_type: &ShellType) -> bool {
-        Self::for_shell_type(shell_type) == Some(self)
-    }
-
     fn file_suffix(self) -> &'static str {
         match self {
             Self::Posix => ".sh",
@@ -171,14 +159,26 @@ impl ShellEnvCapture {
         }
     }
 
+    fn scripts(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Posix => (
+                POSIX_DUMP_ENV_SCRIPT,
+                POSIX_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT,
+            ),
+            Self::PowerShell => (
+                POWERSHELL_DUMP_ENV_SCRIPT,
+                POWERSHELL_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT,
+            ),
+        }
+    }
+
     async fn capture_env_from_shell(
         self,
         shell: &Shell,
         cwd: &Path,
-        mode: ShellEnvCaptureMode,
+        script: &str,
         env: &HashMap<String, String>,
     ) -> Result<HashMap<String, String>> {
-        let script = self.capture_script(mode);
         let output = Command::new(&shell.shell_path)
             .current_dir(cwd)
             .args(self.capture_args(script))
@@ -195,19 +195,6 @@ impl ShellEnvCapture {
             );
         }
         self.parse_env_output(&output.stdout)
-    }
-
-    fn capture_script(self, mode: ShellEnvCaptureMode) -> &'static str {
-        match (self, mode) {
-            (Self::Posix, ShellEnvCaptureMode::Baseline) => POSIX_DUMP_ENV_SCRIPT,
-            (Self::Posix, ShellEnvCaptureMode::SourceEnvFile) => {
-                POSIX_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT
-            }
-            (Self::PowerShell, ShellEnvCaptureMode::Baseline) => POWERSHELL_DUMP_ENV_SCRIPT,
-            (Self::PowerShell, ShellEnvCaptureMode::SourceEnvFile) => {
-                POWERSHELL_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT
-            }
-        }
     }
 
     fn capture_args(self, script: &str) -> Vec<&str> {
@@ -270,11 +257,11 @@ fn parse_posix_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
         let Some(separator) = entry.iter().position(|byte| *byte == b'=') else {
             continue;
         };
-        let key = String::from_utf8(entry[..separator].to_vec())
+        let key = std::str::from_utf8(&entry[..separator])
             .context("captured shell environment key was not UTF-8")?;
-        let value = String::from_utf8(entry[separator + 1..].to_vec())
+        let value = std::str::from_utf8(&entry[separator + 1..])
             .context("captured shell environment value was not UTF-8")?;
-        env.insert(key, value);
+        env.insert(key.to_string(), value.to_string());
     }
     Ok(env)
 }
@@ -308,7 +295,7 @@ fn diff_env(
         if ignored_capture_key(key) {
             continue;
         }
-        if !contains_env_var(captured, key) {
+        if get_env_var(captured, key).is_none() {
             exports.insert(key.clone(), None);
         }
     }
@@ -333,10 +320,6 @@ fn get_env_var<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a St
     env.iter()
         .find(|(candidate, _)| env_key_eq(candidate, key))
         .map(|(_, value)| value)
-}
-
-fn contains_env_var(env: &HashMap<String, String>, key: &str) -> bool {
-    get_env_var(env, key).is_some()
 }
 
 fn insert_env_var(env: &mut HashMap<String, String>, key: String, value: String) {

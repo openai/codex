@@ -37,7 +37,7 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
-    pub command_env: HashMap<String, String>,
+    pub session_start_env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,7 +75,7 @@ impl Hooks {
             CommandShell {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
-                env: config.command_env,
+                session_start_env: config.session_start_env,
             },
         );
         Self {

@@ -203,7 +203,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -219,7 +219,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
-        command_env: HashMap::new(),
+        session_start_env: HashMap::new(),
     });
     assert!(listed.hooks[0].is_managed);
     let cwd = cwd();
@@ -308,7 +308,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -388,7 +388,7 @@ fn unknown_requirement_source_hooks_stay_managed() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -471,7 +471,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -535,7 +535,7 @@ fn user_disablement_does_not_filter_managed_layer_hooks() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -697,7 +697,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -754,7 +754,7 @@ fn allow_managed_hooks_only_false_keeps_unmanaged_hooks() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -809,7 +809,7 @@ fn allow_managed_hooks_only_in_config_toml_does_not_enable_policy() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -880,7 +880,7 @@ fn allow_managed_hooks_only_skips_unmanaged_json_and_toml_hooks() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -920,7 +920,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -993,7 +993,7 @@ fn allow_managed_hooks_only_keeps_managed_requirement_and_config_layer_hooks() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -1104,7 +1104,7 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -1198,7 +1198,7 @@ print(json.dumps({
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -1227,7 +1227,7 @@ print(json.dumps({
         plugin_hook_load_warnings: Vec::new(),
         shell_program: None,
         shell_args: Vec::new(),
-        command_env: HashMap::new(),
+        session_start_env: HashMap::new(),
     });
     assert_eq!(
         listed.hooks[0].plugin_id.as_deref(),
@@ -1314,7 +1314,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 
@@ -1359,7 +1359,7 @@ fn plugin_hook_load_warnings_are_startup_warnings() {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            env: HashMap::new(),
+            session_start_env: HashMap::new(),
         },
     );
 

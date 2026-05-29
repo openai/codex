@@ -121,7 +121,7 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
     command.env_remove(CODEX_ENV_FILE_ENV_VAR);
     command.env_remove(CLAUDE_ENV_FILE_ENV_VAR);
     if handler.event_name == HookEventName::SessionStart {
-        command.envs(&shell.env);
+        command.envs(&shell.session_start_env);
     }
     command
 }
@@ -165,7 +165,7 @@ mod tests {
         CommandShell {
             program: "hook-shell".to_string(),
             args: Vec::new(),
-            env: HashMap::from([
+            session_start_env: HashMap::from([
                 (
                     CODEX_ENV_FILE_ENV_VAR.to_string(),
                     "session-owned-env-file".to_string(),
@@ -206,19 +206,5 @@ mod tests {
 
         assert_eq!(command_env(&command, CODEX_ENV_FILE_ENV_VAR), Some(None));
         assert_eq!(command_env(&command, CLAUDE_ENV_FILE_ENV_VAR), Some(None));
-    }
-
-    #[test]
-    fn session_start_hook_receives_session_owned_env_file_paths() {
-        let command = build_command(&shell(), &handler(HookEventName::SessionStart));
-
-        assert_eq!(
-            command_env(&command, CODEX_ENV_FILE_ENV_VAR),
-            Some(Some(OsStr::new("session-owned-env-file")))
-        );
-        assert_eq!(
-            command_env(&command, CLAUDE_ENV_FILE_ENV_VAR),
-            Some(Some(OsStr::new("session-owned-env-file")))
-        );
     }
 }

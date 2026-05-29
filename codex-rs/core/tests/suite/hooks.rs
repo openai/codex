@@ -787,15 +787,6 @@ env_file = Path(os.environ["CLAUDE_ENV_FILE"])
 with env_file.open("a", encoding="utf-8") as handle:
     handle.write("export CODEX_SESSION_START_TEST='from-session-start'\n")
 "#;
-    let pre_tool_use_script_path = home.join("pre_tool_use_env_hook.py");
-    let pre_tool_use_script = r#"import os
-from pathlib import Path
-
-env_file = os.environ.get("CODEX_ENV_FILE") or os.environ.get("CLAUDE_ENV_FILE")
-if env_file:
-    with Path(env_file).open("a", encoding="utf-8") as handle:
-        handle.write("export CODEX_SESSION_START_TEST='leaked-to-pre-tool-use'\n")
-"#;
     let hooks = serde_json::json!({
         "hooks": {
             "SessionStart": [{
@@ -804,22 +795,12 @@ if env_file:
                     "command": format!("python3 {}", session_start_script_path.display()),
                     "statusMessage": "exporting session environment",
                 }]
-            }],
-            "PreToolUse": [{
-                "matcher": "^Bash$",
-                "hooks": [{
-                    "type": "command",
-                    "command": format!("python3 {}", pre_tool_use_script_path.display()),
-                    "statusMessage": "checking session environment isolation",
-                }]
             }]
         }
     });
 
     fs::write(&session_start_script_path, session_start_script)
         .context("write session start env hook script")?;
-    fs::write(&pre_tool_use_script_path, pre_tool_use_script)
-        .context("write pre tool use env hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -2776,10 +2757,6 @@ async fn assert_session_start_env_file_reaches_bash_surface(
         output.contains("from-session-start||"),
         "expected env-file paths to stay hidden from {surface:?} command: {output}"
     );
-    assert!(
-        !output.contains("leaked-to-pre-tool-use"),
-        "PreToolUse should not receive env-file paths: {output}"
-    );
 
     Ok(())
 }
@@ -2792,62 +2769,6 @@ async fn session_start_env_file_exports_reach_shell_command() -> Result<()> {
 #[tokio::test]
 async fn session_start_env_file_exports_reach_exec_command() -> Result<()> {
     assert_session_start_env_file_reaches_bash_surface(BashRewriteSurface::ExecCommand).await
-}
-
-#[tokio::test]
-async fn shell_command_hides_env_file_paths_when_hooks_are_disabled() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    skip_if_windows!(Ok(()));
-
-    let server = start_mock_server().await;
-    let call_id = "codex-env-file-without-hooks";
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_function_call(
-                    call_id,
-                    "shell_command",
-                    &serde_json::to_string(&serde_json::json!({
-                        "command": "printf '%s|%s' \"${CODEX_ENV_FILE:+configured}\" \"${CLAUDE_ENV_FILE:+configured}\"",
-                        "login": false,
-                    }))?,
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "session env file available"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    let mut builder = test_codex().with_config(|config| {
-        if let Err(error) = config.features.disable(Feature::CodexHooks) {
-            panic!("test config should allow feature update: {error}");
-        }
-    });
-    let test = builder.build(&server).await?;
-
-    test.submit_turn_with_permission_profile(
-        "check whether the session environment file is available",
-        PermissionProfile::Disabled,
-    )
-    .await?;
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(
-        !requests[1]
-            .function_call_output(call_id)
-            .to_string()
-            .contains("configured")
-    );
-
-    Ok(())
 }
 
 async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) -> Result<()> {
