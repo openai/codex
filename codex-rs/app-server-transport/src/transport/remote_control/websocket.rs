@@ -1504,9 +1504,14 @@ fn set_pairing_client(
     })?;
     *pairing_client
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(
-        RemoteControlPairingClient::new(remote_control_target, remote_control_token, expires_at),
-    );
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some(RemoteControlPairingClient::new(
+            remote_control_target,
+            remote_control_token,
+            enrollment.server_id.clone(),
+            enrollment.environment_id.clone(),
+            expires_at,
+        ));
     Ok(())
 }
 

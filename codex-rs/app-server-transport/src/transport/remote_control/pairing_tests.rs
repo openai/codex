@@ -102,6 +102,8 @@ async fn start_remote_control_pairing_uses_server_token_and_maps_response() {
             pair_url,
         },
         "remote-control-token".to_string(),
+        "server-id".to_string(),
+        "environment-id".to_string(),
         OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
     );
 
@@ -168,6 +170,8 @@ async fn start_remote_control_pairing_preserves_backend_error_context() {
             pair_url,
         },
         "remote-control-token".to_string(),
+        "server-id".to_string(),
+        "environment-id".to_string(),
         OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
     );
 
@@ -182,5 +186,102 @@ async fn start_remote_control_pairing_preserves_backend_error_context() {
         format!(
             "remote control pairing failed at `{expected_pair_url}`: HTTP 503 Service Unavailable, request-id: request-123, cf-ray: ray-123, body: pairing unavailable"
         )
+    );
+}
+
+#[tokio::test]
+async fn start_remote_control_pairing_rejects_expired_server_token() {
+    let client = RemoteControlPairingClient::new(
+        &RemoteControlTarget {
+            websocket_url: "ws://unused".to_string(),
+            enroll_url: "http://unused".to_string(),
+            refresh_url: "http://unused".to_string(),
+            pair_url: "http://unused".to_string(),
+        },
+        "remote-control-token".to_string(),
+        "server-id".to_string(),
+        "environment-id".to_string(),
+        OffsetDateTime::from_unix_timestamp(0).expect("expired timestamp should parse"),
+    );
+
+    let err = client
+        .start(StartRemoteControlPairingRequest { manual_code: false })
+        .await
+        .expect_err("expired server token should fail pairing");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "remote control pairing is unavailable because the server token expired"
+    );
+}
+
+#[tokio::test]
+async fn start_remote_control_pairing_rejects_mismatched_enrollment() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let pair_url = format!(
+        "http://{}/backend-api/wham/remote/control/server/pair",
+        listener.local_addr().expect("listener should have addr")
+    );
+    let server_task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("request should arrive");
+        let mut reader = BufReader::new(stream);
+
+        loop {
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .await
+                .expect("request line should read");
+            if line == "\r\n" {
+                break;
+            }
+        }
+
+        let response_body = json!({
+            "pairing_code": "pairing-code",
+            "manual_pairing_code": null,
+            "server_id": "other-server-id",
+            "environment_id": "other-environment-id",
+            "expires_at": "3026-05-22T12:34:56Z",
+        })
+        .to_string();
+        reader
+            .get_mut()
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{response_body}",
+                    response_body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("response should write");
+    });
+    let client = RemoteControlPairingClient::new(
+        &RemoteControlTarget {
+            websocket_url: "ws://unused".to_string(),
+            enroll_url: "http://unused".to_string(),
+            refresh_url: "http://unused".to_string(),
+            pair_url,
+        },
+        "remote-control-token".to_string(),
+        "server-id".to_string(),
+        "environment-id".to_string(),
+        OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
+    );
+
+    let err = client
+        .start(StartRemoteControlPairingRequest { manual_code: false })
+        .await
+        .expect_err("mismatched enrollment should fail pairing");
+    server_task.await.expect("server task should finish");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(
+        err.to_string(),
+        "remote control pairing returned mismatched enrollment: expected server_id=server-id, environment_id=environment-id; got server_id=other-server-id, environment_id=other-environment-id"
     );
 }

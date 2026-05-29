@@ -16,6 +16,8 @@ const REMOTE_CONTROL_PAIRING_TIMEOUT: std::time::Duration = std::time::Duration:
 pub(super) struct RemoteControlPairingClient {
     pairing_url: String,
     remote_control_token: String,
+    server_id: String,
+    environment_id: String,
     expires_at: OffsetDateTime,
 }
 
@@ -23,11 +25,15 @@ impl RemoteControlPairingClient {
     pub(super) fn new(
         remote_control_target: &RemoteControlTarget,
         remote_control_token: String,
+        server_id: String,
+        environment_id: String,
         expires_at: OffsetDateTime,
     ) -> Self {
         Self {
             pairing_url: remote_control_target.pair_url.clone(),
             remote_control_token,
+            server_id,
+            environment_id,
             expires_at,
         }
     }
@@ -89,7 +95,15 @@ impl RemoteControlPairingClient {
             environment_id,
             expires_at,
         } = pairing;
-        let _ = server_id;
+        if server_id != self.server_id || environment_id != self.environment_id {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "remote control pairing returned mismatched enrollment: expected server_id={}, environment_id={}; got server_id={}, environment_id={}",
+                    self.server_id, self.environment_id, server_id, environment_id
+                ),
+            ));
+        }
         let expires_at = OffsetDateTime::parse(&expires_at, &Rfc3339)
             .map_err(|err| {
                 io::Error::new(
