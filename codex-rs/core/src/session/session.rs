@@ -464,11 +464,18 @@ async fn warm_plugins_and_skills_for_session_init(
     let Some(path_ref) = path_ref else {
         return Vec::new();
     };
+    let local_file_system = environment_manager
+        .try_local_environment()
+        .map(|environment| environment.get_filesystem());
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input =
-        skills_load_input_from_config(config.as_ref(), path_ref, effective_skill_roots);
+    let skills_input = skills_load_input_from_config(
+        config.as_ref(),
+        path_ref,
+        local_file_system,
+        effective_skill_roots,
+    );
     skills_manager.skills_for_config(&skills_input).await.errors
 }
 

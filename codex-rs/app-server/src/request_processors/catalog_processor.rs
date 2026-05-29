@@ -531,9 +531,13 @@ impl CatalogRequestProcessor {
             }
             None => environment_manager.try_local_environment(),
         };
+        let local_file_system = environment_manager
+            .try_local_environment()
+            .map(|environment| environment.get_filesystem());
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
+                let local_file_system = local_file_system.clone();
                 let selected_environment = selected_environment.clone();
                 let plugins_manager = &plugins_manager;
                 let skills_manager = &skills_manager;
@@ -555,22 +559,6 @@ impl CatalogRequestProcessor {
                             );
                         }
                     };
-                    let Some(environment) = selected_environment.as_ref() else {
-                        // Legacy callers without `environmentId` remain local-only; if local is
-                        // unavailable, do not fabricate an unbound skill path.
-                        return (
-                            index,
-                            codex_app_server_protocol::SkillsListEntry {
-                                cwd,
-                                skills: Vec::new(),
-                                errors: Vec::new(),
-                            },
-                        );
-                    };
-                    let path_ref = codex_core::skills::EnvironmentPathRef::new(
-                        environment.get_filesystem(),
-                        cwd_abs.clone(),
-                    );
                     let effective_skill_roots = if workspace_codex_plugins_enabled {
                         let plugins_input = config.plugins_config_input();
                         plugins_manager
@@ -582,8 +570,25 @@ impl CatalogRequestProcessor {
                     } else {
                         Vec::new()
                     };
+                    let Some(environment) = selected_environment.as_ref() else {
+                        // Omitted `environmentId` uses the legacy implicit local target. When
+                        // local exec is disabled there is no valid implicit target, so return an
+                        // empty catalog rather than silently switching to the default environment.
+                        return (
+                            index,
+                            codex_app_server_protocol::SkillsListEntry {
+                                cwd,
+                                skills: Vec::new(),
+                                errors: Vec::new(),
+                            },
+                        );
+                    };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        path_ref,
+                        codex_core::skills::EnvironmentPathRef::new(
+                            environment.get_filesystem(),
+                            cwd_abs.clone(),
+                        ),
+                        local_file_system,
                         effective_skill_roots,
                         config_layer_stack,
                         config.bundled_skills_enabled(),

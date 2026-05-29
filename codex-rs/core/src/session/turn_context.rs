@@ -685,6 +685,11 @@ impl Session {
             )
         });
         let skills_outcome = if let Some(path_ref) = path_ref {
+            let local_file_system = self
+                .services
+                .environment_manager
+                .try_local_environment()
+                .map(|environment| environment.get_filesystem());
             let plugins_input = per_turn_config.plugins_config_input();
             let plugin_outcome = self
                 .services
@@ -692,8 +697,12 @@ impl Session {
                 .plugins_for_config(&plugins_input)
                 .await;
             let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-            let skills_input =
-                skills_load_input_from_config(&per_turn_config, path_ref, effective_skill_roots);
+            let skills_input = skills_load_input_from_config(
+                &per_turn_config,
+                path_ref,
+                local_file_system,
+                effective_skill_roots,
+            );
             Arc::new(
                 self.services
                     .skills_manager

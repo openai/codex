@@ -4,7 +4,9 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::LocalFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -286,6 +288,55 @@ async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyh
                 user_folder.join("skills").join(".system")
             ),
         ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_roots_bind_repo_and_local_roots_to_their_own_file_systems() -> anyhow::Result<()> {
+    let codex_home = tempfile::tempdir()?;
+    let project_root = codex_home.path().join("workspace");
+    fs::create_dir_all(project_root.join(".git"))?;
+    fs::create_dir_all(project_root.join(REPO_ROOT_CONFIG_DIR_NAME))?;
+    let cfg = make_config_for_cwd(&codex_home, project_root.clone()).await;
+
+    let env_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+    let local_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+    let env_path = EnvironmentPathRef::new(env_file_system.clone(), cfg.cwd.clone());
+    let roots = super::skill_roots(
+        &env_path,
+        Some(&local_file_system),
+        &cfg.config_layer_stack,
+        Vec::new(),
+    )
+    .await;
+
+    let repo_root = roots
+        .iter()
+        .find(|root| root.scope == SkillScope::Repo)
+        .expect("repo root");
+    let user_root = roots
+        .iter()
+        .find(|root| root.scope == SkillScope::User)
+        .expect("user root");
+    assert!(Arc::ptr_eq(&repo_root.path.file_system(), &env_file_system));
+    assert!(Arc::ptr_eq(
+        &user_root.path.file_system(),
+        &local_file_system
+    ));
+
+    let roots_without_local = super::skill_roots(
+        &env_path,
+        /*local_file_system*/ None,
+        &cfg.config_layer_stack,
+        Vec::new(),
+    )
+    .await;
+    assert!(
+        roots_without_local
+            .iter()
+            .all(|root| root.scope == SkillScope::Repo)
     );
 
     Ok(())
@@ -1887,12 +1938,18 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     let cfg = make_config(&codex_home).await;
 
     let cwd = local_env_path(cfg.cwd.clone());
-    let scopes: Vec<SkillScope> =
-        super::skill_roots(&cwd, &cfg.config_layer_stack, Vec::new(), Vec::new())
-            .await
-            .into_iter()
-            .map(|root| root.scope)
-            .collect();
+    let local_file_system = cwd.file_system();
+    let scopes: Vec<SkillScope> = super::skill_roots(
+        &cwd,
+        Some(&local_file_system),
+        &cfg.config_layer_stack,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await
+    .into_iter()
+    .map(|root| root.scope)
+    .collect();
     let mut expected = vec![SkillScope::User, SkillScope::System];
     if home_dir().is_some() {
         expected.insert(1, SkillScope::User);

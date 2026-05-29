@@ -103,11 +103,16 @@ impl SkillsWatcher {
 
         let root_path_ref =
             EnvironmentPathRef::new(environment.get_filesystem(), config.cwd.clone());
+        let local_file_system = thread_manager
+            .environment_manager()
+            .try_local_environment()
+            .map(|environment| environment.get_filesystem());
         let plugins_input = config.plugins_config_input();
         let plugins_manager = thread_manager.plugins_manager();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let skills_input = SkillsLoadInput::new(
             root_path_ref,
+            local_file_system,
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),
             config.bundled_skills_enabled(),

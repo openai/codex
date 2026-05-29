@@ -230,7 +230,8 @@ where
 }
 
 pub(crate) async fn skill_roots(
-    path_ref: &EnvironmentPathRef,
+    env_path: &EnvironmentPathRef,
+    local_file_system: Option<&Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
@@ -238,7 +239,8 @@ pub(crate) async fn skill_roots(
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     skill_roots_with_home_dir(
-        path_ref,
+        env_path,
+        local_file_system,
         config_layer_stack,
         home_dir.as_ref(),
         plugin_skill_roots,
@@ -248,35 +250,38 @@ pub(crate) async fn skill_roots(
 }
 
 async fn skill_roots_with_home_dir(
-    path_ref: &EnvironmentPathRef,
+    env_path: &EnvironmentPathRef,
+    local_file_system: Option<&Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
-    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir, path_ref);
-    roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
-        path: path_ref.with_path(root.path),
-        scope: SkillScope::User,
-        plugin_id: Some(root.plugin_id),
-        plugin_root: Some(path_ref.with_path(root.plugin_root)),
-    }));
-    roots.extend(extra_skill_roots.into_iter().map(|path| SkillRoot {
-        path: path_ref.with_path(path),
-        scope: SkillScope::User,
-        plugin_id: None,
-        plugin_root: None,
-    }));
-    roots.extend(repo_agents_skill_roots(path_ref, config_layer_stack).await);
+    let mut roots = repo_config_skill_roots(env_path, config_layer_stack);
+    roots.extend(local_skill_roots(
+        local_file_system,
+        config_layer_stack,
+        home_dir,
+        plugin_skill_roots,
+        extra_skill_roots,
+    ));
+    roots.extend(repo_agents_skill_roots(env_path, config_layer_stack).await);
     dedupe_skill_roots_by_path(&mut roots);
     roots
 }
 
-fn skill_roots_from_layer_stack_inner(
+fn local_skill_roots(
+    local_file_system: Option<&Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     home_dir: Option<&AbsolutePathBuf>,
-    path_ref: &EnvironmentPathRef,
+    plugin_skill_roots: Vec<PluginSkillRoot>,
+    extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
+    let Some(local_file_system) = local_file_system else {
+        // Local exec can be disabled. In that case, keep repo/env skill loading intact but skip
+        // local absolute roots instead of falling back to the process-global local filesystem.
+        return Vec::new();
+    };
     let mut roots = Vec::new();
 
     for layer in config_layer_stack.get_layers(
@@ -288,19 +293,13 @@ fn skill_roots_from_layer_stack_inner(
         };
 
         match &layer.name {
-            ConfigLayerSource::Project { .. } => {
-                roots.push(SkillRoot {
-                    path: path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
-                    scope: SkillScope::Repo,
-                    plugin_id: None,
-                    plugin_root: None,
-                });
-            }
+            ConfigLayerSource::Project { .. } => {}
             ConfigLayerSource::User { .. } => {
                 // Deprecated user skills location (`$CODEX_HOME/skills`), kept for backward
-                // compatibility.
+                // compatibility. These are client-local absolute paths even when the active repo
+                // environment is remote, so bind them to the available local filesystem only.
                 roots.push(SkillRoot {
-                    path: path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
+                    path: local_path_ref(local_file_system, config_folder.join(SKILLS_DIR_NAME)),
                     scope: SkillScope::User,
                     plugin_id: None,
                     plugin_root: None,
@@ -309,8 +308,10 @@ fn skill_roots_from_layer_stack_inner(
                 // `$HOME/.agents/skills` (user-installed skills).
                 if let Some(home_dir) = home_dir {
                     roots.push(SkillRoot {
-                        path: path_ref
-                            .with_path(home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)),
+                        path: local_path_ref(
+                            local_file_system,
+                            home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
+                        ),
                         scope: SkillScope::User,
                         plugin_id: None,
                         plugin_root: None,
@@ -320,7 +321,7 @@ fn skill_roots_from_layer_stack_inner(
                 // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
                 // special case (not a config layer).
                 roots.push(SkillRoot {
-                    path: path_ref.with_path(system_cache_root_dir(&config_folder)),
+                    path: local_path_ref(local_file_system, system_cache_root_dir(&config_folder)),
                     scope: SkillScope::System,
                     plugin_id: None,
                     plugin_root: None,
@@ -330,7 +331,7 @@ fn skill_roots_from_layer_stack_inner(
                 // The system config layer lives under `/etc/codex/` on Unix, so treat
                 // `/etc/codex/skills` as admin-scoped skills.
                 roots.push(SkillRoot {
-                    path: path_ref.with_path(config_folder.join(SKILLS_DIR_NAME)),
+                    path: local_path_ref(local_file_system, config_folder.join(SKILLS_DIR_NAME)),
                     scope: SkillScope::Admin,
                     plugin_id: None,
                     plugin_root: None,
@@ -343,19 +344,64 @@ fn skill_roots_from_layer_stack_inner(
         }
     }
 
+    roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
+        // Plugin discovery is currently local-only; multi-env plugin skill loading should be an
+        // explicit future change rather than inheriting the selected repo environment here.
+        path: local_path_ref(local_file_system, root.path),
+        scope: SkillScope::User,
+        plugin_id: Some(root.plugin_id),
+        plugin_root: Some(local_path_ref(local_file_system, root.plugin_root)),
+    }));
+    roots.extend(extra_skill_roots.into_iter().map(|path| SkillRoot {
+        path: local_path_ref(local_file_system, path),
+        scope: SkillScope::User,
+        plugin_id: None,
+        plugin_root: None,
+    }));
+
     roots
 }
 
+fn repo_config_skill_roots(
+    env_path: &EnvironmentPathRef,
+    config_layer_stack: &ConfigLayerStack,
+) -> Vec<SkillRoot> {
+    config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .filter_map(|layer| match &layer.name {
+            ConfigLayerSource::Project { .. } => layer.config_folder().map(|config_folder| {
+                SkillRoot {
+                    // Project and repo `.agents` roots belong to the selected environment because
+                    // their absolute paths are only meaningful within that environment's cwd/repo.
+                    path: env_path.with_path(config_folder.join(SKILLS_DIR_NAME)),
+                    scope: SkillScope::Repo,
+                    plugin_id: None,
+                    plugin_root: None,
+                }
+            }),
+            ConfigLayerSource::User { .. }
+            | ConfigLayerSource::System { .. }
+            | ConfigLayerSource::Mdm { .. }
+            | ConfigLayerSource::SessionFlags
+            | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+            | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
+        })
+        .collect()
+}
+
 async fn repo_agents_skill_roots(
-    path_ref: &EnvironmentPathRef,
+    env_path: &EnvironmentPathRef,
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
-    let project_root = find_project_root(path_ref, &project_root_markers).await;
-    let dirs = dirs_between_project_root_and_cwd(path_ref.path(), project_root.path());
+    let project_root = find_project_root(env_path, &project_root_markers).await;
+    let dirs = dirs_between_project_root_and_cwd(env_path.path(), project_root.path());
     let mut roots = Vec::new();
     for dir in dirs {
-        let agents_skills = path_ref.with_path(dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME));
+        let agents_skills = env_path.with_path(dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME));
         match agents_skills.metadata(/*sandbox*/ None).await {
             Ok(metadata) if metadata.is_directory => roots.push(SkillRoot {
                 path: agents_skills,
@@ -374,6 +420,13 @@ async fn repo_agents_skill_roots(
         }
     }
     roots
+}
+
+fn local_path_ref(
+    file_system: &Arc<dyn ExecutorFileSystem>,
+    path: AbsolutePathBuf,
+) -> EnvironmentPathRef {
+    EnvironmentPathRef::new(Arc::clone(file_system), path)
 }
 
 fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
@@ -1061,8 +1114,16 @@ pub(crate) async fn skill_roots_from_layer_stack(
     home_dir: Option<&AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
     let path_ref = EnvironmentPathRef::new(fs, cwd.clone());
-    skill_roots_with_home_dir(&path_ref, config_layer_stack, home_dir, Vec::new(), Vec::new())
-        .await
+    let local_file_system = path_ref.file_system();
+    skill_roots_with_home_dir(
+        &path_ref,
+        Some(&local_file_system),
+        config_layer_stack,
+        home_dir,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await
 }
 
 #[cfg(test)]

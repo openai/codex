@@ -97,6 +97,7 @@ fn local_skills_input(
     let path_ref = skill_root_path_ref(cwd);
     SkillsLoadInput::new(
         path_ref,
+        Some(Arc::clone(&LOCAL_FS)),
         effective_skill_roots,
         config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(&config_layer_stack),

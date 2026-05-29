@@ -4133,6 +4133,11 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
                     Arc::clone(&skill_fs),
                     parent_config.cwd.clone(),
                 ),
+                session
+                    .services
+                    .environment_manager
+                    .try_local_environment()
+                    .map(|environment| environment.get_filesystem()),
                 Vec::new(),
             ),
             /*force_reload*/ true,
@@ -4702,8 +4707,15 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         environment.get_filesystem(),
         per_turn_config.cwd.clone(),
     );
-    let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, cwd, effective_skill_roots);
+    let skills_input = crate::skills_load_input_from_config(
+        &per_turn_config,
+        cwd,
+        services
+            .environment_manager
+            .try_local_environment()
+            .map(|environment| environment.get_filesystem()),
+        effective_skill_roots,
+    );
     let skills_outcome = Arc::new(
         services
             .skills_manager
@@ -6548,8 +6560,15 @@ where
         environment.get_filesystem(),
         per_turn_config.cwd.clone(),
     );
-    let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, cwd, effective_skill_roots);
+    let skills_input = crate::skills_load_input_from_config(
+        &per_turn_config,
+        cwd,
+        services
+            .environment_manager
+            .try_local_environment()
+            .map(|environment| environment.get_filesystem()),
+        effective_skill_roots,
+    );
     let skills_outcome = Arc::new(
         services
             .skills_manager

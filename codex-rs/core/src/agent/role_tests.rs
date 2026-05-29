@@ -425,7 +425,12 @@ enabled = false
         Arc::clone(&codex_exec_server::LOCAL_FS),
         config.cwd.clone(),
     );
-    let skills_input = skills_load_input_from_config(&config, cwd, effective_skill_roots);
+    let skills_input = skills_load_input_from_config(
+        &config,
+        cwd,
+        Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
+        effective_skill_roots,
+    );
     let outcome = skills_manager.skills_for_config(&skills_input).await;
     let skill = outcome
         .skills
