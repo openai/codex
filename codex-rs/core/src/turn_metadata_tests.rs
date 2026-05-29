@@ -291,6 +291,41 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
 }
 
 #[test]
+fn turn_metadata_state_includes_known_parent_for_other_subagent() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().abs();
+    let permission_profile = PermissionProfile::read_only();
+    let parent_thread_id =
+        ThreadId::from_string("44444444-4444-4444-8444-444444444444").expect("thread id");
+
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        Some(parent_thread_id),
+        &SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+        Some(ThreadSource::Subagent),
+        "turn-a".to_string(),
+        cwd,
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+
+    let header = state.current_header_value().expect("header");
+    let json: Value = serde_json::from_str(&header).expect("json");
+
+    assert_eq!(
+        json["forked_from_thread_id"].as_str(),
+        Some("44444444-4444-4444-8444-444444444444")
+    );
+    assert_eq!(
+        json["parent_thread_id"].as_str(),
+        Some("44444444-4444-4444-8444-444444444444")
+    );
+    assert_eq!(json["subagent_kind"].as_str(), Some("guardian"));
+}
+
+#[test]
 fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();

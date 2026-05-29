@@ -2669,13 +2669,13 @@ impl fmt::Display for SubAgentSource {
 }
 
 impl SubAgentSource {
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> &str {
         match self {
             SubAgentSource::Review => "review",
             SubAgentSource::Compact => "compact",
             SubAgentSource::ThreadSpawn { .. } => "thread_spawn",
             SubAgentSource::MemoryConsolidation => "memory_consolidation",
-            SubAgentSource::Other(_) => "other",
+            SubAgentSource::Other(other) => other,
         }
     }
 

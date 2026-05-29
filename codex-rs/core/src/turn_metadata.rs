@@ -135,7 +135,7 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent_thread_id: Option<ThreadId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    subagent_kind: Option<&'static str>,
+    subagent_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_source: Option<ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -278,22 +278,25 @@ impl TurnMetadataState {
             )
             .to_string(),
         );
-        let subagent_kind = match session_source {
-            SessionSource::SubAgent(subagent_source) => Some(subagent_source.kind()),
+        let (parent_thread_id, subagent_kind) = match session_source {
+            SessionSource::SubAgent(subagent_source) => (
+                subagent_source.parent_thread_id().or(forked_from_thread_id),
+                Some(subagent_source.kind().to_string()),
+            ),
             SessionSource::Cli
             | SessionSource::VSCode
             | SessionSource::Exec
             | SessionSource::Mcp
             | SessionSource::Custom(_)
             | SessionSource::Internal(_)
-            | SessionSource::Unknown => None,
+            | SessionSource::Unknown => (None, None),
         };
         let base_metadata = TurnMetadataBag {
             request_kind: None,
             session_id: Some(session_id),
             thread_id: Some(thread_id),
             forked_from_thread_id,
-            parent_thread_id: session_source.parent_thread_id(),
+            parent_thread_id,
             subagent_kind,
             thread_source,
             turn_id: Some(turn_id),
