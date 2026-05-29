@@ -148,6 +148,24 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     Ok(())
 }
 
+#[test]
+fn explicit_escalation_preserves_user_ca_env() {
+    let env = HashMap::from([
+        (PROXY_ACTIVE_ENV_KEY.to_string(), "1".to_string()),
+        (
+            "SSL_CERT_FILE".to_string(),
+            "/tmp/custom-ca.pem".to_string(),
+        ),
+    ]);
+
+    let env = exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated);
+
+    assert_eq!(
+        env.get("SSL_CERT_FILE"),
+        Some(&"/tmp/custom-ca.pem".to_string())
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn apply_zsh_fork_path_prepend_uses_shell_parent() {

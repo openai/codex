@@ -129,6 +129,11 @@ impl ManagedMitmCaTrustBundles {
     pub(crate) fn path_for_env_key(&self, key: &str) -> &Path {
         self.env_paths
             .get(key)
+            .or_else(|| {
+                (key == "CODEX_CA_CERTIFICATE")
+                    .then(|| self.env_paths.get("SSL_CERT_FILE"))
+                    .flatten()
+            })
             .map(PathBuf::as_path)
             .unwrap_or(self.default_path.as_path())
     }
@@ -165,18 +170,6 @@ fn managed_ca_trust_bundles_for_cert_path(
     env: &HashMap<&'static str, String>,
     cwd: &Path,
 ) -> Result<ManagedMitmCaTrustBundles> {
-    let default_path = env
-        .get("SSL_CERT_FILE")
-        .map(String::as_str)
-        .map(|value| resolve_ca_bundle_path(value, cwd))
-        .filter(|path| is_current_generated_trust_bundle_path(path, cert_path))
-        .map_or_else(
-            || {
-                let trust_bundle = build_default_managed_ca_trust_bundle(cert_path)?;
-                persist_managed_ca_trust_bundle(cert_path, &trust_bundle)
-            },
-            Ok,
-        )?;
     let mut env_paths = HashMap::new();
     let mut inherited_env_values = HashMap::new();
     for key in CUSTOM_CA_ENV_KEYS {
@@ -193,6 +186,13 @@ fn managed_ca_trust_bundles_for_cert_path(
         };
         env_paths.insert(key, trust_bundle_path);
     }
+    let default_path = env_paths.get("SSL_CERT_FILE").cloned().map_or_else(
+        || {
+            let trust_bundle = build_default_managed_ca_trust_bundle(cert_path)?;
+            persist_managed_ca_trust_bundle(cert_path, &trust_bundle)
+        },
+        Ok,
+    )?;
 
     Ok(ManagedMitmCaTrustBundles {
         default_path,
@@ -260,6 +260,14 @@ fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Pa
         && trust_bundle
             .windows(managed_ca_cert.len())
             .any(|window| window == managed_ca_cert)
+}
+
+/// Returns whether `path` points at a current Codex-generated MITM CA bundle.
+pub fn is_managed_mitm_ca_trust_bundle_path(path: &str) -> bool {
+    let Ok((managed_ca_cert_path, _)) = managed_ca_paths() else {
+        return false;
+    };
+    is_current_generated_trust_bundle_path(Path::new(path), &managed_ca_cert_path)
 }
 
 fn persist_managed_ca_trust_bundle(
@@ -622,6 +630,25 @@ mod tests {
         assert!(requests_bundle.contains("requests ca"));
         assert!(requests_bundle.contains("managed ca"));
         assert!(!requests_bundle.contains("-----BEGIN CERTIFICATE-----"));
+    }
+
+    #[test]
+    fn managed_ca_trust_bundles_use_ssl_bundle_as_default() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let ssl_bundle_path = dir.path().join("ssl.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        fs::write(&ssl_bundle_path, "ssl ca\n").unwrap();
+        let env = HashMap::from([("SSL_CERT_FILE", ssl_bundle_path.display().to_string())]);
+
+        let bundles =
+            managed_ca_trust_bundles_for_cert_path(&managed_ca_cert_path, &env, dir.path())
+                .unwrap();
+
+        assert_eq!(
+            bundles.default_path,
+            bundles.path_for_env_key("SSL_CERT_FILE")
+        );
     }
 
     #[cfg(unix)]
