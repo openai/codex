@@ -21,6 +21,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -55,6 +56,8 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
+    /// Parent turn's resolved selector.
+    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
 }
 
 #[derive(Clone, Debug)]
@@ -188,11 +191,18 @@ impl AgentControl {
         initial_operation: Op,
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
+        let multi_agent_version = config
+            .features
+            .enabled(Feature::MultiAgentV2)
+            .then_some(MultiAgentVersion::V2);
         let spawned_agent = Box::pin(self.spawn_agent_internal(
             config,
             initial_operation,
             session_source,
-            SpawnAgentOptions::default(),
+            SpawnAgentOptions {
+                multi_agent_version,
+                ..Default::default()
+            },
         ))
         .await?;
         Ok(spawned_agent.thread_id)
@@ -218,6 +228,7 @@ impl AgentControl {
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
         let state = self.upgrade()?;
+        let multi_agent_version = options.multi_agent_version;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
@@ -255,6 +266,7 @@ impl AgentControl {
                     &state,
                     config,
                     session_source,
+                    multi_agent_version,
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
@@ -267,6 +279,7 @@ impl AgentControl {
                     config.clone(),
                     self.clone(),
                     session_source,
+                    multi_agent_version,
                     forked_from_thread_id,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*persist_extended_history*/ false,
@@ -339,7 +352,7 @@ impl AgentControl {
 
         self.send_input(new_thread.thread_id, initial_operation)
             .await?;
-        if agent_metadata.agent_path.is_none() {
+        if multi_agent_version != Some(MultiAgentVersion::V2) {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -349,7 +362,6 @@ impl AgentControl {
                 new_thread.thread_id,
                 notification_source,
                 child_reference,
-                agent_metadata.agent_path.clone(),
             );
         }
 
@@ -365,6 +377,7 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         config: crate::config::Config,
         session_source: SessionSource,
+        multi_agent_version: Option<MultiAgentVersion>,
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
@@ -418,7 +431,7 @@ impl AgentControl {
         }
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
-                if session_source.get_agent_path().is_some() {
+                if multi_agent_version == Some(MultiAgentVersion::V2) {
                     let parent_config = parent_thread.codex.session.get_config().await;
                     [
                         parent_config
@@ -436,7 +449,7 @@ impl AgentControl {
                 } else {
                     Vec::new()
                 }
-            } else if session_source.get_agent_path().is_some() {
+            } else if multi_agent_version == Some(MultiAgentVersion::V2) {
                 [
                     config.multi_agent_v2.root_agent_usage_hint_text.clone(),
                     config.multi_agent_v2.subagent_usage_hint_text.clone(),
@@ -472,7 +485,7 @@ impl AgentControl {
             }
         }
         if preserve_reference_context_item
-            && session_source.get_agent_path().is_some()
+            && multi_agent_version == Some(MultiAgentVersion::V2)
             && let Some(subagent_usage_hint_text) =
                 config.multi_agent_v2.subagent_usage_hint_text.clone()
             && let Some(subagent_usage_hint_message) =
@@ -489,6 +502,7 @@ impl AgentControl {
                 InitialHistory::Forked(forked_rollout_items),
                 self.clone(),
                 session_source,
+                multi_agent_version,
                 /*thread_source*/ Some(ThreadSource::Subagent),
                 /*forked_from_thread_id*/ Some(parent_thread_id),
                 /*persist_extended_history*/ false,
@@ -505,12 +519,14 @@ impl AgentControl {
         config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<ThreadId> {
         let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
         let resumed_thread_id = Box::pin(self.resume_single_agent_from_rollout(
             config.clone(),
             thread_id,
             session_source,
+            multi_agent_version,
         ))
         .await?;
         let state = self.upgrade()?;
@@ -563,6 +579,7 @@ impl AgentControl {
                         config.clone(),
                         child_thread_id,
                         child_session_source,
+                        multi_agent_version,
                     ))
                     .await
                     {
@@ -587,10 +604,11 @@ impl AgentControl {
         mut config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<ThreadId> {
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
             && *depth >= config.agent_max_depth
-            && !config.features.enabled(Feature::MultiAgentV2)
+            && multi_agent_version != Some(MultiAgentVersion::V2)
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
@@ -656,6 +674,7 @@ impl AgentControl {
                 }),
                 agent_control: self.clone(),
                 session_source,
+                inherited_multi_agent_version: multi_agent_version,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
             })
@@ -666,7 +685,7 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        if agent_metadata.agent_path.is_none() {
+        if multi_agent_version != Some(MultiAgentVersion::V2) {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -676,7 +695,6 @@ impl AgentControl {
                 resumed_thread.thread_id,
                 Some(notification_source.clone()),
                 child_reference,
-                agent_metadata.agent_path.clone(),
             );
         }
         self.persist_thread_spawn_edge_for_source(
@@ -1018,7 +1036,6 @@ impl AgentControl {
         child_thread_id: ThreadId,
         session_source: Option<SessionSource>,
         child_reference: String,
-        child_agent_path: Option<AgentPath>,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -1049,36 +1066,7 @@ impl AgentControl {
             let Ok(state) = control.upgrade() else {
                 return;
             };
-            let child_thread = state.get_thread(child_thread_id).await.ok();
             let message = format_subagent_notification_message(child_reference.as_str(), &status);
-            if child_agent_path.is_some()
-                && child_thread
-                    .as_ref()
-                    .map(|thread| thread.enabled(Feature::MultiAgentV2))
-                    .unwrap_or(true)
-            {
-                let Some(child_agent_path) = child_agent_path.clone() else {
-                    return;
-                };
-                let Some(parent_agent_path) = child_agent_path
-                    .as_str()
-                    .rsplit_once('/')
-                    .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
-                else {
-                    return;
-                };
-                let communication = InterAgentCommunication::new(
-                    child_agent_path,
-                    parent_agent_path,
-                    Vec::new(),
-                    message,
-                    /*trigger_turn*/ false,
-                );
-                let _ = control
-                    .send_inter_agent_communication(parent_thread_id, communication)
-                    .await;
-                return;
-            }
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };

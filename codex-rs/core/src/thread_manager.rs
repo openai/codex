@@ -34,6 +34,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -187,6 +188,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) initial_history: InitialHistory,
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
+    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
@@ -601,6 +603,7 @@ impl ThreadManager {
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             session_source,
+            /*inherited_multi_agent_version*/ None,
             forked_from_thread_id,
             thread_source,
             options.dynamic_tools,
@@ -1029,6 +1032,7 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
+            /*inherited_multi_agent_version*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             /*persist_extended_history*/ false,
@@ -1046,6 +1050,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
+        inherited_multi_agent_version: Option<MultiAgentVersion>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
@@ -1063,6 +1068,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            inherited_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1086,6 +1092,7 @@ impl ThreadManagerState {
             initial_history,
             agent_control,
             session_source,
+            inherited_multi_agent_version,
             inherited_shell_snapshot,
             inherited_exec_policy,
         } = options;
@@ -1098,6 +1105,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            inherited_multi_agent_version,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
@@ -1119,6 +1127,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         agent_control: AgentControl,
         session_source: SessionSource,
+        inherited_multi_agent_version: Option<MultiAgentVersion>,
         thread_source: Option<ThreadSource>,
         forked_from_thread_id: Option<ThreadId>,
         persist_extended_history: bool,
@@ -1135,6 +1144,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            inherited_multi_agent_version,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1172,6 +1182,7 @@ impl ThreadManagerState {
             auth_manager,
             agent_control,
             self.session_source.clone(),
+            /*inherited_multi_agent_version*/ None,
             forked_from_thread_id,
             thread_source,
             dynamic_tools,
@@ -1194,6 +1205,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
+        inherited_multi_agent_version: Option<MultiAgentVersion>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
@@ -1238,6 +1250,7 @@ impl ThreadManagerState {
         } = Codex::spawn(CodexSpawnArgs {
             config,
             installation_id: self.installation_id.clone(),
+            inherited_multi_agent_version,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),

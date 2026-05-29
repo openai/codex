@@ -4723,11 +4723,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
+        /*inherited_multi_agent_version*/ None,
     );
 
     let session = Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        inherited_multi_agent_version: None,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
@@ -6566,11 +6568,13 @@ where
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
+        /*inherited_multi_agent_version*/ None,
     ));
 
     let session = Arc::new(Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
+        inherited_multi_agent_version: None,
         tx_event,
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
@@ -7220,26 +7224,27 @@ async fn spawned_child_multi_agent_version_follows_parent_system() {
     let (_session, turn_context) = make_session_and_context().await;
     let mut model_info = turn_context.model_info.clone();
     model_info.multi_agent_version = Some(MultiAgentVersion::V1);
-    let v2_parent_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id: ThreadId::new(),
-        depth: 1,
-        agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path should parse")),
-        agent_nickname: None,
-        agent_role: None,
-    });
-    let resolved_from_v2_parent =
-        resolve_multi_agent_version(&model_info, turn_context.config.as_ref(), &v2_parent_source);
-
-    model_info.multi_agent_version = Some(MultiAgentVersion::V2);
-    let v1_parent_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+    let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: ThreadId::new(),
         depth: 1,
         agent_path: None,
         agent_nickname: None,
         agent_role: None,
     });
-    let resolved_from_v1_parent =
-        resolve_multi_agent_version(&model_info, turn_context.config.as_ref(), &v1_parent_source);
+    let resolved_from_v2_parent = resolve_multi_agent_version(
+        &model_info,
+        turn_context.config.as_ref(),
+        &child_source,
+        Some(MultiAgentVersion::V2),
+    );
+
+    model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+    let resolved_from_v1_parent = resolve_multi_agent_version(
+        &model_info,
+        turn_context.config.as_ref(),
+        &child_source,
+        Some(MultiAgentVersion::V1),
+    );
 
     assert_eq!(
         (resolved_from_v2_parent, resolved_from_v1_parent),

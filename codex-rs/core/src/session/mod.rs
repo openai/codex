@@ -393,6 +393,7 @@ pub struct CodexSpawnOk {
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) installation_id: String,
+    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -458,6 +459,7 @@ impl Codex {
         let CodexSpawnArgs {
             mut config,
             installation_id,
+            inherited_multi_agent_version,
             auth_manager,
             models_manager,
             environment_manager,
@@ -488,7 +490,7 @@ impl Codex {
 
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
             && depth >= config.agent_max_depth
-            && !config.features.enabled(Feature::MultiAgentV2)
+            && inherited_multi_agent_version != Some(MultiAgentVersion::V2)
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
@@ -611,6 +613,7 @@ impl Codex {
             session_configuration,
             config.clone(),
             installation_id,
+            inherited_multi_agent_version,
             auth_manager.clone(),
             models_manager.clone(),
             exec_policy,

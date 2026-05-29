@@ -888,6 +888,7 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
             &turn.model_info,
             turn.config.as_ref(),
             &turn.session_source,
+            /*inherited_multi_agent_version*/ None,
         );
     })
     .await;
@@ -908,6 +909,7 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
             &turn.model_info,
             turn.config.as_ref(),
             &turn.session_source,
+            /*inherited_multi_agent_version*/ None,
         );
     })
     .await;
@@ -933,6 +935,7 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
             &turn.model_info,
             turn.config.as_ref(),
             &turn.session_source,
+            Some(MultiAgentVersion::V1),
         );
     })
     .await;

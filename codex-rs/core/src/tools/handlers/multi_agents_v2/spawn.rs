@@ -144,6 +144,7 @@ async fn handle_spawn_agent(
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                 fork_mode,
                 environments: Some(turn.environments.to_selections()),
+                multi_agent_version: turn.multi_agent_version,
             },
         ),
     )

@@ -341,7 +341,12 @@ async fn resume_agent_errors_when_manager_dropped() {
     let control = AgentControl::default();
     let (_home, config) = test_config().await;
     let err = control
-        .resume_agent_from_rollout(config, ThreadId::new(), SessionSource::Exec)
+        .resume_agent_from_rollout(
+            config,
+            ThreadId::new(),
+            SessionSource::Exec,
+            /*multi_agent_version*/ None,
+        )
         .await
         .expect_err("resume_agent should fail without a manager");
     assert_eq!(
@@ -660,6 +665,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
             },
         )
@@ -819,6 +825,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
             },
         )
@@ -1117,6 +1124,7 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 ..Default::default()
             },
         )
@@ -1439,7 +1447,12 @@ async fn resume_agent_respects_max_threads_limit() {
         .expect("spawn_agent should succeed for active slot");
 
     let err = control
-        .resume_agent_from_rollout(config, resumable_id, SessionSource::Exec)
+        .resume_agent_from_rollout(
+            config,
+            resumable_id,
+            SessionSource::Exec,
+            /*multi_agent_version*/ None,
+        )
         .await
         .expect_err("resume should respect max threads");
     let CodexErr::AgentLimitReached {
@@ -1473,7 +1486,12 @@ async fn resume_agent_releases_slot_after_resume_failure() {
     let control = manager.agent_control();
 
     let _ = control
-        .resume_agent_from_rollout(config.clone(), ThreadId::new(), SessionSource::Exec)
+        .resume_agent_from_rollout(
+            config.clone(),
+            ThreadId::new(),
+            SessionSource::Exec,
+            /*multi_agent_version*/ None,
+        )
         .await
         .expect_err("resume should fail for missing rollout path");
 
@@ -1626,104 +1644,6 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
 }
 
 #[tokio::test]
-async fn completion_watcher_queues_message_for_direct_parent() {
-    let harness = AgentControlHarness::new().await;
-    let (_root_thread_id, root_thread) = harness.start_thread().await;
-    let (worker_thread_id, _worker_thread) = harness.start_thread().await;
-    let tester_thread_id = harness
-        .manager
-        .start_thread(harness.config.clone())
-        .await
-        .expect("tester thread should start")
-        .thread_id;
-    let tester_thread = harness
-        .manager
-        .get_thread(tester_thread_id)
-        .await
-        .expect("tester thread should exist");
-    let worker_path = AgentPath::root().join("worker_a").expect("worker path");
-    let tester_path = worker_path.join("tester").expect("tester path");
-    harness.control.maybe_start_completion_watcher(
-        tester_thread_id,
-        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id: worker_thread_id,
-            depth: 2,
-            agent_path: Some(tester_path.clone()),
-            agent_nickname: None,
-            agent_role: Some("explorer".to_string()),
-        })),
-        tester_path.to_string(),
-        Some(tester_path.clone()),
-    );
-    let tester_turn = tester_thread.codex.session.new_default_turn().await;
-    tester_thread
-        .codex
-        .session
-        .send_event(
-            tester_turn.as_ref(),
-            EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: tester_turn.sub_id.clone(),
-                last_agent_message: Some("done".to_string()),
-                completed_at: None,
-                duration_ms: None,
-                time_to_first_token_ms: None,
-            }),
-        )
-        .await;
-
-    let expected_message = crate::session_prefix::format_subagent_notification_message(
-        tester_path.as_str(),
-        &AgentStatus::Completed(Some("done".to_string())),
-    );
-    let expected = (
-        worker_thread_id,
-        Op::InterAgentCommunication {
-            communication: InterAgentCommunication::new(
-                tester_path.clone(),
-                worker_path.clone(),
-                Vec::new(),
-                expected_message.clone(),
-                /*trigger_turn*/ false,
-            ),
-        },
-    );
-
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let captured = harness
-                .manager
-                .captured_ops()
-                .into_iter()
-                .find(|entry| *entry == expected);
-            if captured == Some(expected.clone()) {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("completion watcher should queue a direct-parent message");
-
-    let root_history_items = root_thread
-        .codex
-        .session
-        .clone_history()
-        .await
-        .raw_items()
-        .to_vec();
-    assert!(!history_contains_assistant_inter_agent_communication(
-        &root_history_items,
-        &InterAgentCommunication::new(
-            tester_path,
-            AgentPath::root(),
-            Vec::new(),
-            expected_message,
-            /*trigger_turn*/ false,
-        )
-    ));
-}
-
-#[tokio::test]
 async fn completion_watcher_notifies_parent_when_child_is_missing() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
@@ -1739,7 +1659,6 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
             agent_role: Some("explorer".to_string()),
         })),
         child_thread_id.to_string(),
-        /*child_agent_path*/ None,
     );
 
     assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
@@ -1960,6 +1879,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
                 agent_nickname: None,
                 agent_role: None,
             }),
+            /*multi_agent_version*/ None,
         )
         .await
         .expect("resume should succeed");
@@ -2033,7 +1953,12 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
 
     let resumed_thread_id = harness
         .control
-        .resume_agent_from_rollout(harness.config.clone(), child_thread_id, SessionSource::Exec)
+        .resume_agent_from_rollout(
+            harness.config.clone(),
+            child_thread_id,
+            SessionSource::Exec,
+            /*multi_agent_version*/ None,
+        )
         .await
         .expect("resume should find archived rollout");
     assert_eq!(resumed_thread_id, child_thread_id);
@@ -2476,6 +2401,7 @@ async fn resume_agent_from_rollout_does_not_reopen_closed_descendants() {
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
+            /*multi_agent_version*/ None,
         )
         .await
         .expect("single-thread resume should succeed");
@@ -2572,6 +2498,7 @@ async fn resume_closed_child_reopens_open_descendants() {
                 agent_nickname: None,
                 agent_role: None,
             }),
+            /*multi_agent_version*/ None,
         )
         .await
         .expect("child resume should succeed");
@@ -2601,8 +2528,6 @@ async fn resume_closed_child_reopens_open_descendants() {
 async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdown() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    let child_path = AgentPath::root().join("explorer").expect("child path");
-    let grandchild_path = child_path.join("worker").expect("grandchild path");
 
     let child_thread_id = harness
         .control
@@ -2612,7 +2537,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
-                agent_path: Some(child_path.clone()),
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
@@ -2627,7 +2552,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: child_thread_id,
                 depth: 2,
-                agent_path: Some(grandchild_path.clone()),
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: Some("worker".to_string()),
             })),
@@ -2666,6 +2591,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
+            /*multi_agent_version*/ None,
         )
         .await
         .expect("tree resume should succeed");
@@ -2681,29 +2607,6 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
     assert_ne!(
         harness.control.get_status(grandchild_thread_id).await,
         AgentStatus::NotFound
-    );
-    let child_source = harness
-        .manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("resumed child thread should exist")
-        .config_snapshot()
-        .await
-        .session_source;
-    let grandchild_source = harness
-        .manager
-        .get_thread(grandchild_thread_id)
-        .await
-        .expect("resumed grandchild thread should exist")
-        .config_snapshot()
-        .await
-        .session_source;
-    assert_eq!(
-        (
-            child_source.get_agent_path(),
-            grandchild_source.get_agent_path()
-        ),
-        (Some(child_path), Some(grandchild_path))
     );
 
     let _ = harness
@@ -2802,6 +2705,7 @@ async fn resume_agent_from_rollout_uses_edge_data_when_descendant_metadata_sourc
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
+            /*multi_agent_version*/ None,
         )
         .await
         .expect("tree resume should succeed");
@@ -2917,6 +2821,7 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails() 
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
+            /*multi_agent_version*/ None,
         )
         .await
         .expect("root resume should succeed");

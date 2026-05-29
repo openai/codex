@@ -7,6 +7,7 @@ use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ThreadSource;
@@ -19,6 +20,8 @@ use tokio::sync::Semaphore;
 pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     pub(crate) installation_id: String,
+    /// Parent turn's resolved selector for child sessions.
+    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) out_of_band_elicitation_paused: watch::Sender<bool>,
@@ -484,6 +487,7 @@ impl Session {
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         installation_id: String,
+        inherited_multi_agent_version: Option<MultiAgentVersion>,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
         exec_policy: Arc<ExecPolicyManager>,
@@ -1055,6 +1059,7 @@ impl Session {
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
                 installation_id,
+                inherited_multi_agent_version,
                 tx_event: tx_event.clone(),
                 agent_status,
                 out_of_band_elicitation_paused,
