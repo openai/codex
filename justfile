@@ -1,5 +1,8 @@
 set working-directory := "codex-rs"
-set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-File", "../scripts/just-windows-shell.ps1"]
+set positional-arguments
+python_shell := 'import pathlib, runpy, sys; p = pathlib.Path.cwd().resolve(); script = next((d / "scripts" / "just-shell.py" for d in (p, *p.parents) if (d / "scripts" / "just-shell.py").is_file()), None); sys.exit("could not find scripts/just-shell.py") if script is None else runpy.run_path(str(script), run_name="__main__")'
+set shell := ["python3", "-c", python_shell]
+set windows-shell := ["python", "-c", python_shell]
 
 rust_min_stack := "8388608" # 8 MiB
 
@@ -9,26 +12,12 @@ help:
 
 # `codex`
 alias c := codex
-[unix]
-[positional-arguments]
 codex *args:
-    cargo run --bin codex -- "$@"
-
-[windows]
-[positional-arguments]
-codex *args:
-    cargo run --bin codex -- @($args | Select-Object -Skip 1)
+    cargo run --bin codex -- {args}
 
 # `codex exec`
-[unix]
-[positional-arguments]
 exec *args:
-    cargo run --bin codex -- exec "$@"
-
-[windows]
-[positional-arguments]
-exec *args:
-    cargo run --bin codex -- exec @($args | Select-Object -Skip 1)
+    cargo run --bin codex -- exec {args}
 
 # Start `codex exec-server` and run codex-tui.
 [unix]
@@ -38,28 +27,13 @@ tui-with-exec-server *args:
     {{ justfile_directory() }}/scripts/run_tui_with_exec_server.sh "$@"
 
 # Run the CLI version of the file-search crate.
-[unix]
-[positional-arguments]
 file-search *args:
-    cargo run --bin codex-file-search -- "$@"
-
-[windows]
-[positional-arguments]
-file-search *args:
-    cargo run --bin codex-file-search -- @($args | Select-Object -Skip 1)
+    cargo run --bin codex-file-search -- {args}
 
 # Build the CLI and run the app-server test client
-[unix]
-[positional-arguments]
 app-server-test-client *args:
     cargo build -p codex-cli
-    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
-
-[windows]
-[positional-arguments]
-app-server-test-client *args:
-    cargo build -p codex-cli
-    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex @($args | Select-Object -Skip 1)
+    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex {args}
 
 # Format Rust and Python SDK code.
 [unix]
@@ -74,25 +48,11 @@ fmt:
     uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
     uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
 
-[unix]
-[positional-arguments]
 fix *args:
-    cargo clippy --fix --tests --allow-dirty "$@"
+    cargo clippy --fix --tests --allow-dirty {args}
 
-[windows]
-[positional-arguments]
-fix *args:
-    cargo clippy --fix --tests --allow-dirty @($args | Select-Object -Skip 1)
-
-[unix]
-[positional-arguments]
 clippy *args:
-    cargo clippy --tests "$@"
-
-[windows]
-[positional-arguments]
-clippy *args:
-    cargo clippy --tests @($args | Select-Object -Skip 1)
+    cargo clippy --tests {args}
 
 [unix]
 install:
@@ -106,13 +66,6 @@ install:
     if (-not $pwsh) {
         winget install --exact --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    } else {
-        $version = & $pwsh.Source -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        if ([version] $version -lt [version] "7.4") {
-            winget upgrade --exact --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        }
     }
     rustup show active-toolchain
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -125,27 +78,18 @@ install:
 # Prefer this for routine local runs. Workspace crate features are banned, so
 # there should be no need to add `--all-features`.
 [unix]
-[positional-arguments]
 test *args:
     RUST_MIN_STACK={{ rust_min_stack }} cargo nextest run --no-fail-fast "$@"
     just bench-smoke
 
 [windows]
-[positional-arguments]
 test *args:
     $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
     just bench-smoke
 
 # Run explicit workspace benchmark targets.
-[unix]
-[positional-arguments]
 bench *args:
-    cargo bench --workspace --bench '*' "$@"
-
-[windows]
-[positional-arguments]
-bench *args:
-    cargo bench --workspace --bench '*' @($args | Select-Object -Skip 1)
+    cargo bench --workspace --bench '*' {args}
 
 # Run benchmark targets once to ensure they start successfully.
 bench-smoke:
@@ -156,12 +100,10 @@ bench-smoke:
 # the command in the current working directory.
 [unix]
 [no-cd]
-[positional-arguments]
 bazel-codex *args:
     bazel run //codex-rs/cli:codex --run_under="cd $PWD &&" -- "$@"
 
 [windows]
-[positional-arguments]
 bazel-codex *args:
     bazel run //codex-rs/cli:codex --run_under='cd /d "{{invocation_directory_native()}}" &&' -- @($args | Select-Object -Skip 1)
 
@@ -203,44 +145,24 @@ build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
 
 # Run the MCP server
-[unix]
-[positional-arguments]
 mcp-server-run *args:
-    cargo run -p codex-mcp-server -- "$@"
-
-[windows]
-[positional-arguments]
-mcp-server-run *args:
-    cargo run -p codex-mcp-server -- @($args | Select-Object -Skip 1)
+    cargo run -p codex-mcp-server -- {args}
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
     cargo run -p codex-core --bin codex-write-config-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
-[unix]
-[positional-arguments]
 write-app-server-schema *args:
-    cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- "$@"
+    cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- {args}
 
-[windows]
-[positional-arguments]
-write-app-server-schema *args:
-    cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- @($args | Select-Object -Skip 1)
-
-[unix]
 [no-cd]
-write-hooks-schema:
-    cargo run --manifest-path {{ justfile_directory() }}/codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
-
-[windows]
 write-hooks-schema:
     cargo run --manifest-path {{ justfile_directory() }}/codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
 
 # Run the argument-comment Dylint checks across codex-rs.
 [unix]
 [no-cd]
-[positional-arguments]
 argument-comment-lint *args:
     if [ "$#" -eq 0 ]; then \
       bazel build --config=argument-comment-lint -- $({{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh); \
@@ -250,22 +172,18 @@ argument-comment-lint *args:
 
 [unix]
 [no-cd]
-[positional-arguments]
 argument-comment-lint-from-source *args:
     {{ justfile_directory() }}/tools/argument-comment-lint/run.py "$@"
 
 [windows]
-[positional-arguments]
 argument-comment-lint-from-source *args:
     python {{ justfile_directory() }}/tools/argument-comment-lint/run.py @($args | Select-Object -Skip 1)
 
 # Tail logs from the state SQLite database
 [unix]
-[positional-arguments]
 log *args:
     if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"
 
 [windows]
-[positional-arguments]
 log *args:
     $forwarded_args = @($args | Select-Object -Skip 1); if ($forwarded_args.Count -gt 0 -and $forwarded_args[0] -eq "--") { $forwarded_args = @($forwarded_args | Select-Object -Skip 1) }; cargo run -p codex-state --bin logs_client -- @forwarded_args
