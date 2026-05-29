@@ -5,9 +5,11 @@ use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
 pub use codex_exec_server::EnvironmentPathRef;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
+use std::sync::Arc;
 
 pub use codex_core_skills::SkillError;
 pub use codex_core_skills::SkillLoadOutcome;
@@ -36,10 +38,13 @@ pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
+    env_path: Option<EnvironmentPathRef>,
+    local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     effective_skill_roots: Vec<PluginSkillRoot>,
 ) -> SkillsLoadInput {
     SkillsLoadInput::new(
-        config.cwd.clone(),
+        env_path,
+        local_file_system,
         effective_skill_roots,
         config.config_layer_stack.clone(),
         config.bundled_skills_enabled(),

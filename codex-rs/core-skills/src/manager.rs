@@ -24,12 +24,12 @@ use crate::system::uninstall_system_skills;
 use codex_config::SkillsConfig;
 use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::LOCAL_FS;
 
 #[derive(Clone)]
 pub struct SkillsLoadInput {
-    pub cwd: AbsolutePathBuf,
-    local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
+    pub env_path: Option<EnvironmentPathRef>,
+    /// Local user/system/plugin skill roots are read from this filesystem for now.
+    pub local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
@@ -38,7 +38,7 @@ pub struct SkillsLoadInput {
 impl std::fmt::Debug for SkillsLoadInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SkillsLoadInput")
-            .field("cwd", &self.cwd)
+            .field("env_path", &self.env_path)
             .field("has_local_file_system", &self.local_file_system.is_some())
             .field("effective_skill_roots", &self.effective_skill_roots)
             .field("config_layer_stack", &self.config_layer_stack)
@@ -49,40 +49,19 @@ impl std::fmt::Debug for SkillsLoadInput {
 
 impl SkillsLoadInput {
     pub fn new(
-        cwd: AbsolutePathBuf,
+        env_path: Option<EnvironmentPathRef>,
+        local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
         effective_skill_roots: Vec<PluginSkillRoot>,
         config_layer_stack: ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Self {
         Self {
-            cwd,
-            local_file_system: Some(Arc::clone(&LOCAL_FS)),
+            env_path,
+            local_file_system,
             effective_skill_roots,
             config_layer_stack,
             bundled_skills_enabled,
         }
-    }
-
-    #[cfg(test)]
-    fn with_local_file_system(
-        mut self,
-        local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
-    ) -> Self {
-        self.local_file_system = local_file_system;
-        self
-    }
-
-    fn authorities(
-        &self,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
-    ) -> (
-        Option<EnvironmentPathRef>,
-        Option<Arc<dyn ExecutorFileSystem>>,
-    ) {
-        (
-            fs.map(|fs| EnvironmentPathRef::new(fs, self.cwd.clone())),
-            self.local_file_system.clone(),
-        )
     }
 }
 
@@ -138,12 +117,8 @@ impl SkillsManager {
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
     /// to share a directory.
-    pub async fn skills_for_config(
-        &self,
-        input: &SkillsLoadInput,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
-    ) -> SkillLoadOutcome {
-        let roots = self.skill_roots_for_config(input, fs).await;
+    pub async fn skills_for_config(&self, input: &SkillsLoadInput) -> SkillLoadOutcome {
+        let roots = self.skill_roots_for_config(input).await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
@@ -159,15 +134,10 @@ impl SkillsManager {
         outcome
     }
 
-    pub async fn skill_roots_for_config(
-        &self,
-        input: &SkillsLoadInput,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
-    ) -> Vec<SkillRoot> {
-        let (env_path, local_file_system) = input.authorities(fs);
+    pub async fn skill_roots_for_config(&self, input: &SkillsLoadInput) -> Vec<SkillRoot> {
         let mut roots = skill_roots(
-            env_path.as_ref(),
-            local_file_system.as_ref(),
+            input.env_path.as_ref(),
+            input.local_file_system.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
             self.extra_roots(),
@@ -183,12 +153,13 @@ impl SkillsManager {
         &self,
         input: &SkillsLoadInput,
         force_reload: bool,
-        fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
-        let (env_path, local_file_system) = input.authorities(fs);
         let path_ref_cache_key = SkillsPathCacheKey {
-            env_path: env_path.clone(),
-            local_file_system: local_file_system.as_ref().map(ExecutorFileSystemRef::new),
+            env_path: input.env_path.clone(),
+            local_file_system: input
+                .local_file_system
+                .as_ref()
+                .map(ExecutorFileSystemRef::new),
         };
         if !force_reload
             && let Some(outcome) = self.cached_outcome_for_path_ref(&path_ref_cache_key)
@@ -197,8 +168,8 @@ impl SkillsManager {
         }
 
         let mut roots = skill_roots(
-            env_path.as_ref(),
-            local_file_system.as_ref(),
+            input.env_path.as_ref(),
+            input.local_file_system.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
             self.extra_roots(),

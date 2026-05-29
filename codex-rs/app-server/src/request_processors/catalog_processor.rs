@@ -513,15 +513,17 @@ impl CatalogRequestProcessor {
             .await;
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let fs = self
-            .thread_manager
-            .environment_manager()
-            .default_environment()
-            .map(|environment| environment.get_filesystem());
+        let environment_manager = self.thread_manager.environment_manager();
+        // TODO: Reintroduce env-scoped `skills/list` only after cwd/config-layer discovery can run
+        // against the selected environment and the design decides which non-repo roots stay local
+        // versus follow that environment.
+        let selected_environment = environment_manager.default_environment();
+        let local_file_system = Some(Arc::clone(&codex_exec_server::LOCAL_FS));
         let mut data = futures::stream::iter(cwds.into_iter().enumerate())
             .map(|(index, cwd)| {
                 let config = &config;
-                let fs = fs.clone();
+                let local_file_system = local_file_system.clone();
+                let selected_environment = selected_environment.clone();
                 let plugins_manager = &plugins_manager;
                 let skills_manager = &skills_manager;
                 async move {
@@ -554,13 +556,19 @@ impl CatalogRequestProcessor {
                         Vec::new()
                     };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        cwd_abs.clone(),
+                        selected_environment.as_ref().map(|environment| {
+                            codex_exec_server::EnvironmentPathRef::new(
+                                environment.get_filesystem(),
+                                cwd_abs.clone(),
+                            )
+                        }),
+                        local_file_system,
                         effective_skill_roots,
                         config_layer_stack,
                         config.bundled_skills_enabled(),
                     );
                     let outcome = skills_manager
-                        .skills_for_cwd(&skills_input, force_reload, fs)
+                        .skills_for_cwd(&skills_input, force_reload)
                         .await;
                     let errors = errors_to_info(&outcome.errors);
                     let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
