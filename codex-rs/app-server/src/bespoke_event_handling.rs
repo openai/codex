@@ -70,6 +70,7 @@ use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnAttribution;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
@@ -165,6 +166,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     started_at: payload.started_at,
                     completed_at: None,
                     duration_ms: None,
+                    attribution: None,
                 });
                 turn.items.clear();
                 turn.items_view = TurnItemsView::NotLoaded;
@@ -188,6 +190,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             handle_turn_complete(
                 conversation_id,
+                &conversation,
                 event_turn_id,
                 turn_complete_event,
                 &outgoing,
@@ -1120,6 +1123,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             handle_turn_interrupted(
                 conversation_id,
+                &conversation,
                 event_turn_id,
                 turn_aborted_event,
                 &outgoing,
@@ -1292,6 +1296,7 @@ async fn emit_turn_completed_with_status(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_completion_metadata: TurnCompletionMetadata,
+    attribution: Option<TurnAttribution>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let notification = TurnCompletedNotification {
@@ -1305,6 +1310,7 @@ async fn emit_turn_completed_with_status(
             started_at: turn_completion_metadata.started_at,
             completed_at: turn_completion_metadata.completed_at,
             duration_ms: turn_completion_metadata.duration_ms,
+            attribution,
         },
     };
     outgoing
@@ -1468,12 +1474,14 @@ async fn find_and_remove_turn_summary(
 
 async fn handle_turn_complete(
     conversation_id: ThreadId,
+    conversation: &Arc<CodexThread>,
     event_turn_id: String,
     turn_complete_event: TurnCompleteEvent,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let attribution = conversation.take_turn_attribution(&event_turn_id);
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
@@ -1490,6 +1498,7 @@ async fn handle_turn_complete(
             completed_at: turn_complete_event.completed_at,
             duration_ms: turn_complete_event.duration_ms,
         },
+        attribution,
         outgoing,
     )
     .await;
@@ -1497,12 +1506,14 @@ async fn handle_turn_complete(
 
 async fn handle_turn_interrupted(
     conversation_id: ThreadId,
+    conversation: &Arc<CodexThread>,
     event_turn_id: String,
     turn_aborted_event: TurnAbortedEvent,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let attribution = conversation.take_turn_attribution(&event_turn_id);
 
     emit_turn_completed_with_status(
         conversation_id,
@@ -1514,6 +1525,7 @@ async fn handle_turn_interrupted(
             completed_at: turn_aborted_event.completed_at,
             duration_ms: turn_aborted_event.duration_ms,
         },
+        attribution,
         outgoing,
     )
     .await;

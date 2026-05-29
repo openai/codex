@@ -299,6 +299,7 @@ fn sample_turn_start_response(turn_id: &str) -> ClientResponsePayload {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+            attribution: None,
         },
     })
 }
@@ -315,6 +316,7 @@ fn sample_turn_started_notification(thread_id: &str, turn_id: &str) -> ServerNot
             started_at: Some(455),
             completed_at: None,
             duration_ms: None,
+            attribution: None,
         },
     })
 }
@@ -354,6 +356,7 @@ fn sample_turn_completed_notification(
             started_at: None,
             completed_at: Some(456),
             duration_ms: Some(1234),
+            attribution: None,
         },
     })
 }

@@ -1185,6 +1185,7 @@ impl From<PendingTurn> for Turn {
             started_at: value.started_at,
             completed_at: value.completed_at,
             duration_ms: value.duration_ms,
+            attribution: None,
         }
     }
 }
@@ -1200,6 +1201,7 @@ impl From<&PendingTurn> for Turn {
             started_at: value.started_at,
             completed_at: value.completed_at,
             duration_ms: value.duration_ms,
+            attribution: None,
         }
     }
 }
@@ -1587,6 +1589,7 @@ mod tests {
                 completed_at: None,
                 duration_ms: None,
                 items_view: TurnItemsView::Full,
+                attribution: None,
                 items: vec![
                     ThreadItem::UserMessage {
                         id: "item-1".into(),
@@ -2947,6 +2950,7 @@ mod tests {
                 completed_at: None,
                 duration_ms: None,
                 items_view: TurnItemsView::Full,
+                attribution: None,
                 items: Vec::new(),
             }]
         );
@@ -3218,6 +3222,7 @@ mod tests {
                 completed_at: None,
                 duration_ms: None,
                 items_view: TurnItemsView::Full,
+                attribution: None,
                 items: vec![ThreadItem::UserMessage {
                     id: "item-1".into(),
                     client_id: None,

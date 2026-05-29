@@ -1874,6 +1874,17 @@
     },
     "Turn": {
       "properties": {
+        "attribution": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TurnAttribution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Skills, plugins, apps, and tools observed during this turn."
+        },
         "completedAt": {
           "description": "Unix timestamp (in seconds) when the turn completed.",
           "format": "int64",
@@ -1939,6 +1950,64 @@
       ],
       "type": "object"
     },
+    "TurnAppAttribution": {
+      "properties": {
+        "appName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connectorId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invokeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TurnAttribution": {
+      "properties": {
+        "apps": {
+          "items": {
+            "$ref": "#/definitions/TurnAppAttribution"
+          },
+          "type": "array"
+        },
+        "plugins": {
+          "items": {
+            "$ref": "#/definitions/TurnPluginAttribution"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/definitions/TurnSkillAttribution"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/definitions/TurnToolAttribution"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "apps",
+        "plugins",
+        "skills",
+        "tools"
+      ],
+      "type": "object"
+    },
     "TurnError": {
       "properties": {
         "additionalDetails": {
@@ -1992,6 +2061,64 @@
         }
       ]
     },
+    "TurnPluginAttribution": {
+      "properties": {
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "marketplaceName": {
+          "type": "string"
+        },
+        "pluginId": {
+          "type": "string"
+        },
+        "pluginName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplaceName",
+        "pluginId",
+        "pluginName"
+      ],
+      "type": "object"
+    },
+    "TurnSkillAttribution": {
+      "properties": {
+        "invokeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skillId": {
+          "type": "string"
+        },
+        "skillName": {
+          "type": "string"
+        },
+        "skillScope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "skillId",
+        "skillName"
+      ],
+      "type": "object"
+    },
     "TurnStatus": {
       "enum": [
         "completed",
@@ -2000,6 +2127,39 @@
         "inProgress"
       ],
       "type": "string"
+    },
+    "TurnToolAttribution": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
     },
     "TurnsPage": {
       "properties": {

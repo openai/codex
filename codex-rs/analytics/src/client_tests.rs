@@ -7,18 +7,24 @@ use crate::events::SkillInvocationEventParams;
 use crate::events::SkillInvocationEventRequest;
 use crate::events::TrackEventRequest;
 use crate::facts::AnalyticsFact;
+use crate::facts::AppInvocation;
 use crate::facts::InvocationType;
+use crate::facts::SkillInvocation;
+use crate::facts::TrackEventsContext;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
@@ -28,8 +34,12 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+use codex_plugin::PluginId;
+use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -81,7 +91,13 @@ fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsFac
         app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
         plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
     };
-    (AnalyticsEventsClient { queue: Some(queue) }, receiver)
+    (
+        AnalyticsEventsClient {
+            queue: Some(queue),
+            turn_attributions: Arc::new(Mutex::new(HashMap::new())),
+        },
+        receiver,
+    )
 }
 
 fn sample_turn_start_request() -> ClientRequest {
@@ -206,6 +222,7 @@ fn sample_turn_start_response() -> ClientResponsePayload {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+            attribution: None,
         },
     })
 }
@@ -264,6 +281,67 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn records_turn_attribution_for_skill_plugin_app_and_tool() {
+    let client = AnalyticsEventsClient::disabled();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+
+    client.track_skill_invocations(
+        tracking.clone(),
+        vec![SkillInvocation {
+            skill_name: "build-helper".to_string(),
+            skill_scope: SkillScope::User,
+            skill_path: "/repo/.codex/skills/build-helper/SKILL.md".into(),
+            plugin_id: Some("plugin@example".to_string()),
+            invocation_type: InvocationType::Explicit,
+        }],
+    );
+    client.track_plugin_used(
+        tracking.clone(),
+        PluginTelemetryMetadata {
+            plugin_id: PluginId::new("plugin".to_string(), "example".to_string()).unwrap(),
+            remote_plugin_id: None,
+            capability_summary: None,
+        },
+    );
+    client.track_app_used(
+        tracking.clone(),
+        AppInvocation {
+            connector_id: Some("calendar".to_string()),
+            app_name: Some("Calendar".to_string()),
+            invocation_type: Some(InvocationType::Implicit),
+        },
+    );
+    client.track_notification(ServerNotification::ItemStarted(ItemStartedNotification {
+        item: ThreadItem::WebSearch {
+            id: "tool-1".to_string(),
+            query: "docs".to_string(),
+            action: None,
+        },
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        started_at_ms: 123,
+    }));
+
+    let attribution = client.take_turn_attribution("turn-1").unwrap();
+    assert_eq!(attribution.skills.len(), 1);
+    assert_eq!(attribution.skills[0].skill_name, "build-helper");
+    assert_eq!(attribution.plugins.len(), 1);
+    assert_eq!(attribution.plugins[0].plugin_id, "plugin@example");
+    assert_eq!(attribution.apps.len(), 1);
+    assert_eq!(
+        attribution.apps[0].connector_id.as_deref(),
+        Some("calendar")
+    );
+    assert_eq!(attribution.tools.len(), 1);
+    assert_eq!(attribution.tools[0].kind, "web_search");
+    assert!(client.take_turn_attribution("turn-1").is_none());
 }
 
 #[test]

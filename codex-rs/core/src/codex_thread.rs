@@ -138,6 +138,17 @@ impl CodexThread {
         self.codex.session.services.session_telemetry.clone()
     }
 
+    pub fn take_turn_attribution(
+        &self,
+        turn_id: &str,
+    ) -> Option<codex_app_server_protocol::TurnAttribution> {
+        self.codex
+            .session
+            .services
+            .analytics_events_client
+            .take_turn_attribution(turn_id)
+    }
+
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
     }

@@ -169,6 +169,10 @@ pub struct Turn {
     /// Duration between turn start and completion in milliseconds, if known.
     #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
+    /// Skills, plugins, apps, and tools observed during this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub attribution: Option<TurnAttribution>,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -182,6 +186,66 @@ pub enum TurnItemsView {
     /// `items` contains every ThreadItem available from persisted app-server history for this turn.
     #[default]
     Full,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnAttribution {
+    pub skills: Vec<TurnSkillAttribution>,
+    pub plugins: Vec<TurnPluginAttribution>,
+    pub apps: Vec<TurnAppAttribution>,
+    pub tools: Vec<TurnToolAttribution>,
+}
+
+impl TurnAttribution {
+    pub fn is_empty(&self) -> bool {
+        self.skills.is_empty()
+            && self.plugins.is_empty()
+            && self.apps.is_empty()
+            && self.tools.is_empty()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnSkillAttribution {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub skill_scope: Option<String>,
+    pub plugin_id: Option<String>,
+    pub invoke_type: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPluginAttribution {
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub marketplace_name: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnAppAttribution {
+    pub connector_id: Option<String>,
+    pub app_name: Option<String>,
+    pub invoke_type: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnToolAttribution {
+    pub id: String,
+    pub kind: String,
+    pub name: Option<String>,
+    pub server: Option<String>,
+    pub plugin_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
