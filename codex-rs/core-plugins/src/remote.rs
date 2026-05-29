@@ -489,9 +489,17 @@ struct RemotePluginMutationResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct RemoteTemplateConnectorIdsResponse {
+struct RemoteWorkspaceConnectorDirectoryResponse {
     #[serde(default)]
-    connector_ids: Vec<String>,
+    apps: Vec<RemoteWorkspaceConnectorDirectoryApp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RemoteWorkspaceConnectorDirectoryApp {
+    id: String,
+    #[serde(alias = "templateId")]
+    template_id: Option<String>,
+    visibility: Option<String>,
 }
 
 pub async fn fetch_remote_marketplaces(
@@ -1453,11 +1461,20 @@ async fn fetch_template_connector_ids(
     auth: &CodexAuth,
     template_id: &str,
 ) -> Result<Vec<String>, RemotePluginCatalogError> {
-    let url = remote_template_connector_ids_url(config, template_id)?;
+    let url = remote_workspace_connector_directory_url(config)?;
     let client = build_reqwest_client();
     let request = authenticated_request(client.get(&url), auth)?;
-    let response: RemoteTemplateConnectorIdsResponse = send_and_decode(request, &url).await?;
-    Ok(response.connector_ids)
+    let response: RemoteWorkspaceConnectorDirectoryResponse =
+        send_and_decode(request, &url).await?;
+    Ok(response
+        .apps
+        .into_iter()
+        .filter(|app| {
+            app.template_id.as_deref() == Some(template_id)
+                && !matches!(app.visibility.as_deref(), Some("HIDDEN"))
+        })
+        .map(|app| app.id)
+        .collect())
 }
 
 fn remote_plugin_skill_detail_url(
@@ -1481,9 +1498,8 @@ fn remote_plugin_skill_detail_url(
     Ok(url.to_string())
 }
 
-fn remote_template_connector_ids_url(
+fn remote_workspace_connector_directory_url(
     config: &RemotePluginServiceConfig,
-    template_id: &str,
 ) -> Result<String, RemotePluginCatalogError> {
     let mut url = Url::parse(config.chatgpt_base_url.trim_end_matches('/'))
         .map_err(RemotePluginCatalogError::InvalidBaseUrl)?;
@@ -1492,11 +1508,11 @@ fn remote_template_connector_ids_url(
             .path_segments_mut()
             .map_err(|()| RemotePluginCatalogError::InvalidBaseUrlPath)?;
         segments.pop_if_empty();
-        segments.push("ps");
         segments.push("connectors");
-        segments.push("by_template_id");
-        segments.push(template_id);
+        segments.push("directory");
+        segments.push("list_workspace");
     }
+    url.set_query(Some("external_logos=true"));
     Ok(url.to_string())
 }
 

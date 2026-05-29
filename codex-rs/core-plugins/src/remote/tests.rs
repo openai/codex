@@ -26,13 +26,16 @@ fn app(id: &str) -> AppConnectorId {
 async fn resolve_remote_plugin_app_ids_expands_templates_and_dedupes_stably() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path(
-            "/backend-api/ps/connectors/by_template_id/templated_apps_GitHubEnterprise",
-        ))
+        .and(path("/backend-api/connectors/directory/list_workspace"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"{"connector_ids":["connector_ghe","asdk_app_ghe","connector_ghe"]}"#,
+            r#"{"apps":[
+                {"id":"connector_ghe","template_id":"templated_apps_GitHubEnterprise"},
+                {"id":"asdk_app_ghe","template_id":"templated_apps_GitHubEnterprise"},
+                {"id":"asdk_app_other","template_id":"templated_apps_Other"},
+                {"id":"asdk_app_hidden","template_id":"templated_apps_GitHubEnterprise","visibility":"HIDDEN"}
+            ]}"#,
         ))
         .mount(&server)
         .await;
@@ -63,12 +66,12 @@ async fn resolve_remote_plugin_app_ids_expands_templates_and_dedupes_stably() {
 async fn resolve_remote_plugin_app_ids_drops_missing_template_mappings() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path(
-            "/backend-api/ps/connectors/by_template_id/templated_apps_GitHubEnterprise",
-        ))
+        .and(path("/backend-api/connectors/directory/list_workspace"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"connector_ids":[]}"#))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"apps":[{"id":"asdk_app_other","template_id":"templated_apps_Other"}]}"#,
+        ))
         .mount(&server)
         .await;
 
@@ -86,9 +89,7 @@ async fn resolve_remote_plugin_app_ids_drops_missing_template_mappings() {
 async fn resolve_remote_plugin_app_ids_drops_templates_when_lookup_fails() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path(
-            "/backend-api/ps/connectors/by_template_id/templated_apps_GitHubEnterprise",
-        ))
+        .and(path("/backend-api/connectors/directory/list_workspace"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
         .respond_with(ResponseTemplate::new(500).set_body_string("lookup failed"))

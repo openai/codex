@@ -1165,7 +1165,7 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
 }
 
 #[tokio::test]
-async fn tool_suggest_connector_ids_include_configured_tool_suggest_discoverables() {
+async fn tool_suggest_connector_selection_includes_configured_tool_suggest_discoverables() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -1186,13 +1186,18 @@ discoverables = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config, None).await,
-        HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
+        tool_suggest_connector_selection(&config).await,
+        ToolSuggestConnectorSelection {
+            connector_ids: HashSet::from(
+                ["connector_2128aebfecb84f64a069897515042a44".to_string()]
+            ),
+            ..ToolSuggestConnectorSelection::default()
+        }
     );
 }
 
 #[tokio::test]
-async fn tool_suggest_connector_ids_exclude_disabled_tool_suggestions() {
+async fn tool_suggest_connector_selection_excludes_disabled_tool_suggestions() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -1215,27 +1220,17 @@ disabled_tools = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config, None).await,
-        HashSet::from(["connector_gmail".to_string()])
+        tool_suggest_connector_selection(&config).await,
+        ToolSuggestConnectorSelection {
+            connector_ids: HashSet::from(["connector_gmail".to_string()]),
+            disabled_connector_ids: HashSet::from(["connector_calendar".to_string()]),
+            ..ToolSuggestConnectorSelection::default()
+        }
     );
 }
 
 #[tokio::test]
-async fn tool_suggest_connector_ids_resolve_template_connectors() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(
-            "/backend-api/ps/connectors/by_template_id/templated_apps_Databricks",
-        ))
-        .and(header("authorization", "Bearer Access Token"))
-        .and(header("chatgpt-account-id", "account_id"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"connector_ids":["asdk_app_databricks_workspace"]}"#),
-        )
-        .mount(&server)
-        .await;
-
+async fn tool_suggest_connector_selection_tracks_template_connectors_separately() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -1247,17 +1242,18 @@ discoverables = [
 "#,
     )
     .expect("write config");
-    let mut config = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .build()
         .await
         .expect("config should load");
-    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     assert_eq!(
-        tool_suggest_connector_ids(&config, Some(&auth)).await,
-        HashSet::from(["asdk_app_databricks_workspace".to_string()])
+        tool_suggest_connector_selection(&config).await,
+        ToolSuggestConnectorSelection {
+            template_ids: HashSet::from(["templated_apps_Databricks".to_string()]),
+            ..ToolSuggestConnectorSelection::default()
+        }
     );
 }
 
@@ -1265,15 +1261,24 @@ discoverables = [
 async fn tool_suggest_resolves_template_connectors_before_returning_install_entries() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path(
-            "/backend-api/ps/connectors/by_template_id/templated_apps_Databricks",
-        ))
+        .and(path("/backend-api/connectors/directory/list_workspace"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"connector_ids":["asdk_app_databricks_workspace"]}"#),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"apps":[
+                {
+                    "id":"asdk_app_databricks_workspace",
+                    "name":"Databricks Workspace",
+                    "description":"Query Databricks",
+                    "template_id":"templated_apps_Databricks"
+                },
+                {
+                    "id":"asdk_app_other",
+                    "name":"Other",
+                    "template_id":"templated_apps_Other"
+                }
+            ]}"#,
+        ))
         .mount(&server)
         .await;
 
@@ -1306,29 +1311,57 @@ discoverables = [
 
     assert_eq!(
         discoverable_tools,
-        vec![DiscoverableTool::from(plugin_connector_to_app_info(
-            "asdk_app_databricks_workspace".to_string(),
-        ))]
+        vec![DiscoverableTool::from(AppInfo {
+            id: "asdk_app_databricks_workspace".to_string(),
+            name: "Databricks Workspace".to_string(),
+            description: Some("Query Databricks".to_string()),
+            install_url: Some(connector_install_url(
+                "Databricks Workspace",
+                "asdk_app_databricks_workspace",
+            )),
+            ..app("asdk_app_databricks_workspace")
+        })]
     );
 }
 
 #[tokio::test]
-async fn template_directory_connector_metadata_is_carried_to_resolved_connector() {
+async fn tool_suggest_returns_all_resolved_connectors_for_template() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path(
-            "/backend-api/ps/connectors/by_template_id/templated_apps_Databricks",
-        ))
+        .and(path("/backend-api/connectors/directory/list_workspace"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"connector_ids":["asdk_app_databricks_workspace"]}"#),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"apps":[
+                {
+                    "id":"asdk_app_databricks_a",
+                    "name":"Databricks A",
+                    "template_id":"templated_apps_Databricks"
+                },
+                {
+                    "id":"asdk_app_databricks_b",
+                    "name":"Databricks B",
+                    "template_id":"templated_apps_Databricks"
+                }
+            ]}"#,
+        ))
         .mount(&server)
         .await;
 
     let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+apps = true
+
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "templated_apps_Databricks" }
+]
+"#,
+    )
+    .expect("write config");
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .build()
@@ -1337,34 +1370,33 @@ async fn template_directory_connector_metadata_is_carried_to_resolved_connector(
     config.chatgpt_base_url = format!("{}/backend-api", server.uri());
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
-    let resolved = resolve_template_directory_connectors(
-        &config,
-        Some(&auth),
-        vec![AppInfo {
-            id: "templated_apps_Databricks".to_string(),
-            name: "Databricks".to_string(),
-            description: Some("Query Databricks".to_string()),
-            install_url: Some(connector_install_url(
-                "Databricks",
-                "templated_apps_Databricks",
-            )),
-            ..app("templated_apps_Databricks")
-        }],
-    )
-    .await;
+    let discoverable_tools =
+        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[], &[])
+            .await
+            .expect("discoverable tools should load");
 
     assert_eq!(
-        resolved,
-        vec![AppInfo {
-            id: "asdk_app_databricks_workspace".to_string(),
-            name: "Databricks".to_string(),
-            description: Some("Query Databricks".to_string()),
-            install_url: Some(connector_install_url(
-                "Databricks",
-                "asdk_app_databricks_workspace",
-            )),
-            ..app("asdk_app_databricks_workspace")
-        }]
+        discoverable_tools,
+        vec![
+            DiscoverableTool::from(AppInfo {
+                id: "asdk_app_databricks_a".to_string(),
+                name: "Databricks A".to_string(),
+                install_url: Some(connector_install_url(
+                    "Databricks A",
+                    "asdk_app_databricks_a",
+                )),
+                ..app("asdk_app_databricks_a")
+            }),
+            DiscoverableTool::from(AppInfo {
+                id: "asdk_app_databricks_b".to_string(),
+                name: "Databricks B".to_string(),
+                install_url: Some(connector_install_url(
+                    "Databricks B",
+                    "asdk_app_databricks_b",
+                )),
+                ..app("asdk_app_databricks_b")
+            }),
+        ]
     );
 }
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
@@ -77,6 +78,8 @@ pub struct DirectoryApp {
     logo_url_dark: Option<String>,
     #[serde(alias = "distributionChannel")]
     distribution_channel: Option<String>,
+    #[serde(alias = "templateId")]
+    template_id: Option<String>,
     visibility: Option<String>,
 }
 
@@ -152,16 +155,7 @@ where
         .into_iter()
         .map(directory_app_to_app_info)
         .collect::<Vec<_>>();
-    for connector in &mut connectors {
-        let install_url = match connector.install_url.take() {
-            Some(install_url) => install_url,
-            None => connector_install_url(&connector.name, &connector.id),
-        };
-        connector.name = normalize_connector_name(&connector.name, &connector.id);
-        connector.description = normalize_connector_value(connector.description.as_deref());
-        connector.install_url = Some(install_url);
-        connector.is_accessible = false;
-    }
+    normalize_directory_app_infos(&mut connectors);
     connectors.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
@@ -248,6 +242,35 @@ where
     }
 }
 
+pub async fn list_workspace_template_connectors<F, Fut>(
+    template_ids: &HashSet<String>,
+    mut fetch_page: F,
+) -> anyhow::Result<Vec<AppInfo>>
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = anyhow::Result<DirectoryListResponse>>,
+{
+    let mut connectors = list_workspace_connectors(&mut fetch_page)
+        .await?
+        .into_iter()
+        .filter(|app| {
+            app.template_id
+                .as_deref()
+                .is_some_and(|template_id| template_ids.contains(template_id))
+        })
+        .map(directory_app_to_app_info)
+        .collect::<Vec<_>>();
+    for connector in &mut connectors {
+        normalize_directory_app_info(connector);
+    }
+    connectors.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(connectors)
+}
+
 fn merge_directory_apps(apps: Vec<DirectoryApp>) -> Vec<DirectoryApp> {
     let mut merged: HashMap<String, DirectoryApp> = HashMap::new();
     for app in apps {
@@ -271,6 +294,7 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
         logo_url,
         logo_url_dark,
         distribution_channel,
+        template_id,
         visibility: _,
     } = incoming;
 
@@ -295,6 +319,9 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
     }
     if existing.distribution_channel.is_none() && distribution_channel.is_some() {
         existing.distribution_channel = distribution_channel;
+    }
+    if existing.template_id.is_none() && template_id.is_some() {
+        existing.template_id = template_id;
     }
 
     if let Some(incoming_branding) = branding {
@@ -422,6 +449,23 @@ fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
     }
 }
 
+fn normalize_directory_app_infos(connectors: &mut [AppInfo]) {
+    for connector in connectors {
+        normalize_directory_app_info(connector);
+    }
+}
+
+fn normalize_directory_app_info(connector: &mut AppInfo) {
+    let install_url = match connector.install_url.take() {
+        Some(install_url) => install_url,
+        None => connector_install_url(&connector.name, &connector.id),
+    };
+    connector.name = normalize_connector_name(&connector.name, &connector.id);
+    connector.description = normalize_connector_value(connector.description.as_deref());
+    connector.install_url = Some(install_url);
+    connector.is_accessible = false;
+}
+
 fn connector_install_url(name: &str, connector_id: &str) -> String {
     let slug = connector_name_slug(name);
     format!("https://chatgpt.com/apps/{slug}/{connector_id}")
@@ -504,6 +548,7 @@ mod tests {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            template_id: None,
             visibility: None,
         }
     }
