@@ -125,13 +125,8 @@ pub(crate) fn resolve_multi_agent_version(
             ..
         }) => Some(MultiAgentVersion::V2),
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            depth,
-            agent_path: None,
-            ..
-        }) if *depth < config.agent_max_depth => Some(MultiAgentVersion::V1),
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             agent_path: None, ..
-        }) => None,
+        }) => Some(MultiAgentVersion::V1),
         _ => model_info.multi_agent_version.or_else(|| {
             if config.features.enabled(Feature::MultiAgentV2) {
                 Some(MultiAgentVersion::V2)
