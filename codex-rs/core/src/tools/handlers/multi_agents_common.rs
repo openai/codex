@@ -8,14 +8,12 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::CollabAgentRef;
@@ -212,12 +210,8 @@ pub(crate) fn build_agent_spawn_config(
     Ok(config)
 }
 
-pub(crate) fn build_agent_resume_config(
-    turn: &TurnContext,
-    child_depth: i32,
-) -> Result<Config, FunctionCallError> {
+pub(crate) fn build_agent_resume_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
-    apply_spawn_agent_overrides(&mut config, child_depth, turn.multi_agent_version);
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     Ok(config)
@@ -279,17 +273,6 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
             FunctionCallError::RespondToModel(format!("permission_profile is invalid: {err}"))
         })?;
     Ok(())
-}
-
-pub(crate) fn apply_spawn_agent_overrides(
-    config: &mut Config,
-    child_depth: i32,
-    multi_agent_version: Option<MultiAgentVersion>,
-) {
-    if child_depth >= config.agent_max_depth && multi_agent_version != Some(MultiAgentVersion::V2) {
-        let _ = config.features.disable(Feature::SpawnCsv);
-        let _ = config.features.disable(Feature::Collab);
-    }
 }
 
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(

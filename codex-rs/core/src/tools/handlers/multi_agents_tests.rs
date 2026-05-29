@@ -4282,7 +4282,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
 
-    let config = build_agent_resume_config(&turn, /*child_depth*/ 0).expect("resume config");
+    let config = build_agent_resume_config(&turn).expect("resume config");
 
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;

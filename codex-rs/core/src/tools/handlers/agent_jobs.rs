@@ -90,7 +90,6 @@ struct ReportAgentJobResultToolResult {
 struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
-    multi_agent_version: Option<MultiAgentVersion>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,16 +120,14 @@ async fn build_runner_options(
             "agent depth limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    let max_threads = if turn.multi_agent_version == Some(MultiAgentVersion::V2) {
-        Some(
+    let max_threads = (turn.multi_agent_version == Some(MultiAgentVersion::V2))
+        .then(|| {
             turn.config
                 .multi_agent_v2
                 .max_concurrent_threads_per_session
-                .saturating_sub(1),
-        )
-    } else {
-        turn.config.agent_max_threads
-    };
+                .saturating_sub(1)
+        })
+        .or(turn.config.agent_max_threads);
     if max_threads == Some(0) {
         return Err(FunctionCallError::RespondToModel(
             "agent thread limit reached; this session cannot spawn more subagents".to_string(),
@@ -142,7 +139,6 @@ async fn build_runner_options(
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
-        multi_agent_version: turn.multi_agent_version,
     })
 }
 
@@ -224,7 +220,6 @@ async fn run_agent_job_loop(
                         )))),
                         SpawnAgentOptions {
                             environments: Some(turn.environments.to_selections()),
-                            multi_agent_version: options.multi_agent_version,
                             ..Default::default()
                         },
                     )
