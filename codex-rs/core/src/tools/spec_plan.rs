@@ -292,23 +292,11 @@ fn code_mode_only_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
-    multi_agent_version(turn_context) == Some(MultiAgentVersion::V2)
+    turn_context.multi_agent_version == Some(MultiAgentVersion::V2)
 }
 
 fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
-    multi_agent_version(turn_context).is_some()
-}
-
-fn multi_agent_version(turn_context: &TurnContext) -> Option<MultiAgentVersion> {
-    turn_context.model_info.multi_agent_version.or_else(|| {
-        if turn_context.features.get().enabled(Feature::MultiAgentV2) {
-            Some(MultiAgentVersion::V2)
-        } else if turn_context.features.get().enabled(Feature::Collab) {
-            Some(MultiAgentVersion::V1)
-        } else {
-            None
-        }
-    })
+    turn_context.multi_agent_version.is_some()
 }
 
 fn goal_tools_enabled(turn_context: &TurnContext) -> bool {

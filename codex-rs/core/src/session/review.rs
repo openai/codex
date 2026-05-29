@@ -1,4 +1,5 @@
 use super::*;
+use crate::multi_agent_version::resolve_multi_agent_version;
 use crate::tool_mode::resolve_tool_mode;
 use std::sync::atomic::AtomicBool;
 
@@ -49,6 +50,7 @@ pub(super) async fn spawn_review_thread(
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
     let tool_mode = resolve_tool_mode(&model_info, &per_turn_config.features);
+    let multi_agent_version = resolve_multi_agent_version(&model_info, &per_turn_config.features);
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -99,6 +101,7 @@ pub(super) async fn spawn_review_thread(
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
         tool_mode,
+        multi_agent_version,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,

@@ -2,11 +2,13 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::multi_agent_version::resolve_multi_agent_version;
 use crate::tool_mode::resolve_tool_mode;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -58,6 +60,7 @@ pub struct TurnContext {
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
     pub(crate) tool_mode: ToolMode,
+    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -184,6 +187,7 @@ impl TurnContext {
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
         let tool_mode = resolve_tool_mode(&model_info, &config.features);
+        let multi_agent_version = resolve_multi_agent_version(&model_info, &config.features);
         let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
@@ -225,6 +229,7 @@ impl TurnContext {
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
             tool_mode,
+            multi_agent_version,
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -489,6 +494,8 @@ impl Session {
 
         let mut per_turn_config = per_turn_config;
         let tool_mode = resolve_tool_mode(&model_info, &per_turn_config.features);
+        let multi_agent_version =
+            resolve_multi_agent_version(&model_info, &per_turn_config.features);
         per_turn_config.service_tier = get_service_tier(
             per_turn_config.service_tier,
             per_turn_config.features.enabled(Feature::FastMode),
@@ -516,6 +523,7 @@ impl Session {
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
             tool_mode,
+            multi_agent_version,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             reasoning_effort,
