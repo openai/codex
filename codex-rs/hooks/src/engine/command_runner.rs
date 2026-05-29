@@ -443,7 +443,7 @@ mod tests {
 
     fn print_command(output: &str) -> String {
         if cfg!(windows) {
-            format!("<nul set /p={output} & exit /B 0")
+            format!("powershell -NoLogo -NoProfile -Command \"[Console]::Out.Write('{output}')\"")
         } else {
             format!("printf {output}")
         }
@@ -452,7 +452,7 @@ mod tests {
     fn echo_stdin_to_stdout_and_stderr_with_exit_code(exit_code: i32) -> String {
         if cfg!(windows) {
             format!(
-                "set /p input= & <nul set /p=%input% & <nul set /p=stderr 1>&2 & exit /B {exit_code}"
+                "powershell -NoLogo -NoProfile -Command \"$hookInput = [Console]::In.ReadToEnd(); [Console]::Out.Write($hookInput); [Console]::Error.Write('stderr'); exit {exit_code}\""
             )
         } else {
             format!("cat; printf stderr >&2; exit {exit_code}")
