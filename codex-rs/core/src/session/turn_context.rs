@@ -506,6 +506,7 @@ impl Session {
             session_id.to_string(),
             thread_id.to_string(),
             session_configuration.forked_from_thread_id,
+            &session_configuration.session_source,
             session_configuration.thread_source,
             sub_id.clone(),
             cwd.clone(),

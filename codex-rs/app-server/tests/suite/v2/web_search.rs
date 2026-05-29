@@ -140,6 +140,7 @@ async fn standalone_web_search_round_trips_encrypted_output() -> Result<()> {
     );
 
     let search_body = search_request_body(&server).await?;
+    assert_eq!(search_body["model"], json!("mock-model"));
     assert_eq!(
         search_body["commands"],
         json!({
