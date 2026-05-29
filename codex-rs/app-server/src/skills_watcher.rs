@@ -9,12 +9,14 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::skills::SkillsLoadInput;
 use codex_core::skills::SkillsManager;
+use codex_exec_server::EnvironmentPathRef;
 use codex_file_watcher::FileWatcher;
 use codex_file_watcher::FileWatcherSubscriber;
 use codex_file_watcher::Receiver;
 use codex_file_watcher::ThrottledWatchReceiver;
 use codex_file_watcher::WatchPath;
 use codex_file_watcher::WatchRegistration;
+use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio_util::sync::CancellationToken;
@@ -96,24 +98,26 @@ impl SkillsWatcher {
             );
             return WatchRegistration::default();
         };
-        if environment.is_remote() {
-            return WatchRegistration::default();
-        }
 
+        let root_path_ref = (!environment.is_remote())
+            .then(|| EnvironmentPathRef::new(environment.get_filesystem(), config.cwd.clone()));
+        let local_file_system = Some(Arc::clone(&codex_exec_server::LOCAL_FS));
         let plugins_input = config.plugins_config_input();
         let plugins_manager = thread_manager.plugins_manager();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let skills_input = SkillsLoadInput::new(
-            config.cwd.clone(),
+            root_path_ref,
+            local_file_system,
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),
             config.bundled_skills_enabled(),
         );
         let roots = thread_manager
             .skills_manager()
-            .skill_roots_for_config(&skills_input, Some(environment.get_filesystem()))
+            .skill_roots_for_config(&skills_input)
             .await
             .into_iter()
+            .filter(|root| !environment.is_remote() || root.scope != SkillScope::Repo)
             .map(|root| WatchPath {
                 path: root.path.path().to_path_buf(),
                 recursive: true,
