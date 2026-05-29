@@ -277,7 +277,8 @@ impl GoalRuntimeHandle {
     }
 
     pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
-        if !self.is_enabled() {
+        if !self.tools_visible() {
+            self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
 
@@ -297,10 +298,7 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
-        let goal_id = goal.goal_id.clone();
-        self.inner
-            .accounting_state
-            .mark_idle_goal_active(goal_id.clone());
+        let expected_goal_id = goal.goal_id.clone();
         let item = continuation_steering_item(&protocol_goal_from_state(goal));
         let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
             tracing::debug!("skipping goal continuation because thread manager is unavailable");
@@ -317,7 +315,7 @@ impl GoalRuntimeHandle {
             .start_idle_turn_if_current(vec![item], move || async move {
                 match state_dbs.thread_goals().get_thread_goal(thread_id).await {
                     Ok(Some(goal))
-                        if goal.goal_id == goal_id
+                        if goal.goal_id == expected_goal_id
                             && goal.status == codex_state::ThreadGoalStatus::Active =>
                     {
                         true
@@ -335,6 +333,19 @@ impl GoalRuntimeHandle {
                 }
             })
             .await;
+
+        let current_turn_is_goal_active = self
+            .inner
+            .accounting_state
+            .current_turn_id()
+            .is_some_and(|turn_id| {
+                self.inner
+                    .accounting_state
+                    .turn_is_current_active_goal(turn_id.as_str())
+            });
+        if !current_turn_is_goal_active {
+            self.inner.accounting_state.clear_active_goal();
+        }
         Ok(())
     }
 
