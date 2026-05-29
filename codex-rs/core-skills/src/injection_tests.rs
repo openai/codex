@@ -1,10 +1,12 @@
 use super::*;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_exec_server::EnvironmentPathRef;
+use codex_exec_server::LocalFileSystem;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 fn make_skill(name: &str, path: &str) -> SkillMetadata {
     SkillMetadata {
@@ -15,6 +17,8 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         dependencies: None,
         policy: None,
         path_to_skills_md: test_path_buf(path).abs(),
+        source_path: codex_exec_server::EnvironmentPathRef::local(test_path_buf(path).abs()),
+        environment_id: "local".to_string(),
         scope: codex_protocol::protocol::SkillScope::User,
         plugin_id: None,
     }
@@ -37,7 +41,7 @@ fn linked_skill_mention(name: &str, unix_path: &str) -> String {
 fn collect_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    disabled_paths: &HashSet<EnvironmentPathRef>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
     collect_explicit_skill_mentions(inputs, skills, disabled_paths, connector_slug_counts)
@@ -204,7 +208,7 @@ fn collect_explicit_skill_mentions_skips_disabled_structured_and_blocks_plain_fa
             path: test_path_buf("/tmp/alpha"),
         },
     ];
-    let disabled = HashSet::from([test_path_buf("/tmp/alpha").abs()]);
+    let disabled = HashSet::from([EnvironmentPathRef::local(test_path_buf("/tmp/alpha").abs())]);
     let connector_counts = HashMap::new();
 
     let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);
@@ -226,6 +230,27 @@ fn collect_explicit_skill_mentions_dedupes_by_path() {
     let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
 
     assert_eq!(selected, vec![alpha]);
+}
+
+#[test]
+fn collect_explicit_skill_mentions_skips_ambiguous_same_path_across_envs() {
+    let mut devbox = make_skill("demo-skill", "/tmp/demo/SKILL.md");
+    devbox.environment_id = "devbox".to_string();
+    devbox.source_path = EnvironmentPathRef::new(
+        Arc::new(LocalFileSystem::unsandboxed()),
+        test_path_buf("/tmp/demo/SKILL.md").abs(),
+    );
+    let local = make_skill("demo-skill", "/tmp/demo/SKILL.md");
+    let skills = vec![devbox, local];
+    let inputs = vec![UserInput::Skill {
+        name: "demo-skill".to_string(),
+        path: test_path_buf("/tmp/demo/SKILL.md"),
+    }];
+    let connector_counts = HashMap::new();
+
+    let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
+
+    assert_eq!(selected, Vec::new());
 }
 
 #[test]
@@ -302,7 +327,7 @@ fn collect_explicit_skill_mentions_skips_when_linked_path_disabled() {
         text: format!("use {}", linked_skill_mention("demo-skill", "/tmp/alpha")),
         text_elements: Vec::new(),
     }];
-    let disabled = HashSet::from([test_path_buf("/tmp/alpha").abs()]);
+    let disabled = HashSet::from([EnvironmentPathRef::local(test_path_buf("/tmp/alpha").abs())]);
     let connector_counts = HashMap::new();
 
     let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);

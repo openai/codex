@@ -3,6 +3,7 @@ use super::*;
 use crate::config::ConstraintError;
 use crate::goals::GoalRuntimeState;
 use crate::skills::SkillError;
+use crate::skills_load_input;
 use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -452,16 +453,19 @@ async fn warm_plugins_and_skills_for_session_init(
         &environments,
     )
     .ok();
-    let path_ref = resolved_environments
+    let skill_environment = resolved_environments
         .as_ref()
         .and_then(crate::environment_selection::ResolvedTurnEnvironments::primary)
         .map(|environment| {
-            crate::skills::EnvironmentPathRef::new(
-                environment.environment.get_filesystem(),
-                environment.cwd.clone(),
+            (
+                environment.environment_id.clone(),
+                crate::skills::EnvironmentPathRef::new(
+                    environment.environment.get_filesystem(),
+                    environment.cwd.clone(),
+                ),
             )
         });
-    let Some(path_ref) = path_ref else {
+    let Some((environment_id, path_ref)) = skill_environment else {
         return Vec::new();
     };
     let local_file_system = environment_manager
@@ -470,9 +474,12 @@ async fn warm_plugins_and_skills_for_session_init(
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input = skills_load_input_from_config(
+    let skills_input = skills_load_input(
         config.as_ref(),
-        path_ref,
+        vec![codex_core_skills::loader::SkillEnvironment {
+            environment_id,
+            path: path_ref,
+        }],
         local_file_system,
         effective_skill_roots,
     );

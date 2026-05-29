@@ -111,7 +111,10 @@ impl SkillsWatcher {
         let plugins_manager = thread_manager.plugins_manager();
         let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
         let skills_input = SkillsLoadInput::new(
-            root_path_ref,
+            vec![codex_core::skills::loader::SkillEnvironment {
+                environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                path: root_path_ref,
+            }],
             local_file_system,
             plugin_outcome.effective_plugin_skill_roots(),
             config.config_layer_stack.clone(),

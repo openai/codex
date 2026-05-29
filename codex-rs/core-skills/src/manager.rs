@@ -16,6 +16,7 @@ use crate::build_implicit_skill_path_indexes;
 use crate::config_rules::SkillConfigRules;
 use crate::config_rules::resolve_disabled_skill_paths;
 use crate::config_rules::skill_config_rules_from_stack;
+use crate::loader::SkillEnvironment;
 use crate::loader::SkillRoot;
 use crate::loader::load_skills_from_roots;
 use crate::loader::skill_roots;
@@ -27,7 +28,7 @@ use codex_exec_server::ExecutorFileSystem;
 
 #[derive(Clone)]
 pub struct SkillsLoadInput {
-    pub env_path: EnvironmentPathRef,
+    pub env_paths: Vec<SkillEnvironment>,
     /// Local user/system/plugin skill roots are read from this filesystem for now.
     pub local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     pub effective_skill_roots: Vec<PluginSkillRoot>,
@@ -38,7 +39,7 @@ pub struct SkillsLoadInput {
 impl std::fmt::Debug for SkillsLoadInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SkillsLoadInput")
-            .field("env_path", &self.env_path)
+            .field("env_paths", &self.env_paths.len())
             .field("has_local_file_system", &self.local_file_system.is_some())
             .field("effective_skill_roots", &self.effective_skill_roots)
             .field("config_layer_stack", &self.config_layer_stack)
@@ -49,14 +50,14 @@ impl std::fmt::Debug for SkillsLoadInput {
 
 impl SkillsLoadInput {
     pub fn new(
-        env_path: EnvironmentPathRef,
+        env_paths: Vec<SkillEnvironment>,
         local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
         effective_skill_roots: Vec<PluginSkillRoot>,
         config_layer_stack: ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Self {
         Self {
-            env_path,
+            env_paths,
             local_file_system,
             effective_skill_roots,
             config_layer_stack,
@@ -136,7 +137,7 @@ impl SkillsManager {
 
     pub async fn skill_roots_for_config(&self, input: &SkillsLoadInput) -> Vec<SkillRoot> {
         let mut roots = skill_roots(
-            &input.env_path,
+            &input.env_paths,
             input.local_file_system.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
@@ -155,7 +156,7 @@ impl SkillsManager {
         force_reload: bool,
     ) -> SkillLoadOutcome {
         let path_ref_cache_key = SkillsPathCacheKey {
-            env_path: input.env_path.clone(),
+            env_paths: input.env_paths.clone(),
             local_file_system: input
                 .local_file_system
                 .as_ref()
@@ -168,7 +169,7 @@ impl SkillsManager {
         }
 
         let mut roots = skill_roots(
-            &input.env_path,
+            &input.env_paths,
             input.local_file_system.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
@@ -254,7 +255,7 @@ impl SkillsManager {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct SkillsPathCacheKey {
-    env_path: EnvironmentPathRef,
+    env_paths: Vec<SkillEnvironment>,
     local_file_system: Option<ExecutorFileSystemRef>,
 }
 
@@ -289,7 +290,7 @@ impl std::fmt::Debug for ExecutorFileSystemRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(EnvironmentPathRef, u8, Option<String>)>,
+    roots: Vec<(EnvironmentPathRef, String, u8, Option<String>)>,
     skill_config_rules: SkillConfigRules,
 }
 
@@ -329,7 +330,12 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (root.path.clone(), scope_rank, root.plugin_id.clone())
+                (
+                    root.path.clone(),
+                    root.environment_id.clone(),
+                    scope_rank,
+                    root.plugin_id.clone(),
+                )
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),
@@ -338,7 +344,7 @@ fn config_skills_cache_key(
 
 fn finalize_skill_outcome(
     mut outcome: SkillLoadOutcome,
-    disabled_paths: HashSet<AbsolutePathBuf>,
+    disabled_paths: HashSet<EnvironmentPathRef>,
 ) -> SkillLoadOutcome {
     outcome.disabled_paths = disabled_paths;
     let (by_scripts_dir, by_doc_path) =

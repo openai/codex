@@ -17,12 +17,12 @@ const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    disabled_paths: &HashSet<codex_exec_server::EnvironmentPathRef>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
         .iter()
         .map(|skill| {
-            let enabled = !disabled_paths.contains(&skill.path_to_skills_md);
+            let enabled = !disabled_paths.contains(&skill.source_path);
             codex_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
@@ -527,9 +527,16 @@ impl CatalogRequestProcessor {
                             "unknown skills/list environment id `{environment_id}`"
                         ))
                     })?;
-                Some(environment)
+                Some((environment_id, environment))
             }
-            None => environment_manager.try_local_environment(),
+            None => environment_manager
+                .try_local_environment()
+                .map(|environment| {
+                    (
+                        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                        environment,
+                    )
+                }),
         };
         let local_file_system = environment_manager
             .try_local_environment()
@@ -570,7 +577,7 @@ impl CatalogRequestProcessor {
                     } else {
                         Vec::new()
                     };
-                    let Some(environment) = selected_environment.as_ref() else {
+                    let Some((environment_id, environment)) = selected_environment.as_ref() else {
                         // Omitted `environmentId` uses the legacy implicit local target. When
                         // local exec is disabled there is no valid implicit target, so return an
                         // empty catalog rather than silently switching to the default environment.
@@ -584,10 +591,13 @@ impl CatalogRequestProcessor {
                         );
                     };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        codex_exec_server::EnvironmentPathRef::new(
-                            environment.get_filesystem(),
-                            cwd_abs.clone(),
-                        ),
+                        vec![codex_core::skills::loader::SkillEnvironment {
+                            environment_id: environment_id.clone(),
+                            path: codex_exec_server::EnvironmentPathRef::new(
+                                environment.get_filesystem(),
+                                cwd_abs.clone(),
+                            ),
+                        }],
                         local_file_system,
                         effective_skill_roots,
                         config_layer_stack,

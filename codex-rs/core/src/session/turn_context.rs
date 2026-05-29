@@ -678,14 +678,21 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
-        let path_ref = primary_turn_environment.map(|turn_environment| {
-            crate::skills::EnvironmentPathRef::new(
-                turn_environment.environment.get_filesystem(),
-                turn_environment.cwd.clone(),
+        let skill_env_paths = turn_environments
+            .turn_environments
+            .iter()
+            .map(
+                |turn_environment| codex_core_skills::loader::SkillEnvironment {
+                    environment_id: turn_environment.environment_id.clone(),
+                    path: crate::skills::EnvironmentPathRef::new(
+                        turn_environment.environment.get_filesystem(),
+                        turn_environment.cwd.clone(),
+                    ),
+                },
             )
-        });
-        let skills_outcome = if let Some(path_ref) = path_ref {
-            // Workspace/repo skill roots use the selected turn environment path above, while
+            .collect::<Vec<_>>();
+        let skills_outcome = if !skill_env_paths.is_empty() {
+            // Workspace/repo skill roots use the selected turn environment paths above, while
             // user/system/plugin skill roots still read from the available local filesystem.
             let local_file_system = self
                 .services
@@ -699,9 +706,9 @@ impl Session {
                 .plugins_for_config(&plugins_input)
                 .await;
             let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-            let skills_input = skills_load_input_from_config(
+            let skills_input = crate::skills::skills_load_input(
                 &per_turn_config,
-                path_ref,
+                skill_env_paths,
                 local_file_system,
                 effective_skill_roots,
             );

@@ -18,6 +18,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 use toml::Value as TomlValue;
 
@@ -153,6 +155,7 @@ fn local_env_path(path: AbsolutePathBuf) -> EnvironmentPathRef {
 fn local_skill_root(path: AbsolutePathBuf, scope: SkillScope) -> SkillRoot {
     SkillRoot {
         path: local_env_path(path),
+        environment_id: "local".to_string(),
         scope,
         plugin_id: None,
         plugin_root: None,
@@ -305,7 +308,10 @@ async fn skill_roots_bind_repo_and_local_roots_to_their_own_file_systems() -> an
     let local_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
     let env_path = EnvironmentPathRef::new(env_file_system.clone(), cfg.cwd.clone());
     let roots = super::skill_roots(
-        &env_path,
+        &[super::SkillEnvironment {
+            environment_id: "devbox".to_string(),
+            path: env_path.clone(),
+        }],
         Some(&local_file_system),
         &cfg.config_layer_stack,
         Vec::new(),
@@ -328,7 +334,10 @@ async fn skill_roots_bind_repo_and_local_roots_to_their_own_file_systems() -> an
     ));
 
     let roots_without_local = super::skill_roots(
-        &env_path,
+        &[super::SkillEnvironment {
+            environment_id: "devbox".to_string(),
+            path: env_path.clone(),
+        }],
         /*local_file_system*/ None,
         &cfg.config_layer_stack,
         Vec::new(),
@@ -339,6 +348,78 @@ async fn skill_roots_bind_repo_and_local_roots_to_their_own_file_systems() -> an
         roots_without_local
             .iter()
             .all(|root| root.scope == SkillScope::Repo)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_roots_bind_project_config_roots_to_primary_environment_only() -> anyhow::Result<()> {
+    let codex_home = tempfile::tempdir()?;
+    let project_root = codex_home.path().join("workspace");
+    fs::create_dir_all(project_root.join(".git"))?;
+    fs::create_dir_all(project_root.join(REPO_ROOT_CONFIG_DIR_NAME))?;
+    let cfg = make_config_for_cwd(&codex_home, project_root.clone()).await;
+
+    let primary_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+    let secondary_file_system: Arc<dyn ExecutorFileSystem> =
+        Arc::new(LocalFileSystem::unsandboxed());
+    let roots = super::skill_roots(
+        &[
+            super::SkillEnvironment {
+                environment_id: "primary".to_string(),
+                path: EnvironmentPathRef::new(primary_file_system.clone(), cfg.cwd.clone()),
+            },
+            super::SkillEnvironment {
+                environment_id: "secondary".to_string(),
+                path: EnvironmentPathRef::new(secondary_file_system, cfg.cwd.clone()),
+            },
+        ],
+        /*local_file_system*/ None,
+        &cfg.config_layer_stack,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await;
+
+    let repo_roots = roots
+        .iter()
+        .filter(|root| root.scope == SkillScope::Repo)
+        .collect::<Vec<_>>();
+    assert_eq!(repo_roots.len(), 1);
+    assert_eq!(repo_roots[0].environment_id, "primary");
+    assert!(Arc::ptr_eq(
+        &repo_roots[0].path.file_system(),
+        &primary_file_system
+    ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_roots_stop_repo_agents_walk_when_environment_probe_fails() -> anyhow::Result<()> {
+    let codex_home = tempfile::tempdir()?;
+    let cfg = make_config(&codex_home).await;
+    let remote_environment =
+        codex_exec_server::Environment::create_for_tests(Some("ws://127.0.0.1:1".to_string()))?;
+    let started = Instant::now();
+
+    let roots = super::skill_roots(
+        &[super::SkillEnvironment {
+            environment_id: "remote".to_string(),
+            path: EnvironmentPathRef::new(remote_environment.get_filesystem(), cfg.cwd.clone()),
+        }],
+        /*local_file_system*/ None,
+        &cfg.config_layer_stack,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await;
+
+    assert!(roots.is_empty());
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "repo agents discovery should stop after the first unavailable environment probe"
     );
 
     Ok(())
@@ -397,6 +478,8 @@ async fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -535,6 +618,8 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
             }),
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -591,6 +676,10 @@ interface:
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(skill_path.as_path()),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                skill_path.as_path()
+            )),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -745,6 +834,8 @@ async fn accepts_icon_paths_under_assets_dir() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -786,6 +877,8 @@ async fn ignores_invalid_brand_color() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -840,6 +933,8 @@ async fn ignores_default_prompt_over_max_length() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -882,6 +977,8 @@ async fn drops_interface_when_icons_are_invalid() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -913,6 +1010,7 @@ interface:
     let plugin_root_abs = plugin_root.abs();
     let outcome = load_skills_from_roots([SkillRoot {
         path: local_env_path(plugin_root.join("skills").abs()),
+        environment_id: "local".to_string(),
         scope: SkillScope::User,
         plugin_id: Some("twilio-developer-kit@test".to_string()),
         plugin_root: Some(local_env_path(plugin_root_abs.clone())),
@@ -942,6 +1040,8 @@ interface:
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: Some("twilio-developer-kit@test".to_string()),
         }]
@@ -969,6 +1069,7 @@ interface:
 
     let outcome = load_skills_from_roots([SkillRoot {
         path: local_env_path(plugin_root.join("skills").abs()),
+        environment_id: "local".to_string(),
         scope: SkillScope::User,
         plugin_id: Some("twilio-developer-kit@test".to_string()),
         plugin_root: Some(local_env_path(plugin_root.abs())),
@@ -990,6 +1091,8 @@ interface:
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: Some("twilio-developer-kit@test".to_string()),
         }]
@@ -1035,6 +1138,10 @@ async fn loads_skills_via_symlinked_subdir_for_user_scope() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&shared_skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                &shared_skill_path
+            )),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -1095,6 +1202,8 @@ async fn does_not_loop_on_symlink_cycle_for_user_scope() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -1131,6 +1240,10 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&shared_skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                &shared_skill_path
+            )),
+            environment_id: "local".to_string(),
             scope: SkillScope::Admin,
             plugin_id: None,
         }]
@@ -1171,6 +1284,10 @@ async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&linked_skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                &linked_skill_path
+            )),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
         }]
@@ -1235,6 +1352,10 @@ async fn respects_max_scan_depth_for_user_scope() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&within_depth_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                &within_depth_path
+            )),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -1263,6 +1384,8 @@ async fn loads_valid_skill() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -1296,6 +1419,8 @@ async fn falls_back_to_directory_name_when_skill_name_is_missing() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -1320,6 +1445,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
 
     let outcome = load_skills_from_roots([SkillRoot {
         path: local_env_path(plugin_root.join("skills").abs()),
+        environment_id: "local".to_string(),
         scope: SkillScope::User,
         plugin_id: Some("sample@test".to_string()),
         plugin_root: Some(local_env_path(plugin_root.abs())),
@@ -1341,6 +1467,8 @@ async fn namespaces_plugin_skills_using_plugin_name() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: Some("sample@test".to_string()),
         }]
@@ -1373,6 +1501,8 @@ async fn loads_short_description_from_metadata() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
         }]
@@ -1486,6 +1616,8 @@ async fn loads_skills_from_repo_root() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
         }]
@@ -1522,6 +1654,8 @@ async fn loads_skills_from_agents_dir_without_codex_dir() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
         }]
@@ -1576,6 +1710,10 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 dependencies: None,
                 policy: None,
                 path_to_skills_md: normalized(&nested_skill_path),
+                source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                    &nested_skill_path
+                )),
+                environment_id: "local".to_string(),
                 scope: SkillScope::Repo,
                 plugin_id: None,
             },
@@ -1587,6 +1725,10 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 dependencies: None,
                 policy: None,
                 path_to_skills_md: normalized(&root_skill_path),
+                source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                    &root_skill_path
+                )),
+                environment_id: "local".to_string(),
                 scope: SkillScope::Repo,
                 plugin_id: None,
             },
@@ -1627,6 +1769,8 @@ async fn loads_skills_from_codex_dir_when_not_git_repo() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
         }]
@@ -1642,12 +1786,14 @@ async fn deduplicates_by_path_preferring_first_root() {
     let outcome = load_skills_from_roots([
         SkillRoot {
             path: local_env_path(root.path().abs()),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
             plugin_root: None,
         },
         SkillRoot {
             path: local_env_path(root.path().abs()),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: None,
             plugin_root: None,
@@ -1670,9 +1816,53 @@ async fn deduplicates_by_path_preferring_first_root() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
         }]
+    );
+}
+
+#[tokio::test]
+async fn preserves_same_absolute_skill_path_from_distinct_environments() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_skill_at(root.path(), "dupe", "dupe-skill", "from repo");
+    let shared_path = root.path().abs();
+    let first_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+    let second_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+
+    let outcome = load_skills_from_roots([
+        SkillRoot {
+            path: EnvironmentPathRef::new(first_file_system, shared_path.clone()),
+            environment_id: "devbox".to_string(),
+            scope: SkillScope::Repo,
+            plugin_id: None,
+            plugin_root: None,
+        },
+        SkillRoot {
+            path: EnvironmentPathRef::new(second_file_system, shared_path),
+            environment_id: "local".to_string(),
+            scope: SkillScope::Repo,
+            plugin_id: None,
+            plugin_root: None,
+        },
+    ])
+    .await;
+
+    assert_eq!(
+        outcome
+            .skills
+            .iter()
+            .map(|skill| (
+                skill.environment_id.as_str(),
+                skill.path_to_skills_md.clone()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("devbox", normalized(&skill_path)),
+            ("local", normalized(&skill_path)),
+        ]
     );
 }
 
@@ -1712,6 +1902,10 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 dependencies: None,
                 policy: None,
                 path_to_skills_md: normalized(&repo_skill_path),
+                source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                    &repo_skill_path
+                )),
+                environment_id: "local".to_string(),
                 scope: SkillScope::Repo,
                 plugin_id: None,
             },
@@ -1723,6 +1917,10 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 dependencies: None,
                 policy: None,
                 path_to_skills_md: normalized(&user_skill_path),
+                source_path: codex_exec_server::EnvironmentPathRef::local(normalized(
+                    &user_skill_path
+                )),
+                environment_id: "local".to_string(),
                 scope: SkillScope::User,
                 plugin_id: None,
             },
@@ -1785,7 +1983,9 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 interface: None,
                 dependencies: None,
                 policy: None,
-                path_to_skills_md: first_path,
+                path_to_skills_md: first_path.clone(),
+                source_path: codex_exec_server::EnvironmentPathRef::local(first_path),
+                environment_id: "local".to_string(),
                 scope: SkillScope::Repo,
                 plugin_id: None,
             },
@@ -1796,7 +1996,9 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 interface: None,
                 dependencies: None,
                 policy: None,
-                path_to_skills_md: second_path,
+                path_to_skills_md: second_path.clone(),
+                source_path: codex_exec_server::EnvironmentPathRef::local(second_path),
+                environment_id: "local".to_string(),
                 scope: SkillScope::Repo,
                 plugin_id: None,
             },
@@ -1869,6 +2071,8 @@ async fn loads_skills_when_cwd_is_file_in_repo() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::Repo,
             plugin_id: None,
         }]
@@ -1928,6 +2132,8 @@ async fn loads_skills_from_system_cache_when_present() {
             dependencies: None,
             policy: None,
             path_to_skills_md: normalized(&skill_path),
+            source_path: codex_exec_server::EnvironmentPathRef::local(normalized(&skill_path)),
+            environment_id: "local".to_string(),
             scope: SkillScope::System,
             plugin_id: None,
         }]
@@ -1942,7 +2148,10 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     let cwd = local_env_path(cfg.cwd.clone());
     let local_file_system = cwd.file_system();
     let scopes: Vec<SkillScope> = super::skill_roots(
-        &cwd,
+        &[super::SkillEnvironment {
+            environment_id: "local".to_string(),
+            path: cwd.clone(),
+        }],
         Some(&local_file_system),
         &cfg.config_layer_stack,
         Vec::new(),

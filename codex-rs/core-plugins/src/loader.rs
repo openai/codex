@@ -653,6 +653,7 @@ pub async fn load_plugin_skills(
         .into_iter()
         .map(|path| SkillRoot {
             path: plugin_root.with_path(path),
+            environment_id: "local".to_string(),
             scope: SkillScope::User,
             plugin_id: Some(plugin_id.as_key()),
             plugin_root: Some(plugin_root.clone()),
@@ -665,7 +666,10 @@ pub async fn load_plugin_skills(
         .into_iter()
         .filter(|skill| skill.matches_product_restriction_for_product(restriction_product))
         .collect::<Vec<_>>();
-    let disabled_skill_paths = resolve_disabled_skill_paths(&skills, skill_config_rules);
+    let disabled_skill_paths = resolve_disabled_skill_paths(&skills, skill_config_rules)
+        .into_iter()
+        .map(|path| path.path().clone())
+        .collect();
 
     ResolvedPluginSkills {
         skills,

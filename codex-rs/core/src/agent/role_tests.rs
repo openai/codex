@@ -1,7 +1,7 @@
 use super::*;
 use crate::SkillsManager;
 use crate::config::ConfigBuilder;
-use crate::skills_load_input_from_config;
+use crate::skills_load_input;
 use codex_config::ConfigLayerStackOrdering;
 use codex_core_plugins::PluginsManager;
 use codex_protocol::config_types::ServiceTier;
@@ -425,9 +425,12 @@ enabled = false
         Arc::clone(&codex_exec_server::LOCAL_FS),
         config.cwd.clone(),
     );
-    let skills_input = skills_load_input_from_config(
+    let skills_input = skills_load_input(
         &config,
-        cwd,
+        vec![codex_core_skills::loader::SkillEnvironment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            path: cwd,
+        }],
         Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
         effective_skill_roots,
     );
