@@ -120,6 +120,7 @@ async fn replayed_user_messages_seed_composer_history() {
     assert_eq!(
         chat.bottom_pane.take_mention_bindings(),
         vec![MentionBinding {
+            sigil: '$',
             mention: "google-calendar".to_string(),
             path: "app://google_calendar".to_string(),
         }]
@@ -130,6 +131,7 @@ async fn replayed_user_messages_seed_composer_history() {
     assert_eq!(
         chat.bottom_pane.take_mention_bindings(),
         vec![MentionBinding {
+            sigil: '$',
             mention: "sample".to_string(),
             path: "plugin://sample@test".to_string(),
         }]

@@ -1231,6 +1231,7 @@ impl ChatWidget {
                 .iter()
                 .filter_map(|item| match item {
                     UserInput::Skill { name, path } => Some(MentionBinding {
+                        sigil: '$',
                         mention: name.clone(),
                         path: path.to_string_lossy().into_owned(),
                     }),
@@ -1247,6 +1248,7 @@ impl ChatWidget {
                             name.clone()
                         };
                         Some(MentionBinding {
+                            sigil: '$',
                             mention,
                             path: path.clone(),
                         })
@@ -1258,7 +1260,7 @@ impl ChatWidget {
                 .collect();
             let message = display.message.as_str();
             mention_bindings.sort_by_key(|binding| {
-                let token = format!("${}", binding.mention);
+                let token = format!("{}{}", binding.sigil, binding.mention);
                 message
                     .match_indices(&token)
                     .find_map(|(start, _)| {
