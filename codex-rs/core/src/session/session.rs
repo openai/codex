@@ -452,16 +452,19 @@ async fn warm_plugins_and_skills_for_session_init(
         &environments,
     )
     .ok();
-    let path_ref = resolved_environments
+    let skill_environment = resolved_environments
         .as_ref()
         .and_then(crate::environment_selection::ResolvedTurnEnvironments::primary)
         .map(|environment| {
-            crate::skills::EnvironmentPathRef::new(
-                environment.environment.get_filesystem(),
-                environment.cwd.clone(),
+            (
+                environment.environment_id.clone(),
+                crate::skills::EnvironmentPathRef::new(
+                    environment.environment.get_filesystem(),
+                    environment.cwd.clone(),
+                ),
             )
         });
-    let Some(path_ref) = path_ref else {
+    let Some((environment_id, path_ref)) = skill_environment else {
         return Vec::new();
     };
     let local_file_system = environment_manager
@@ -472,6 +475,7 @@ async fn warm_plugins_and_skills_for_session_init(
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let skills_input = skills_load_input_from_config(
         config.as_ref(),
+        environment_id,
         path_ref,
         local_file_system,
         effective_skill_roots,

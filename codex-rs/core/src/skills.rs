@@ -38,13 +38,14 @@ pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(
     config: &Config,
+    environment_id: String,
     env_path: EnvironmentPathRef,
     local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     effective_skill_roots: Vec<PluginSkillRoot>,
 ) -> SkillsLoadInput {
     SkillsLoadInput::new(
         vec![codex_core_skills::loader::SkillEnvironment {
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            environment_id,
             path: env_path,
         }],
         local_file_system,

@@ -153,6 +153,7 @@ fn local_env_path(path: AbsolutePathBuf) -> EnvironmentPathRef {
 fn local_skill_root(path: AbsolutePathBuf, scope: SkillScope) -> SkillRoot {
     SkillRoot {
         path: local_env_path(path),
+        environment_id: "local".to_string(),
         scope,
         plugin_id: None,
         plugin_root: None,
@@ -1746,6 +1747,48 @@ async fn deduplicates_by_path_preferring_first_root() {
             scope: SkillScope::Repo,
             plugin_id: None,
         }]
+    );
+}
+
+#[tokio::test]
+async fn preserves_same_absolute_skill_path_from_distinct_environments() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_skill_at(root.path(), "dupe", "dupe-skill", "from repo");
+    let shared_path = root.path().abs();
+    let first_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+    let second_file_system: Arc<dyn ExecutorFileSystem> = Arc::new(LocalFileSystem::unsandboxed());
+
+    let outcome = load_skills_from_roots([
+        SkillRoot {
+            path: EnvironmentPathRef::new(first_file_system, shared_path.clone()),
+            environment_id: "devbox".to_string(),
+            scope: SkillScope::Repo,
+            plugin_id: None,
+            plugin_root: None,
+        },
+        SkillRoot {
+            path: EnvironmentPathRef::new(second_file_system, shared_path),
+            environment_id: "local".to_string(),
+            scope: SkillScope::Repo,
+            plugin_id: None,
+            plugin_root: None,
+        },
+    ])
+    .await;
+
+    assert_eq!(
+        outcome
+            .skills
+            .iter()
+            .map(|skill| (
+                skill.environment_id.as_str(),
+                skill.path_to_skills_md.clone()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("devbox", normalized(&skill_path)),
+            ("local", normalized(&skill_path)),
+        ]
     );
 }
 

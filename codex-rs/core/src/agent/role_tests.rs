@@ -427,6 +427,7 @@ enabled = false
     );
     let skills_input = skills_load_input_from_config(
         &config,
+        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         cwd,
         Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
         effective_skill_roots,

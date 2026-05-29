@@ -4129,6 +4129,7 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .skills_for_cwd(
             &crate::skills_load_input_from_config(
                 &parent_config,
+                codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                 crate::skills::EnvironmentPathRef::new(
                     Arc::clone(&skill_fs),
                     parent_config.cwd.clone(),
@@ -4709,6 +4710,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
     let skills_input = crate::skills_load_input_from_config(
         &per_turn_config,
+        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         cwd,
         services
             .environment_manager
@@ -6562,6 +6564,7 @@ where
     );
     let skills_input = crate::skills_load_input_from_config(
         &per_turn_config,
+        codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         cwd,
         services
             .environment_manager

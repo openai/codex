@@ -518,6 +518,9 @@ impl CatalogRequestProcessor {
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let environment_manager = self.thread_manager.environment_manager();
+        let selected_environment_id = environment_id
+            .clone()
+            .unwrap_or_else(|| codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string());
         let selected_environment = match environment_id {
             Some(environment_id) => {
                 let environment = environment_manager
@@ -539,6 +542,7 @@ impl CatalogRequestProcessor {
                 let config = &config;
                 let local_file_system = local_file_system.clone();
                 let selected_environment = selected_environment.clone();
+                let selected_environment_id = selected_environment_id.clone();
                 let plugins_manager = &plugins_manager;
                 let skills_manager = &skills_manager;
                 async move {
@@ -584,10 +588,13 @@ impl CatalogRequestProcessor {
                         );
                     };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        codex_exec_server::EnvironmentPathRef::new(
-                            environment.get_filesystem(),
-                            cwd_abs.clone(),
-                        ),
+                        vec![codex_core::skills::loader::SkillEnvironment {
+                            environment_id: selected_environment_id.clone(),
+                            path: codex_exec_server::EnvironmentPathRef::new(
+                                environment.get_filesystem(),
+                                cwd_abs.clone(),
+                            ),
+                        }],
                         local_file_system,
                         effective_skill_roots,
                         config_layer_stack,
