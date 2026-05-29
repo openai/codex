@@ -4,8 +4,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
-use codex_exec_server::EnvironmentPathRef;
-use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -24,13 +22,29 @@ use crate::loader::skill_roots;
 use crate::system::install_system_skills;
 use crate::system::uninstall_system_skills;
 use codex_config::SkillsConfig;
+use codex_exec_server::EnvironmentPathRef;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SkillsLoadInput {
     pub cwd: AbsolutePathBuf,
+    local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
+}
+
+impl std::fmt::Debug for SkillsLoadInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillsLoadInput")
+            .field("cwd", &self.cwd)
+            .field("has_local_file_system", &self.local_file_system.is_some())
+            .field("effective_skill_roots", &self.effective_skill_roots)
+            .field("config_layer_stack", &self.config_layer_stack)
+            .field("bundled_skills_enabled", &self.bundled_skills_enabled)
+            .finish()
+    }
 }
 
 impl SkillsLoadInput {
@@ -42,10 +56,33 @@ impl SkillsLoadInput {
     ) -> Self {
         Self {
             cwd,
+            local_file_system: Some(Arc::clone(&LOCAL_FS)),
             effective_skill_roots,
             config_layer_stack,
             bundled_skills_enabled,
         }
+    }
+
+    #[cfg(test)]
+    fn with_local_file_system(
+        mut self,
+        local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> Self {
+        self.local_file_system = local_file_system;
+        self
+    }
+
+    fn authorities(
+        &self,
+        fs: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> (
+        Option<EnvironmentPathRef>,
+        Option<Arc<dyn ExecutorFileSystem>>,
+    ) {
+        (
+            fs.map(|fs| EnvironmentPathRef::new(fs, self.cwd.clone())),
+            self.local_file_system.clone(),
+        )
     }
 }
 
@@ -53,7 +90,7 @@ pub struct SkillsManager {
     codex_home: AbsolutePathBuf,
     restriction_product: Option<Product>,
     extra_roots: RwLock<Vec<AbsolutePathBuf>>,
-    cache_by_cwd: RwLock<HashMap<EnvironmentPathRef, SkillLoadOutcome>>,
+    cache_by_path_ref: RwLock<HashMap<SkillsPathCacheKey, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
 
@@ -71,7 +108,7 @@ impl SkillsManager {
             codex_home,
             restriction_product,
             extra_roots: RwLock::new(Vec::new()),
-            cache_by_cwd: RwLock::new(HashMap::new()),
+            cache_by_path_ref: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(HashMap::new()),
         };
         if !bundled_skills_enabled {
@@ -127,10 +164,11 @@ impl SkillsManager {
         input: &SkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> Vec<SkillRoot> {
+        let (env_path, local_file_system) = input.authorities(fs);
         let mut roots = skill_roots(
-            fs,
+            env_path.as_ref(),
+            local_file_system.as_ref(),
             &input.config_layer_stack,
-            &input.cwd,
             input.effective_skill_roots.clone(),
             self.extra_roots(),
         )
@@ -147,20 +185,22 @@ impl SkillsManager {
         force_reload: bool,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
-        let cwd_path_ref = fs
-            .as_ref()
-            .map(|fs| EnvironmentPathRef::new(Arc::clone(fs), input.cwd.clone()));
+        let (env_path, local_file_system) = input.authorities(fs);
+        let path_ref_cache_key = env_path.as_ref().map(|_| SkillsPathCacheKey {
+            env_path: env_path.clone(),
+            local_file_system: local_file_system.as_ref().map(ExecutorFileSystemRef::new),
+        });
         if !force_reload
-            && let Some(cwd_path_ref) = cwd_path_ref.as_ref()
-            && let Some(outcome) = self.cached_outcome_for_cwd(cwd_path_ref)
+            && let Some(path_ref_cache_key) = path_ref_cache_key.as_ref()
+            && let Some(outcome) = self.cached_outcome_for_path_ref(path_ref_cache_key)
         {
             return outcome;
         }
 
         let mut roots = skill_roots(
-            fs.clone(),
+            env_path.as_ref(),
+            local_file_system.as_ref(),
             &input.config_layer_stack,
-            &input.cwd,
             input.effective_skill_roots.clone(),
             self.extra_roots(),
         )
@@ -170,12 +210,12 @@ impl SkillsManager {
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
-        if let Some(cwd_path_ref) = cwd_path_ref {
+        if let Some(path_ref_cache_key) = path_ref_cache_key {
             let mut cache = self
-                .cache_by_cwd
+                .cache_by_path_ref
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.insert(cwd_path_ref, outcome.clone());
+            cache.insert(path_ref_cache_key, outcome.clone());
         }
         outcome
     }
@@ -194,9 +234,9 @@ impl SkillsManager {
     }
 
     pub fn clear_cache(&self) {
-        let cleared_cwd = {
+        let cleared_path_refs = {
             let mut cache = self
-                .cache_by_cwd
+                .cache_by_path_ref
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let cleared = cache.len();
@@ -212,14 +252,17 @@ impl SkillsManager {
             cache.clear();
             cleared
         };
-        let cleared = cleared_cwd + cleared_config;
+        let cleared = cleared_path_refs + cleared_config;
         info!("skills cache cleared ({cleared} entries)");
     }
 
-    fn cached_outcome_for_cwd(&self, cwd: &EnvironmentPathRef) -> Option<SkillLoadOutcome> {
-        match self.cache_by_cwd.read() {
-            Ok(cache) => cache.get(cwd).cloned(),
-            Err(err) => err.into_inner().get(cwd).cloned(),
+    fn cached_outcome_for_path_ref(
+        &self,
+        cache_key: &SkillsPathCacheKey,
+    ) -> Option<SkillLoadOutcome> {
+        match self.cache_by_path_ref.read() {
+            Ok(cache) => cache.get(cache_key).cloned(),
+            Err(err) => err.into_inner().get(cache_key).cloned(),
         }
     }
 
@@ -238,6 +281,41 @@ impl SkillsManager {
             Ok(roots) => roots.clone(),
             Err(err) => err.into_inner().clone(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SkillsPathCacheKey {
+    env_path: Option<EnvironmentPathRef>,
+    local_file_system: Option<ExecutorFileSystemRef>,
+}
+
+#[derive(Clone)]
+struct ExecutorFileSystemRef(Arc<dyn ExecutorFileSystem>);
+
+impl ExecutorFileSystemRef {
+    fn new(file_system: &Arc<dyn ExecutorFileSystem>) -> Self {
+        Self(Arc::clone(file_system))
+    }
+}
+
+impl PartialEq for ExecutorFileSystemRef {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ExecutorFileSystemRef {}
+
+impl std::hash::Hash for ExecutorFileSystemRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&(Arc::as_ptr(&self.0) as *const () as usize), state);
+    }
+}
+
+impl std::fmt::Debug for ExecutorFileSystemRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutorFileSystemRef").finish()
     }
 }
 
@@ -283,11 +361,7 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (
-                    EnvironmentPathRef::new(Arc::clone(&root.file_system), root.path.clone()),
-                    scope_rank,
-                    root.plugin_id.clone(),
-                )
+                (root.path.clone(), scope_rank, root.plugin_id.clone())
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),
