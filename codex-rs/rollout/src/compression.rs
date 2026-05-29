@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const COMPRESSED_SUFFIX: &str = ".zst";
-const OPEN_ROLLOUT_LINE_READER_RETRIES: usize = 3;
+const MAX_NOT_FOUND_RETRIES: usize = 3;
 const OPEN_ROLLOUT_LINE_READER_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Returns the modified time for the existing plain or compressed rollout file.
@@ -23,7 +23,7 @@ pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::O
 /// If the requested path disappears during a representation transition, this briefly retries
 /// resolution so callers do not need to know which representation is on disk.
 pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineReader> {
-    for _ in 0..OPEN_ROLLOUT_LINE_READER_RETRIES {
+    for _ in 0..MAX_NOT_FOUND_RETRIES {
         match reader::open_once(path).await {
             Ok(reader) => return Ok(reader),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -110,7 +110,6 @@ mod path {
 
     use super::COMPRESSED_SUFFIX;
 
-    /// Returns the compressed `.jsonl.zst` path for a rollout path.
     pub(super) fn compressed_rollout_path(path: &Path) -> PathBuf {
         if is_compressed_rollout_path(path) {
             return path.to_path_buf();
@@ -123,7 +122,6 @@ mod path {
         path.with_file_name(file_name)
     }
 
-    /// Returns the plain `.jsonl` path for a plain or compressed rollout path.
     pub(super) fn plain_rollout_path(path: &Path) -> PathBuf {
         let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
             return path.to_path_buf();
@@ -134,19 +132,16 @@ mod path {
         path.with_file_name(plain_file_name)
     }
 
-    /// Returns whether the path names a compressed rollout file.
     pub(super) fn is_compressed_rollout_path(path: &Path) -> bool {
         path.file_name()
             .and_then(OsStr::to_str)
             .is_some_and(|name| name.ends_with(".jsonl.zst"))
     }
 
-    /// Returns whether a compressed rollout should be skipped because the plain sibling exists.
     pub(super) fn should_skip_compressed_sibling(path: &Path) -> bool {
         is_compressed_rollout_path(path) && plain_rollout_path(path).exists()
     }
 
-    /// Returns the existing rollout path, preferring the plain sibling when both exist.
     pub(super) async fn existing_rollout_path(path: &Path) -> Option<PathBuf> {
         let plain_path = plain_rollout_path(path);
         if tokio::fs::try_exists(plain_path.as_path())
@@ -169,12 +164,10 @@ mod path {
 mod file_name {
     use super::COMPRESSED_SUFFIX;
 
-    /// Returns whether the file name is a rollout file name.
     pub(super) fn is_rollout_file_name(name: &str) -> bool {
         parse_rollout_file_name(name).is_some()
     }
 
-    /// Parses a rollout file name, returning its plain `.jsonl` name when valid.
     pub(super) fn parse_rollout_file_name(name: &str) -> Option<&str> {
         let name = name.strip_suffix(COMPRESSED_SUFFIX).unwrap_or(name);
         if name.starts_with("rollout-") && name.ends_with(".jsonl") {
@@ -197,7 +190,6 @@ mod reader {
     use super::path;
     use tokio::io::AsyncBufReadExt;
 
-    /// Opens the current plain or compressed rollout representation after resolving the path once.
     pub(super) async fn open_once(path: &Path) -> io::Result<RolloutLineReader> {
         let path = path::existing_rollout_path(path)
             .await
