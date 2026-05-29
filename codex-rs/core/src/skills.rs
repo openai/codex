@@ -54,7 +54,9 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         turn_context.turn_skills.outcome.as_ref(),
         command,
         workdir,
-    ) else {
+    )
+    .await
+    else {
         return;
     };
     let source_path = candidate.source_path.clone();

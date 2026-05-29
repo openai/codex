@@ -168,10 +168,18 @@ where
     for root in roots {
         let fs = root.file_system;
         let root_path_ref =
-            canonicalize_for_skill_identity(&EnvironmentPathRef::new(Arc::clone(&fs), root.path));
-        let plugin_root = root.plugin_root.map(|plugin_root| {
-            canonicalize_for_skill_identity(&EnvironmentPathRef::new(Arc::clone(&fs), plugin_root))
-        });
+            canonicalize_for_skill_identity(&EnvironmentPathRef::new(Arc::clone(&fs), root.path))
+                .await;
+        let plugin_root = match root.plugin_root {
+            Some(plugin_root) => Some(
+                canonicalize_for_skill_identity(&EnvironmentPathRef::new(
+                    Arc::clone(&fs),
+                    plugin_root,
+                ))
+                .await,
+            ),
+            None => None,
+        };
         let skills_before_root = outcome.skills.len();
         discover_skills_under_root(
             &root_path_ref,
@@ -470,8 +478,10 @@ fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
     });
 }
 
-fn canonicalize_for_skill_identity(path: &EnvironmentPathRef) -> EnvironmentPathRef {
-    path.canonicalize_if_exists()
+async fn canonicalize_for_skill_identity(path: &EnvironmentPathRef) -> EnvironmentPathRef {
+    path.canonicalize(/*sandbox*/ None)
+        .await
+        .unwrap_or_else(|_| path.clone())
 }
 
 async fn discover_skills_under_root(
@@ -482,8 +492,11 @@ async fn discover_skills_under_root(
     outcome: &mut SkillLoadOutcome,
 ) {
     let fs = root.file_system();
-    let root = canonicalize_for_skill_identity(root);
-    let plugin_root = plugin_root.map(canonicalize_for_skill_identity);
+    let root = canonicalize_for_skill_identity(root).await;
+    let plugin_root = match plugin_root {
+        Some(plugin_root) => Some(canonicalize_for_skill_identity(plugin_root).await),
+        None => None,
+    };
 
     match fs.get_metadata(root.path(), /*sandbox*/ None).await {
         Ok(metadata) if metadata.is_directory => {}
@@ -561,6 +574,7 @@ async fn discover_skills_under_root(
                     Ok(_) => {
                         let resolved_dir =
                             canonicalize_for_skill_identity(&root.with_path(path.clone()))
+                                .await
                                 .path()
                                 .clone();
                         enqueue_dir(
@@ -588,6 +602,7 @@ async fn discover_skills_under_root(
 
             if metadata.is_directory {
                 let resolved_dir = canonicalize_for_skill_identity(&root.with_path(path.clone()))
+                    .await
                     .path()
                     .clone();
                 enqueue_dir(
@@ -690,7 +705,7 @@ async fn parse_skill_file(
         )?;
     }
 
-    let resolved_path = canonicalize_for_skill_identity(path);
+    let resolved_path = canonicalize_for_skill_identity(path).await;
 
     Ok(SkillMetadata {
         name,

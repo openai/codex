@@ -56,10 +56,11 @@ fn script_run_detection_excludes_python_c() {
     assert_eq!(script_run_token(&tokens).is_some(), false);
 }
 
-#[test]
-fn skill_doc_read_detection_matches_absolute_path() {
+#[tokio::test]
+async fn skill_doc_read_detection_matches_absolute_path() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
-    let normalized_skill_doc_path = canonicalize_if_exists(&local_path_ref(skill_doc_path.clone()));
+    let normalized_skill_doc_path =
+        canonicalize_if_exists(&local_path_ref(skill_doc_path.clone())).await;
     let skill = test_skill_metadata(skill_doc_path);
     let outcome = SkillLoadOutcome {
         implicit_skills_by_scripts_dir: Arc::new(HashMap::new()),
@@ -77,7 +78,8 @@ fn skill_doc_read_detection_matches_absolute_path() {
         &outcome,
         &tokens,
         &local_path_ref(test_path_buf("/tmp").abs()),
-    );
+    )
+    .await;
 
     assert_eq!(
         found.map(|value| value.name),
@@ -85,12 +87,42 @@ fn skill_doc_read_detection_matches_absolute_path() {
     );
 }
 
-#[test]
-fn skill_script_run_detection_matches_relative_path_from_skill_root() {
+#[tokio::test]
+async fn skill_doc_read_detection_matches_parent_relative_path() {
+    let skill_doc_path = test_path_buf("/tmp/project/.agents/skills/test-skill/SKILL.md").abs();
+    let normalized_skill_doc_path =
+        canonicalize_if_exists(&local_path_ref(skill_doc_path.clone())).await;
+    let skill = test_skill_metadata(skill_doc_path);
+    let outcome = SkillLoadOutcome {
+        implicit_skills_by_scripts_dir: Arc::new(HashMap::new()),
+        implicit_skills_by_doc_path: Arc::new(HashMap::from([(normalized_skill_doc_path, skill)])),
+        ..Default::default()
+    };
+    let tokens = vec![
+        "cat".to_string(),
+        "../.agents/skills/test-skill/SKILL.md".to_string(),
+    ];
+
+    let found = detect_skill_doc_read(
+        &outcome,
+        &tokens,
+        &local_path_ref(test_path_buf("/tmp/project/nested").abs()),
+    )
+    .await;
+
+    assert_eq!(
+        found.map(|value| value.name),
+        Some("test-skill".to_string())
+    );
+}
+
+#[tokio::test]
+async fn skill_script_run_detection_matches_relative_path_from_skill_root() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
     let scripts_dir = canonicalize_if_exists(&local_path_ref(
         test_path_buf("/tmp/skill-test/scripts").abs(),
-    ));
+    ))
+    .await;
     let skill = test_skill_metadata(skill_doc_path);
     let outcome = SkillLoadOutcome {
         implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
@@ -106,7 +138,8 @@ fn skill_script_run_detection_matches_relative_path_from_skill_root() {
         &outcome,
         &tokens,
         &local_path_ref(test_path_buf("/tmp/skill-test").abs()),
-    );
+    )
+    .await;
 
     assert_eq!(
         found.map(|value| value.name),
@@ -114,12 +147,13 @@ fn skill_script_run_detection_matches_relative_path_from_skill_root() {
     );
 }
 
-#[test]
-fn skill_script_run_detection_matches_absolute_path_from_any_workdir() {
+#[tokio::test]
+async fn skill_script_run_detection_matches_absolute_path_from_any_workdir() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
     let scripts_dir = canonicalize_if_exists(&local_path_ref(
         test_path_buf("/tmp/skill-test/scripts").abs(),
-    ));
+    ))
+    .await;
     let skill = test_skill_metadata(skill_doc_path);
     let outcome = SkillLoadOutcome {
         implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
@@ -135,7 +169,8 @@ fn skill_script_run_detection_matches_absolute_path_from_any_workdir() {
         &outcome,
         &tokens,
         &local_path_ref(test_path_buf("/tmp/other").abs()),
-    );
+    )
+    .await;
 
     assert_eq!(
         found.map(|value| value.name),

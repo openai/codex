@@ -172,21 +172,30 @@ mod tests {
     use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
 
-    #[test]
-    fn environment_path_ref_joins_only_relative_paths() {
+    #[tokio::test]
+    async fn environment_path_ref_join_matches_absolute_path_buf() {
         let root_path = std::env::temp_dir().join("skills");
         let path_ref = EnvironmentPathRef::local(root_path.abs());
 
         assert_eq!(
             path_ref
-                .join_relative(Path::new("demo/SKILL.md"))
-                .map(|path_ref| path_ref.path().clone()),
-            Some(root_path.join("demo/SKILL.md").abs())
+                .join(Path::new("demo/SKILL.md"))
+                .await
+                .expect("join")
+                .path()
+                .clone(),
+            root_path.join("demo/SKILL.md").abs()
         );
-        assert!(
+        assert_eq!(
             path_ref
-                .join_relative(std::env::temp_dir().join("SKILL.md").as_path())
-                .is_none()
+                .join(std::env::temp_dir().join("SKILL.md").as_path())
+                .await
+                .expect("join")
+                .path()
+                .clone(),
+            path_ref
+                .path()
+                .join(std::env::temp_dir().join("SKILL.md").as_path())
         );
     }
 }
