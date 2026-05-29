@@ -31,6 +31,7 @@ use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
+use crate::marketplace::marketplace_root_dir;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
@@ -49,10 +50,13 @@ use crate::store::PluginInstallResult as StorePluginInstallResult;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use codex_analytics::AnalyticsEventsClient;
+use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerStack;
+use codex_config::MarketplaceConfigUpdate;
 use codex_config::PluginConfigEdit;
 use codex_config::apply_user_plugin_config_edits;
 use codex_config::clear_user_plugin;
+use codex_config::record_user_marketplace;
 use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
 use codex_config::version_for_toml;
@@ -71,6 +75,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -817,7 +823,8 @@ impl PluginsManager {
             &request.plugin_name,
             self.restriction_product,
         )?;
-        self.install_resolved_plugin(resolved).await
+        self.install_resolved_plugin(&request.marketplace_path, resolved)
+            .await
     }
 
     pub async fn install_plugin_with_remote_sync(
@@ -840,11 +847,13 @@ impl PluginsManager {
         )
         .await
         .map_err(PluginInstallError::from)?;
-        self.install_resolved_plugin(resolved).await
+        self.install_resolved_plugin(&request.marketplace_path, resolved)
+            .await
     }
 
     async fn install_resolved_plugin(
         &self,
+        marketplace_path: &AbsolutePathBuf,
         resolved: ResolvedMarketplacePlugin,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let auth_policy = resolved.policy.authentication;
@@ -875,6 +884,43 @@ impl PluginsManager {
         })
         .await
         .map_err(PluginInstallError::join)??;
+
+        let marketplace_name = result.plugin_id.marketplace_name.clone();
+        if marketplace_name != OPENAI_CURATED_MARKETPLACE_NAME {
+            let config_path = self.codex_home.join(CONFIG_TOML_FILE);
+            let marketplace_already_configured = match fs::read_to_string(&config_path) {
+                Ok(config) => {
+                    let config: toml::Value = toml::from_str(&config)
+                        .map_err(|err| PluginInstallError::Config(anyhow::Error::from(err)))?;
+                    config
+                        .get("marketplaces")
+                        .and_then(toml::Value::as_table)
+                        .is_some_and(|marketplaces| marketplaces.contains_key(&marketplace_name))
+                }
+                Err(err) if err.kind() == ErrorKind::NotFound => false,
+                Err(err) => return Err(PluginInstallError::Config(anyhow::Error::from(err))),
+            };
+
+            if !marketplace_already_configured {
+                let marketplace_root = marketplace_root_dir(marketplace_path)?;
+                let marketplace_source = marketplace_root.as_path().display().to_string();
+                let last_updated =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                record_user_marketplace(
+                    &self.codex_home,
+                    &marketplace_name,
+                    &MarketplaceConfigUpdate {
+                        last_updated: &last_updated,
+                        last_revision: None,
+                        source_type: "local",
+                        source: &marketplace_source,
+                        ref_name: None,
+                        sparse_paths: &[],
+                    },
+                )
+                .map_err(|err| PluginInstallError::Config(anyhow::Error::from(err)))?;
+            }
+        }
 
         set_user_plugin_enabled(
             &self.codex_home,

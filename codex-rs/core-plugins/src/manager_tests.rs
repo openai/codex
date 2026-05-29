@@ -1209,6 +1209,117 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
     let config = fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     assert!(config.contains(r#"[plugins."sample-plugin@debug"]"#));
     assert!(config.contains("enabled = true"));
+    let config: Value = toml::from_str(&config).unwrap();
+    assert_eq!(
+        config["marketplaces"]["debug"]["source_type"].as_str(),
+        Some("local")
+    );
+    assert_eq!(
+        config["marketplaces"]["debug"]["source"].as_str(),
+        Some(repo_root.display().to_string().as_str())
+    );
+}
+
+#[tokio::test]
+async fn install_plugin_preserves_existing_marketplace_source_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let marketplace_root = marketplace_install_root(tmp.path()).join("debug");
+    fs::create_dir_all(marketplace_root.join(".agents/plugins")).unwrap();
+    write_plugin(&marketplace_root, "plugins/sample-plugin", "sample-plugin");
+    fs::write(
+        marketplace_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[marketplaces.debug]
+last_updated = "2026-04-10T12:34:56Z"
+source_type = "git"
+source = "https://github.com/example/debug-marketplace.git"
+"#,
+    );
+
+    PluginsManager::new(tmp.path().to_path_buf())
+        .install_plugin(PluginInstallRequest {
+            plugin_name: "sample-plugin".to_string(),
+            marketplace_path: AbsolutePathBuf::try_from(
+                marketplace_root.join(".agents/plugins/marketplace.json"),
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap();
+
+    let config = fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap();
+    let config: Value = toml::from_str(&config).unwrap();
+    assert_eq!(
+        config["marketplaces"]["debug"]["source_type"].as_str(),
+        Some("git")
+    );
+    assert_eq!(
+        config["marketplaces"]["debug"]["source"].as_str(),
+        Some("https://github.com/example/debug-marketplace.git")
+    );
+}
+
+#[tokio::test]
+async fn install_plugin_does_not_record_marketplace_when_materialization_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./missing-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let err = PluginsManager::new(tmp.path().to_path_buf())
+        .install_plugin(PluginInstallRequest {
+            plugin_name: "sample-plugin".to_string(),
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.join(".agents/plugins/marketplace.json"),
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("missing plugin.json"),
+        "unexpected error: {err}"
+    );
+    let config = fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap_or_default();
+    let config: Value =
+        toml::from_str(&config).unwrap_or_else(|_| Value::Table(Default::default()));
+    assert!(config.get("marketplaces").is_none());
+    assert!(config.get("plugins").is_none());
 }
 
 #[tokio::test]
