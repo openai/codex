@@ -148,16 +148,18 @@ async fn resolve_thread_target(
         });
     }
 
-    lookup_thread_by_exact_name(app_server, action, target)
+    let resolved = lookup_thread_by_exact_name(app_server, action, target)
         .await?
         .map(thread_target_from_app_server_thread)
-        .with_context(|| {
-            format!(
-                "No {} chat found matching '{}'.",
-                action.search_scope(),
-                target
-            )
-        })
+        .transpose()?;
+
+    resolved.with_context(|| {
+        format!(
+            "No {} chat found matching '{}'.",
+            action.search_scope(),
+            target
+        )
+    })
 }
 
 async fn lookup_thread_by_exact_name(
@@ -204,12 +206,57 @@ async fn lookup_thread_by_exact_name(
     }
 }
 
-fn thread_target_from_app_server_thread(thread: AppServerThread) -> ResolvedThreadTarget {
+fn thread_target_from_app_server_thread(thread: AppServerThread) -> Result<ResolvedThreadTarget> {
     let thread_id = ThreadId::from_string(&thread.id)
-        .unwrap_or_else(|err| panic!("app server returned invalid thread id: {err}"));
-    ResolvedThreadTarget {
+        .wrap_err_with(|| format!("app server returned invalid thread id `{}`", thread.id))?;
+    Ok(ResolvedThreadTarget {
         thread_id,
         thread_name: thread.name,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::SessionSource;
+    use codex_app_server_protocol::ThreadStatus;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+
+    fn app_server_thread(id: &str) -> AppServerThread {
+        AppServerThread {
+            id: id.to_string(),
+            session_id: id.to_string(),
+            forked_from_id: None,
+            preview: String::new(),
+            ephemeral: false,
+            model_provider: "mock_provider".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            status: ThreadStatus::NotLoaded,
+            path: None,
+            cwd: AbsolutePathBuf::from_absolute_path(std::env::current_dir().expect("cwd"))
+                .expect("absolute cwd"),
+            cli_version: String::new(),
+            source: SessionSource::Cli,
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: Some("saved-thread".to_string()),
+            turns: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn thread_target_from_app_server_thread_reports_invalid_ids() {
+        let err = thread_target_from_app_server_thread(app_server_thread("not-a-thread-id"))
+            .expect_err("invalid ids should be reported as normal errors");
+
+        assert!(
+            err.to_string()
+                .contains("app server returned invalid thread id `not-a-thread-id`"),
+            "unexpected error: {err}"
+        );
     }
 }
 

@@ -35,6 +35,7 @@ use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
+use codex_utils_cli::SharedCliOptions;
 use codex_utils_cli::resume_hint;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
@@ -334,7 +335,20 @@ struct ThreadArchiveCommand {
     remote: InteractiveRemoteOptions,
 
     #[clap(flatten)]
-    config_overrides: TuiCli,
+    config_overrides: ThreadArchiveConfigOverrides,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+struct ThreadArchiveConfigOverrides {
+    #[clap(flatten)]
+    shared: SharedCliOptions,
+
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", default_value_t = false)]
+    strict_config: bool,
+
+    #[clap(flatten)]
+    config_overrides: CliConfigOverrides,
 }
 
 #[derive(Debug, Parser)]
@@ -2276,9 +2290,21 @@ fn finalize_fork_interactive(
 fn finalize_thread_archive_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
-    archive_cli: TuiCli,
+    archive_cli: ThreadArchiveConfigOverrides,
 ) -> TuiCli {
-    merge_interactive_cli_flags(&mut interactive, archive_cli);
+    let ThreadArchiveConfigOverrides {
+        shared,
+        strict_config,
+        config_overrides,
+    } = archive_cli;
+    interactive.shared.apply_subcommand_overrides(shared);
+    if strict_config {
+        interactive.strict_config = true;
+    }
+    interactive
+        .config_overrides
+        .raw_overrides
+        .extend(config_overrides.raw_overrides);
     prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
     interactive
 }
@@ -2754,6 +2780,14 @@ mod tests {
     }
 
     #[test]
+    fn archive_rejects_extra_positional_argument() {
+        let err = MultitoolCli::try_parse_from(["codex", "archive", "old", "name"])
+            .expect_err("archive should reject unquoted thread names");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
     fn archive_parses_scoped_remote_flag() {
         let (target, _interactive, remote) = finalize_archive_from_args(
             [
@@ -2813,6 +2847,14 @@ mod tests {
         };
 
         assert_eq!(command.target, "my-thread");
+    }
+
+    #[test]
+    fn unarchive_rejects_extra_positional_argument() {
+        let err = MultitoolCli::try_parse_from(["codex", "unarchive", "old", "name"])
+            .expect_err("unarchive should reject unquoted thread names");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
