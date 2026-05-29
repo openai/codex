@@ -372,6 +372,7 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
             &absolute_path(source_link.clone()),
             Path::new("nested/note.txt"),
         )
+        .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(
         joined_nested,
@@ -379,22 +380,26 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
     );
     let joined_parent = file_system
         .parent(&joined_nested)
+        .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(
         joined_parent,
         Some(absolute_path(source_link.join("nested")))
     );
-    let join_error =
-        match file_system.join(&absolute_path(source_dir.clone()), Path::new("../outside")) {
-            Ok(path) => panic!(
-                "join should reject parent traversal, got {}",
-                path.display()
-            ),
-            Err(err) => err,
-        };
-    assert_eq!(join_error.kind(), std::io::ErrorKind::InvalidInput);
+    let joined_parent_traversal = file_system
+        .join(&absolute_path(source_dir.clone()), Path::new("../outside"))
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(
+        joined_parent_traversal,
+        absolute_path(source_dir.join("../outside"))
+    );
     let canonical_nested = file_system
-        .canonicalize(&absolute_path(source_link.join("nested").join("note.txt")))
+        .canonicalize(
+            &absolute_path(source_link.join("nested").join("note.txt")),
+            /*sandbox*/ None,
+        )
+        .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(
         canonical_nested,
@@ -564,6 +569,32 @@ async fn file_system_sandboxed_read_allows_readable_root(use_remote: bool) -> Re
         .await
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"sandboxed hello");
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_sandboxed_canonicalize_allows_readable_root(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let allowed_dir = tmp.path().join("allowed");
+    let file_path = allowed_dir.join("note.txt");
+    std::fs::create_dir_all(&allowed_dir)?;
+    std::fs::write(&file_path, "sandboxed hello")?;
+    let sandbox = read_only_sandbox(allowed_dir);
+
+    let canonical_path = file_system
+        .canonicalize(&absolute_path(file_path.clone()), Some(&sandbox))
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(
+        canonical_path,
+        absolute_path(std::fs::canonicalize(file_path)?)
+    );
 
     Ok(())
 }

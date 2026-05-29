@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -80,20 +79,25 @@ impl LocalFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {
-    fn canonicalize(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
-        self.unsandboxed.canonicalize(path)
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.canonicalize(path, sandbox).await
     }
 
-    fn join(
+    async fn join(
         &self,
         base_path: &AbsolutePathBuf,
-        relative_path: &Path,
+        path: &Path,
     ) -> FileSystemResult<AbsolutePathBuf> {
-        self.unsandboxed.join(base_path, relative_path)
+        self.unsandboxed.join(base_path, path).await
     }
 
-    fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        self.unsandboxed.parent(path)
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+        self.unsandboxed.parent(path).await
     }
 
     async fn read_file(
@@ -169,20 +173,25 @@ impl ExecutorFileSystem for LocalFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for UnsandboxedFileSystem {
-    fn canonicalize(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
-        self.file_system.canonicalize(path)
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system.canonicalize(path, /*sandbox*/ None).await
     }
 
-    fn join(
+    async fn join(
         &self,
         base_path: &AbsolutePathBuf,
-        relative_path: &Path,
+        path: &Path,
     ) -> FileSystemResult<AbsolutePathBuf> {
-        self.file_system.join(base_path, relative_path)
+        self.file_system.join(base_path, path).await
     }
 
-    fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        self.file_system.parent(path)
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+        self.file_system.parent(path).await
     }
 
     async fn read_file(
@@ -271,19 +280,24 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for DirectFileSystem {
-    fn canonicalize(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
-        path.canonicalize()
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        reject_sandbox_context(sandbox)?;
+        AbsolutePathBuf::from_absolute_path(tokio::fs::canonicalize(path.as_path()).await?)
     }
 
-    fn join(
+    async fn join(
         &self,
         base_path: &AbsolutePathBuf,
-        relative_path: &Path,
+        path: &Path,
     ) -> FileSystemResult<AbsolutePathBuf> {
-        join_bound_path(base_path, relative_path)
+        Ok(base_path.join(path))
     }
 
-    fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
         Ok(path.parent())
     }
 
@@ -454,28 +468,6 @@ fn reject_sandbox_context(sandbox: Option<&FileSystemSandboxContext>) -> io::Res
         ));
     }
     Ok(())
-}
-
-fn join_bound_path(
-    base_path: &AbsolutePathBuf,
-    relative_path: &Path,
-) -> FileSystemResult<AbsolutePathBuf> {
-    for component in relative_path.components() {
-        match component {
-            Component::CurDir | Component::Normal(_) => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "relative path must not escape or replace the bound root: {}",
-                        relative_path.display()
-                    ),
-                ));
-            }
-        }
-    }
-
-    AbsolutePathBuf::from_absolute_path_checked(base_path.as_path().join(relative_path))
 }
 
 fn reject_platform_sandbox_context(sandbox: Option<&FileSystemSandboxContext>) -> io::Result<()> {

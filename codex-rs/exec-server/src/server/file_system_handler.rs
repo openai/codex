@@ -118,7 +118,8 @@ impl FileSystemHandler {
     ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
         let path = self
             .file_system
-            .canonicalize(&params.path)
+            .canonicalize(&params.path, params.sandbox.as_ref())
+            .await
             .map_err(map_fs_error)?;
         Ok(FsCanonicalizeResponse { path })
     }
@@ -129,7 +130,8 @@ impl FileSystemHandler {
     ) -> Result<FsJoinResponse, JSONRPCErrorError> {
         let path = self
             .file_system
-            .join(&params.base_path, &params.relative_path)
+            .join(&params.base_path, &params.path)
+            .await
             .map_err(map_fs_error)?;
         Ok(FsJoinResponse { path })
     }
@@ -141,6 +143,7 @@ impl FileSystemHandler {
         let path = self
             .file_system
             .parent(&params.path)
+            .await
             .map_err(map_fs_error)?;
         Ok(FsParentResponse { path })
     }

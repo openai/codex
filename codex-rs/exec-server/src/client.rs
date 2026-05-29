@@ -214,10 +214,6 @@ impl LazyRemoteExecServerClient {
         }
     }
 
-    pub(crate) fn new_connection_client(&self) -> Self {
-        Self::new(self.transport_params.clone())
-    }
-
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
         if let Some(client) = self.connected_client() {
             return Ok(client);

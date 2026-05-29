@@ -218,6 +218,7 @@ pub struct FsGetMetadataResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsCanonicalizeParams {
     pub path: AbsolutePathBuf,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,7 +231,7 @@ pub struct FsCanonicalizeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsJoinParams {
     pub base_path: AbsolutePathBuf,
-    pub relative_path: PathBuf,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
