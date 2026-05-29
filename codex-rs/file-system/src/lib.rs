@@ -133,43 +133,22 @@ pub type FileSystemResult<T> = io::Result<T>;
 /// a remote environment.
 #[async_trait]
 pub trait ExecutorFileSystem: Send + Sync {
-    /// Resolves a path within this filesystem when supported.
-    ///
-    /// Implementations that cannot resolve bound paths may return
-    /// [`io::ErrorKind::Unsupported`].
-    fn canonicalize(&self, _path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "filesystem does not support canonicalization",
-        ))
-    }
-
-    /// Lexically joins a relative path onto an existing bound path when
-    /// supported.
-    ///
-    /// Implementations that cannot join bound paths may return
-    /// [`io::ErrorKind::Unsupported`].
-    fn join(
+    /// Resolves a path within this filesystem.
+    async fn canonicalize(
         &self,
-        _base_path: &AbsolutePathBuf,
-        _relative_path: &Path,
-    ) -> FileSystemResult<AbsolutePathBuf> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "filesystem does not support joining bound paths",
-        ))
-    }
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf>;
 
-    /// Returns the parent directory of a bound path when supported.
-    ///
-    /// Implementations that cannot inspect bound paths may return
-    /// [`io::ErrorKind::Unsupported`].
-    fn parent(&self, _path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "filesystem does not support parent lookup for bound paths",
-        ))
-    }
+    /// Lexically joins a path onto an existing bound path.
+    async fn join(
+        &self,
+        base_path: &AbsolutePathBuf,
+        path: &Path,
+    ) -> FileSystemResult<AbsolutePathBuf>;
+
+    /// Returns the parent directory of a bound path.
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>>;
 
     async fn read_file(
         &self,
