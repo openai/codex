@@ -185,7 +185,7 @@ fn managed_ca_trust_bundles_for_cert_path(
         };
         inherited_env_values.insert(key.to_string(), value.clone());
         let path = resolve_ca_bundle_path(value, cwd);
-        let trust_bundle_path = if is_generated_trust_bundle_path(&path, cert_path) {
+        let trust_bundle_path = if is_current_generated_trust_bundle_path(&path, cert_path) {
             path
         } else {
             let trust_bundle = build_managed_ca_trust_bundle_for_path(cert_path, &path)?;
@@ -244,7 +244,23 @@ fn inherited_generated_trust_bundle_path(
 ) -> Option<PathBuf> {
     value
         .map(|value| resolve_ca_bundle_path(value, cwd))
-        .filter(|path| is_generated_trust_bundle_path(path, managed_ca_cert_path))
+        .filter(|path| is_current_generated_trust_bundle_path(path, managed_ca_cert_path))
+}
+
+fn is_current_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Path) -> bool {
+    if !is_generated_trust_bundle_path(path, managed_ca_cert_path) {
+        return false;
+    }
+    let Ok(trust_bundle) = fs::read(path) else {
+        return false;
+    };
+    let Ok(managed_ca_cert) = fs::read(managed_ca_cert_path) else {
+        return false;
+    };
+    !managed_ca_cert.is_empty()
+        && trust_bundle
+            .windows(managed_ca_cert.len())
+            .any(|window| window == managed_ca_cert)
 }
 
 fn is_generated_trust_bundle_path(path: &Path, managed_ca_cert_path: &Path) -> bool {
@@ -555,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn build_managed_ca_trust_bundle_skips_existing_managed_bundle() {
+    fn build_managed_ca_trust_bundle_rebuilds_stale_generated_bundle() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
         let trust_bundle_path = dir.path().join("ca-bundle-123.pem");
@@ -568,7 +584,7 @@ mod tests {
                 &managed_ca_cert_path,
                 dir.path(),
             ),
-            Some(trust_bundle_path),
+            None,
         );
     }
 
