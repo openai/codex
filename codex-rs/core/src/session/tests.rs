@@ -7312,6 +7312,12 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
 #[tokio::test]
 async fn build_initial_context_qualifies_skills_only_when_skill_envs_are_ambiguous() {
     let (session, mut turn_context) = make_session_and_context().await;
+    let expected_skill_path = |name: &str| {
+        test_path_buf(&format!("/tmp/{name}/SKILL.md"))
+            .abs()
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
     let make_skill = |name: &str, environment_id: &str| SkillMetadata {
         name: name.to_string(),
         description: "desc".to_string(),
@@ -7333,11 +7339,10 @@ async fn build_initial_context_qualifies_skills_only_when_skill_envs_are_ambiguo
     turn_context.turn_skills = TurnSkillsContext::new(Arc::new(single_env_outcome));
     let single_env_context = session.build_initial_context(&turn_context).await;
     let single_env_texts = developer_input_texts(&single_env_context);
-    assert!(
-        single_env_texts
-            .iter()
-            .any(|text| text.contains("- repo-skill: desc (file: /tmp/repo-skill/SKILL.md)"))
-    );
+    assert!(single_env_texts.iter().any(|text| text.contains(&format!(
+        "- repo-skill: desc (file: {})",
+        expected_skill_path("repo-skill")
+    ))));
     assert!(single_env_texts.iter().all(|text| !text.contains("env:")));
 
     let mut secondary_environment = turn_context.environments.turn_environments[0].clone();
@@ -7349,7 +7354,10 @@ async fn build_initial_context_qualifies_skills_only_when_skill_envs_are_ambiguo
     let multi_turn_env_context = session.build_initial_context(&turn_context).await;
     let multi_turn_env_texts = developer_input_texts(&multi_turn_env_context);
     assert!(multi_turn_env_texts.iter().any(|text| {
-        text.contains("- repo-skill: desc (env: local, file: /tmp/repo-skill/SKILL.md)")
+        text.contains(&format!(
+            "- repo-skill: desc (env: local, file: {})",
+            expected_skill_path("repo-skill")
+        ))
     }));
     turn_context.environments.turn_environments.truncate(1);
 
@@ -7362,10 +7370,16 @@ async fn build_initial_context_qualifies_skills_only_when_skill_envs_are_ambiguo
     let mixed_env_context = session.build_initial_context(&turn_context).await;
     let mixed_env_texts = developer_input_texts(&mixed_env_context);
     assert!(mixed_env_texts.iter().any(|text| {
-        text.contains("- repo-skill: desc (env: devbox, file: /tmp/repo-skill/SKILL.md)")
+        text.contains(&format!(
+            "- repo-skill: desc (env: devbox, file: {})",
+            expected_skill_path("repo-skill")
+        ))
     }));
     assert!(mixed_env_texts.iter().any(|text| {
-        text.contains("- user-skill: desc (env: local, file: /tmp/user-skill/SKILL.md)")
+        text.contains(&format!(
+            "- user-skill: desc (env: local, file: {})",
+            expected_skill_path("user-skill")
+        ))
     }));
 }
 
