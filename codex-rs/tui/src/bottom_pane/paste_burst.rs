@@ -16,9 +16,6 @@
 //! - buffer a burst as a single pasted string, or
 //! - let input flow through as normal typing.
 //!
-//! For the higher-level view of how `PasteBurst` integrates with `ChatComposer`, see
-//! `docs/tui-chat-composer.md`.
-//!
 //! # Call Pattern
 //!
 //! `PasteBurst` is a pure state machine: it never mutates the textarea directly. The caller feeds

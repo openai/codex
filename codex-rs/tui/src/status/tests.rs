@@ -668,6 +668,25 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
         rendered.contains("https://chatgpt.com/codex/settings/usage"),
         "expected /status to show ChatGPT usage link for OpenAI-auth proxy, got: {rendered}"
     );
+
+    let wide_destinations: Vec<String> = composite
+        .display_hyperlink_lines(/*width*/ 120)
+        .into_iter()
+        .flat_map(|line| line.hyperlinks.into_iter())
+        .map(|link| link.destination)
+        .collect();
+    assert_eq!(
+        wide_destinations,
+        vec!["https://chatgpt.com/codex/settings/usage"]
+    );
+
+    let narrow_destinations: Vec<String> = composite
+        .display_hyperlink_lines(/*width*/ 24)
+        .into_iter()
+        .flat_map(|line| line.hyperlinks.into_iter())
+        .map(|link| link.destination)
+        .collect();
+    assert_eq!(narrow_destinations, Vec::<String>::new());
 }
 
 #[tokio::test]

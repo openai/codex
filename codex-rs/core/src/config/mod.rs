@@ -2631,9 +2631,8 @@ impl Config {
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
             None => WindowsSandboxLevel::from_features(&features),
         };
+        let memories_config: MemoriesConfig = cfg.memories.clone().unwrap_or_default().into();
         let memories_root = memory_root(&codex_home);
-        std::fs::create_dir_all(&memories_root)?;
-        let internal_writable_roots = vec![memories_root];
 
         let profiles_are_active = effective_permission_selection.profiles_are_active(
             default_permissions_override.as_deref(),
@@ -2701,8 +2700,8 @@ impl Config {
             file_system_sandbox_policy,
             mut active_permission_profile,
             mut profile_workspace_roots,
-        ) = if let Some(mut permission_profile) = permission_profile {
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
+        ) = if let Some(permission_profile) = permission_profile {
+            let (file_system_sandbox_policy, _network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
             let configured_network_proxy_config =
                 if profile_allows_configured_network_proxy(&permission_profile)
@@ -2726,30 +2725,6 @@ impl Config {
                 } else {
                     NetworkProxyConfig::default()
                 };
-            let materialized_file_system_sandbox_policy = file_system_sandbox_policy
-                .clone()
-                .materialize_project_roots_with_workspace_roots(&workspace_roots);
-            let materialized_permission_profile =
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &materialized_file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-                &materialized_permission_profile,
-                &materialized_file_system_sandbox_policy,
-                network_sandbox_policy,
-                resolved_cwd.as_path(),
-            );
-            if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_legacy_workspace_writable_roots(&internal_writable_roots);
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            }
             (
                 configured_network_proxy_config,
                 permission_profile,
@@ -2794,7 +2769,7 @@ impl Config {
             dedupe_absolute_paths(&mut configured_workspace_roots);
             file_system_sandbox_policy = file_system_sandbox_policy
                 .with_materialized_project_roots_for_workspace_roots(&configured_workspace_roots);
-            let mut permission_profile = if let Some(permission_profile) =
+            let permission_profile = if let Some(permission_profile) =
                 builtin_permission_profile(default_permissions, builtin_workspace_write_settings)
             {
                 permission_profile
@@ -2804,30 +2779,6 @@ impl Config {
                     network_sandbox_policy,
                 )
             };
-            let materialized_file_system_sandbox_policy = file_system_sandbox_policy
-                .clone()
-                .materialize_project_roots_with_workspace_roots(&workspace_roots);
-            let materialized_permission_profile =
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &materialized_file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-                &materialized_permission_profile,
-                &materialized_file_system_sandbox_policy,
-                network_sandbox_policy,
-                resolved_cwd.as_path(),
-            );
-            if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_legacy_workspace_writable_roots(&internal_writable_roots);
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            }
             let active_permission_profile = if using_implicit_builtin_profile
                 && default_permissions == BUILT_IN_WORKSPACE_PROFILE
                 && cfg.sandbox_workspace_write.is_some()
@@ -2885,29 +2836,8 @@ impl Config {
                 );
                 permission_profile = PermissionProfile::read_only();
             }
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
+            let (file_system_sandbox_policy, _network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
-            let materialized_file_system_sandbox_policy = permission_profile
-                .clone()
-                .materialize_project_roots_with_workspace_roots(&workspace_roots)
-                .file_system_sandbox_policy();
-            if matches!(permission_profile.enforcement(), SandboxEnforcement::Managed)
-                && materialized_file_system_sandbox_policy.can_write_path_with_cwd(
-                    resolved_cwd.as_path(),
-                    resolved_cwd.as_path(),
-                )
-                && !materialized_file_system_sandbox_policy.has_full_disk_write_access()
-            {
-                // Keep Codex runtime write access while storing the runtime
-                // workspace roots separately on the thread.
-                file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_legacy_workspace_writable_roots(&internal_writable_roots);
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            }
             (
                 configured_network_proxy_config,
                 permission_profile,
@@ -3324,11 +3254,14 @@ impl Config {
             network_requirements,
             &network_permission_profile,
         )?;
-        let helper_readable_roots = get_readable_roots_required_for_codex_runtime(
+        let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
             zsh_path.as_ref(),
             main_execve_wrapper_exe.as_ref(),
         );
+        if features.enabled(Feature::MemoryTool) && memories_config.use_memories {
+            helper_readable_roots.push(memories_root);
+        }
         let effective_permission_profile = constrained_permission_profile.value.get().clone();
         let (mut effective_file_system_sandbox_policy, effective_network_sandbox_policy) =
             effective_permission_profile.to_runtime_permissions();
@@ -3438,7 +3371,7 @@ impl Config {
             agent_max_threads,
             agent_max_depth,
             agent_roles,
-            memories: cfg.memories.unwrap_or_default().into(),
+            memories: memories_config,
             agent_job_max_runtime_seconds,
             agent_interrupt_message_enabled,
             codex_home,

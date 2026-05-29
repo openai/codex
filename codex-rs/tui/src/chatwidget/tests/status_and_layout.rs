@@ -393,8 +393,8 @@ async fn completed_plan_table_tail_skips_provisional_history_insert() {
 
     assert!(saw_source_backed_plan, "expected source-backed plan insert");
     assert!(
-        rendered_plan.contains('│') || rendered_plan.contains('┌'),
-        "expected completed plan table to render as a boxed table, got: {rendered_plan:?}"
+        rendered_plan.contains('━'),
+        "expected completed plan table to render with separators, got: {rendered_plan:?}"
     );
     assert!(
         !saw_stream_plan,
@@ -3381,7 +3381,7 @@ async fn hook_completed_before_reveal_renders_completed_without_running_flash() 
             codex_app_server_protocol::HookRunStatus::Completed,
             vec![codex_app_server_protocol::HookOutputEntry {
                 kind: codex_app_server_protocol::HookOutputEntryKind::Context,
-                text: "session context".to_string(),
+                text: "session context\nsecond line".to_string(),
             }],
         ),
     );

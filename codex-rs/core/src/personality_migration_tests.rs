@@ -68,6 +68,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
     let user_event = RolloutLine {
         timestamp: TEST_TIMESTAMP.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "hello".to_string(),
             images: None,
             local_images: Vec::new(),

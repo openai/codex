@@ -416,6 +416,7 @@ impl TurnRequestProcessor {
             .into_iter()
             .map(V2UserInput::into_core)
             .collect();
+        let client_user_message_id = params.client_user_message_id;
         let additional_context = map_additional_context(params.additional_context);
         let turn_has_input = !mapped_items.is_empty();
         let thread_settings = self
@@ -448,8 +449,12 @@ impl TurnRequestProcessor {
             additional_context,
             thread_settings,
         };
-        let turn_id = self
-            .submit_core_op(&request_id, thread.as_ref(), turn_op)
+        let turn_id = thread
+            .submit_user_input_with_client_user_message_id(
+                turn_op,
+                self.request_trace_context(&request_id).await,
+                client_user_message_id,
+            )
             .await
             .map_err(|err| {
                 let error = internal_error(format!("failed to start turn: {err}"));
@@ -780,6 +785,7 @@ impl TurnRequestProcessor {
                 mapped_items,
                 additional_context,
                 Some(&params.expected_turn_id),
+                params.client_user_message_id,
                 params.responsesapi_client_metadata,
             )
             .await
@@ -989,6 +995,7 @@ impl TurnRequestProcessor {
         } else {
             vec![ThreadItem::UserMessage {
                 id: turn_id.clone(),
+                client_id: None,
                 content: vec![V2UserInput::Text {
                     text: display_text.to_string(),
                     // Review prompt display text is synthesized; no UI element ranges to preserve.

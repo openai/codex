@@ -2241,8 +2241,6 @@ impl ThreadRequestProcessor {
             sort_direction,
             items_view,
         } = params;
-        let items_view = items_view.unwrap_or(TurnItemsView::Summary);
-
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
@@ -2270,60 +2268,20 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
-        let mut turns = reconstruct_thread_turns_for_turns_list(
+        build_thread_turns_page_response(
             &items,
             self.thread_watch_manager
                 .loaded_status_for_thread(&thread_uuid.to_string())
                 .await,
             has_live_running_thread,
             active_turn,
-        );
-        for turn in &mut turns {
-            match items_view {
-                TurnItemsView::NotLoaded => {
-                    turn.items.clear();
-                    turn.items_view = TurnItemsView::NotLoaded;
-                }
-                TurnItemsView::Summary => {
-                    let first_user_message = turn
-                        .items
-                        .iter()
-                        .find(|item| matches!(item, ThreadItem::UserMessage { .. }))
-                        .cloned();
-                    let final_agent_message = turn
-                        .items
-                        .iter()
-                        .rev()
-                        .find(|item| matches!(item, ThreadItem::AgentMessage { .. }))
-                        .cloned();
-                    turn.items = match (first_user_message, final_agent_message) {
-                        (Some(user_message), Some(agent_message))
-                            if user_message.id() != agent_message.id() =>
-                        {
-                            vec![user_message, agent_message]
-                        }
-                        (Some(user_message), _) => vec![user_message],
-                        (None, Some(agent_message)) => vec![agent_message],
-                        (None, None) => Vec::new(),
-                    };
-                    turn.items_view = TurnItemsView::Summary;
-                }
-                TurnItemsView::Full => {
-                    turn.items_view = TurnItemsView::Full;
-                }
-            }
-        }
-        let page = paginate_thread_turns(
-            turns,
-            cursor.as_deref(),
-            limit,
-            sort_direction.unwrap_or(SortDirection::Desc),
-        )?;
-        Ok(ThreadTurnsListResponse {
-            data: page.turns,
-            next_cursor: page.next_cursor,
-            backwards_cursor: page.backwards_cursor,
-        })
+            ThreadTurnsPageOptions {
+                cursor: cursor.as_deref(),
+                limit,
+                sort_direction: sort_direction.unwrap_or(SortDirection::Desc),
+                items_view: items_view.unwrap_or(TurnItemsView::Summary),
+            },
+        )
     }
 
     async fn load_thread_turns_list_history(
@@ -2531,6 +2489,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
             exclude_turns,
+            initial_turns_page,
             persist_extended_history: _persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
@@ -2685,8 +2644,28 @@ impl ThreadRequestProcessor {
                     config_snapshot.active_permission_profile,
                 );
                 let token_usage_thread = include_turns.then(|| thread.clone());
+                let mut initial_turns_page = if let Some(params) = initial_turns_page.as_ref() {
+                    match build_thread_resume_initial_turns_page(
+                        &response_history.get_rollout_items(),
+                        thread.status.clone(),
+                        /*has_live_running_thread*/ false,
+                        /*active_turn*/ None,
+                        params,
+                    ) {
+                        Ok(page) => Some(page),
+                        Err(error) => {
+                            self.outgoing.send_error(request_id, error).await;
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    None
+                };
                 if redact_resume_payloads {
-                    redact_thread_resume_payloads(&mut thread);
+                    redact_thread_resume_payloads(&mut thread.turns);
+                    if let Some(initial_turns_page) = initial_turns_page.as_mut() {
+                        redact_thread_resume_payloads(&mut initial_turns_page.data);
+                    }
                 }
 
                 let response = ThreadResumeResponse {
@@ -2702,6 +2681,7 @@ impl ThreadRequestProcessor {
                     sandbox,
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
+                    initial_turns_page,
                 };
 
                 let connection_id = request_id.connection_id;
@@ -2926,6 +2906,7 @@ impl ThreadRequestProcessor {
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
+                    initial_turns_page: params.initial_turns_page.clone(),
                     redact_resume_payloads,
                 }),
             );
@@ -3704,6 +3685,95 @@ fn serialize_thread_turns_cursor(
 
 fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, JSONRPCErrorError> {
     serde_json::from_str(cursor).map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))
+}
+
+struct ThreadTurnsPageOptions<'a> {
+    cursor: Option<&'a str>,
+    limit: Option<u32>,
+    sort_direction: SortDirection,
+    items_view: TurnItemsView,
+}
+
+fn build_thread_turns_page_response(
+    items: &[RolloutItem],
+    loaded_status: ThreadStatus,
+    has_live_running_thread: bool,
+    active_turn: Option<Turn>,
+    options: ThreadTurnsPageOptions<'_>,
+) -> Result<ThreadTurnsListResponse, JSONRPCErrorError> {
+    let mut turns = reconstruct_thread_turns_for_turns_list(
+        items,
+        loaded_status,
+        has_live_running_thread,
+        active_turn,
+    );
+    apply_thread_turns_items_view(&mut turns, options.items_view);
+    let page = paginate_thread_turns(turns, options.cursor, options.limit, options.sort_direction)?;
+    Ok(ThreadTurnsListResponse {
+        data: page.turns,
+        next_cursor: page.next_cursor,
+        backwards_cursor: page.backwards_cursor,
+    })
+}
+
+pub(super) fn build_thread_resume_initial_turns_page(
+    items: &[RolloutItem],
+    loaded_status: ThreadStatus,
+    has_live_running_thread: bool,
+    active_turn: Option<Turn>,
+    params: &ThreadResumeInitialTurnsPageParams,
+) -> Result<codex_app_server_protocol::TurnsPage, JSONRPCErrorError> {
+    build_thread_turns_page_response(
+        items,
+        loaded_status,
+        has_live_running_thread,
+        active_turn,
+        ThreadTurnsPageOptions {
+            cursor: None,
+            limit: params.limit,
+            sort_direction: params.sort_direction.unwrap_or(SortDirection::Desc),
+            items_view: params.items_view.unwrap_or(TurnItemsView::Summary),
+        },
+    )
+    .map(Into::into)
+}
+
+fn apply_thread_turns_items_view(turns: &mut [Turn], items_view: TurnItemsView) {
+    for turn in turns {
+        match items_view {
+            TurnItemsView::NotLoaded => {
+                turn.items.clear();
+                turn.items_view = TurnItemsView::NotLoaded;
+            }
+            TurnItemsView::Summary => {
+                let first_user_message = turn
+                    .items
+                    .iter()
+                    .find(|item| matches!(item, ThreadItem::UserMessage { .. }))
+                    .cloned();
+                let final_agent_message = turn
+                    .items
+                    .iter()
+                    .rev()
+                    .find(|item| matches!(item, ThreadItem::AgentMessage { .. }))
+                    .cloned();
+                turn.items = match (first_user_message, final_agent_message) {
+                    (Some(user_message), Some(agent_message))
+                        if user_message.id() != agent_message.id() =>
+                    {
+                        vec![user_message, agent_message]
+                    }
+                    (Some(user_message), _) => vec![user_message],
+                    (None, Some(agent_message)) => vec![agent_message],
+                    (None, None) => Vec::new(),
+                };
+                turn.items_view = TurnItemsView::Summary;
+            }
+            TurnItemsView::Full => {
+                turn.items_view = TurnItemsView::Full;
+            }
+        }
+    }
 }
 
 fn reconstruct_thread_turns_for_turns_list(

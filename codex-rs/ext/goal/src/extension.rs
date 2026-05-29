@@ -17,11 +17,15 @@ use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::TurnAbortInput;
+use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsageInfo;
 
@@ -29,6 +33,7 @@ use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::runtime::GoalRuntimeConfig;
 use crate::runtime::GoalRuntimeHandle;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
@@ -85,6 +90,11 @@ where
 {
     async fn on_thread_start(&self, input: ThreadStartInput<'_, C>) {
         let enabled = (self.goals_enabled)(input.config);
+        let tools_available_for_thread = input.persistent_thread_state_available
+            && !matches!(
+                input.session_source,
+                SessionSource::SubAgent(SubAgentSource::Review)
+            );
         input
             .thread_store
             .insert(GoalExtensionConfig::from_enabled(enabled));
@@ -102,7 +112,10 @@ where
                 self.metrics.clone(),
                 self.thread_manager.clone(),
                 accounting_state,
-                enabled,
+                GoalRuntimeConfig {
+                    enabled,
+                    tools_available_for_thread,
+                },
             )
         });
         runtime.set_enabled(enabled);
@@ -237,6 +250,22 @@ where
         }
         runtime.accounting_state().finish_turn(turn_id);
     }
+
+    async fn on_turn_error(&self, input: TurnErrorInput<'_>) {
+        if input.error != CodexErrorInfo::UsageLimitExceeded {
+            return;
+        }
+        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+            return;
+        };
+
+        if let Err(err) = runtime
+            .usage_limit_active_goal_for_turn(input.turn_id)
+            .await
+        {
+            tracing::warn!("failed to usage-limit active goal after usage-limit error: {err}");
+        }
+    }
 }
 
 #[async_trait]
@@ -330,7 +359,7 @@ where
         let Some(runtime) = goal_runtime_handle(thread_store) else {
             return Vec::new();
         };
-        if !runtime.is_enabled() {
+        if !runtime.tools_visible() {
             return Vec::new();
         }
 

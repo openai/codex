@@ -8,6 +8,12 @@ use super::*;
 #[cfg(target_os = "windows")]
 use codex_utils_approval_presets::ApprovalPreset;
 
+#[cfg(target_os = "windows")]
+pub(super) struct WindowsSetupPermissions {
+    pub(super) permission_profile: PermissionProfile,
+    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
+}
+
 impl App {
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
         let mut overrides = self.harness_overrides.clone();
@@ -45,19 +51,25 @@ impl App {
     }
 
     #[cfg(target_os = "windows")]
-    pub(super) async fn permission_profile_for_windows_setup(
+    pub(super) async fn windows_setup_permissions(
         &self,
         preset: &ApprovalPreset,
         profile_selection: Option<&PermissionProfileSelection>,
-    ) -> Result<PermissionProfile> {
+    ) -> Result<WindowsSetupPermissions> {
         match profile_selection {
-            Some(selection) => Ok(self
-                .rebuild_config_for_permission_profile(selection.profile_id.as_str())
-                .await?
-                .permissions
-                .permission_profile()
-                .clone()),
-            None => Ok(preset.permission_profile.clone()),
+            Some(selection) => {
+                let selected_config = self
+                    .rebuild_config_for_permission_profile(selection.profile_id.as_str())
+                    .await?;
+                Ok(WindowsSetupPermissions {
+                    permission_profile: selected_config.permissions.permission_profile().clone(),
+                    workspace_roots: selected_config.effective_workspace_roots(),
+                })
+            }
+            None => Ok(WindowsSetupPermissions {
+                permission_profile: preset.permission_profile.clone(),
+                workspace_roots: self.config.effective_workspace_roots(),
+            }),
         }
     }
 

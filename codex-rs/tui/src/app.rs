@@ -473,7 +473,7 @@ struct SessionSummary {
 
 #[derive(Debug, Default)]
 struct InitialHistoryReplayBuffer {
-    retained_lines: VecDeque<Line<'static>>,
+    retained_lines: VecDeque<crate::terminal_hyperlinks::HyperlinkLine>,
     render_from_transcript_tail: bool,
 }
 
@@ -498,7 +498,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
+    pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
@@ -1045,11 +1045,13 @@ See the Codex keymap documentation for supported actions and examples."
                     .unwrap_or(false);
             if should_check {
                 let cwd = app.config.cwd.clone();
+                let workspace_roots = app.config.effective_workspace_roots();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 Self::spawn_world_writable_scan(
                     cwd,
+                    workspace_roots,
                     env_map,
                     logs_base_dir,
                     startup_permission_profile,

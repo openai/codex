@@ -115,6 +115,8 @@ pub struct TuiGlobalKeymap {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiChatKeymap {
+    /// Interrupt the active turn.
+    pub interrupt_turn: Option<KeybindingsSpec>,
     /// Decrease the active reasoning effort.
     pub decrease_reasoning_effort: Option<KeybindingsSpec>,
     /// Increase the active reasoning effort.
@@ -223,6 +225,8 @@ pub struct TuiVimNormalKeymap {
     pub delete_char: Option<KeybindingsSpec>,
     /// Delete from cursor to end of line (`D`).
     pub delete_to_line_end: Option<KeybindingsSpec>,
+    /// Change from cursor to end of line and enter insert mode (`C`).
+    pub change_to_line_end: Option<KeybindingsSpec>,
     /// Yank the entire line (`Y`).
     pub yank_line: Option<KeybindingsSpec>,
     /// Paste after cursor (`p`).
@@ -231,6 +235,8 @@ pub struct TuiVimNormalKeymap {
     pub start_delete_operator: Option<KeybindingsSpec>,
     /// Begin yank operator; next key selects motion (`y`).
     pub start_yank_operator: Option<KeybindingsSpec>,
+    /// Begin change operator; next keys select a text object.
+    pub start_change_operator: Option<KeybindingsSpec>,
     /// Cancel a pending operator and return to normal mode.
     pub cancel_operator: Option<KeybindingsSpec>,
 }
@@ -266,7 +272,36 @@ pub struct TuiVimOperatorKeymap {
     pub motion_line_start: Option<KeybindingsSpec>,
     /// Motion: to end of line (`$`).
     pub motion_line_end: Option<KeybindingsSpec>,
+    /// Select an inner text object after an operator.
+    pub select_inner_text_object: Option<KeybindingsSpec>,
+    /// Select an around text object after an operator.
+    pub select_around_text_object: Option<KeybindingsSpec>,
     /// Cancel the pending operator and return to normal mode.
+    pub cancel: Option<KeybindingsSpec>,
+}
+
+/// Vim text-object keybindings for modal editing inside text areas.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiVimTextObjectKeymap {
+    /// Text object: word.
+    pub word: Option<KeybindingsSpec>,
+    /// Text object: whitespace-delimited WORD.
+    pub big_word: Option<KeybindingsSpec>,
+    /// Text object: parentheses.
+    pub parentheses: Option<KeybindingsSpec>,
+    /// Text object: brackets.
+    pub brackets: Option<KeybindingsSpec>,
+    /// Text object: braces.
+    pub braces: Option<KeybindingsSpec>,
+    /// Text object: double quotes.
+    pub double_quote: Option<KeybindingsSpec>,
+    /// Text object: single quotes.
+    pub single_quote: Option<KeybindingsSpec>,
+    /// Text object: backticks.
+    pub backtick: Option<KeybindingsSpec>,
+    /// Cancel the pending text-object command.
     pub cancel: Option<KeybindingsSpec>,
 }
 
@@ -373,6 +408,8 @@ pub struct TuiKeymap {
     pub vim_normal: TuiVimNormalKeymap,
     #[serde(default)]
     pub vim_operator: TuiVimOperatorKeymap,
+    #[serde(default)]
+    pub vim_text_object: TuiVimTextObjectKeymap,
     #[serde(default)]
     pub pager: TuiPagerKeymap,
     #[serde(default)]
@@ -556,6 +593,20 @@ mod tests {
             .expect_err("expected unknown action under context");
         assert!(
             err.to_string().contains("open_transcrip"),
+            "expected error to mention misspelled field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn misspelled_vim_text_object_action_is_rejected() {
+        let toml_input = r#"
+            [vim_text_object]
+            double_quotes = "shift-quote"
+        "#;
+        let err = toml::from_str::<TuiKeymap>(toml_input)
+            .expect_err("expected unknown vim text object action");
+        assert!(
+            err.to_string().contains("double_quotes"),
             "expected error to mention misspelled field, got: {err}"
         );
     }

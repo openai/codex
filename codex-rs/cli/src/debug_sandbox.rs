@@ -208,10 +208,12 @@ async fn run_command_under_sandbox(
     // In practice, this should be `std::env::current_dir()` because this CLI
     // does not support `--cwd`, but let's use the config value for consistency.
     let cwd = config.cwd.clone();
-    // For now, we always use the same cwd for both the command and the
-    // permission profile. In the future, we could add a CLI option to set them
-    // separately.
-    let permission_profile_cwd = cwd.clone();
+    // Non-Windows sandbox launchers still use `sandbox_policy_cwd` for any
+    // remaining cwd-dependent policy resolution. `:workspace_roots` entries in
+    // the effective profile have already been materialized from config roots.
+    let sandbox_policy_cwd = cwd.clone();
+    #[cfg(target_os = "windows")]
+    let workspace_roots = config.effective_workspace_roots();
 
     let env = create_env(
         &config.permissions.shell_environment_policy,
@@ -222,8 +224,7 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            run_command_under_windows_session(&config, command, cwd, permission_profile_cwd, env)
-                .await;
+            run_command_under_windows_session(&config, command, cwd, workspace_roots, env).await;
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -264,7 +265,7 @@ async fn run_command_under_sandbox(
             .map(AbsolutePathBuf::from_absolute_path)
             .collect::<std::io::Result<Vec<_>>>()?;
         runtime_permission_profile = runtime_permission_profile.with_required_readable_roots(
-            permission_profile_cwd.as_path(),
+            sandbox_policy_cwd.as_path(),
             &managed_mitm_ca_trust_bundle_paths,
         )?;
     }
@@ -278,7 +279,7 @@ async fn run_command_under_sandbox(
                 command,
                 file_system_sandbox_policy: &file_system_sandbox_policy,
                 network_sandbox_policy,
-                sandbox_policy_cwd: permission_profile_cwd.as_path(),
+                sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
                 enforce_managed_network: false,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,
@@ -310,7 +311,7 @@ async fn run_command_under_sandbox(
                 command,
                 cwd.as_path(),
                 &runtime_permission_profile,
-                permission_profile_cwd.as_path(),
+                sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
                 allow_network_for_proxy(managed_network_requirements_enabled),
             );
@@ -362,7 +363,7 @@ async fn run_command_under_windows_session(
     config: &Config,
     command: Vec<String>,
     cwd: AbsolutePathBuf,
-    permission_profile_cwd: AbsolutePathBuf,
+    workspace_roots: Vec<AbsolutePathBuf>,
     env: std::collections::HashMap<String, String>,
 ) -> ! {
     use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -380,7 +381,7 @@ async fn run_command_under_windows_session(
     let spawned = if use_elevated {
         spawn_windows_sandbox_session_elevated_for_permission_profile(
             &permission_profile,
-            permission_profile_cwd.as_path(),
+            workspace_roots.as_slice(),
             config.codex_home.as_path(),
             command,
             cwd.as_path(),
@@ -399,7 +400,7 @@ async fn run_command_under_windows_session(
     } else {
         spawn_windows_sandbox_session_legacy(
             &permission_profile,
-            permission_profile_cwd.as_path(),
+            workspace_roots.as_slice(),
             config.codex_home.as_path(),
             command,
             cwd.as_path(),
@@ -1137,7 +1138,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn debug_sandbox_uses_explicit_profile_cwd() -> anyhow::Result<()> {
+    async fn debug_sandbox_uses_explicit_cwd() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let cwd = TempDir::new()?;
 
