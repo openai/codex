@@ -62,6 +62,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::UsageContributor;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -206,7 +207,6 @@ fn build_model_visible_specs_and_registry(
         hosted_specs,
     } = planned_tools;
     let mut specs = Vec::new();
-    let mut usage_contributors = Vec::new();
     let mut usage_contributors_by_tool_name = HashMap::new();
     let mut seen_tool_names = HashSet::new();
     for runtime in &runtimes {
@@ -226,13 +226,6 @@ fn build_model_visible_specs_and_registry(
             if !namespace_tools_enabled(turn_context) && matches!(spec, ToolSpec::Namespace(_)) {
                 continue;
             }
-            let estimated_tokens = crate::usage::estimate_serialized_tokens(&spec);
-            usage_contributors.extend(runtime_usage_contributors.into_iter().map(|contributor| {
-                crate::usage::UsagePromptContributor {
-                    contributor,
-                    source_estimated_tokens: estimated_tokens,
-                }
-            }));
             specs.push(spec);
         }
     }
@@ -247,12 +240,14 @@ fn build_model_visible_specs_and_registry(
     }
 
     let registry = ToolRegistry::from_tools(runtimes);
-    let model_visible_specs = merge_into_namespaces(specs)
+    let model_visible_specs: Vec<ToolSpec> = merge_into_namespaces(specs)
         .into_iter()
         .filter(|spec| {
             namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
         })
         .collect();
+    let usage_contributors =
+        prompt_usage_contributors(&model_visible_specs, &usage_contributors_by_tool_name);
 
     (
         model_visible_specs,
@@ -260,6 +255,50 @@ fn build_model_visible_specs_and_registry(
         usage_contributors,
         usage_contributors_by_tool_name,
     )
+}
+
+fn prompt_usage_contributors(
+    specs: &[ToolSpec],
+    contributors_by_tool_name: &HashMap<ToolName, Vec<UsageContributor>>,
+) -> Vec<crate::usage::UsagePromptContributor> {
+    let mut prompt_contributors = Vec::new();
+    for spec in specs {
+        let mut spec_contributors = Vec::new();
+        match spec {
+            ToolSpec::Namespace(namespace) => {
+                for tool in &namespace.tools {
+                    let ResponsesApiNamespaceTool::Function(tool) = tool;
+                    let tool_name = ToolName::namespaced(&namespace.name, &tool.name);
+                    if let Some(contributors) = contributors_by_tool_name.get(&tool_name) {
+                        for contributor in contributors {
+                            if !spec_contributors.contains(contributor) {
+                                spec_contributors.push(contributor.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            ToolSpec::Function(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::ImageGeneration { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::Freeform(_) => {
+                if let Some(contributors) =
+                    contributors_by_tool_name.get(&ToolName::plain(spec.name()))
+                {
+                    spec_contributors.extend(contributors.iter().cloned());
+                }
+            }
+        }
+        let source_estimated_tokens = crate::usage::estimate_serialized_tokens(spec);
+        prompt_contributors.extend(spec_contributors.into_iter().map(|contributor| {
+            crate::usage::UsagePromptContributor {
+                contributor,
+                source_estimated_tokens,
+            }
+        }));
+    }
+    prompt_contributors
 }
 
 fn spec_for_model_request(
@@ -431,6 +470,7 @@ fn build_code_mode_executors(
 
     let mut code_mode_nested_tool_specs = Vec::new();
     let mut exec_prompt_tool_specs = Vec::new();
+    let mut exec_prompt_usage_contributors = Vec::new();
     for executor in executors {
         let exposure = executor.exposure();
         if exposure == ToolExposure::DirectModelOnly {
@@ -444,6 +484,11 @@ fn build_code_mode_executors(
 
         if exposure != ToolExposure::Deferred {
             exec_prompt_tool_specs.push(spec.clone());
+            for contributor in executor.usage_contributors() {
+                if !exec_prompt_usage_contributors.contains(&contributor) {
+                    exec_prompt_usage_contributors.push(contributor);
+                }
+            }
         }
         code_mode_nested_tool_specs.push(spec);
     }
@@ -463,6 +508,7 @@ fn build_code_mode_executors(
                 deferred_tools_available,
             ),
             code_mode_nested_tool_specs,
+            exec_prompt_usage_contributors,
         )),
         Arc::new(CodeModeWaitHandler),
     ]

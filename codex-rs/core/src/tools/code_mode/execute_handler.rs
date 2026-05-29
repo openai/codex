@@ -5,6 +5,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_protocol::protocol::UsageContributor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
@@ -16,13 +17,19 @@ use super::is_exec_tool_name;
 pub struct CodeModeExecuteHandler {
     spec: ToolSpec,
     nested_tool_specs: Vec<ToolSpec>,
+    usage_contributors: Vec<UsageContributor>,
 }
 
 impl CodeModeExecuteHandler {
-    pub(crate) fn new(spec: ToolSpec, nested_tool_specs: Vec<ToolSpec>) -> Self {
+    pub(crate) fn new(
+        spec: ToolSpec,
+        nested_tool_specs: Vec<ToolSpec>,
+        usage_contributors: Vec<UsageContributor>,
+    ) -> Self {
         Self {
             spec,
             nested_tool_specs,
+            usage_contributors,
         }
     }
 
@@ -117,6 +124,10 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
 }
 
 impl CoreToolRuntime for CodeModeExecuteHandler {
+    fn usage_contributors(&self) -> Vec<UsageContributor> {
+        self.usage_contributors.clone()
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Custom { .. })
     }

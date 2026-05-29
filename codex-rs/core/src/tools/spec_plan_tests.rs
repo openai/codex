@@ -525,6 +525,22 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         vec!["direct".to_string()]
     );
 
+    let merged_mcp = probe_with(
+        |_| {},
+        ToolPlanInputs {
+            mcp_tools: Some(vec![
+                mcp_tool("merged", "mcp__merged", "lookup"),
+                mcp_tool("merged", "mcp__merged", "search"),
+            ]),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        merged_mcp.prompt_usage_contributor_labels,
+        vec!["merged".to_string()]
+    );
+
     let searchable_mcp = ToolPlanInputs {
         deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable", "lookup")]),
         ..ToolPlanInputs::default()
@@ -758,6 +774,7 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
             set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
         },
         ToolPlanInputs {
+            mcp_tools: Some(vec![mcp_tool("nested", "mcp__nested", "lookup")]),
             dynamic_tools: vec![dynamic_tool(
                 Some("codex_app"),
                 "lookup",
@@ -774,6 +791,10 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
     assert_eq!(
         code_mode_only.namespace_function_names("codex_app"),
         Vec::<String>::new().as_slice()
+    );
+    assert_eq!(
+        code_mode_only.prompt_usage_contributor_labels,
+        vec!["nested".to_string()]
     );
 }
 
