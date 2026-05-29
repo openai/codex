@@ -46,6 +46,13 @@ impl RemoteControlEnrollment {
             })
     }
 
+    pub(super) fn server_token_refresh_delay(&self) -> Option<std::time::Duration> {
+        let refresh_at = self.expires_at?
+            - time::Duration::seconds(REMOTE_CONTROL_SERVER_TOKEN_REFRESH_SKEW_SECS);
+        let refresh_delay = refresh_at - OffsetDateTime::now_utc();
+        Some(std::time::Duration::try_from(refresh_delay).unwrap_or_default())
+    }
+
     pub(super) fn clear_server_token(&mut self) {
         self.remote_control_token = None;
         self.expires_at = None;
@@ -433,6 +440,22 @@ mod tests {
 
         assert!(expires_soon.should_refresh_server_token());
         assert!(!expires_later.should_refresh_server_token());
+    }
+
+    #[test]
+    fn remote_control_enrollment_schedules_server_token_refresh_before_expiry() {
+        let refresh_delay = RemoteControlEnrollment {
+            account_id: "account_id".to_string(),
+            environment_id: "environment_id".to_string(),
+            server_id: "server_id".to_string(),
+            server_name: "server_name".to_string(),
+            remote_control_token: Some("remote-control-token".to_string()),
+            expires_at: Some(OffsetDateTime::now_utc() + time::Duration::seconds(31)),
+        }
+        .server_token_refresh_delay()
+        .expect("server token refresh should be scheduled");
+
+        assert!(refresh_delay <= std::time::Duration::from_secs(1));
     }
 
     #[test]

@@ -288,6 +288,7 @@ enum ConnectionEndReason {
     EnabledWatchClosed,
     AuthChanged,
     AuthWatchClosed,
+    ServerTokenRefreshRequired,
     ConnectionWorkerStopped,
 }
 
@@ -729,6 +730,17 @@ impl RemoteControlWebsocket {
         ));
 
         let mut enabled_rx = self.enabled_rx.clone();
+        let server_token_refresh_delay = self
+            .enrollment
+            .as_ref()
+            .and_then(RemoteControlEnrollment::server_token_refresh_delay);
+        let server_token_refresh = async move {
+            match server_token_refresh_delay {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::pin!(server_token_refresh);
         let connection_end_reason = tokio::select! {
             _ = shutdown_token.cancelled() => ConnectionEndReason::Shutdown,
             changed = enabled_rx.wait_for(|enabled| !*enabled) => {
@@ -748,6 +760,7 @@ impl RemoteControlWebsocket {
                     ConnectionEndReason::AuthWatchClosed
                 }
             }
+            _ = &mut server_token_refresh => ConnectionEndReason::ServerTokenRefreshRequired,
             _ = join_set.join_next() => ConnectionEndReason::ConnectionWorkerStopped,
         };
         clear_pairing_client(&self.pairing_client);
