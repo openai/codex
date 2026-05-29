@@ -1,8 +1,8 @@
 diff --git a/src/lib.rs b/src/lib.rs
-index 3316604..fcdd7c7 100644
+index a240dd6..6e64dfd 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -84,7 +84,7 @@ pub fn custom_dir() -> Option<path::PathBuf> {
+@@ -89,7 +89,7 @@ pub fn custom_dir() -> Option<path::PathBuf> {
  /// across multiple crates without dependencies constraints
  /// This also has the benefit of not re-downloading the binaries for each crate
  pub fn prebuilt_dir() -> path::PathBuf {
@@ -11,7 +11,7 @@ index 3316604..fcdd7c7 100644
      path::Path::new(&target_dir).join(format!(
          "livekit/{}-{}/{}",
          webrtc_triple(),
-@@ -197,8 +197,12 @@ pub fn configure_jni_symbols() -> Result<()> {
+@@ -197,7 +197,7 @@ pub fn configure_jni_symbols() -> Result<()> {
  }
  
  pub fn download_webrtc() -> Result<()> {
@@ -19,7 +19,8 @@ index 3316604..fcdd7c7 100644
 +    let dir = scratch_dir();
      // temporary fix to avoid github workflow issue
      fs::create_dir_all(&dir).context("Failed to create scratch_path")?;
-@@ -231,6 +235,10 @@ pub fn download_webrtc() -> Result<()> {
+     let flock = File::create(dir.join(".lock"))
+@@ -233,6 +233,10 @@ pub fn download_webrtc() -> Result<()> {
      Ok(())
  }
  
@@ -28,5 +29,5 @@ index 3316604..fcdd7c7 100644
 +}
 +
  pub fn android_ndk_toolchain() -> Result<path::PathBuf> {
-     let ndk_home = env::var("ANDROID_NDK_HOME")
-         .or_else(|_| env::var("ANDROID_NDK_ROOT"))
+     let host_os = host_os();
+ 
