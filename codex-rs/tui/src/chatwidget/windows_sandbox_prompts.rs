@@ -14,13 +14,22 @@ impl ChatWidget {
             return None;
         }
         let cwd = self.config.cwd.clone();
+        let workspace_roots = self.config.effective_workspace_roots();
         let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
-        let policy = self.config.legacy_sandbox_policy();
-        match codex_windows_sandbox::apply_world_writable_scan_and_denies(
+        let permission_profile = self.config.permissions.effective_permission_profile();
+        let Ok(permissions) =
+            codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &permission_profile,
+                workspace_roots.as_slice(),
+            )
+        else {
+            return None;
+        };
+        match codex_windows_sandbox::apply_world_writable_scan_and_denies_for_permissions(
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            &policy,
+            &permissions,
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,

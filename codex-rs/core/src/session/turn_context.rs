@@ -322,10 +322,12 @@ impl TurnContext {
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+        let workspace_roots = self.config.effective_workspace_roots();
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
+            workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
@@ -482,6 +484,7 @@ impl Session {
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
             thread_id.to_string(),
+            session_configuration.forked_from_thread_id,
             session_configuration.thread_source,
             sub_id.clone(),
             cwd.clone(),

@@ -213,6 +213,7 @@ mod thread_processor_behavior_tests {
     fn thread_turns_list_merges_in_progress_active_turn_before_agent_status_running() {
         let persisted_items = vec![RolloutItem::EventMsg(EventMsg::UserMessage(
             codex_protocol::protocol::UserMessageEvent {
+                client_id: None,
                 message: "persisted".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -224,6 +225,7 @@ mod thread_processor_behavior_tests {
             id: "live-turn".to_string(),
             items: vec![ThreadItem::UserMessage {
                 id: "live-user-message".to_string(),
+                client_id: None,
                 content: vec![V2UserInput::Text {
                     text: "live".to_string(),
                     text_elements: Vec::new(),
@@ -610,6 +612,7 @@ mod thread_processor_behavior_tests {
                 Some(HashMap::from([
                     ("model_provider".to_string(), json!("request")),
                     ("features.plugins".to_string(), json!(true)),
+                    ("bypass_hook_trust".to_string(), json!(true)),
                     (
                         "model_providers.session".to_string(),
                         json!({
@@ -626,6 +629,7 @@ mod thread_processor_behavior_tests {
         assert_eq!(config.model_provider_id, "session");
         assert_eq!(config.model_provider, session_provider);
         assert!(!config.features.enabled(Feature::Plugins));
+        assert!(config.bypass_hook_trust);
         Ok(())
     }
 
@@ -650,6 +654,7 @@ mod thread_processor_behavior_tests {
             developer_instructions: None,
             personality: None,
             exclude_turns: false,
+            initial_turns_page: None,
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {

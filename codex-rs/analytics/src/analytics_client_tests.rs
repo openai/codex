@@ -263,6 +263,7 @@ fn sample_thread_resume_response_with_source(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        initial_turns_page: None,
     })
 }
 
@@ -271,6 +272,7 @@ fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest 
         request_id: RequestId::Integer(request_id),
         params: TurnStartParams {
             thread_id: thread_id.to_string(),
+            client_user_message_id: None,
             input: vec![
                 UserInput::Text {
                     text: "hello".to_string(),
@@ -390,6 +392,7 @@ fn sample_turn_steer_request(
         params: TurnSteerParams {
             thread_id: thread_id.to_string(),
             expected_turn_id: expected_turn_id.to_string(),
+            client_user_message_id: None,
             input: vec![
                 UserInput::Text {
                     text: "more".to_string(),
@@ -401,6 +404,7 @@ fn sample_turn_steer_request(
                 },
             ],
             responsesapi_client_metadata: None,
+            additional_context: None,
         },
     }
 }
@@ -1212,6 +1216,7 @@ fn compaction_event_serializes_expected_shape() {
                 completed_at: 106,
                 duration_ms: Some(6543),
             },
+            "session-thread-1".to_string(),
             sample_app_server_client_metadata(),
             sample_runtime_metadata(),
             Some(ThreadSource::User),
@@ -1228,6 +1233,7 @@ fn compaction_event_serializes_expected_shape() {
             "event_type": "codex_compaction_event",
             "event_params": {
                 "thread_id": "thread-1",
+                "session_id": "session-thread-1",
                 "turn_id": "turn-1",
                 "app_server_client": {
                     "product_client_id": DEFAULT_ORIGINATOR,
@@ -1306,6 +1312,7 @@ fn thread_initialized_event_serializes_expected_shape() {
         event_type: "codex_thread_initialized",
         event_params: ThreadInitializedEventParams {
             thread_id: "thread-0".to_string(),
+            session_id: "session-thread-0".to_string(),
             app_server_client: CodexAppServerClientMetadata {
                 product_client_id: DEFAULT_ORIGINATOR.to_string(),
                 client_name: Some("codex-tui".to_string()),
@@ -1337,6 +1344,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_type": "codex_thread_initialized",
             "event_params": {
                 "thread_id": "thread-0",
+                "session_id": "session-thread-0",
                 "app_server_client": {
                     "product_client_id": DEFAULT_ORIGINATOR,
                     "client_name": "codex-tui",
@@ -1604,6 +1612,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
+    assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["product_client_id"],
         DEFAULT_ORIGINATOR
@@ -1780,6 +1789,7 @@ async fn compaction_event_ingests_custom_fact() {
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_compaction_event");
+    assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
     assert_eq!(payload[0]["event_params"]["turn_id"], "turn-compact");
     assert_eq!(
@@ -1904,6 +1914,10 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_guardian_review");
+    assert_eq!(
+        payload[0]["event_params"]["session_id"],
+        "session-thread-guardian"
+    );
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-guardian");
     assert_eq!(payload[0]["event_params"]["turn_id"], "turn-guardian");
     assert_eq!(payload[0]["event_params"]["review_id"], "review-guardian");
@@ -2396,6 +2410,7 @@ async fn item_review_summaries_do_not_cross_threads_with_reused_item_ids() {
 fn subagent_thread_started_review_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
+            session_id: "session-root".to_string(),
             thread_id: "thread-review".to_string(),
             parent_thread_id: None,
             product_client_id: "codex-tui".to_string(),
@@ -2439,6 +2454,7 @@ fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
             .expect("valid thread id");
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
+            session_id: "session-root".to_string(),
             thread_id: "thread-spawn".to_string(),
             parent_thread_id: None,
             product_client_id: "codex-tui".to_string(),
@@ -2458,18 +2474,21 @@ fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize thread spawn subagent event");
+    assert_eq!(payload["event_params"]["thread_id"], "thread-spawn");
     assert_eq!(payload["event_params"]["thread_source"], "subagent");
     assert_eq!(payload["event_params"]["subagent_source"], "thread_spawn");
     assert_eq!(
         payload["event_params"]["parent_thread_id"],
         "11111111-1111-1111-1111-111111111111"
     );
+    assert_eq!(payload["event_params"]["session_id"], "session-root");
 }
 
 #[test]
 fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
+            session_id: "session-root".to_string(),
             thread_id: "thread-memory".to_string(),
             parent_thread_id: None,
             product_client_id: "codex-tui".to_string(),
@@ -2495,6 +2514,7 @@ fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
 fn subagent_thread_started_other_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
+            session_id: "session-root".to_string(),
             thread_id: "thread-guardian".to_string(),
             parent_thread_id: None,
             product_client_id: "codex-tui".to_string(),
@@ -2516,6 +2536,7 @@ fn subagent_thread_started_other_serializes_expected_shape() {
 fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
+            session_id: "session-root".to_string(),
             thread_id: "thread-guardian".to_string(),
             parent_thread_id: Some("parent-thread-guardian".to_string()),
             product_client_id: "codex-tui".to_string(),
@@ -2545,6 +2566,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
                 SubAgentThreadStartedInput {
+                    session_id: "session-root".to_string(),
                     thread_id: "thread-review".to_string(),
                     parent_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
@@ -2618,6 +2640,7 @@ async fn subagent_thread_started_inherits_parent_connection_for_new_thread() {
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
                 SubAgentThreadStartedInput {
+                    session_id: "session-root".to_string(),
                     thread_id: "thread-review".to_string(),
                     parent_thread_id: None,
                     product_client_id: "parent-client".to_string(),
@@ -2665,6 +2688,8 @@ async fn subagent_thread_started_inherits_parent_connection_for_new_thread() {
         .await;
 
     let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload[0]["event_params"]["session_id"], "session-root");
+    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-review");
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["product_client_id"],
         "parent-client"
@@ -2685,6 +2710,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
                 SubAgentThreadStartedInput {
+                    session_id: "session-root".to_string(),
                     thread_id: "thread-subagent".to_string(),
                     parent_thread_id: Some("thread-1".to_string()),
                     product_client_id: "codex-tui".to_string(),
@@ -3190,6 +3216,7 @@ fn turn_event_serializes_expected_shape() {
         event_type: "codex_turn_event",
         event_params: crate::events::CodexTurnEventParams {
             thread_id: "thread-2".to_string(),
+            session_id: "session-thread-2".to_string(),
             turn_id: "turn-2".to_string(),
             app_server_client: sample_app_server_client_metadata(),
             runtime: sample_runtime_metadata(),
@@ -3240,6 +3267,7 @@ fn turn_event_serializes_expected_shape() {
             "event_type": "codex_turn_event",
             "event_params": {
                 "thread_id": "thread-2",
+                "session_id": "session-thread-2",
                 "turn_id": "turn-2",
                 "submission_type": null,
                 "app_server_client": {
@@ -3341,6 +3369,10 @@ async fn accepted_turn_steer_emits_expected_event() {
     let payload = serde_json::to_value(&out[0]).expect("serialize turn steer event");
     assert_eq!(payload["event_type"], json!("codex_turn_steer_event"));
     assert_eq!(payload["event_params"]["thread_id"], json!("thread-2"));
+    assert_eq!(
+        payload["event_params"]["session_id"],
+        json!("session-thread-2")
+    );
     assert_eq!(payload["event_params"]["expected_turn_id"], json!("turn-2"));
     assert_eq!(payload["event_params"]["accepted_turn_id"], json!("turn-2"));
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
@@ -3558,6 +3590,10 @@ async fn turn_lifecycle_emits_turn_event() {
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_type"], json!("codex_turn_event"));
     assert_eq!(payload["event_params"]["thread_id"], json!("thread-2"));
+    assert_eq!(
+        payload["event_params"]["session_id"],
+        json!("session-thread-2")
+    );
     assert_eq!(payload["event_params"]["turn_id"], json!("turn-2"));
     assert_eq!(
         payload["event_params"]["app_server_client"],

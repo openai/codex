@@ -578,6 +578,7 @@ impl ChatWidget {
                 UserInput::Text {
                     text,
                     text_elements: current_text_elements,
+                    ..
                 } => append_text_with_rebased_elements(
                     &mut message,
                     &mut text_elements,

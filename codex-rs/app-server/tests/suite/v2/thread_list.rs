@@ -227,6 +227,7 @@ async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let seed_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -249,6 +250,7 @@ async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let failed_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "fail turn".to_string(),
                 text_elements: Vec::new(),

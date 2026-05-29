@@ -263,10 +263,14 @@ impl ChatWidget {
                 else {
                     continue;
                 };
-                if !selected_app_ids.insert(app_id.to_string()) {
+                if selected_app_ids.contains(app_id) {
                     continue;
                 }
-                if let Some(app) = apps.iter().find(|app| app.id == app_id && app.is_enabled) {
+                if let Some(app) = apps
+                    .iter()
+                    .find(|app| app.id == app_id && is_app_mentionable(app))
+                {
+                    selected_app_ids.insert(app_id.to_string());
                     items.push(UserInput::Mention {
                         name: app.name.clone(),
                         path: binding.path.clone(),
@@ -359,6 +363,7 @@ impl ChatWidget {
         let encoded_mentions = mention_bindings
             .iter()
             .map(|binding| LinkedMention {
+                sigil: binding.sigil,
                 mention: binding.mention.clone(),
                 path: binding.path.clone(),
             })

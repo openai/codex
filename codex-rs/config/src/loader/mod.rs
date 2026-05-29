@@ -1006,7 +1006,7 @@ fn project_trust_for_lookup_key(
         .iter()
         .filter(|(key, _)| normalize_project_trust_lookup_key((*key).clone()) == lookup_key)
         .collect();
-    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches.sort_by_key(|(key, _)| *key);
     normalized_matches
         .first()
         .map(|(key, trust_level)| ((**key).clone(), **trust_level))

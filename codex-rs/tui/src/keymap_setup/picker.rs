@@ -60,6 +60,7 @@ struct KeymapContextTab {
 
 const KEYMAP_COMMON_ACTIONS: &[(&str, &str)] = &[
     ("composer", "submit"),
+    ("chat", "interrupt_turn"),
     ("editor", "insert_newline"),
     ("composer", "queue"),
     ("global", "toggle_fast_mode"),
@@ -104,7 +105,7 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
         id: "vim-shortcuts",
         label: "Vim",
         description: "Vim normal-mode and operator shortcuts.",
-        contexts: &["vim_normal", "vim_operator"],
+        contexts: &["vim_normal", "vim_operator", "vim_text_object"],
     },
     KeymapContextTab {
         id: "navigation-shortcuts",

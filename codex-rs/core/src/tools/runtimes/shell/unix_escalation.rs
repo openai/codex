@@ -16,6 +16,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
+use crate::tools::runtimes::prepend_zsh_fork_bin_to_path;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -116,7 +117,8 @@ pub(super) async fn try_run_zsh_fork(
         return Ok(None);
     }
 
-    let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+    let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+    prepend_zsh_fork_bin_to_path(&mut env, shell_zsh_path);
     let command =
         build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
     let options = ExecOptions {
@@ -140,6 +142,7 @@ pub(super) async fn try_run_zsh_fork(
         capture_policy: _capture_policy,
         sandbox,
         windows_sandbox_policy_cwd: sandbox_policy_cwd,
+        windows_sandbox_workspace_roots,
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
         permission_profile,
@@ -168,6 +171,7 @@ pub(super) async fn try_run_zsh_fork(
         windows_sandbox_level,
         arg0,
         sandbox_policy_cwd,
+        windows_sandbox_workspace_roots,
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -269,6 +273,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
         sandbox_policy_cwd: exec_request.windows_sandbox_policy_cwd.clone(),
+        windows_sandbox_workspace_roots: exec_request.windows_sandbox_workspace_roots.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -753,6 +758,7 @@ struct CoreShellCommandExecutor {
     windows_sandbox_level: WindowsSandboxLevel,
     arg0: Option<String>,
     sandbox_policy_cwd: AbsolutePathBuf,
+    windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
 }
@@ -795,6 +801,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
                 windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
+                windows_sandbox_workspace_roots: self.windows_sandbox_workspace_roots.clone(),
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
                 permission_profile: self.permission_profile.clone(),
@@ -932,6 +939,7 @@ impl CoreShellCommandExecutor {
             exec_request,
             options,
             self.sandbox_policy_cwd.clone(),
+            self.windows_sandbox_workspace_roots.clone(),
         );
         if let Some(network) = exec_request.network.as_ref() {
             network.apply_to_env(&mut exec_request.env);

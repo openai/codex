@@ -325,14 +325,17 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
-                .underlined(),
+            crate::terminal_hyperlinks::osc8_hyperlink(
+                "https://developers.openai.com/codex/mcp",
+                "MCP docs",
+            )
+            .underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
     ];
 
-    PlainHistoryCell { lines }
+    PlainHistoryCell::new(lines)
 }
 
 #[cfg(test)]
@@ -358,7 +361,7 @@ pub(crate) fn new_mcp_tools_output(
 
     let effective_servers = config.mcp_servers.get().clone();
     let mut servers: Vec<_> = effective_servers.iter().collect();
-    servers.sort_by(|(a, _), (b, _)| a.cmp(b));
+    servers.sort_by_key(|(server, _)| *server);
 
     for (server, cfg) in servers {
         let prefix = qualified_mcp_tool_name_prefix(server);
@@ -430,7 +433,7 @@ pub(crate) fn new_mcp_tools_output(
                     && !headers.is_empty()
                 {
                     let mut pairs: Vec<_> = headers.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs.sort_by_key(|(name, _)| *name);
                     let display = pairs
                         .into_iter()
                         .map(|(name, _)| format!("{name}=*****"))
@@ -442,7 +445,7 @@ pub(crate) fn new_mcp_tools_output(
                     && !headers.is_empty()
                 {
                     let mut pairs: Vec<_> = headers.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs.sort_by_key(|(name, _)| *name);
                     let display = pairs
                         .into_iter()
                         .map(|(name, var)| format!("{name}={var}"))
@@ -512,14 +515,13 @@ pub(crate) fn new_mcp_tools_output(
 /// Build the `/mcp` history cell from app-server `McpServerStatus` responses.
 ///
 /// The server list comes directly from the app-server status response, sorted
-/// alphabetically. Local config is only used to enrich returned servers with
-/// transport details such as command, URL, cwd, and environment display.
+/// alphabetically. The TUI deliberately does not enrich these rows from
+/// client-local config because the app-server owns the remote MCP state.
 ///
 /// This mirrors the layout of [`new_mcp_tools_output`] but sources data from
 /// the paginated RPC response rather than the in-process `McpManager`. The
 /// `detail` flag controls whether resources and resource templates are rendered.
 pub(crate) fn new_mcp_tools_output_from_statuses(
-    config: &Config,
     statuses: &[McpServerStatus],
     detail: McpServerStatusDetail,
 ) -> PlainHistoryCell {
@@ -530,13 +532,8 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         "".into(),
     ];
 
-    let mut statuses_by_name = HashMap::new();
-    for status in statuses {
-        statuses_by_name.insert(status.name.as_str(), status);
-    }
-
-    let mut server_names: Vec<String> = statuses.iter().map(|status| status.name.clone()).collect();
-    server_names.sort();
+    let mut statuses = statuses.iter().collect::<Vec<_>>();
+    statuses.sort_by(|a, b| a.name.cmp(&b.name));
 
     let has_any_tools = statuses.iter().any(|status| !status.tools.is_empty());
     if !has_any_tools {
@@ -544,32 +541,16 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         lines.push("".into());
     }
 
-    for server in server_names {
-        let cfg = config.mcp_servers.get().get(server.as_str());
-        let status = statuses_by_name.get(server.as_str()).copied();
-        let header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
+    for status in statuses {
+        let header: Vec<Span<'static>> = vec!["  • ".into(), status.name.clone().into()];
 
         lines.push(header.into());
-        if matches!(detail, McpServerStatusDetail::Full) {
-            let enabled = cfg.map(|cfg| cfg.enabled).unwrap_or(true);
-            let status_text = if enabled {
-                "enabled".green()
-            } else {
-                "disabled".red()
-            };
-            lines.push(vec!["    • Status: ".into(), status_text].into());
-            if let Some(reason) = cfg.and_then(|cfg| cfg.disabled_reason.as_ref()) {
-                lines.push(vec!["    • Reason: ".into(), reason.to_string().dim()].into());
-            }
-        }
-        let auth_status = status
-            .map(|status| match status.auth_status {
-                codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
-                codex_app_server_protocol::McpAuthStatus::NotLoggedIn => McpAuthStatus::NotLoggedIn,
-                codex_app_server_protocol::McpAuthStatus::BearerToken => McpAuthStatus::BearerToken,
-                codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
-            })
-            .unwrap_or(McpAuthStatus::Unsupported);
+        let auth_status = match status.auth_status {
+            codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
+            codex_app_server_protocol::McpAuthStatus::NotLoggedIn => McpAuthStatus::NotLoggedIn,
+            codex_app_server_protocol::McpAuthStatus::BearerToken => McpAuthStatus::BearerToken,
+            codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
+        };
         lines.push(
             vec![
                 "    • Auth: ".into(),
@@ -578,72 +559,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
             .into(),
         );
 
-        if let Some(cfg) = cfg {
-            match &cfg.transport {
-                McpServerTransportConfig::Stdio {
-                    command,
-                    args,
-                    env,
-                    env_vars,
-                    cwd,
-                } => {
-                    let args_suffix = if args.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {}", args.join(" "))
-                    };
-                    let cmd_display = format!("{command}{args_suffix}");
-                    lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
-
-                    if let Some(cwd) = cwd.as_ref() {
-                        lines.push(
-                            vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into(),
-                        );
-                    }
-
-                    let env_display = format_env_display(env.as_ref(), env_vars.as_slice());
-                    if env_display != "-" {
-                        lines.push(vec!["    • Env: ".into(), env_display.into()].into());
-                    }
-                }
-                McpServerTransportConfig::StreamableHttp {
-                    url,
-                    http_headers,
-                    env_http_headers,
-                    ..
-                } => {
-                    lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
-                    if let Some(headers) = http_headers.as_ref()
-                        && !headers.is_empty()
-                    {
-                        let mut pairs: Vec<_> = headers.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                        let display = pairs
-                            .into_iter()
-                            .map(|(name, _)| format!("{name}=*****"))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        lines.push(vec!["    • HTTP headers: ".into(), display.into()].into());
-                    }
-                    if let Some(headers) = env_http_headers.as_ref()
-                        && !headers.is_empty()
-                    {
-                        let mut pairs: Vec<_> = headers.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                        let display = pairs
-                            .into_iter()
-                            .map(|(name, var)| format!("{name}={var}"))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
-                    }
-                }
-            }
-        }
-
-        let mut names = status
-            .map(|status| status.tools.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
+        let mut names = status.tools.keys().cloned().collect::<Vec<_>>();
         names.sort();
         if names.is_empty() {
             lines.push("    • Tools: (none)".into());
@@ -652,9 +568,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         }
 
         if matches!(detail, McpServerStatusDetail::Full) {
-            let server_resources = status
-                .map(|status| status.resources.clone())
-                .unwrap_or_default();
+            let server_resources = status.resources.clone();
             if server_resources.is_empty() {
                 lines.push("    • Resources: (none)".into());
             } else {
@@ -674,9 +588,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
                 lines.push(spans.into());
             }
 
-            let server_templates = status
-                .map(|status| status.resource_templates.clone())
-                .unwrap_or_default();
+            let server_templates = status.resource_templates.clone();
             if server_templates.is_empty() {
                 lines.push("    • Resource templates: (none)".into());
             } else {

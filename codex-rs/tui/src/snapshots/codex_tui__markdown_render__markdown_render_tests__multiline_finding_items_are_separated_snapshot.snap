@@ -1,0 +1,17 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: "plain_lines(&text).join(\"\\n\")"
+---
+Findings
+
+1. Correctness issue: server tool-search completions are always rejected.
+
+   In next_prompt_suggestion.rs, the output is ignored, suppressing suggestions after completed searches.
+
+   Minimal correction: count matching outputs and suppress only missing ones.
+
+2. High-confidence simplification: remove the unused error channel.
+
+   The implementation resolves failures to None, so its contract can be narrower.
+
+3. High-confidence churn reduction: consolidate table-driven filter tests.

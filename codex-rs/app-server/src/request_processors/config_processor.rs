@@ -54,6 +54,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "mentions_v2",
     "plugins",
     "remote_control",
+    "remote_plugin",
     "tool_suggest",
     "tool_call_mcp_elicitation",
 ];
@@ -610,7 +611,7 @@ fn map_network_unix_socket_permission_to_api(
 ) -> NetworkUnixSocketPermission {
     match permission {
         codex_config::NetworkUnixSocketPermissionToml::Allow => NetworkUnixSocketPermission::Allow,
-        codex_config::NetworkUnixSocketPermissionToml::None => NetworkUnixSocketPermission::None,
+        codex_config::NetworkUnixSocketPermissionToml::Deny => NetworkUnixSocketPermission::Deny,
     }
 }
 

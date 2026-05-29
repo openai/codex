@@ -39,9 +39,11 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::raw_lines_from_source;
 use crate::history_cell::{self};
-use crate::markdown::append_markdown_agent_with_cwd;
-use crate::render::line_utils::prefix_lines;
+use crate::markdown::render_markdown_agent_with_links_and_cwd;
 use crate::style::proposed_plan_style;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::plain_hyperlink_lines;
+use crate::terminal_hyperlinks::prefix_hyperlink_lines;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
 use std::path::Path;
@@ -75,7 +77,7 @@ struct StreamCore {
     /// Accumulated raw markdown source for the current stream.
     raw_source: String,
     /// Full re-render of `raw_source` at `width`. Rebuilt on every committed delta.
-    rendered_lines: Vec<Line<'static>>,
+    rendered_lines: Vec<HyperlinkLine>,
     /// Lines enqueued into the commit-animation queue.
     enqueued_stable_len: usize,
     /// Lines actually emitted to scrollback.
@@ -149,7 +151,7 @@ impl StreamCore {
     /// final render is the canonical transcript representation used for
     /// consolidation, so callers that skip `reset()` can accidentally replay a
     /// finished stream into the next answer.
-    fn finalize_remaining(&mut self) -> Vec<Line<'static>> {
+    fn finalize_remaining(&mut self) -> Vec<HyperlinkLine> {
         let remainder_source = self.state.collector.finalize_and_drain_source();
         if !remainder_source.is_empty() {
             self.raw_source.push_str(&remainder_source);
@@ -164,14 +166,14 @@ impl StreamCore {
     }
 
     /// Step animation: dequeue one line, update the emitted count.
-    fn tick(&mut self) -> Vec<Line<'static>> {
+    fn tick(&mut self) -> Vec<HyperlinkLine> {
         let step = self.state.step();
         self.emitted_stable_len += step.len();
         step
     }
 
     /// Batch drain: dequeue up to `max_lines`, update the emitted count.
-    fn tick_batch(&mut self, max_lines: usize) -> Vec<Line<'static>> {
+    fn tick_batch(&mut self, max_lines: usize) -> Vec<HyperlinkLine> {
         if max_lines == 0 {
             return Vec::new();
         }
@@ -209,7 +211,7 @@ impl StreamCore {
     /// `emitted_stable_len` instead, queued-but-not-yet-emitted lines could
     /// reappear in the active cell and duplicate content on screen.
     #[inline]
-    fn current_tail_lines(&self) -> Vec<Line<'static>> {
+    fn current_tail_lines(&self) -> Vec<HyperlinkLine> {
         let start = self.enqueued_stable_len.min(self.rendered_lines.len());
         self.rendered_lines[start..].to_vec()
     }
@@ -273,19 +275,14 @@ impl StreamCore {
         self.holdback_scanner.reset();
     }
 
-    fn render_source(&self, source: &str) -> Vec<Line<'static>> {
+    fn render_source(&self, source: &str) -> Vec<HyperlinkLine> {
         match self.render_mode {
-            HistoryRenderMode::Rich => {
-                let mut rendered = Vec::new();
-                append_markdown_agent_with_cwd(
-                    source,
-                    self.width,
-                    Some(self.cwd.as_path()),
-                    &mut rendered,
-                );
-                rendered
-            }
-            HistoryRenderMode::Raw => raw_lines_from_source(source),
+            HistoryRenderMode::Rich => render_markdown_agent_with_links_and_cwd(
+                source,
+                self.width,
+                Some(self.cwd.as_path()),
+            ),
+            HistoryRenderMode::Raw => plain_hyperlink_lines(raw_lines_from_source(source)),
         }
     }
 
@@ -437,12 +434,10 @@ impl StreamCore {
         }
 
         let render_start = Instant::now();
-        let mut stable_prefix_render = Vec::new();
-        append_markdown_agent_with_cwd(
+        let stable_prefix_render = render_markdown_agent_with_links_and_cwd(
             &self.raw_source[..source_start.min(self.raw_source.len())],
             self.width,
             Some(self.cwd.as_path()),
-            &mut stable_prefix_render,
         );
         let stable_prefix_len = stable_prefix_render.len();
         tracing::trace!(
@@ -528,7 +523,7 @@ impl StreamController {
     }
 
     #[inline]
-    pub(crate) fn current_tail_lines(&self) -> Vec<Line<'static>> {
+    pub(crate) fn current_tail_lines(&self) -> Vec<HyperlinkLine> {
         self.core.current_tail_lines()
     }
 
@@ -555,15 +550,17 @@ impl StreamController {
         self.core.set_render_mode(render_mode);
     }
 
-    fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
+    fn emit(&mut self, lines: Vec<HyperlinkLine>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
         }
-        Some(Box::new(history_cell::AgentMessageCell::new(lines, {
-            let header_emitted = self.header_emitted;
-            self.header_emitted = true;
-            !header_emitted
-        })))
+        Some(Box::new(
+            history_cell::AgentMessageCell::new_hyperlink_lines(lines, {
+                let header_emitted = self.header_emitted;
+                self.header_emitted = true;
+                !header_emitted
+            }),
+        ))
     }
 }
 // ---------------------------------------------------------------------------
@@ -644,7 +641,7 @@ impl PlanStreamController {
     }
 
     #[inline]
-    pub(crate) fn current_tail_lines(&self) -> Vec<Line<'static>> {
+    pub(crate) fn current_tail_lines(&self) -> Vec<HyperlinkLine> {
         self.core.current_tail_lines()
     }
 
@@ -653,7 +650,7 @@ impl PlanStreamController {
         !self.header_emitted && self.core.enqueued_stable_len == 0
     }
 
-    pub(crate) fn current_tail_display_lines(&self) -> Vec<Line<'static>> {
+    pub(crate) fn current_tail_display_lines(&self) -> Vec<HyperlinkLine> {
         let lines = self.current_tail_lines();
         if lines.is_empty() {
             return Vec::new();
@@ -680,7 +677,7 @@ impl PlanStreamController {
 
     fn emit(
         &mut self,
-        lines: Vec<Line<'static>>,
+        lines: Vec<HyperlinkLine>,
         include_bottom_padding: bool,
     ) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() && !include_bottom_padding {
@@ -700,26 +697,28 @@ impl PlanStreamController {
 
     fn render_display_lines(
         &self,
-        lines: Vec<Line<'static>>,
+        lines: Vec<HyperlinkLine>,
         include_bottom_padding: bool,
-    ) -> Vec<Line<'static>> {
-        let mut out_lines: Vec<Line<'static>> = Vec::with_capacity(4);
+    ) -> Vec<HyperlinkLine> {
+        let mut out_lines: Vec<HyperlinkLine> = Vec::with_capacity(/*capacity*/ 4);
         if !self.header_emitted {
-            out_lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
-            out_lines.push(Line::from(" "));
+            out_lines.push(HyperlinkLine::new(
+                vec!["• ".dim(), "Proposed Plan".bold()].into(),
+            ));
+            out_lines.push(HyperlinkLine::new(Line::from(" ")));
         }
 
-        let mut plan_lines: Vec<Line<'static>> = Vec::with_capacity(4);
+        let mut plan_lines: Vec<HyperlinkLine> = Vec::with_capacity(/*capacity*/ 4);
         if !self.top_padding_emitted {
-            plan_lines.push(Line::from(" "));
+            plan_lines.push(HyperlinkLine::new(Line::from(" ")));
         }
         plan_lines.extend(lines);
         if include_bottom_padding {
-            plan_lines.push(Line::from(" "));
+            plan_lines.push(HyperlinkLine::new(Line::from(" ")));
         }
 
         let plan_style = proposed_plan_style();
-        let plan_lines = prefix_lines(plan_lines, "  ".into(), "  ".into())
+        let plan_lines = prefix_hyperlink_lines(plan_lines, "  ".into(), "  ".into())
             .into_iter()
             .map(|line| line.style(plan_style))
             .collect::<Vec<_>>();
@@ -731,6 +730,7 @@ impl PlanStreamController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_hyperlinks::visible_lines;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -759,6 +759,10 @@ mod tests {
                     .join("")
             })
             .collect()
+    }
+
+    fn hyperlink_lines_to_plain_strings(lines: &[HyperlinkLine]) -> Vec<String> {
+        lines_to_plain_strings(&visible_lines(lines.to_vec()))
     }
 
     fn collect_streamed_lines(deltas: &[&str], width: Option<usize>) -> Vec<String> {
@@ -862,7 +866,7 @@ mod tests {
         let mut ctrl = stream_controller(Some(80));
         assert!(!ctrl.has_live_tail());
 
-        ctrl.core.rendered_lines = vec![Line::from("tail line")];
+        ctrl.core.rendered_lines = vec![Line::from("tail line").into()];
         ctrl.core.enqueued_stable_len = 0;
         assert!(ctrl.has_live_tail());
 
@@ -875,7 +879,7 @@ mod tests {
         let mut ctrl = plan_stream_controller(Some(80));
         assert!(!ctrl.has_live_tail());
 
-        ctrl.core.rendered_lines = vec![Line::from("tail line")];
+        ctrl.core.rendered_lines = vec![Line::from("tail line").into()];
         ctrl.core.enqueued_stable_len = 0;
         assert!(ctrl.has_live_tail());
 
@@ -890,7 +894,7 @@ mod tests {
         ctrl.push("| --- | --- |\n");
         ctrl.push("| partial");
 
-        let tail = lines_to_plain_strings(&ctrl.current_tail_lines()).join("\n");
+        let tail = hyperlink_lines_to_plain_strings(&ctrl.current_tail_lines()).join("\n");
         assert!(
             !tail.contains("partial"),
             "expected live tail to remain newline-gated: {tail:?}",
@@ -920,7 +924,7 @@ mod tests {
 
         for width in [48, 104, 56] {
             ctrl.set_width(Some(width));
-            let tail = lines_to_plain_strings(&ctrl.current_tail_lines());
+            let tail = hyperlink_lines_to_plain_strings(&ctrl.current_tail_lines());
 
             let mut expected = Vec::new();
             crate::markdown::append_markdown_agent(
@@ -1033,7 +1037,7 @@ mod tests {
 
         ctrl.set_width(Some(24));
 
-        let tail_after = lines_to_plain_strings(&ctrl.current_tail_lines());
+        let tail_after = hyperlink_lines_to_plain_strings(&ctrl.current_tail_lines());
         assert!(
             !tail_after.is_empty(),
             "resize must keep mutable tail when queue is empty",
@@ -1189,6 +1193,7 @@ mod tests {
             "3. Loose item with its own paragraph.".to_string(),
             "".to_string(),
             "   This paragraph belongs to the same list item.".to_string(),
+            "".to_string(),
             "4. Second loose item with a nested list after a blank line.".to_string(),
             "    - Nested bullet under a loose item".to_string(),
             "    - Another nested bullet".to_string(),
@@ -1361,7 +1366,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_renders_unicode_for_multi_table_response_shape() {
+    fn controller_renders_separators_for_multi_table_response_shape() {
         let source = "Absolutely. Here are several different Markdown table patterns you can use for rendering tests.\n\n| Name  | Role      |
   Location |\n|-------|-----------|----------|\n| Ava   | Engineer  | NYC      |\n| Malik | Designer  | Berlin   |\n| Priya | PM        | Remote
   |\n\n| Item        | Qty | Price | In Stock |\n|:------------|----:|------:|:--------:|\n| Keyboard    |   2 | 49.99 |    Yes   |\n| Mouse       |  10
@@ -1377,13 +1382,13 @@ mod tests {
         let deltas = chunked.iter().map(String::as_str).collect::<Vec<_>>();
         let streamed = collect_streamed_lines(&deltas, Some(120));
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border in streamed output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator in streamed output: {streamed:?}"
         );
     }
 
     #[test]
-    fn controller_renders_unicode_for_no_outer_pipes_table_shape() {
+    fn controller_renders_separators_for_no_outer_pipes_table_shape() {
         let source = "### 1) Basic\n\n| Name | Role | Active |\n|---|---|---|\n| Alice | Engineer | Yes |\n| Bob | Designer | No |\n\n### 2) No outer
   pipes\n\nCol A | Col B | Col C\n--- | --- | ---\nx | y | z\n10 | 20 | 30\n\n### 3) Another table\n\n| Key | Value |\n|---|---|\n| a | b |\n";
 
@@ -1405,6 +1410,10 @@ mod tests {
         assert!(
             !has_raw_no_outer_header,
             "no-outer-pipes header should not remain raw in final streamed output: {streamed:?}"
+        );
+        assert!(
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator in final streamed output: {streamed:?}"
         );
     }
 
@@ -1428,8 +1437,8 @@ mod tests {
 
         assert_eq!(streamed, expected);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border for no-outer-pipes streaming: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator for no-outer-pipes streaming: {streamed:?}"
         );
         assert!(
             !streamed
@@ -1457,8 +1466,8 @@ mod tests {
 
         assert_eq!(streamed, expected);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border for two-column no-outer table: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator for two-column no-outer table: {streamed:?}"
         );
         assert!(
             !streamed.iter().any(|line| line.trim() == "A | B"),
@@ -1489,8 +1498,8 @@ mod tests {
         assert!(
             streamed
                 .iter()
-                .any(|line| line.contains("┌───────┬───────┬───────┐")),
-            "expected converted no-outer table border in streamed output: {streamed:?}"
+                .any(|line| line.contains(" Col A    Col B    Col C")),
+            "expected converted no-outer table header in streamed output: {streamed:?}"
         );
     }
 
@@ -1512,8 +1521,8 @@ mod tests {
 
         assert_eq!(streamed, expected);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border in streamed output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator in streamed output: {streamed:?}"
         );
         assert!(
             !streamed.iter().any(|line| line.trim() == "| A | B |"),
@@ -1541,8 +1550,8 @@ mod tests {
 
         assert_eq!(streamed, expected);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border in streamed output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separator in streamed output: {streamed:?}"
         );
         assert!(
             !streamed
@@ -1580,7 +1589,7 @@ mod tests {
             }
 
             let mut visible = emitted_lines.clone();
-            visible.extend(ctrl.current_tail_lines());
+            visible.extend(visible_lines(ctrl.current_tail_lines()));
             let visible_plain = lines_to_plain_strings(&visible);
 
             let mut expected = Vec::new();
@@ -1596,6 +1605,30 @@ mod tests {
                 "live view diverged after delta: {delta:?}"
             );
         }
+    }
+
+    #[test]
+    fn finalized_stream_table_preserves_semantic_url_fragments() {
+        let destination = "https://example.com/a/very/long/path/to/a/table/artifact";
+        let source = format!("| Item | URL |\n| --- | --- |\n| report | {destination} |\n");
+        let mut ctrl = stream_controller(/*width*/ Some(32));
+        ctrl.push(&source);
+
+        let (cell, _) = ctrl.finalize();
+        let lines = cell
+            .expect("final stream table cell")
+            .display_hyperlink_lines(/*width*/ 32);
+        let linked_rows = lines
+            .iter()
+            .filter(|line| !line.hyperlinks.is_empty())
+            .collect::<Vec<_>>();
+
+        assert!(linked_rows.len() > 1);
+        assert!(linked_rows.iter().all(|line| {
+            line.hyperlinks
+                .iter()
+                .all(|link| link.destination == destination)
+        }));
     }
 
     #[test]
@@ -1620,8 +1653,10 @@ mod tests {
             "expected code-fenced pipe line to remain raw: {streamed:?}"
         );
         assert!(
-            !streamed.iter().any(|line| line.contains('┌')),
-            "did not expect unicode table border for non-markdown fence: {streamed:?}"
+            !streamed
+                .iter()
+                .any(|line| line.contains('━') || line.contains('─')),
+            "did not expect a table separator for non-markdown fence: {streamed:?}"
         );
     }
 
@@ -1642,10 +1677,8 @@ mod tests {
 
         assert_eq!(streamed, baseline);
         assert!(
-            streamed
-                .iter()
-                .any(|line| line.contains('│') || line.contains('└') || line.contains('┌')),
-            "expected unicode table box drawing chars in plan streamed output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separators in plan streamed output: {streamed:?}"
         );
         assert!(
             !streamed
@@ -1653,6 +1686,34 @@ mod tests {
                 .any(|line| line.trim() == "| Step | Owner |"),
             "did not expect raw table header line in plan output: {streamed:?}"
         );
+    }
+
+    #[test]
+    fn finalized_plan_stream_preserves_semantic_url_fragments() {
+        let destination = "https://example.com/a/very/long/path/to/a/table/artifact";
+        let source = format!("| Step | URL |\n| --- | --- |\n| Verify | {destination} |\n");
+        let mut ctrl = PlanStreamController::new(
+            /*width*/ Some(32),
+            &test_cwd(),
+            HistoryRenderMode::Rich,
+        );
+        ctrl.push(&source);
+
+        let (cell, _) = ctrl.finalize();
+        let lines = cell
+            .expect("final plan stream table cell")
+            .display_hyperlink_lines(/*width*/ 32);
+        let linked_rows = lines
+            .iter()
+            .filter(|line| !line.hyperlinks.is_empty())
+            .collect::<Vec<_>>();
+
+        assert!(linked_rows.len() > 1);
+        assert!(linked_rows.iter().all(|line| {
+            line.hyperlinks
+                .iter()
+                .all(|link| link.destination == destination)
+        }));
     }
 
     #[test]
@@ -1674,10 +1735,8 @@ mod tests {
 
         assert_eq!(streamed, baseline);
         assert!(
-            streamed
-                .iter()
-                .any(|line| line.contains('│') || line.contains('└') || line.contains('┌')),
-            "expected unicode table box drawing chars in fenced plan output: {streamed:?}"
+            streamed.iter().any(|line| line.contains('━')),
+            "expected table separators in fenced plan output: {streamed:?}"
         );
         assert!(
             !streamed

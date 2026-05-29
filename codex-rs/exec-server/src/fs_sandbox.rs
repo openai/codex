@@ -137,7 +137,7 @@ fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, JS
 fn helper_read_roots(runtime_paths: &ExecServerRuntimePaths) -> Vec<AbsolutePathBuf> {
     let mut roots = Vec::new();
     for path in std::iter::once(runtime_paths.codex_self_exe.as_path())
-        .chain(runtime_paths.codex_linux_sandbox_exe.as_deref().into_iter())
+        .chain(runtime_paths.codex_linux_sandbox_exe.as_deref())
     {
         if let Some(parent) = path.parent()
             && let Ok(root) = AbsolutePathBuf::from_absolute_path(parent)

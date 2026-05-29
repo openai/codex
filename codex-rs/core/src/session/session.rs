@@ -95,6 +95,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
+    /// Immediate history source copied into this thread, when this thread was forked.
+    pub(super) forked_from_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     pub(super) thread_source: Option<ThreadSource>,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
@@ -505,7 +507,10 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
-        let forked_from_id = initial_history.forked_from_id();
+        let forked_from_id = session_configuration
+            .forked_from_thread_id
+            .or_else(|| initial_history.forked_from_id());
+        session_configuration.forked_from_thread_id = forked_from_id;
 
         let event_persistence_mode = if session_configuration.persist_extended_history {
             ThreadEventPersistenceMode::Extended
@@ -961,6 +966,8 @@ impl Session {
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
+                    session_source: &session_configuration.session_source,
+                    persistent_thread_state_available: state_db_ctx.is_some(),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
                 }).await;
@@ -978,6 +985,7 @@ impl Session {
                     McpConnectionManager::new_uninitialized_with_permission_profile(
                         &config.permissions.approval_policy,
                         config.permissions.permission_profile(),
+                        config.prefix_mcp_tool_names(),
                     ),
                 )),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -1028,6 +1036,12 @@ impl Session {
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
                     attestation_provider,
+                )
+                .with_prompt_cache_key_override(
+                    crate::guardian::prompt_cache_key_override_for_review_session(
+                        &session_configuration.session_source,
+                        session_configuration.forked_from_thread_id,
+                    ),
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
@@ -1156,6 +1170,7 @@ impl Session {
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
                 host_owned_codex_apps_enabled,
+                config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
                 tool_plugin_provenance,
                 auth,
