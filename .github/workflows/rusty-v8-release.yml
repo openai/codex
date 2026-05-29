@@ -9,6 +9,13 @@ concurrency:
   group: ${{ github.workflow }}::${{ github.ref_name }}
   cancel-in-progress: false
 
+env:
+  # BuildBuddy keys may exist in trusted upstream runs or in a separately
+  # configured fork. Only trusted runs in `openai/codex` may select the OpenAI
+  # tenant; fork PRs and runs in fork repositories stay on the generic host.
+  # The Bazel remote-config wrapper repeats the repository check as defense in depth.
+  CODEX_BAZEL_USE_OPENAI_BUILDBUDDY_HOST: ${{ github.repository == 'openai/codex' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+
 jobs:
   metadata:
     runs-on: ubuntu-latest
@@ -186,11 +193,10 @@ jobs:
             bazel_args+=(--config=v8-release-compat)
           fi
 
-          bazel \
+          ./.github/scripts/run_bazel_with_buildbuddy.py \
             --noexperimental_remote_repo_contents_cache \
             "${bazel_args[@]}" \
-            "--config=${{ matrix.bazel_config }}" \
-            "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+            "--config=${{ matrix.bazel_config }}"
 
       - name: Stage release pair
         env:

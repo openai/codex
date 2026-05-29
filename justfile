@@ -83,6 +83,11 @@ test *args:
     $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
     just bench-smoke
 
+# Run the Python tests for repository automation scripts.
+[no-cd]
+test-scripts:
+    {{ python }} -m unittest discover -s {{ justfile_directory() }}/.github/scripts -p 'test_*.py'
+
 # Run explicit workspace benchmark targets.
 bench *args:
     cargo bench --workspace --bench '*' {args}

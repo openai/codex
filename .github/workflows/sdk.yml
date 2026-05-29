@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request: {}
 
+env:
+  # BuildBuddy keys may exist in trusted upstream runs or in a separately
+  # configured fork. Only trusted runs in `openai/codex` may select the OpenAI
+  # tenant; fork PRs and runs in fork repositories stay on the generic host.
+  # The Bazel remote-config wrapper repeats the repository check as defense in depth.
+  CODEX_BAZEL_USE_OPENAI_BUILDBUDDY_HOST: ${{ github.repository == 'openai/codex' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+
 jobs:
   python-sdk:
     runs-on:

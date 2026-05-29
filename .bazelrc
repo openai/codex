@@ -49,6 +49,25 @@ common --experimental_remote_execution_keepalive
 common --grpc_keepalive_time=30s
 common --experimental_remote_downloader=grpcs://remote.buildbuddy.io
 
+# Remote configurations selected by `.github/scripts/run_bazel_with_buildbuddy.py`.
+# The OpenAI tenant config is intentionally opt-in; fork workflows use the
+# generic BuildBuddy host even when they provide their own API key.
+common:buildbuddy-generic --bes_backend=grpcs://remote.buildbuddy.io
+common:buildbuddy-generic --bes_results_url=https://app.buildbuddy.io/invocation/
+common:buildbuddy-generic --remote_cache=grpcs://remote.buildbuddy.io
+common:buildbuddy-generic --experimental_remote_downloader=grpcs://remote.buildbuddy.io
+
+common:buildbuddy-generic-rbe --config=buildbuddy-generic
+common:buildbuddy-generic-rbe --remote_executor=grpcs://remote.buildbuddy.io
+
+common:buildbuddy-openai --bes_backend=grpcs://openai.buildbuddy.io
+common:buildbuddy-openai --bes_results_url=https://openai.buildbuddy.io/invocation/
+common:buildbuddy-openai --remote_cache=grpcs://openai.buildbuddy.io
+common:buildbuddy-openai --experimental_remote_downloader=grpcs://openai.buildbuddy.io
+
+common:buildbuddy-openai-rbe --config=buildbuddy-openai
+common:buildbuddy-openai-rbe --remote_executor=grpcs://openai.buildbuddy.io
+
 # This limits both in-flight executions and concurrent downloads. Even with high number
 # of jobs execution will still be limited by CPU cores, so this just pays a bit of
 # memory in exchange for higher download concurrency.

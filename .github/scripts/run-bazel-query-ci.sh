@@ -52,18 +52,17 @@ fi
 
 run_bazel() {
   if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-    MSYS2_ARG_CONV_EXCL='*' bazel "$@"
+    MSYS2_ARG_CONV_EXCL='*' "$(dirname "${BASH_SOURCE[0]}")/run_bazel_with_buildbuddy.py" "$@"
     return
   fi
 
-  bazel "$@"
+  "$(dirname "${BASH_SOURCE[0]}")/run_bazel_with_buildbuddy.py" "$@"
 }
 
 bazel_query_args=(--noexperimental_remote_repo_contents_cache query)
 if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   bazel_query_args+=(
     "--config=${ci_config}"
-    "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
   )
 fi
 

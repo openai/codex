@@ -88,24 +88,35 @@ class RustyV8BazelTest(unittest.TestCase):
             ),
         )
 
-    def test_bazel_remote_args_include_buildbuddy_header_when_present(self) -> None:
-        with patch.dict(environ, {"BUILDBUDDY_API_KEY": "token"}, clear=False):
+    def test_bazel_commands_use_shared_buildbuddy_remote_config_library(self) -> None:
+        with patch.dict(environ, {}, clear=True):
             self.assertEqual(
-                ["--remote_header=x-buildbuddy-api-key=token"],
-                rusty_v8_bazel.bazel_remote_args(),
+                [
+                    "bazel",
+                    "build",
+                    "--config=ci-v8",
+                    "//third_party/v8:release",
+                    "--config=buildbuddy-generic-rbe",
+                ],
+                rusty_v8_bazel.bazel_command(
+                    "build",
+                    "--config=ci-v8",
+                    "//third_party/v8:release",
+                ),
             )
 
-        with patch.dict(environ, {}, clear=True):
-            self.assertEqual([], rusty_v8_bazel.bazel_remote_args())
-
-    def test_release_pair_labels_and_staged_names_distinguish_sandbox_artifacts(self) -> None:
+    def test_release_pair_labels_and_staged_names_distinguish_sandbox_artifacts(
+        self,
+    ) -> None:
         self.assertEqual(
             "//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl",
             rusty_v8_bazel.release_pair_label("x86_64-unknown-linux-musl"),
         )
         self.assertEqual(
             "//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl",
-            rusty_v8_bazel.release_pair_label("x86_64-unknown-linux-musl", sandbox=True),
+            rusty_v8_bazel.release_pair_label(
+                "x86_64-unknown-linux-musl", sandbox=True
+            ),
         )
         self.assertEqual(
             "//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_apple_darwin",
@@ -205,11 +216,7 @@ class RustyV8BazelTest(unittest.TestCase):
         with TemporaryDirectory() as source_dir, TemporaryDirectory() as output_dir:
             source_root = Path(source_dir)
             gn_out = (
-                source_root
-                / "target"
-                / "x86_64-pc-windows-msvc"
-                / "release"
-                / "gn_out"
+                source_root / "target" / "x86_64-pc-windows-msvc" / "release" / "gn_out"
             )
             (gn_out / "obj").mkdir(parents=True)
             (gn_out / "obj" / "rusty_v8.lib").write_bytes(b"archive")
