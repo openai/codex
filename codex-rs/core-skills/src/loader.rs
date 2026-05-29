@@ -236,6 +236,9 @@ pub(crate) async fn skill_roots(
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
+    // `env_path` owns workspace/repo-relative skill discovery for the selected environment.
+    // `local_file_system` owns client-local system/user/plugin roots and is absent when local exec
+    // is disabled, in which case those local roots intentionally do not load.
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     skill_roots_with_home_dir(
@@ -257,6 +260,8 @@ async fn skill_roots_with_home_dir(
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
+    // Assemble one precedence-ordered root list from the two authorities above, then dedupe before
+    // any reads happen so downstream loading stays oblivious to local-vs-selected-env routing.
     let mut roots = repo_config_skill_roots(env_path, config_layer_stack);
     roots.extend(local_skill_roots(
         local_file_system,
@@ -277,6 +282,9 @@ fn local_skill_roots(
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
+    // These roots are absolute paths on the client machine, not paths inside the selected
+    // workspace environment. Bind them to the available local exec filesystem so remote turns
+    // keep loading local installed/bundled/plugin skills without reading those paths remotely.
     let Some(local_file_system) = local_file_system else {
         // Local exec can be disabled. In that case, keep repo/env skill loading intact but skip
         // local absolute roots instead of falling back to the process-global local filesystem.
@@ -366,6 +374,8 @@ fn repo_config_skill_roots(
     env_path: &EnvironmentPathRef,
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
+    // Project config layers describe workspace-local skill directories. Their absolute paths only
+    // make sense inside the selected environment, so keep them bound to `env_path`.
     config_layer_stack
         .get_layers(
             ConfigLayerStackOrdering::HighestPrecedenceFirst,
@@ -397,6 +407,8 @@ async fn repo_agents_skill_roots(
     env_path: &EnvironmentPathRef,
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<SkillRoot> {
+    // Discover repo `.agents/skills` folders by walking from the selected environment's project
+    // root to its cwd; this must never consult the local filesystem for remote workspaces.
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
     let project_root = find_project_root(env_path, &project_root_markers).await;
     let dirs = dirs_between_project_root_and_cwd(env_path.path(), project_root.path());

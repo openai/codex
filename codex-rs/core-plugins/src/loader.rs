@@ -563,6 +563,8 @@ async fn load_plugin(
         .or_else(|| Some(manifest.name.clone()));
     loaded_plugin.manifest_description = manifest.description.clone();
     loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
+    // TODO: Support multi-env plugin skill loading. Plugin discovery is local-only today, so bind
+    // plugin skill reads to the local environment instead of the selected turn environment.
     let resolved_skills = load_plugin_skills(
         EnvironmentPathRef::local(plugin_root.clone()),
         &loaded_plugin_id,
