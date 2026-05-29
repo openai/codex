@@ -779,12 +779,14 @@ async fn load_skill_metadata(
     let Ok(Some(skill_dir)) = skill_path.parent().await else {
         return LoadedSkillMetadata::default();
     };
-    let Ok(metadata_path) = skill_dir.join(
-        Path::new(SKILLS_METADATA_DIR)
-            .join(SKILLS_METADATA_FILENAME)
-            .as_path(),
-    )
-    .await else {
+    let Ok(metadata_path) = skill_dir
+        .join(
+            Path::new(SKILLS_METADATA_DIR)
+                .join(SKILLS_METADATA_FILENAME)
+                .as_path(),
+        )
+        .await
+    else {
         return LoadedSkillMetadata::default();
     };
     match metadata_path.metadata(/*sandbox*/ None).await {

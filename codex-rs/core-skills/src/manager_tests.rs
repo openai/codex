@@ -770,6 +770,52 @@ async fn skills_for_cwd_keeps_cache_entries_bound_to_file_system() {
     assert_ne!(first_skill.source_path, second_skill.source_path);
 }
 
+#[tokio::test]
+async fn skills_for_cwd_skips_cache_without_environment_path() {
+    let manager_codex_home = tempfile::tempdir().expect("tempdir");
+    let first_codex_home = tempfile::tempdir().expect("tempdir");
+    let second_codex_home = tempfile::tempdir().expect("tempdir");
+    let first_cwd = tempfile::tempdir().expect("tempdir");
+    let second_cwd = tempfile::tempdir().expect("tempdir");
+    write_user_skill(&first_codex_home, "first", "first-skill", "first");
+    write_user_skill(&second_codex_home, "second", "second-skill", "second");
+    let skills_manager = SkillsManager::new(
+        manager_codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+    let first_input = local_skills_input(
+        first_cwd.path().abs(),
+        Vec::new(),
+        config_stack(&first_codex_home, ""),
+    );
+    let second_input = local_skills_input(
+        second_cwd.path().abs(),
+        Vec::new(),
+        config_stack(&second_codex_home, ""),
+    );
+
+    let first = skills_manager
+        .skills_for_cwd(&first_input, /*force_reload*/ false, /*fs*/ None)
+        .await;
+    let second = skills_manager
+        .skills_for_cwd(&second_input, /*force_reload*/ false, /*fs*/ None)
+        .await;
+
+    assert!(first.skills.iter().any(|skill| skill.name == "first-skill"));
+    assert!(
+        second
+            .skills
+            .iter()
+            .any(|skill| skill.name == "second-skill")
+    );
+    assert!(
+        second
+            .skills
+            .iter()
+            .all(|skill| skill.name != "first-skill")
+    );
+}
+
 #[cfg_attr(windows, ignore)]
 #[test]
 fn disabled_paths_for_skills_allows_session_flags_to_override_user_layer() {

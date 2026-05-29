@@ -186,12 +186,13 @@ impl SkillsManager {
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
         let (env_path, local_file_system) = input.authorities(fs);
-        let path_ref_cache_key = SkillsPathCacheKey {
+        let path_ref_cache_key = env_path.as_ref().map(|_| SkillsPathCacheKey {
             env_path: env_path.clone(),
             local_file_system: local_file_system.as_ref().map(ExecutorFileSystemRef::new),
-        };
+        });
         if !force_reload
-            && let Some(outcome) = self.cached_outcome_for_path_ref(&path_ref_cache_key)
+            && let Some(path_ref_cache_key) = path_ref_cache_key.as_ref()
+            && let Some(outcome) = self.cached_outcome_for_path_ref(path_ref_cache_key)
         {
             return outcome;
         }
@@ -209,11 +210,13 @@ impl SkillsManager {
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
-        let mut cache = self
-            .cache_by_path_ref
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(path_ref_cache_key, outcome.clone());
+        if let Some(path_ref_cache_key) = path_ref_cache_key {
+            let mut cache = self
+                .cache_by_path_ref
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache.insert(path_ref_cache_key, outcome.clone());
+        }
         outcome
     }
 
