@@ -51,6 +51,8 @@ common --remote_header=x-buildbuddy-api-key=<your-buildbuddy-api-key>
 
 Use `buildbuddy-generic` or `buildbuddy-openai` without the `-rbe` suffix if
 you want cache, build event upload, and downloads without remote execution.
+The repository's `--config=remote` settings do not select a host; the `-rbe`
+configuration above supplies the executor when a command uses them.
 
 `user.bazelrc` is ignored by Git but still contains a credential; do not commit
 or share it.
@@ -69,11 +71,11 @@ The `Cache/BES` host is also used for remote downloads.
 | Invocation/config | Key Required | Cache/BES | Build exec | Test exec |
 | --- | --- | --- | --- | --- |
 | `bazel ...` | No | None | Local | Local |
-| `bazel ... --config=remote` | Yes | None | Remote | Remote |
+| `bazel ... --config=remote` | - | None | Requires `*-rbe` | Requires `*-rbe` |
 | `bazel ... --config=buildbuddy-generic` | Yes | `remote.buildbuddy.io` | Local | Local |
-| `bazel ... --config=buildbuddy-generic-rbe` | Yes | `remote.buildbuddy.io` | Remote | Remote |
+| `bazel ... --config=remote --config=buildbuddy-generic-rbe` | Yes | `remote.buildbuddy.io` | Remote | Remote |
 | `bazel ... --config=buildbuddy-openai` | Yes | `openai.buildbuddy.io` | Local | Local |
-| `bazel ... --config=buildbuddy-openai-rbe` | Yes | `openai.buildbuddy.io` | Remote | Remote |
+| `bazel ... --config=remote --config=buildbuddy-openai-rbe` | Yes | `openai.buildbuddy.io` | Remote | Remote |
 
 Without an API key, the wrapper removes remote CI configurations and runs
 locally. With a key, workflows choose the host as follows:
