@@ -319,6 +319,8 @@ mod tests {
     use std::time::Instant;
 
     use async_trait::async_trait;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use codex_exec_server::EnvironmentManager;
     use codex_exec_server::ExecProcessEventReceiver;
     use codex_exec_server::ExecServerError;
@@ -443,7 +445,7 @@ mod tests {
 
     fn print_command(output: &str) -> String {
         if cfg!(windows) {
-            format!("powershell -NoLogo -NoProfile -Command \"[Console]::Out.Write('{output}')\"")
+            powershell_command(&format!("[Console]::Out.Write('{output}')"))
         } else {
             format!("printf {output}")
         }
@@ -451,12 +453,22 @@ mod tests {
 
     fn echo_stdin_to_stdout_and_stderr_with_exit_code(exit_code: i32) -> String {
         if cfg!(windows) {
-            format!(
-                "powershell -NoLogo -NoProfile -Command \"$hookInput = [Console]::In.ReadToEnd(); [Console]::Out.Write($hookInput); [Console]::Error.Write('stderr'); exit {exit_code}\""
-            )
+            powershell_command(&format!(
+                "$hookInput = [Console]::In.ReadToEnd(); [Console]::Out.Write($hookInput); [Console]::Error.Write('stderr'); exit {exit_code}"
+            ))
         } else {
             format!("cat; printf stderr >&2; exit {exit_code}")
         }
+    }
+
+    fn powershell_command(script: &str) -> String {
+        let encoded = BASE64_STANDARD.encode(
+            script
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<u8>>(),
+        );
+        format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")
     }
 
     fn sleep_command(seconds: u64) -> String {
