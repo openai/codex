@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::function_tool::FunctionCallError;
+use crate::multi_agent_runtime::MultiAgentRuntime;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
@@ -216,7 +217,7 @@ pub(crate) fn build_agent_resume_config(
     child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
+    apply_spawn_agent_overrides(&mut config, turn.multi_agent_runtime, child_depth);
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     Ok(config)
@@ -280,8 +281,12 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     Ok(())
 }
 
-pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    if child_depth >= config.agent_max_depth && !config.features.enabled(Feature::MultiAgentV2) {
+pub(crate) fn apply_spawn_agent_overrides(
+    config: &mut Config,
+    multi_agent_runtime: MultiAgentRuntime,
+    child_depth: i32,
+) {
+    if child_depth >= config.agent_max_depth && !multi_agent_runtime.multi_agent_v2_enabled() {
         let _ = config.features.disable(Feature::SpawnCsv);
         let _ = config.features.disable(Feature::Collab);
     }
@@ -310,7 +315,6 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
             .models_manager
             .get_model_info(&selected_model_name, &config.to_models_manager_config())
             .await;
-
         config.model = Some(selected_model_name.clone());
         if let Some(reasoning_effort) = requested_reasoning_effort {
             validate_spawn_agent_reasoning_effort(
@@ -364,7 +368,6 @@ pub(crate) async fn apply_spawn_agent_service_tier(
         .models_manager
         .get_model_info(model.as_str(), &config.to_models_manager_config())
         .await;
-
     if let Some(requested_service_tier) = requested_service_tier
         && !model_info.supports_service_tier(requested_service_tier)
     {

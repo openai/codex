@@ -108,7 +108,7 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
+    apply_spawn_agent_overrides(&mut config, turn.multi_agent_runtime, child_depth);
 
     let spawn_source = thread_spawn_source(
         session.conversation_id,

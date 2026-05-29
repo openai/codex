@@ -237,6 +237,13 @@ pub enum ToolMode {
     CodeModeOnly,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiAgentVersion {
+    V1,
+    V2,
+}
+
 fn deserialize_optional_model_selector<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -345,6 +352,12 @@ pub struct ModelInfo {
         deserialize_with = "deserialize_optional_model_selector"
     )]
     pub tool_mode: Option<ToolMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_model_selector"
+    )]
+    pub multi_agent_version: Option<MultiAgentVersion>,
 }
 
 impl ModelInfo {
@@ -640,6 +653,7 @@ mod tests {
             used_fallback_model_metadata: false,
             supports_search_tool: false,
             tool_mode: None,
+            multi_agent_version: None,
         }
     }
 
@@ -858,10 +872,11 @@ mod tests {
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
         assert_eq!(model.tool_mode, None);
+        assert_eq!(model.multi_agent_version, None);
     }
 
     #[test]
-    fn model_info_deserializes_known_tool_mode() {
+    fn model_info_deserializes_known_runtime_selectors() {
         let mut value =
             serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
         let object = value
@@ -871,13 +886,20 @@ mod tests {
             "tool_mode".to_string(),
             serde_json::Value::String("code_mode_only".to_string()),
         );
+        object.insert(
+            "multi_agent_version".to_string(),
+            serde_json::Value::String("v2".to_string()),
+        );
         let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
 
-        assert_eq!(model.tool_mode, Some(ToolMode::CodeModeOnly));
+        assert_eq!(
+            (model.tool_mode, model.multi_agent_version),
+            (Some(ToolMode::CodeModeOnly), Some(MultiAgentVersion::V2))
+        );
     }
 
     #[test]
-    fn model_info_treats_unknown_tool_mode_as_omitted() {
+    fn model_info_treats_unknown_runtime_selectors_as_omitted() {
         let mut value =
             serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
         let object = value
@@ -887,14 +909,19 @@ mod tests {
             "tool_mode".to_string(),
             serde_json::Value::String("future_tool_mode".to_string()),
         );
+        object.insert(
+            "multi_agent_version".to_string(),
+            serde_json::Value::String("v3".to_string()),
+        );
         let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
 
-        assert_eq!(model.tool_mode, None);
+        assert_eq!((model.tool_mode, model.multi_agent_version), (None, None));
         let serialized = serde_json::to_value(model).expect("serialize model info");
         let object = serialized
             .as_object()
             .expect("model info should be an object");
         assert!(!object.contains_key("tool_mode"));
+        assert!(!object.contains_key("multi_agent_version"));
     }
 
     #[test]

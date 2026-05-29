@@ -61,6 +61,7 @@ use crate::goals::ExternalGoalPreviousStatus;
 use crate::goals::ExternalGoalSet;
 use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
+use crate::multi_agent_runtime::MultiAgentRuntime;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::state::ActiveTurn;
 use crate::state::TaskKind;
@@ -3071,6 +3072,7 @@ async fn set_rate_limits_retains_previous_credits() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_runtime: MultiAgentRuntime::from_features(&config.features),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -3176,6 +3178,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_runtime: MultiAgentRuntime::from_features(&config.features),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -3704,6 +3707,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_runtime: MultiAgentRuntime::from_features(&config.features),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4448,6 +4452,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_runtime: MultiAgentRuntime::from_features(&config.features),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4558,6 +4563,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_runtime: MultiAgentRuntime::from_features(&config.features),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4793,6 +4799,7 @@ async fn make_session_with_config_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_runtime: MultiAgentRuntime::from_features(&config.features),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4897,6 +4904,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_runtime: MultiAgentRuntime::from_features(&config.features),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -6401,6 +6409,7 @@ where
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_runtime: MultiAgentRuntime::from_features(&config.features),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),

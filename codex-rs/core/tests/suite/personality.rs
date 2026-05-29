@@ -593,6 +593,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         tool_mode: None,
+        multi_agent_version: None,
     };
 
     let _models_mock = mount_models_once(
@@ -704,6 +705,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         tool_mode: None,
+        multi_agent_version: None,
     };
 
     let _models_mock = mount_models_once(

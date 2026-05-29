@@ -2,6 +2,7 @@ use super::input_queue::InputQueue;
 use super::*;
 use crate::config::ConstraintError;
 use crate::goals::GoalRuntimeState;
+use crate::multi_agent_runtime::MultiAgentRuntime;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
@@ -45,6 +46,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) provider: ModelProviderInfo,
 
     pub(super) collaboration_mode: CollaborationMode,
+    pub(super) multi_agent_runtime: MultiAgentRuntime,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(super) service_tier: Option<String>,
 

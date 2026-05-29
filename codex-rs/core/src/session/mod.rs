@@ -31,6 +31,7 @@ use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
+use crate::multi_agent_runtime::MultiAgentRuntime;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -485,14 +486,6 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= config.agent_max_depth
-            && !config.features.enabled(Feature::MultiAgentV2)
-        {
-            let _ = config.features.disable(Feature::SpawnCsv);
-            let _ = config.features.disable(Feature::Collab);
-        }
-
         let primary_environment = environment_selections.primary_environment();
         let mut user_instruction_warnings = Vec::new();
         let user_instructions = AgentsMdManager::new(&config)
@@ -518,7 +511,7 @@ impl Codex {
             )
         };
 
-        let config = Arc::new(config);
+        let mut config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -543,6 +536,19 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        let mut multi_agent_runtime = MultiAgentRuntime::resolve(&model_info, &config.features);
+        {
+            let config = Arc::make_mut(&mut config);
+            if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) =
+                session_source
+                && depth >= config.agent_max_depth
+                && !multi_agent_runtime.multi_agent_v2_enabled()
+            {
+                let _ = config.features.disable(Feature::SpawnCsv);
+                let _ = config.features.disable(Feature::Collab);
+                multi_agent_runtime.disable_collab_tools();
+            }
+        }
         let base_instructions = config
             .base_instructions
             .clone()
@@ -573,6 +579,7 @@ impl Codex {
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
+            multi_agent_runtime,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
@@ -1450,6 +1457,11 @@ impl Session {
             .clone()
     }
 
+    pub(crate) async fn multi_agent_runtime(&self) -> MultiAgentRuntime {
+        let state = self.state.lock().await;
+        state.session_configuration.multi_agent_runtime
+    }
+
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
         let state = self.state.lock().await;
         state.session_configuration.provider.clone()
@@ -1650,7 +1662,7 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if !self.enabled(Feature::MultiAgentV2) {
+        if !turn_context.multi_agent_v2_enabled() {
             return;
         }
 

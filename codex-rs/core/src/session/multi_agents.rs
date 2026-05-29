@@ -1,5 +1,4 @@
 use crate::session::turn_context::TurnContext;
-use codex_features::Feature;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 
@@ -7,7 +6,7 @@ pub(super) fn usage_hint_text<'a>(
     turn_context: &'a TurnContext,
     session_source: &SessionSource,
 ) -> Option<&'a str> {
-    if !turn_context.features.enabled(Feature::MultiAgentV2) {
+    if !turn_context.multi_agent_v2_enabled() {
         return None;
     }
 

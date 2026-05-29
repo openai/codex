@@ -286,11 +286,11 @@ fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.features.get().enabled(Feature::MultiAgentV2)
+    turn_context.multi_agent_v2_enabled()
 }
 
 fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
-    multi_agent_v2_enabled(turn_context) || turn_context.features.get().enabled(Feature::Collab)
+    turn_context.collab_tools_enabled()
 }
 
 fn goal_tools_enabled(turn_context: &TurnContext) -> bool {

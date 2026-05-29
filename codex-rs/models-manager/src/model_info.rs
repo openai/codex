@@ -100,6 +100,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,
         tool_mode: None,
+        multi_agent_version: None,
     }
 }
 
