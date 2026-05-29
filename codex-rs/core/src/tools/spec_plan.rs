@@ -283,11 +283,11 @@ fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn code_mode_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.features.get().enabled(Feature::CodeMode)
+    turn_context.code_mode_enabled()
 }
 
 fn code_mode_only_enabled(turn_context: &TurnContext) -> bool {
-    code_mode_enabled(turn_context) && turn_context.features.get().enabled(Feature::CodeModeOnly)
+    turn_context.code_mode_only_enabled()
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {

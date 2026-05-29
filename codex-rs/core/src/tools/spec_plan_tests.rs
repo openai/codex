@@ -13,6 +13,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -29,6 +30,7 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::model_runtime::ModelRuntimeModes;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
@@ -215,6 +217,7 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .expect("test feature should be disableable in config");
     }
     turn.config = Arc::new(config);
+    resolve_model_runtime_modes(turn);
 }
 
 fn set_features(turn: &mut TurnContext, features: &[Feature]) {
@@ -226,6 +229,12 @@ fn set_features(turn: &mut TurnContext, features: &[Feature]) {
 fn update_config(turn: &mut TurnContext, update: impl FnOnce(&mut crate::config::Config)) {
     let mut config = (*turn.config).clone();
     update(&mut config);
+    turn.config = Arc::new(config);
+}
+
+fn resolve_model_runtime_modes(turn: &mut TurnContext) {
+    let mut config = (*turn.config).clone();
+    config.model_runtime_modes = ModelRuntimeModes::resolve(&turn.model_info, &config.features);
     turn.config = Arc::new(config);
 }
 
@@ -795,6 +804,20 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         direct_model_only.exposure("spawn_agent"),
         ToolExposure::DirectModelOnly
     );
+}
+
+#[tokio::test]
+async fn tool_mode_selector_overrides_feature_flags() {
+    let direct = probe(|turn| {
+        set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+        turn.model_info.tool_mode = Some(ToolMode::Direct);
+        resolve_model_runtime_modes(turn);
+    })
+    .await;
+    direct.assert_visible_lacks(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+    ]);
 }
 
 #[tokio::test]
