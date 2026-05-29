@@ -151,12 +151,16 @@ fn remote_control_handle_with_pairing_client(
         "env_test".to_string(),
         OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
         /*auth_change_revision*/ 0,
+        /*generation*/ 0,
     ))));
     RemoteControlHandle {
         enabled_tx: Arc::new(enabled_tx),
         status_tx: Arc::new(status_tx),
         state_db_available: true,
-        pairing_client,
+        pairing: PairingClientState {
+            client: pairing_client,
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        },
         auth_change_rx: Arc::new(StdMutex::new(auth_change_rx)),
     }
 }
@@ -1044,6 +1048,49 @@ async fn remote_control_handle_discards_pairing_response_after_auth_change() {
             .await
             .expect("pairing task should join")
             .expect_err("stale pairing response should be discarded")
+            .to_string(),
+        "remote control pairing is unavailable until enrollment completes"
+    );
+}
+
+#[tokio::test]
+async fn remote_control_handle_discards_pairing_response_after_disable() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let remote_handle = remote_control_handle_with_pairing_client(
+        &remote_control_url,
+        watch::channel(/*init*/ 0u64).1,
+    );
+    let pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+
+    let pairing_request = accept_http_request(&listener).await;
+    remote_handle.disable();
+    respond_with_json(
+        pairing_request.stream,
+        json!({
+            "pairing_code": "stale-pairing-code",
+            "manual_pairing_code": "ABCD-EFGH",
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
+            "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        pairing_task
+            .await
+            .expect("pairing task should join")
+            .expect_err("disabled remote control should discard pairing response")
             .to_string(),
         "remote control pairing is unavailable until enrollment completes"
     );

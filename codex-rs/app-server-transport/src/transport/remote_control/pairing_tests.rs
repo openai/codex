@@ -94,19 +94,7 @@ async fn start_remote_control_pairing_uses_server_token_and_maps_response() {
             .await
             .expect("response should write");
     });
-    let client = RemoteControlPairingClient::new(
-        &RemoteControlTarget {
-            websocket_url: "ws://unused".to_string(),
-            enroll_url: "http://unused".to_string(),
-            refresh_url: "http://unused".to_string(),
-            pair_url,
-        },
-        "remote-control-token".to_string(),
-        "server-id".to_string(),
-        "environment-id".to_string(),
-        OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
-        /*auth_change_revision*/ 0,
-    );
+    let client = pairing_client(pair_url);
 
     let response = client
         .start(StartRemoteControlPairingRequest { manual_code: true })
@@ -163,19 +151,7 @@ async fn start_remote_control_pairing_preserves_backend_error_context() {
             .await
             .expect("response should write");
     });
-    let client = RemoteControlPairingClient::new(
-        &RemoteControlTarget {
-            websocket_url: "ws://unused".to_string(),
-            enroll_url: "http://unused".to_string(),
-            refresh_url: "http://unused".to_string(),
-            pair_url,
-        },
-        "remote-control-token".to_string(),
-        "server-id".to_string(),
-        "environment-id".to_string(),
-        OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
-        /*auth_change_revision*/ 0,
-    );
+    let client = pairing_client(pair_url);
 
     let err = client
         .start(StartRemoteControlPairingRequest { manual_code: false })
@@ -204,6 +180,8 @@ async fn start_remote_control_pairing_rejects_expired_server_token() {
         "server-id".to_string(),
         "environment-id".to_string(),
         OffsetDateTime::from_unix_timestamp(0).expect("expired timestamp should parse"),
+        /*auth_change_revision*/ 0,
+        /*generation*/ 0,
     );
 
     let err = client
@@ -262,18 +240,7 @@ async fn start_remote_control_pairing_rejects_mismatched_enrollment() {
             .await
             .expect("response should write");
     });
-    let client = RemoteControlPairingClient::new(
-        &RemoteControlTarget {
-            websocket_url: "ws://unused".to_string(),
-            enroll_url: "http://unused".to_string(),
-            refresh_url: "http://unused".to_string(),
-            pair_url,
-        },
-        "remote-control-token".to_string(),
-        "server-id".to_string(),
-        "environment-id".to_string(),
-        OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
-    );
+    let client = pairing_client(pair_url);
 
     let err = client
         .start(StartRemoteControlPairingRequest { manual_code: false })
@@ -286,4 +253,21 @@ async fn start_remote_control_pairing_rejects_mismatched_enrollment() {
         err.to_string(),
         "remote control pairing returned mismatched enrollment: expected server_id=server-id, environment_id=environment-id; got server_id=other-server-id, environment_id=other-environment-id"
     );
+}
+
+fn pairing_client(pair_url: String) -> RemoteControlPairingClient {
+    RemoteControlPairingClient::new(
+        &RemoteControlTarget {
+            websocket_url: "ws://unused".to_string(),
+            enroll_url: "http://unused".to_string(),
+            refresh_url: "http://unused".to_string(),
+            pair_url,
+        },
+        "remote-control-token".to_string(),
+        "server-id".to_string(),
+        "environment-id".to_string(),
+        OffsetDateTime::from_unix_timestamp(33_336_362_096).expect("future timestamp should parse"),
+        /*auth_change_revision*/ 0,
+        /*generation*/ 0,
+    )
 }
