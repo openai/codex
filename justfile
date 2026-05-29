@@ -1,6 +1,7 @@
 set working-directory := "codex-rs"
 set positional-arguments
-python_shell := 'import pathlib, runpy, sys; p = pathlib.Path.cwd().resolve(); script = next((d / "scripts" / "just-shell.py" for d in (p, *p.parents) if (d / "scripts" / "just-shell.py").is_file()), None); sys.exit("could not find scripts/just-shell.py") if script is None else runpy.run_path(str(script), run_name="__main__")'
+export JUST_SHELL := justfile_directory() / "scripts/just-shell.py"
+python_shell := 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")'
 set shell := ["python3", "-c", python_shell]
 set windows-shell := ["python", "-c", python_shell]
 
