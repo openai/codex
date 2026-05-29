@@ -1,6 +1,7 @@
 use super::*;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestArgs;
+use codex_network_proxy::NetworkMode;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use pretty_assertions::assert_eq;
@@ -98,6 +99,27 @@ fn classifies_filesystem_violation_with_path() {
 }
 
 #[test]
+fn classifies_filesystem_violation_with_unicode_before_marker() {
+    let output = make_exec_output(
+        /*exit_code*/ 1,
+        "",
+        "bash: /private/tmp/\u{130}-denied: Operation not permitted",
+        "",
+    );
+
+    assert_eq!(
+        classify_filesystem_sandbox_violation(SandboxType::MacosSeatbelt, &output),
+        Some(FileSystemSandboxViolation {
+            sandbox_type: SandboxType::MacosSeatbelt,
+            reason: FileSystemSandboxViolationReason::OperationNotPermitted,
+            path: Some("/private/tmp/\u{130}-denied".to_string()),
+            output_snippet: "bash: /private/tmp/\u{130}-denied: Operation not permitted"
+                .to_string(),
+        })
+    );
+}
+
+#[test]
 fn classifies_filesystem_violation_from_aggregated_output() {
     let output = make_exec_output(
         /*exit_code*/ 101,
@@ -152,7 +174,7 @@ fn converts_blocked_request_to_network_violation() {
         reason: "not_allowed".to_string(),
         client: Some("curl".to_string()),
         method: Some("CONNECT".to_string()),
-        mode: None,
+        mode: Some(NetworkMode::Limited),
         protocol: "https".to_string(),
         decision: Some("block".to_string()),
         source: Some("policy".to_string()),
@@ -166,6 +188,7 @@ fn converts_blocked_request_to_network_violation() {
             reason: "not_allowed".to_string(),
             client: Some("curl".to_string()),
             method: Some("CONNECT".to_string()),
+            mode: Some(NetworkMode::Limited),
             protocol: "https".to_string(),
             decision: Some("block".to_string()),
             source: Some("policy".to_string()),
