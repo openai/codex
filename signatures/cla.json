@@ -7975,6 +7975,14 @@
       "created_at": "2026-05-29T18:19:49Z",
       "repoId": 965415649,
       "pullRequestNo": 24994
+    },
+    {
+      "name": "knittel-openai",
+      "id": 153027209,
+      "comment_id": 4579555675,
+      "created_at": "2026-05-29T20:22:14Z",
+      "repoId": 965415649,
+      "pullRequestNo": 25135
     }
   ]
 }
