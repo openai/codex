@@ -352,6 +352,12 @@ pub struct ModelInfo {
         deserialize_with = "deserialize_optional_model_selector"
     )]
     pub tool_mode: Option<ToolMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_model_selector"
+    )]
+    pub multi_agent_version: Option<MultiAgentVersion>,
 }
 
 impl ModelInfo {
@@ -647,6 +653,7 @@ mod tests {
             used_fallback_model_metadata: false,
             supports_search_tool: false,
             tool_mode: None,
+            multi_agent_version: None,
         }
     }
 
@@ -865,6 +872,7 @@ mod tests {
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
         assert_eq!(model.tool_mode, None);
+        assert_eq!(model.multi_agent_version, None);
     }
 
     #[test]
@@ -902,6 +910,43 @@ mod tests {
             .as_object()
             .expect("model info should be an object");
         assert!(!object.contains_key("tool_mode"));
+    }
+
+    #[test]
+    fn model_info_deserializes_known_multi_agent_version() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        let object = value
+            .as_object_mut()
+            .expect("model info should be an object");
+        object.insert(
+            "multi_agent_version".to_string(),
+            serde_json::Value::String("v2".to_string()),
+        );
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert_eq!(model.multi_agent_version, Some(MultiAgentVersion::V2));
+    }
+
+    #[test]
+    fn model_info_treats_unknown_multi_agent_version_as_omitted() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        let object = value
+            .as_object_mut()
+            .expect("model info should be an object");
+        object.insert(
+            "multi_agent_version".to_string(),
+            serde_json::Value::String("future_multi_agent_version".to_string()),
+        );
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert_eq!(model.multi_agent_version, None);
+        let serialized = serde_json::to_value(model).expect("serialize model info");
+        let object = serialized
+            .as_object()
+            .expect("model info should be an object");
+        assert!(!object.contains_key("multi_agent_version"));
     }
 
     #[test]

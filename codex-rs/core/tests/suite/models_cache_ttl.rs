@@ -371,5 +371,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         tool_mode: None,
+        multi_agent_version: None,
     }
 }

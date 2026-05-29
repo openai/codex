@@ -99,6 +99,7 @@ async fn models_client_hits_models_endpoint() {
             used_fallback_model_metadata: false,
             supports_search_tool: false,
             tool_mode: None,
+            multi_agent_version: None,
         }],
     };
 

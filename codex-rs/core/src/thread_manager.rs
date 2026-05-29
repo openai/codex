@@ -922,6 +922,7 @@ impl ThreadManager {
             &config,
             &session_source,
             history.get_multi_agent_version(),
+            /*model_info*/ None,
         );
         let interrupted_marker =
             InterruptedTurnHistoryMarker::from_config(&config, multi_agent_version);
