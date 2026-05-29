@@ -12,6 +12,7 @@ use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::steering::continuation_steering_item;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 
@@ -272,6 +273,68 @@ impl GoalRuntimeHandle {
             }
             Some(_) | None => self.inner.accounting_state.clear_active_goal(),
         }
+        Ok(())
+    }
+
+    pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        };
+        if goal.status != codex_state::ThreadGoalStatus::Active {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        }
+
+        let goal_id = goal.goal_id.clone();
+        self.inner
+            .accounting_state
+            .mark_idle_goal_active(goal_id.clone());
+        let item = continuation_steering_item(&protocol_goal_from_state(goal));
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            tracing::debug!("skipping goal continuation because thread manager is unavailable");
+            return Ok(());
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            tracing::debug!("skipping goal continuation because live thread is unavailable");
+            return Ok(());
+        };
+
+        let state_dbs = Arc::clone(&self.inner.state_dbs);
+        let thread_id = self.inner.thread_id;
+        thread
+            .start_idle_turn_if_current(vec![item], move || async move {
+                match state_dbs.thread_goals().get_thread_goal(thread_id).await {
+                    Ok(Some(goal))
+                        if goal.goal_id == goal_id
+                            && goal.status == codex_state::ThreadGoalStatus::Active =>
+                    {
+                        true
+                    }
+                    Ok(Some(_)) | Ok(None) => {
+                        tracing::debug!(
+                            "skipping active goal continuation because the goal changed before launch"
+                        );
+                        false
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to re-read thread goal before continuation: {err}");
+                        false
+                    }
+                }
+            })
+            .await;
         Ok(())
     }
 

@@ -7,6 +7,7 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
@@ -127,6 +128,19 @@ where
         if let Err(err) = runtime.restore_after_resume().await {
             tracing::warn!(
                 "failed to restore goal runtime after thread resume for {}: {err}",
+                runtime.thread_id()
+            );
+        }
+    }
+
+    async fn on_thread_idle(&self, input: ThreadIdleInput<'_>) {
+        let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+            return;
+        };
+
+        if let Err(err) = runtime.continue_if_idle().await {
+            tracing::warn!(
+                "failed to continue active goal for idle thread {}: {err}",
                 runtime.thread_id()
             );
         }

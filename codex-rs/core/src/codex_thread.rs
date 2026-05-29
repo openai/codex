@@ -43,6 +43,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -274,6 +275,22 @@ impl CodexThread {
         items: Vec<ResponseItem>,
     ) -> Result<(), Vec<ResponseItem>> {
         self.codex.session.inject_if_running(items).await
+    }
+
+    /// Starts a regular turn with model-visible initial input if the thread is
+    /// still idle after caller-owned validation.
+    ///
+    /// Core owns the idle scheduling invariants; the caller owns deciding
+    /// whether the synthetic work is still current.
+    pub async fn start_idle_turn_if_current<F, Fut>(&self, items: Vec<ResponseItem>, validate: F)
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = bool> + Send,
+    {
+        self.codex
+            .session
+            .start_idle_turn_if_current(items, validate)
+            .await
     }
 
     pub async fn set_app_server_client_info(
