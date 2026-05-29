@@ -23,7 +23,6 @@ use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission
 use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::create_seatbelt_command_args;
-use codex_sandboxing::with_managed_mitm_ca_readable_roots;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use tokio::process::Child;
@@ -258,17 +257,12 @@ async fn run_command_under_sandbox(
     let network = network_proxy
         .as_ref()
         .map(codex_core::config::StartedNetworkProxy::proxy);
-    let runtime_permission_profile = with_managed_mitm_ca_readable_roots(
-        config.permissions.effective_permission_profile(),
-        network.as_ref(),
-        sandbox_policy_cwd.as_path(),
-    )?;
 
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
-            let (file_system_sandbox_policy, network_sandbox_policy) =
-                runtime_permission_profile.to_runtime_permissions();
+            let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
+            let network_sandbox_policy = config.permissions.network_sandbox_policy();
             let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                 command,
                 file_system_sandbox_policy: &file_system_sandbox_policy,
@@ -300,11 +294,11 @@ async fn run_command_under_sandbox(
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
             let use_legacy_landlock = config.features.use_legacy_landlock();
-            let network_sandbox_policy = runtime_permission_profile.network_sandbox_policy();
+            let network_sandbox_policy = config.permissions.network_sandbox_policy();
             let args = create_linux_sandbox_command_args_for_permission_profile(
                 command,
                 cwd.as_path(),
-                &runtime_permission_profile,
+                &config.permissions.effective_permission_profile(),
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
                 allow_network_for_proxy(managed_network_requirements_enabled),

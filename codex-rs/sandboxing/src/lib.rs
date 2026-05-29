@@ -19,7 +19,6 @@ pub use manager::SandboxType;
 pub use manager::SandboxablePreference;
 pub use manager::compatibility_sandbox_policy_for_permission_profile;
 pub use manager::get_platform_sandbox;
-pub use manager::with_managed_mitm_ca_readable_roots;
 
 use codex_protocol::error::CodexErr;
 
@@ -36,7 +35,6 @@ impl From<SandboxTransformError> for CodexErr {
             SandboxTransformError::MissingLinuxSandboxExecutable => {
                 CodexErr::LandlockSandboxExecutableNotProvided
             }
-            SandboxTransformError::ManagedMitmCaTrust(err) => CodexErr::Io(err),
             #[cfg(target_os = "linux")]
             SandboxTransformError::Wsl1UnsupportedForBubblewrap => {
                 CodexErr::UnsupportedOperation(crate::bwrap::WSL1_BWRAP_WARNING.to_string())
