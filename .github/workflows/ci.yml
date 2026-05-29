@@ -74,5 +74,11 @@ jobs:
       - name: Check root README ToC
         run: python3 scripts/readme_toc.py README.md
 
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just,uv@0.11.3
+      - name: Ruff format Python scripts (run `just fmt` to fix)
+        run: just fmt-scripts-check
+
       - name: Prettier (run `pnpm run format:fix` to fix)
         run: pnpm run format

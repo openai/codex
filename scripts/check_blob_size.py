@@ -75,7 +75,9 @@ def blob_size(commit: str, path: str) -> int:
     return int(run_git("cat-file", "-s", f"{commit}:{path}").strip())
 
 
-def collect_changed_blobs(base: str, head: str, allowlist: set[str]) -> list[ChangedBlob]:
+def collect_changed_blobs(
+    base: str, head: str, allowlist: set[str]
+) -> list[ChangedBlob]:
     blobs: list[ChangedBlob] = []
     for path in get_changed_paths(base, head):
         blobs.append(
@@ -137,7 +139,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fail if changed blobs exceed the configured size budget."
     )
-    parser.add_argument("--base", required=True, help="Base git revision to diff against.")
+    parser.add_argument(
+        "--base", required=True, help="Base git revision to diff against."
+    )
     parser.add_argument("--head", required=True, help="Head git revision to inspect.")
     parser.add_argument(
         "--max-bytes",
@@ -156,7 +160,9 @@ def main() -> int:
     allowlist = load_allowlist(args.allowlist)
     blobs = collect_changed_blobs(args.base, args.head, allowlist)
     violations = [
-        blob for blob in blobs if blob.size_bytes > args.max_bytes and not blob.is_allowlisted
+        blob
+        for blob in blobs
+        if blob.size_bytes > args.max_bytes and not blob.is_allowlisted
     ]
 
     write_step_summary(args.max_bytes, blobs, violations)
@@ -165,7 +171,9 @@ def main() -> int:
         print("No changed files were detected.")
         return 0
 
-    print(f"Checked {len(blobs)} changed file(s) against the {args.max_bytes}-byte limit.")
+    print(
+        f"Checked {len(blobs)} changed file(s) against the {args.max_bytes}-byte limit."
+    )
     for blob in blobs:
         status = "allowlisted" if blob.is_allowlisted else "ok"
         if blob in violations:

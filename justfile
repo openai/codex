@@ -36,11 +36,16 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex {args}
 
-# Format Rust and Python SDK code.
+# Format Rust, Python SDK code, and Python scripts.
 fmt:
     cargo fmt -- --config imports_granularity=Item {stderr-null}
     uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
     uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
+    # Root scripts are outside the Python SDK project, so use standalone Ruff.
+    uvx ruff format ../scripts
+
+fmt-scripts-check:
+    uvx ruff format --check ../scripts
 
 fix *args:
     cargo clippy --fix --tests --allow-dirty {args}
