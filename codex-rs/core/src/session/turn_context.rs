@@ -56,6 +56,7 @@ pub struct TurnContext {
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
+    pub(crate) model_runtime_modes: ModelRuntimeModes,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -164,11 +165,11 @@ impl TurnContext {
     }
 
     pub(crate) fn code_mode_enabled(&self) -> bool {
-        self.config.model_runtime_modes.code_mode_enabled()
+        self.model_runtime_modes.code_mode_enabled()
     }
 
     pub(crate) fn code_mode_only_enabled(&self) -> bool {
-        self.config.model_runtime_modes.code_mode_only_enabled()
+        self.model_runtime_modes.code_mode_only_enabled()
     }
 
     pub(crate) async fn with_model(
@@ -181,7 +182,7 @@ impl TurnContext {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        config.model_runtime_modes = ModelRuntimeModes::resolve(&model_info, &config.features);
+        let model_runtime_modes = ModelRuntimeModes::resolve(&model_info, &config.features);
         let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
@@ -222,6 +223,7 @@ impl TurnContext {
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
+            model_runtime_modes,
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -485,7 +487,7 @@ impl Session {
         );
 
         let mut per_turn_config = per_turn_config;
-        per_turn_config.model_runtime_modes =
+        let model_runtime_modes =
             ModelRuntimeModes::resolve(&model_info, &per_turn_config.features);
         per_turn_config.service_tier = get_service_tier(
             per_turn_config.service_tier,
@@ -513,6 +515,7 @@ impl Session {
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
+            model_runtime_modes,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             reasoning_effort,

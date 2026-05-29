@@ -233,9 +233,7 @@ fn update_config(turn: &mut TurnContext, update: impl FnOnce(&mut crate::config:
 }
 
 fn resolve_model_runtime_modes(turn: &mut TurnContext) {
-    let mut config = (*turn.config).clone();
-    config.model_runtime_modes = ModelRuntimeModes::resolve(&turn.model_info, &config.features);
-    turn.config = Arc::new(config);
+    turn.model_runtime_modes = ModelRuntimeModes::resolve(&turn.model_info, &turn.config.features);
 }
 
 fn set_web_search_mode(turn: &mut TurnContext, mode: WebSearchMode) {

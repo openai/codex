@@ -9,12 +9,6 @@ pub(crate) struct ModelRuntimeModes {
 }
 
 impl ModelRuntimeModes {
-    pub(crate) fn from_features(features: &ManagedFeatures) -> Self {
-        Self {
-            tool_mode: tool_mode_from_features(features),
-        }
-    }
-
     pub(crate) fn resolve(model_info: &ModelInfo, features: &ManagedFeatures) -> Self {
         Self {
             tool_mode: model_info

@@ -47,8 +47,7 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.model_runtime_modes =
-        ModelRuntimeModes::resolve(&model_info, &per_turn_config.features);
+    let model_runtime_modes = ModelRuntimeModes::resolve(&model_info, &per_turn_config.features);
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -98,6 +97,7 @@ pub(super) async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
+        model_runtime_modes,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,

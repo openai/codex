@@ -1,7 +1,6 @@
 use crate::agents_md::AgentsMdManager;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::model_runtime::ModelRuntimeModes;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
@@ -953,9 +952,6 @@ pub struct Config {
 
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
-
-    /// Runtime tool behavior selected by model metadata, falling back to feature flags.
-    pub(crate) model_runtime_modes: ModelRuntimeModes,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
@@ -2993,8 +2989,7 @@ impl Config {
                     .saturating_sub(1),
             )
         } else {
-            let agent_max_threads =
-                agent_max_threads_from_config.or(DEFAULT_AGENT_MAX_THREADS);
+            let agent_max_threads = agent_max_threads_from_config.or(DEFAULT_AGENT_MAX_THREADS);
             if agent_max_threads == Some(0) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -3459,7 +3454,6 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             multi_agent_v2,
-            model_runtime_modes: ModelRuntimeModes::from_features(&features),
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
