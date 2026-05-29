@@ -71,10 +71,10 @@ async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) -> 
     }
 }
 
-async fn tools_for_remote_model(
+async fn response_body_for_remote_model(
     remote_model: ModelInfo,
     configure: impl FnOnce(&mut Config) + Send + 'static,
-) -> Result<Vec<String>> {
+) -> Result<Value> {
     let server = responses::start_mock_server().await;
     let model_slug = remote_model.slug.clone();
     let models_mock = mount_models_once(
@@ -113,7 +113,7 @@ async fn tools_for_remote_model(
     .await?;
     test.submit_turn("list tools").await?;
 
-    Ok(tool_names(&response_mock.single_request().body_json()))
+    Ok(response_mock.single_request().body_json())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -122,13 +122,14 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
 
     let mut direct_model = remote_model("test-tool-mode-direct");
     direct_model.tool_mode = Some(ToolMode::Direct);
-    let direct_tools = tools_for_remote_model(direct_model, |config| {
+    let direct_body = response_body_for_remote_model(direct_model, |config| {
         config
             .features
             .enable(Feature::CodeModeOnly)
             .expect("test config should allow feature update");
     })
     .await?;
+    let direct_tools = tool_names(&direct_body);
     assert!(
         direct_tools.iter().any(|name| name == "shell_command"),
         "direct mode should retain shell_command: {direct_tools:?}"
@@ -143,9 +144,9 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
 
     let mut code_mode_only_model = remote_model("test-tool-mode-code-mode-only");
     code_mode_only_model.tool_mode = Some(ToolMode::CodeModeOnly);
-    let code_mode_only_tools = tools_for_remote_model(code_mode_only_model, |_| {}).await?;
+    let code_mode_only_body = response_body_for_remote_model(code_mode_only_model, |_| {}).await?;
     assert_eq!(
-        code_mode_only_tools,
+        tool_names(&code_mode_only_body),
         vec![
             codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             codex_code_mode::WAIT_TOOL_NAME.to_string(),
