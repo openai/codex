@@ -10,7 +10,6 @@ use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
-use codex_protocol::openai_models::MultiAgentVersion;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -120,14 +119,7 @@ async fn build_runner_options(
             "agent depth limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    let max_threads = (turn.multi_agent_version == Some(MultiAgentVersion::V2))
-        .then(|| {
-            turn.config
-                .multi_agent_v2
-                .max_concurrent_threads_per_session
-                .saturating_sub(1)
-        })
-        .or(turn.config.agent_max_threads);
+    let max_threads = turn.config.agent_max_threads;
     if max_threads == Some(0) {
         return Err(FunctionCallError::RespondToModel(
             "agent thread limit reached; this session cannot spawn more subagents".to_string(),

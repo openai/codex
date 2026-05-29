@@ -224,15 +224,7 @@ impl AgentControl {
             }
             _ => config.features.enabled(Feature::MultiAgentV2),
         };
-        let max_threads = multi_agent_v2
-            .then(|| {
-                config
-                    .multi_agent_v2
-                    .max_concurrent_threads_per_session
-                    .saturating_sub(1)
-            })
-            .or(config.agent_max_threads);
-        let mut reservation = self.state.reserve_spawn_slot(max_threads)?;
+        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
@@ -618,15 +610,7 @@ impl AgentControl {
         }
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
-        let max_threads = multi_agent_v2
-            .then(|| {
-                config
-                    .multi_agent_v2
-                    .max_concurrent_threads_per_session
-                    .saturating_sub(1)
-            })
-            .or(config.agent_max_threads);
-        let mut reservation = self.state.reserve_spawn_slot(max_threads)?;
+        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,

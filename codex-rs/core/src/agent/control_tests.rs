@@ -1313,54 +1313,6 @@ async fn spawn_agent_respects_max_threads_limit() {
 }
 
 #[tokio::test]
-async fn spawn_agent_uses_multi_agent_v2_selector_thread_limit() {
-    let harness = AgentControlHarness::new().await;
-    let mut config = harness.config.clone();
-    config.agent_max_threads = Some(4);
-    config.multi_agent_v2.max_concurrent_threads_per_session = 2;
-    let session_source = Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id: ThreadId::new(),
-        depth: 1,
-        agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path")),
-        agent_nickname: None,
-        agent_role: None,
-    }));
-
-    let first_agent_id = harness
-        .control
-        .spawn_agent_with_metadata(
-            config.clone(),
-            text_input("hello"),
-            session_source.clone(),
-            SpawnAgentOptions::default(),
-        )
-        .await
-        .expect("spawn_agent should succeed")
-        .thread_id;
-
-    let err = harness
-        .control
-        .spawn_agent_with_metadata(
-            config,
-            text_input("hello again"),
-            session_source,
-            SpawnAgentOptions::default(),
-        )
-        .await
-        .expect_err("spawn_agent should use the v2 thread limit");
-    let CodexErr::AgentLimitReached { max_threads } = err else {
-        panic!("expected CodexErr::AgentLimitReached");
-    };
-    assert_eq!(max_threads, 1);
-
-    let _ = harness
-        .control
-        .shutdown_live_agent(first_agent_id)
-        .await
-        .expect("shutdown agent");
-}
-
-#[tokio::test]
 async fn spawn_agent_releases_slot_after_shutdown() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
