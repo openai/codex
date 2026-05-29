@@ -579,7 +579,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/archive failed in TUI")?;
+            .wrap_err("failed to archive session")?;
         Ok(())
     }
 
@@ -594,7 +594,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/unarchive failed in TUI")?;
+            .wrap_err("failed to unarchive session")?;
         Ok(response.thread)
     }
 

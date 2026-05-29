@@ -174,11 +174,11 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
-    /// Archive a saved session by id or thread name.
-    Archive(ThreadArchiveCommand),
+    /// Archive a saved session by id or session name.
+    Archive(SessionArchiveCommand),
 
-    /// Unarchive a saved session by id or thread name.
-    Unarchive(ThreadArchiveCommand),
+    /// Unarchive a saved session by id or session name.
+    Unarchive(SessionArchiveCommand),
 
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
@@ -301,7 +301,7 @@ struct DebugTraceReduceCommand {
 
 #[derive(Debug, Parser)]
 struct ResumeCommand {
-    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
+    /// Session id (UUID) or session name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
@@ -326,20 +326,20 @@ struct ResumeCommand {
 }
 
 #[derive(Debug, Parser)]
-struct ThreadArchiveCommand {
-    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
-    #[arg(value_name = "THREAD")]
+struct SessionArchiveCommand {
+    /// Session id (UUID) or session name. UUIDs take precedence if it parses.
+    #[arg(value_name = "SESSION")]
     target: String,
 
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
 
     #[clap(flatten)]
-    config_overrides: ThreadArchiveConfigOverrides,
+    config_overrides: SessionArchiveConfigOverrides,
 }
 
 #[derive(Debug, Args, Clone, Default)]
-struct ThreadArchiveConfigOverrides {
+struct SessionArchiveConfigOverrides {
     #[clap(flatten)]
     shared: SharedCliOptions,
 
@@ -767,30 +767,30 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
-async fn run_thread_archive_cli_command(
-    action: codex_tui::ThreadArchiveAction,
-    cmd: ThreadArchiveCommand,
+async fn run_session_archive_cli_command(
+    action: codex_tui::SessionArchiveAction,
+    cmd: SessionArchiveCommand,
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
     root_remote: Option<String>,
     root_remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
-) -> anyhow::Result<codex_tui::ThreadArchiveCommandOutput> {
-    let ThreadArchiveCommand {
+) -> anyhow::Result<codex_tui::SessionArchiveCommandOutput> {
+    let SessionArchiveCommand {
         target,
         remote,
         config_overrides,
     } = cmd;
     interactive =
-        finalize_thread_archive_interactive(interactive, root_config_overrides, config_overrides);
+        finalize_session_archive_interactive(interactive, root_config_overrides, config_overrides);
     let explicit_remote_endpoint = resolve_remote_endpoint(
         remote.remote.or(root_remote),
         remote.remote_auth_token_env.or(root_remote_auth_token_env),
     )?;
-    codex_tui::run_thread_archive_command(
+    codex_tui::run_session_archive_command(
         action,
         target,
-        codex_tui::ThreadArchiveCommandOptions {
+        codex_tui::SessionArchiveCommandOptions {
             cli: interactive,
             arg0_paths,
             loader_overrides: codex_config::LoaderOverrides::default(),
@@ -1192,8 +1192,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Archive(cmd)) => {
-            let output = run_thread_archive_cli_command(
-                codex_tui::ThreadArchiveAction::Archive,
+            let output = run_session_archive_cli_command(
+                codex_tui::SessionArchiveAction::Archive,
                 cmd,
                 interactive,
                 root_config_overrides.clone(),
@@ -1205,8 +1205,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             println!("{}", output.success_message());
         }
         Some(Subcommand::Unarchive(cmd)) => {
-            let output = run_thread_archive_cli_command(
-                codex_tui::ThreadArchiveAction::Unarchive,
+            let output = run_session_archive_cli_command(
+                codex_tui::SessionArchiveAction::Unarchive,
                 cmd,
                 interactive,
                 root_config_overrides.clone(),
@@ -2287,12 +2287,12 @@ fn finalize_fork_interactive(
     interactive
 }
 
-fn finalize_thread_archive_interactive(
+fn finalize_session_archive_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
-    archive_cli: ThreadArchiveConfigOverrides,
+    archive_cli: SessionArchiveConfigOverrides,
 ) -> TuiCli {
-    let ThreadArchiveConfigOverrides {
+    let SessionArchiveConfigOverrides {
         shared,
         strict_config,
         config_overrides,
@@ -2483,7 +2483,7 @@ mod tests {
             remote: _,
         } = cli;
 
-        let Subcommand::Archive(ThreadArchiveCommand {
+        let Subcommand::Archive(SessionArchiveCommand {
             target,
             remote,
             config_overrides: archive_cli,
@@ -2494,7 +2494,7 @@ mod tests {
 
         (
             target,
-            finalize_thread_archive_interactive(interactive, root_overrides, archive_cli),
+            finalize_session_archive_interactive(interactive, root_overrides, archive_cli),
             remote,
         )
     }
@@ -2782,7 +2782,7 @@ mod tests {
     #[test]
     fn archive_rejects_extra_positional_argument() {
         let err = MultitoolCli::try_parse_from(["codex", "archive", "old", "name"])
-            .expect_err("archive should reject unquoted thread names");
+            .expect_err("archive should reject unquoted session names");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
@@ -2852,7 +2852,7 @@ mod tests {
     #[test]
     fn unarchive_rejects_extra_positional_argument() {
         let err = MultitoolCli::try_parse_from(["codex", "unarchive", "old", "name"])
-            .expect_err("unarchive should reject unquoted thread names");
+            .expect_err("unarchive should reject unquoted session names");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }

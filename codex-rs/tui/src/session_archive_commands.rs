@@ -1,6 +1,6 @@
 //! Shared implementation for `codex archive` and `codex unarchive`.
 //!
-//! The CLI commands are thin app-server clients: resolve a user-provided UUID or exact thread
+//! The CLI commands are thin app-server clients: resolve a user-provided UUID or exact session
 //! name, then call the existing `thread/archive` or `thread/unarchive` RPC.
 
 use std::sync::Arc;
@@ -32,12 +32,12 @@ use uuid::Uuid;
 use super::RemoteAppServerEndpoint;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThreadArchiveAction {
+pub enum SessionArchiveAction {
     Archive,
     Unarchive,
 }
 
-impl ThreadArchiveAction {
+impl SessionArchiveAction {
     fn archived_filter(self) -> bool {
         match self {
             Self::Archive => false,
@@ -68,7 +68,7 @@ impl ThreadArchiveAction {
 }
 
 #[derive(Debug, Clone)]
-pub struct ThreadArchiveCommandOptions {
+pub struct SessionArchiveCommandOptions {
     pub cli: Cli,
     pub arg0_paths: Arg0DispatchPaths,
     pub loader_overrides: LoaderOverrides,
@@ -76,95 +76,95 @@ pub struct ThreadArchiveCommandOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadArchiveCommandOutput {
-    pub action: ThreadArchiveAction,
-    pub thread_id: ThreadId,
-    pub thread_name: Option<String>,
+pub struct SessionArchiveCommandOutput {
+    pub action: SessionArchiveAction,
+    pub session_id: ThreadId,
+    pub session_name: Option<String>,
 }
 
-impl ThreadArchiveCommandOutput {
+impl SessionArchiveCommandOutput {
     pub fn success_message(&self) -> String {
         let action = self.action.past_tense();
-        let thread_id = self.thread_id;
-        match self.thread_name.as_deref() {
-            Some(name) => format!("{action} thread {name} ({thread_id})."),
-            None => format!("{action} thread {thread_id}."),
+        let session_id = self.session_id;
+        match self.session_name.as_deref() {
+            Some(name) => format!("{action} session {name} ({session_id})."),
+            None => format!("{action} session {session_id}."),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ResolvedThreadTarget {
-    thread_id: ThreadId,
-    thread_name: Option<String>,
+struct ResolvedSessionTarget {
+    session_id: ThreadId,
+    session_name: Option<String>,
 }
 
-pub async fn run_thread_archive_command(
-    action: ThreadArchiveAction,
+pub async fn run_session_archive_command(
+    action: SessionArchiveAction,
     target: String,
-    options: ThreadArchiveCommandOptions,
-) -> Result<ThreadArchiveCommandOutput> {
+    options: SessionArchiveCommandOptions,
+) -> Result<SessionArchiveCommandOutput> {
     let mut app_server = start_app_server_for_archive_command(options).await?;
-    run_thread_archive_action_with_app_server(&mut app_server, action, &target).await
+    run_session_archive_action_with_app_server(&mut app_server, action, &target).await
 }
 
-async fn run_thread_archive_action_with_app_server(
+async fn run_session_archive_action_with_app_server(
     app_server: &mut AppServerSession,
-    action: ThreadArchiveAction,
+    action: SessionArchiveAction,
     target: &str,
-) -> Result<ThreadArchiveCommandOutput> {
-    let resolved = resolve_thread_target(app_server, action, target).await?;
+) -> Result<SessionArchiveCommandOutput> {
+    let resolved = resolve_session_target(app_server, action, target).await?;
     match action {
-        ThreadArchiveAction::Archive => {
-            app_server.thread_archive(resolved.thread_id).await?;
-            Ok(ThreadArchiveCommandOutput {
+        SessionArchiveAction::Archive => {
+            app_server.thread_archive(resolved.session_id).await?;
+            Ok(SessionArchiveCommandOutput {
                 action,
-                thread_id: resolved.thread_id,
-                thread_name: resolved.thread_name,
+                session_id: resolved.session_id,
+                session_name: resolved.session_name,
             })
         }
-        ThreadArchiveAction::Unarchive => {
-            let thread = app_server.thread_unarchive(resolved.thread_id).await?;
-            Ok(ThreadArchiveCommandOutput {
+        SessionArchiveAction::Unarchive => {
+            let thread = app_server.thread_unarchive(resolved.session_id).await?;
+            Ok(SessionArchiveCommandOutput {
                 action,
-                thread_id: resolved.thread_id,
-                thread_name: thread.name.or(resolved.thread_name),
+                session_id: resolved.session_id,
+                session_name: thread.name.or(resolved.session_name),
             })
         }
     }
 }
 
-async fn resolve_thread_target(
+async fn resolve_session_target(
     app_server: &mut AppServerSession,
-    action: ThreadArchiveAction,
+    action: SessionArchiveAction,
     target: &str,
-) -> Result<ResolvedThreadTarget> {
+) -> Result<ResolvedSessionTarget> {
     if Uuid::parse_str(target).is_ok() {
-        let thread_id = ThreadId::from_string(target)
-            .wrap_err_with(|| format!("invalid thread id: {target}"))?;
-        return Ok(ResolvedThreadTarget {
-            thread_id,
-            thread_name: None,
+        let session_id = ThreadId::from_string(target)
+            .wrap_err_with(|| format!("invalid session id: {target}"))?;
+        return Ok(ResolvedSessionTarget {
+            session_id,
+            session_name: None,
         });
     }
 
-    let resolved = lookup_thread_by_exact_name(app_server, action, target)
+    let resolved = lookup_session_by_exact_name(app_server, action, target)
         .await?
-        .map(thread_target_from_app_server_thread)
+        .map(session_target_from_app_server_thread)
         .transpose()?;
 
     resolved.with_context(|| {
         format!(
-            "No {} chat found matching '{}'.",
+            "No {} session found matching '{}'.",
             action.search_scope(),
             target
         )
     })
 }
 
-async fn lookup_thread_by_exact_name(
+async fn lookup_session_by_exact_name(
     app_server: &mut AppServerSession,
-    action: ThreadArchiveAction,
+    action: SessionArchiveAction,
     name: &str,
 ) -> Result<Option<AppServerThread>> {
     let mut cursor = None;
@@ -187,7 +187,7 @@ async fn lookup_thread_by_exact_name(
             .await
             .wrap_err_with(|| {
                 format!(
-                    "thread/list failed while resolving thread to {}",
+                    "failed to list sessions while resolving session to {}",
                     action.command_name()
                 )
             })?;
@@ -206,12 +206,12 @@ async fn lookup_thread_by_exact_name(
     }
 }
 
-fn thread_target_from_app_server_thread(thread: AppServerThread) -> Result<ResolvedThreadTarget> {
-    let thread_id = ThreadId::from_string(&thread.id)
-        .wrap_err_with(|| format!("app server returned invalid thread id `{}`", thread.id))?;
-    Ok(ResolvedThreadTarget {
-        thread_id,
-        thread_name: thread.name,
+fn session_target_from_app_server_thread(thread: AppServerThread) -> Result<ResolvedSessionTarget> {
+    let session_id = ThreadId::from_string(&thread.id)
+        .wrap_err_with(|| format!("app server returned invalid session id `{}`", thread.id))?;
+    Ok(ResolvedSessionTarget {
+        session_id,
+        session_name: thread.name,
     })
 }
 
@@ -248,22 +248,22 @@ mod tests {
     }
 
     #[test]
-    fn thread_target_from_app_server_thread_reports_invalid_ids() {
-        let err = thread_target_from_app_server_thread(app_server_thread("not-a-thread-id"))
+    fn session_target_from_app_server_thread_reports_invalid_ids() {
+        let err = session_target_from_app_server_thread(app_server_thread("not-a-thread-id"))
             .expect_err("invalid ids should be reported as normal errors");
 
         assert!(
             err.to_string()
-                .contains("app server returned invalid thread id `not-a-thread-id`"),
+                .contains("app server returned invalid session id `not-a-thread-id`"),
             "unexpected error: {err}"
         );
     }
 }
 
 async fn start_app_server_for_archive_command(
-    options: ThreadArchiveCommandOptions,
+    options: SessionArchiveCommandOptions,
 ) -> Result<AppServerSession> {
-    let ThreadArchiveCommandOptions {
+    let SessionArchiveCommandOptions {
         cli,
         arg0_paths,
         loader_overrides,

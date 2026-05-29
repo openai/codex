@@ -782,7 +782,7 @@ async fn thread_resume_can_skip_turns_for_metadata_only_resume() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_rejects_archived_thread_by_id() -> Result<()> {
+async fn thread_resume_rejects_archived_session_by_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -822,7 +822,7 @@ async fn thread_resume_rejects_archived_thread_by_id() -> Result<()> {
 
     let message = resume_err.error.message;
     assert!(
-        message.contains(&format!("thread {conversation_id} is archived"))
+        message.contains(&format!("session {conversation_id} is archived"))
             && message.contains(&format!("codex unarchive {conversation_id}")),
         "unexpected resume error: {message}"
     );
