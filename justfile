@@ -108,12 +108,7 @@ bazel-codex *args:
 bazel-codex *args:
     bazel run //codex-rs/cli:codex --run_under='cd /d "{{invocation_directory_native()}}" &&' -- @($args | Select-Object -Skip 1)
 
-[unix]
 [no-cd]
-bazel-lock-update:
-    bazel mod deps --lockfile_mode=update
-
-[windows]
 bazel-lock-update:
     bazel mod deps --lockfile_mode=update
 
