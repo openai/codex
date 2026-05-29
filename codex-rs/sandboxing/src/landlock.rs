@@ -89,7 +89,6 @@ fn create_linux_sandbox_command_args(
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
     }
-
     // Separator so that command arguments starting with `-` are not parsed as
     // options of the helper itself.
     linux_cmd.push("--".to_string());

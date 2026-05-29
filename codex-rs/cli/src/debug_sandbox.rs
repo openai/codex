@@ -213,7 +213,7 @@ async fn run_command_under_sandbox(
     // separately.
     let permission_profile_cwd = cwd.clone();
 
-    let mut env = create_env(
+    let env = create_env(
         &config.permissions.shell_environment_policy,
         /*thread_id*/ None,
     );
@@ -258,11 +258,9 @@ async fn run_command_under_sandbox(
         .map(codex_core::config::StartedNetworkProxy::proxy);
     let mut runtime_permission_profile = config.permissions.effective_permission_profile();
     if let Some(network) = network.as_ref() {
-        let file_system_sandbox_policy = runtime_permission_profile.file_system_sandbox_policy();
+        network.validate_child_env(&env)?;
         let managed_mitm_ca_trust_bundle_paths = network
-            .prepare_child_env(&mut env, cwd.as_path(), |path| {
-                file_system_sandbox_policy.can_read_path_with_cwd(path, cwd.as_path())
-            })
+            .managed_mitm_ca_trust_bundle_paths()
             .into_iter()
             .map(AbsolutePathBuf::from_absolute_path)
             .collect::<std::io::Result<Vec<_>>>()?;
@@ -296,8 +294,11 @@ async fn run_command_under_sandbox(
                 |env_map| {
                     env_map.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
                     if let Some(network) = network.as_ref() {
-                        network.apply_to_env(env_map);
+                        network
+                            .apply_to_env(env_map)
+                            .map_err(std::io::Error::other)?;
                     }
+                    Ok(())
                 },
             )
             .await?
@@ -326,8 +327,11 @@ async fn run_command_under_sandbox(
                 env,
                 |env_map| {
                     if let Some(network) = network.as_ref() {
-                        network.apply_to_env(env_map);
+                        network
+                            .apply_to_env(env_map)
+                            .map_err(std::io::Error::other)?;
                     }
+                    Ok(())
                 },
             )
             .await?
@@ -492,7 +496,7 @@ async fn spawn_debug_sandbox_child(
     cwd: PathBuf,
     network_sandbox_policy: NetworkSandboxPolicy,
     mut env: std::collections::HashMap<String, String>,
-    apply_env: impl FnOnce(&mut std::collections::HashMap<String, String>),
+    apply_env: impl FnOnce(&mut std::collections::HashMap<String, String>) -> std::io::Result<()>,
 ) -> std::io::Result<Child> {
     let mut cmd = TokioCommand::new(&program);
     #[cfg(unix)]
@@ -501,7 +505,7 @@ async fn spawn_debug_sandbox_child(
     let _ = arg0;
     cmd.args(args);
     cmd.current_dir(cwd);
-    apply_env(&mut env);
+    apply_env(&mut env)?;
     cmd.env_clear();
     cmd.envs(env);
 

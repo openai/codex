@@ -12,7 +12,6 @@ use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
-use codex_network_proxy::MITM_CA_ENV_KEYS;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
@@ -203,12 +202,11 @@ fn build_proxy_env_exports() -> (String, String) {
 
     let (captures, restores) =
         build_override_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
-    let (mitm_ca_captures, mitm_ca_restores) = build_mitm_ca_env_exports();
     let key = PROXY_ACTIVE_ENV_KEY;
     let proxy_blocks = (
-        format!("{captures}\n{mitm_ca_captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\""),
+        format!("{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\""),
         format!(
-            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\n{mitm_ca_restores}\nfi"
+            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi"
         ),
     );
     let git_blocks = build_codex_proxy_git_ssh_command_exports();
@@ -216,20 +214,6 @@ fn build_proxy_env_exports() -> (String, String) {
         join_shell_blocks([proxy_blocks.0, git_blocks.0]),
         join_shell_blocks([proxy_blocks.1, git_blocks.1]),
     )
-}
-
-fn build_mitm_ca_env_exports() -> (String, String) {
-    // Snapshot restore needs these live MITM CA values, but PROXY_ENV_KEYS
-    // stays transport-only because elevated/no-proxy flows strip that list.
-    let mut keys = MITM_CA_ENV_KEYS
-        .iter()
-        .copied()
-        .filter(|key| is_valid_shell_variable_name(key))
-        .collect::<Vec<_>>();
-    keys.sort_unstable();
-    keys.dedup();
-
-    build_override_exports_for_keys("__CODEX_SNAPSHOT_MITM_CA_OVERRIDE", &keys)
 }
 
 #[cfg(target_os = "macos")]

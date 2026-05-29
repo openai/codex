@@ -187,12 +187,11 @@ impl SandboxManager {
         let mut effective_permission_profile =
             effective_permission_profile(permissions, additional_permissions.as_ref());
         if let Some(network) = network {
-            let file_system_sandbox_policy =
-                effective_permission_profile.file_system_sandbox_policy();
+            network.validate_child_env(&command.env).map_err(|err| {
+                SandboxTransformError::ManagedMitmCaTrust(std::io::Error::other(err.to_string()))
+            })?;
             let managed_mitm_ca_trust_bundle_paths = network
-                .prepare_child_env(&mut command.env, command.cwd.as_path(), |path| {
-                    file_system_sandbox_policy.can_read_path_with_cwd(path, command.cwd.as_path())
-                })
+                .managed_mitm_ca_trust_bundle_paths()
                 .into_iter()
                 .map(AbsolutePathBuf::from_absolute_path)
                 .collect::<std::io::Result<Vec<_>>>()

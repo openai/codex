@@ -114,7 +114,9 @@ fn proxy_policy_inputs(
     match network {
         Some(network) => {
             let mut env = HashMap::new();
-            network.apply_to_env(&mut env);
+            let Ok(()) = network.apply_to_env(&mut env) else {
+                unreachable!("empty env cannot contain command-scoped CA overrides");
+            };
             let unix_domain_socket_policy = if network.dangerously_allow_all_unix_sockets() {
                 UnixDomainSocketPolicy::AllowAll
             } else {
