@@ -67,5 +67,6 @@ pub(super) fn test_thread_metadata(
         git_sha: None,
         git_branch: None,
         git_origin_url: None,
+        search_service_browser_state: None,
     }
 }

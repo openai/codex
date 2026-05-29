@@ -415,6 +415,7 @@ mod thread_processor_behavior_tests {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             token_usage: None,
             first_user_message: Some("first user message".to_string()),
+            search_service_browser_state: None,
             history: None,
         };
 

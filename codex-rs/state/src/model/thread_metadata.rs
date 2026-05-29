@@ -107,6 +107,8 @@ pub struct ThreadMetadata {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+    /// Search Service browser state needed by follow-up browse/open calls.
+    pub search_service_browser_state: Option<serde_json::Value>,
 }
 
 /// Builder data required to construct [`ThreadMetadata`] without parsing filenames.
@@ -148,6 +150,8 @@ pub struct ThreadMetadataBuilder {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+    /// Search Service browser state needed by follow-up browse/open calls.
+    pub search_service_browser_state: Option<serde_json::Value>,
 }
 
 impl ThreadMetadataBuilder {
@@ -177,6 +181,7 @@ impl ThreadMetadataBuilder {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            search_service_browser_state: None,
         }
     }
 
@@ -221,13 +226,14 @@ impl ThreadMetadataBuilder {
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
             git_origin_url: self.git_origin_url.clone(),
+            search_service_browser_state: self.search_service_browser_state.clone(),
         }
     }
 }
 
 impl ThreadMetadata {
-    /// Preserve existing non-null Git fields when rollout-derived metadata is reconciled.
-    pub fn prefer_existing_git_info(&mut self, existing: &Self) {
+    /// Preserve existing SQLite-only fields when rollout-derived metadata is reconciled.
+    pub fn prefer_existing_sqlite_only_fields(&mut self, existing: &Self) {
         if existing.git_sha.is_some() {
             self.git_sha = existing.git_sha.clone();
         }
@@ -236,6 +242,9 @@ impl ThreadMetadata {
         }
         if existing.git_origin_url.is_some() {
             self.git_origin_url = existing.git_origin_url.clone();
+        }
+        if existing.search_service_browser_state.is_some() {
+            self.search_service_browser_state = existing.search_service_browser_state.clone();
         }
     }
 
@@ -311,6 +320,9 @@ impl ThreadMetadata {
         if self.git_origin_url != other.git_origin_url {
             diffs.push("git_origin_url");
         }
+        if self.search_service_browser_state != other.search_service_browser_state {
+            diffs.push("search_service_browser_state");
+        }
         diffs
     }
 }
@@ -345,6 +357,7 @@ pub(crate) struct ThreadRow {
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
+    search_service_browser_state: Option<String>,
 }
 
 impl ThreadRow {
@@ -374,6 +387,7 @@ impl ThreadRow {
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
             git_origin_url: row.try_get("git_origin_url")?,
+            search_service_browser_state: row.try_get("search_service_browser_state")?,
         })
     }
 }
@@ -407,11 +421,15 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
+            search_service_browser_state,
         } = row;
         let thread_source = thread_source
             .map(|thread_source| thread_source.parse())
             .transpose()
             .map_err(anyhow::Error::msg)?;
+        let search_service_browser_state = search_service_browser_state
+            .map(|value| serde_json::from_str(&value))
+            .transpose()?;
         Ok(Self {
             id: ThreadId::try_from(id)?,
             rollout_path: PathBuf::from(rollout_path),
@@ -438,6 +456,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
+            search_service_browser_state,
         })
     }
 }
@@ -524,6 +543,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            search_service_browser_state: None,
         }
     }
 
@@ -554,6 +574,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            search_service_browser_state: None,
         }
     }
 

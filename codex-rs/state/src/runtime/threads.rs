@@ -31,7 +31,8 @@ SELECT
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.search_service_browser_state
 FROM threads
 WHERE threads.id = ?
             "#,
@@ -476,6 +477,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
     ) -> anyhow::Result<bool> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         let preview = metadata_preview(metadata);
+        let search_service_browser_state = serialize_search_service_browser_state(metadata)?;
         let result = sqlx::query(
             r#"
 INSERT INTO threads (
@@ -506,8 +508,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    search_service_browser_state,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -547,6 +550,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(search_service_browser_state.as_deref())
         .bind("enabled")
         .execute(self.pool.as_ref())
         .await?;
@@ -679,6 +683,7 @@ WHERE id = ?
     ) -> anyhow::Result<()> {
         let updated_at = self.allocate_thread_updated_at(metadata.updated_at)?;
         let preview = metadata_preview(metadata);
+        let search_service_browser_state = serialize_search_service_browser_state(metadata)?;
         // Backfill/reconcile callers merge existing git info before upserting, but that
         // read/modify/write is not atomic. Preserve non-null SQLite git fields here so
         // an explicit metadata update cannot be lost if a stale rollout upsert lands later.
@@ -712,8 +717,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    search_service_browser_state,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -740,7 +746,8 @@ ON CONFLICT(id) DO UPDATE SET
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
     git_branch = COALESCE(threads.git_branch, excluded.git_branch),
-    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url)
+    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url),
+    search_service_browser_state = COALESCE(excluded.search_service_browser_state, threads.search_service_browser_state)
             "#,
         )
         .bind(metadata.id.to_string())
@@ -779,6 +786,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(search_service_browser_state.as_deref())
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;
@@ -807,7 +815,7 @@ ON CONFLICT(id) DO UPDATE SET
             apply_rollout_item(&mut metadata, item, &self.default_provider);
         }
         if let Some(existing_metadata) = existing_metadata.as_ref() {
-            metadata.prefer_existing_git_info(existing_metadata);
+            metadata.prefer_existing_sqlite_only_fields(existing_metadata);
         }
         let updated_at = match updated_at_override {
             Some(updated_at) => Some(updated_at),
@@ -942,7 +950,8 @@ SELECT
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.search_service_browser_state
 "#,
     );
 }
@@ -1089,6 +1098,17 @@ fn metadata_preview(metadata: &crate::ThreadMetadata) -> &str {
         .as_deref()
         .or(metadata.first_user_message.as_deref())
         .unwrap_or_default()
+}
+
+fn serialize_search_service_browser_state(
+    metadata: &crate::ThreadMetadata,
+) -> anyhow::Result<Option<String>> {
+    metadata
+        .search_service_browser_state
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(Into::into)
 }
 
 #[cfg(test)]

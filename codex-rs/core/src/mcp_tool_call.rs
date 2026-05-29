@@ -18,6 +18,8 @@ use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::search_service_browser_state;
+use crate::search_service_browser_state::SEARCH_SERVICE_CONNECTOR_ID;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
@@ -74,6 +76,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
+use codex_thread_store::ThreadMetadataPatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
@@ -88,6 +91,7 @@ use tracing::Instrument;
 use tracing::Span;
 use tracing::error;
 use tracing::field::Empty;
+use tracing::warn;
 use url::Url;
 
 const MCP_CALL_COUNT_METRIC: &str = "codex.mcp.call";
@@ -555,6 +559,20 @@ async fn execute_mcp_tool_call(
 ) -> Result<CallToolResult, String> {
     let request_meta =
         with_mcp_tool_call_thread_id_meta(request_meta, &sess.conversation_id.to_string());
+    let is_search_service_call = is_search_service_mcp_tool_call(invocation, metadata);
+    let search_service_browser_state = if is_search_service_call {
+        read_search_service_browser_state(sess).await
+    } else {
+        None
+    };
+    let request_meta = if is_search_service_call {
+        search_service_browser_state::augment_request_meta(
+            request_meta,
+            search_service_browser_state.as_ref(),
+        )
+    } else {
+        request_meta
+    };
     let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
         sess,
         turn_context,
@@ -584,7 +602,7 @@ async fn execute_mcp_tool_call(
             .contains(&InputModality::Image),
         Ok(result),
     )?;
-    Ok(maybe_request_codex_apps_auth_elicitation(
+    let result = maybe_request_codex_apps_auth_elicitation(
         sess,
         turn_context,
         call_id,
@@ -592,7 +610,78 @@ async fn execute_mcp_tool_call(
         metadata,
         result,
     )
-    .await)
+    .await;
+    if is_search_service_call {
+        if let Some(new_state) =
+            search_service_browser_state::browser_state_from_tool_result(&result)
+            && let Err(err) = persist_search_service_browser_state(
+                sess,
+                search_service_browser_state.as_ref(),
+                &new_state,
+            )
+            .await
+        {
+            warn!("failed to persist search service browser state: {err:#}");
+        }
+    }
+    Ok(result)
+}
+
+async fn read_search_service_browser_state(sess: &Session) -> Option<JsonValue> {
+    let live_thread = match sess.live_thread_for_persistence("read search service browser state") {
+        Ok(live_thread) => live_thread,
+        Err(err) => {
+            warn!("search service browser state unavailable: {err:#}");
+            return None;
+        }
+    };
+    match live_thread
+        .read_thread(
+            /*include_archived*/ false, /*include_history*/ false,
+        )
+        .await
+    {
+        Ok(thread) => thread.search_service_browser_state,
+        Err(err) => {
+            warn!("failed to read search service browser state: {err}");
+            None
+        }
+    }
+}
+
+async fn persist_search_service_browser_state(
+    sess: &Session,
+    previous_state: Option<&JsonValue>,
+    new_state: &JsonValue,
+) -> anyhow::Result<()> {
+    let durable_state = read_search_service_browser_state(sess).await;
+    let Some(merged_state) = search_service_browser_state::merge_browser_states(
+        durable_state.as_ref().or(previous_state),
+        Some(new_state),
+    ) else {
+        return Ok(());
+    };
+    let live_thread = sess.live_thread_for_persistence("persist search service browser state")?;
+    live_thread
+        .update_metadata(
+            ThreadMetadataPatch {
+                search_service_browser_state: Some(merged_state),
+                ..Default::default()
+            },
+            /*include_archived*/ false,
+        )
+        .await?;
+    Ok(())
+}
+
+fn is_search_service_mcp_tool_call(
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> bool {
+    invocation.tool == "web_run"
+        && metadata
+            .and_then(|metadata| metadata.connector_id.as_deref())
+            .is_some_and(|connector_id| connector_id == SEARCH_SERVICE_CONNECTOR_ID)
 }
 
 async fn maybe_request_codex_apps_auth_elicitation(

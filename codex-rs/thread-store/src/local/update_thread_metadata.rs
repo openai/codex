@@ -284,6 +284,9 @@ async fn apply_metadata_update(
             if let Some(first_user_message) = patch.first_user_message {
                 metadata.first_user_message = Some(first_user_message);
             }
+            if let Some(search_service_browser_state) = patch.search_service_browser_state {
+                metadata.search_service_browser_state = Some(search_service_browser_state);
+            }
             if let Some(git_info) = patch.git_info {
                 let existing_git_info = git_info_from_parts(
                     metadata.git_sha.clone(),
@@ -323,6 +326,11 @@ async fn apply_metadata_update(
         (true, Err(err)) => {
             warn!("state db update_thread_metadata failed for {thread_id}: {err}");
         }
+        (false, Ok(())) if require_sqlite_write => {
+            return Err(ThreadStoreError::Internal {
+                message: format!("sqlite state db unavailable for thread {thread_id}"),
+            });
+        }
         (false, Ok(())) => {}
         (false, Err(err)) if require_sqlite_write || !sqlite_write_error_is_best_effort(&err) => {
             return Err(err);
@@ -359,7 +367,8 @@ fn sqlite_write_failure_should_block(patch: &ThreadMetadataPatch) -> bool {
     // failure isolation so a corrupted optional state DB does not make JSONL transcript durability
     // look broken. Explicit git-only updates still require SQLite because partial git patches need
     // the existing SQLite value to preserve unspecified fields.
-    patch.git_info.is_some() && !has_observed_metadata_facts(patch)
+    patch.search_service_browser_state.is_some()
+        || (patch.git_info.is_some() && !has_observed_metadata_facts(patch))
 }
 
 fn sqlite_write_error_is_best_effort(err: &ThreadStoreError) -> bool {
@@ -385,6 +394,7 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.sandbox_policy.is_some()
         || patch.token_usage.is_some()
         || patch.first_user_message.is_some()
+        || patch.search_service_browser_state.is_some()
 }
 
 fn enum_to_string<T: serde::Serialize>(value: &T) -> String {
@@ -759,6 +769,54 @@ mod tests {
             .await
             .expect("thread memory mode should be readable");
         assert_eq!(memory_mode.as_deref(), Some("disabled"));
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_persists_search_service_browser_state() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(313);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T18-45-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+        let browser_state = json!({
+            "sonic_thread_id": "sonic-thread-123",
+            "external_urls": {
+                "turn0search0": "https://example.com/"
+            }
+        });
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    search_service_browser_state: Some(browser_state.clone()),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("persist search service browser state");
+
+        assert_eq!(
+            thread.search_service_browser_state.as_ref(),
+            Some(&browser_state)
+        );
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("read persisted metadata")
+            .expect("thread metadata");
+        assert_eq!(
+            persisted.search_service_browser_state.as_ref(),
+            Some(&browser_state)
+        );
     }
 
     #[tokio::test]
@@ -1195,6 +1253,14 @@ mod tests {
                 branch: Some(Some("main".to_string())),
                 ..Default::default()
             }),
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn sqlite_failures_block_for_search_service_browser_state_updates() {
+        assert!(sqlite_write_failure_should_block(&ThreadMetadataPatch {
+            search_service_browser_state: Some(json!({"sonic_thread_id": "sonic-thread-123"})),
             ..Default::default()
         }));
     }

@@ -62,6 +62,7 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         token_usage: None,
         first_user_message: Some(first_user_message.to_string()),
+        search_service_browser_state: None,
         history: None,
     }
 }

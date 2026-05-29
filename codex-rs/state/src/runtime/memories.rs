@@ -190,7 +190,8 @@ SELECT
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.search_service_browser_state
 FROM threads
             "#,
         );
@@ -560,7 +561,8 @@ SELECT
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.search_service_browser_state
 FROM threads
 WHERE threads.id = ? AND threads.memory_mode = 'enabled'
             "#,

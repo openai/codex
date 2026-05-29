@@ -402,6 +402,8 @@ pub struct StoredThread {
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread, if any.
     pub first_user_message: Option<String>,
+    /// Search Service browser state needed by follow-up browse/open calls.
+    pub search_service_browser_state: Option<serde_json::Value>,
     /// Persisted history, populated only when requested.
     pub history: Option<StoredThreadHistory>,
 }
@@ -525,6 +527,8 @@ pub struct ThreadMetadataPatch {
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread.
     pub first_user_message: Option<String>,
+    /// Search Service browser state needed by follow-up browse/open calls.
+    pub search_service_browser_state: Option<serde_json::Value>,
     /// Git metadata patch.
     pub git_info: Option<GitInfoPatch>,
     /// Thread memory behavior.
@@ -598,6 +602,9 @@ impl ThreadMetadataPatch {
         if next.first_user_message.is_some() {
             self.first_user_message = next.first_user_message;
         }
+        if next.search_service_browser_state.is_some() {
+            self.search_service_browser_state = next.search_service_browser_state;
+        }
         if let Some(git_info) = next.git_info {
             self.git_info
                 .get_or_insert_with(GitInfoPatch::default)
@@ -629,6 +636,7 @@ impl ThreadMetadataPatch {
             && self.sandbox_policy.is_none()
             && self.token_usage.is_none()
             && self.first_user_message.is_none()
+            && self.search_service_browser_state.is_none()
             && self.git_info.is_none()
             && self.memory_mode.is_none()
     }

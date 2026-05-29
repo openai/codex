@@ -79,6 +79,7 @@ pub(crate) mod mentions {
 }
 mod sandbox_tags;
 pub mod sandboxing;
+mod search_service_browser_state;
 mod session_prefix;
 mod session_startup_prewarm;
 mod shell_detect;

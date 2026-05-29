@@ -57,6 +57,7 @@ pub(super) async fn read_thread(
                 rollout_thread.name = thread.name;
             }
             rollout_thread.git_info = thread.git_info;
+            rollout_thread.search_service_browser_state = thread.search_service_browser_state;
             thread = rollout_thread;
         }
         attach_history_if_requested(&mut thread, params.include_history).await?;
@@ -123,6 +124,7 @@ pub(super) async fn read_thread_by_rollout_path(
             metadata.git_branch.or(fallback_branch),
             metadata.git_origin_url.or(fallback_origin_url),
         );
+        thread.search_service_browser_state = metadata.search_service_browser_state;
     }
     attach_history_if_requested(&mut thread, include_history).await?;
     Ok(thread)
@@ -321,6 +323,7 @@ async fn stored_thread_from_sqlite_metadata(
         ),
         token_usage: None,
         first_user_message: metadata.first_user_message,
+        search_service_browser_state: metadata.search_service_browser_state,
         history: None,
     }
 }
@@ -380,6 +383,7 @@ fn stored_thread_from_meta_line(
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         token_usage: None,
         first_user_message: None,
+        search_service_browser_state: None,
         history: None,
     }
 }
