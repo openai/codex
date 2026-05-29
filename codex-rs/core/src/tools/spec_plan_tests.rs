@@ -31,10 +31,8 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use crate::multi_agent_version::resolve_multi_agent_version;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
-use crate::tool_mode::resolve_tool_mode;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
@@ -219,7 +217,24 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .expect("test feature should be disableable in config");
     }
     turn.config = Arc::new(config);
-    resolve_model_selectors_for_turn(turn);
+    turn.tool_mode = turn.model_info.tool_mode.unwrap_or_else(|| {
+        if turn.config.features.enabled(Feature::CodeModeOnly) {
+            ToolMode::CodeModeOnly
+        } else if turn.config.features.enabled(Feature::CodeMode) {
+            ToolMode::CodeMode
+        } else {
+            ToolMode::Direct
+        }
+    });
+    turn.multi_agent_version = turn.model_info.multi_agent_version.or_else(|| {
+        if turn.config.features.enabled(Feature::MultiAgentV2) {
+            Some(MultiAgentVersion::V2)
+        } else if turn.config.features.enabled(Feature::Collab) {
+            Some(MultiAgentVersion::V1)
+        } else {
+            None
+        }
+    });
 }
 
 fn set_features(turn: &mut TurnContext, features: &[Feature]) {
@@ -232,11 +247,6 @@ fn update_config(turn: &mut TurnContext, update: impl FnOnce(&mut crate::config:
     let mut config = (*turn.config).clone();
     update(&mut config);
     turn.config = Arc::new(config);
-}
-
-fn resolve_model_selectors_for_turn(turn: &mut TurnContext) {
-    turn.tool_mode = resolve_tool_mode(&turn.model_info, &turn.config.features);
-    turn.multi_agent_version = resolve_multi_agent_version(&turn.model_info, &turn.config.features);
 }
 
 fn set_web_search_mode(turn: &mut TurnContext, mode: WebSearchMode) {
@@ -812,7 +822,7 @@ async fn tool_mode_selector_overrides_feature_flags() {
     let direct = probe(|turn| {
         set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
         turn.model_info.tool_mode = Some(ToolMode::Direct);
-        resolve_model_selectors_for_turn(turn);
+        turn.tool_mode = ToolMode::Direct;
     })
     .await;
     direct.assert_visible_lacks(&[
@@ -826,7 +836,7 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
     let v1 = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
         turn.model_info.multi_agent_version = Some(MultiAgentVersion::V1);
-        resolve_model_selectors_for_turn(turn);
+        turn.multi_agent_version = Some(MultiAgentVersion::V1);
     })
     .await;
 
@@ -843,7 +853,7 @@ async fn multi_agent_version_selector_overrides_feature_flags() {
         set_feature(turn, Feature::Collab, /*enabled*/ false);
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
         turn.model_info.multi_agent_version = Some(MultiAgentVersion::V2);
-        resolve_model_selectors_for_turn(turn);
+        turn.multi_agent_version = Some(MultiAgentVersion::V2);
     })
     .await;
 

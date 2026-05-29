@@ -60,8 +60,6 @@ pub use codex_mcp::SandboxState;
 mod mcp_openai_file;
 mod mcp_tool_call;
 pub(crate) mod mention_syntax;
-mod multi_agent_version;
-mod tool_mode;
 pub(crate) mod utils;
 pub use mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 pub use mention_syntax::TOOL_MENTION_SIGIL;

@@ -1,6 +1,6 @@
 use super::*;
-use crate::multi_agent_version::resolve_multi_agent_version;
-use crate::tool_mode::resolve_tool_mode;
+use codex_protocol::openai_models::MultiAgentVersion;
+use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -49,8 +49,24 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    let tool_mode = resolve_tool_mode(&model_info, &per_turn_config.features);
-    let multi_agent_version = resolve_multi_agent_version(&model_info, &per_turn_config.features);
+    let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
+        if per_turn_config.features.enabled(Feature::CodeModeOnly) {
+            ToolMode::CodeModeOnly
+        } else if per_turn_config.features.enabled(Feature::CodeMode) {
+            ToolMode::CodeMode
+        } else {
+            ToolMode::Direct
+        }
+    });
+    let multi_agent_version = model_info.multi_agent_version.or_else(|| {
+        if per_turn_config.features.enabled(Feature::MultiAgentV2) {
+            Some(MultiAgentVersion::V2)
+        } else if per_turn_config.features.enabled(Feature::Collab) {
+            Some(MultiAgentVersion::V1)
+        } else {
+            None
+        }
+    });
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
