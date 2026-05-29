@@ -8,6 +8,10 @@ use std::ops::Range;
 pub(super) enum VimMode {
     /// Normal mode routes printable keys to movement, operators, and mode transitions.
     Normal,
+    /// Visual mode extends a characterwise selection with normal-mode motions.
+    Visual,
+    /// Visual line mode extends a linewise selection with normal-mode motions.
+    VisualLine,
     /// Insert mode routes input through the regular editor keymap until Escape is pressed.
     Insert,
 }
@@ -22,7 +26,9 @@ pub(super) enum VimOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VimPending {
     None,
+    Goto,
     Operator(VimOperator),
+    OperatorGoto(VimOperator),
     TextObject {
         operator: VimOperator,
         scope: VimTextObjectScope,
@@ -40,6 +46,16 @@ pub(super) enum VimMotion {
     WordEnd,
     LineStart,
     LineEnd,
+    BufferStart,
+    BufferEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VimRepeatEdit {
+    DeleteChar,
+    DeleteLine,
+    DeleteMotion(VimMotion),
+    PasteAfter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

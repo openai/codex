@@ -1080,6 +1080,8 @@ impl ChatComposer {
             .vim_mode_label()
             .map(|label| match label {
                 "Normal" => "Vim: Normal".magenta(),
+                "Visual" => "Vim: Visual".cyan(),
+                "Visual Line" => "Vim: Visual Line".cyan(),
                 "Insert" => "Vim: Insert".green(),
                 _ => unreachable!(),
             })
@@ -1641,6 +1643,17 @@ impl ChatComposer {
 
         if self.history_search.is_some() {
             return self.handle_history_search_key(key_event);
+        }
+
+        if matches!(self.popups.active, ActivePopup::None)
+            && self.draft.textarea.is_vim_normal_mode()
+            && self.vim_normal_keymap.redo.is_pressed(key_event)
+            && self.draft.textarea.can_redo_last_undo()
+        {
+            let result = self.handle_key_event_without_popup(key_event);
+            self.reset_vim_mode_after_successful_dispatch(&result.0);
+            self.sync_popups();
+            return result;
         }
 
         if Self::is_history_search_key(&key_event, &self.history_search_previous_keys) {
@@ -3118,6 +3131,8 @@ impl ChatComposer {
                     self.vim_normal_keymap.move_down.is_pressed(key_event),
                 )
             }
+        } else if self.draft.textarea.is_vim_modal_mode() {
+            (false, false)
         } else {
             (
                 self.editor_keymap.move_up.is_pressed(key_event),
@@ -5411,6 +5426,34 @@ mod tests {
         );
         assert_eq!(composer.footer.mode, FooterMode::ComposerEmpty);
         assert!(!composer.footer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn vim_visual_mode_indicator_renders_without_panic() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Visual".cyan())
+        );
     }
 
     #[test]
@@ -9594,6 +9637,57 @@ mod tests {
             composer.draft.textarea.cursor(),
             composer.draft.textarea.text().len()
         );
+    }
+
+    #[test]
+    fn vim_normal_ctrl_r_redoes_instead_of_opening_history_search() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.draft.textarea.set_text_clearing_elements("abcd");
+        composer.draft.textarea.set_cursor(/*pos*/ 0);
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+
+        assert_eq!(composer.draft.textarea.text(), "bcd");
+        assert!(composer.history_search.is_none());
+    }
+
+    #[test]
+    fn vim_visual_arrow_keys_do_not_navigate_history() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['f', 'i', 'r', 's', 't']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        composer.set_vim_enabled(/*enabled*/ true);
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_eq!(composer.draft.textarea.text(), "first");
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        assert_eq!(composer.draft.textarea.text(), "first");
+        assert_eq!(composer.draft.textarea.vim_mode_label(), Some("Visual"));
     }
 
     #[test]

@@ -224,6 +224,20 @@ pub struct TuiVimNormalKeymap {
     pub move_line_start: Option<KeybindingsSpec>,
     /// Move cursor to end of line (`$`).
     pub move_line_end: Option<KeybindingsSpec>,
+    /// Begin a goto sequence (`g`, then `g` jumps to the top).
+    pub start_goto_sequence: Option<KeybindingsSpec>,
+    /// Move cursor to the end of the text (`G`).
+    pub jump_bottom: Option<KeybindingsSpec>,
+    /// Enter visual mode (`v`).
+    pub enter_visual: Option<KeybindingsSpec>,
+    /// Enter linewise visual mode (`V`).
+    pub enter_visual_line: Option<KeybindingsSpec>,
+    /// Undo the previous text edit (`u`).
+    pub undo: Option<KeybindingsSpec>,
+    /// Redo the previous undone edit (`Ctrl-R`).
+    pub redo: Option<KeybindingsSpec>,
+    /// Repeat the previous Vim normal-mode edit (`.`).
+    pub repeat_last_edit: Option<KeybindingsSpec>,
     /// Delete character under cursor (`x`).
     pub delete_char: Option<KeybindingsSpec>,
     /// Delete character under cursor and enter insert mode (`s`).
@@ -248,10 +262,10 @@ pub struct TuiVimNormalKeymap {
 
 /// Vim operator-pending keybindings for modal editing inside text areas.
 ///
-/// This context is active only while waiting for a motion after `d` or `y`.
-/// Repeating the operator key (`dd`, `yy`) targets the entire line. Pressing
-/// `Esc` cancels the pending operator and returns to normal mode without
-/// modifying text.
+/// This context is active only while waiting for a motion after `d`, `y`, or
+/// `c`. Repeating delete/yank (`dd`, `yy`) targets the entire line; change uses
+/// the normal-mode change key (`cc`). Pressing `Esc` cancels the pending
+/// operator and returns to normal mode without modifying text.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiVimOperatorKeymap {

@@ -159,6 +159,13 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_word_end: Vec<KeyBinding>,
     pub(crate) move_line_start: Vec<KeyBinding>,
     pub(crate) move_line_end: Vec<KeyBinding>,
+    pub(crate) start_goto_sequence: Vec<KeyBinding>,
+    pub(crate) jump_bottom: Vec<KeyBinding>,
+    pub(crate) enter_visual: Vec<KeyBinding>,
+    pub(crate) enter_visual_line: Vec<KeyBinding>,
+    pub(crate) undo: Vec<KeyBinding>,
+    pub(crate) redo: Vec<KeyBinding>,
+    pub(crate) repeat_last_edit: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
     pub(crate) substitute_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
@@ -171,12 +178,13 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) cancel_operator: Vec<KeyBinding>,
 }
 
-/// Vim operator-pending keybindings active after `d` or `y` in normal mode.
+/// Vim operator-pending keybindings active after `d`, `y`, or `c` in normal mode.
 ///
-/// When an operator (`start_delete_operator` or `start_yank_operator`) is
-/// pressed, the next keypress is matched against this context to determine the
-/// motion range. Repeating the operator key (`dd`, `yy`) acts on the whole
-/// line. `Esc` cancels the pending operator and returns to normal mode.
+/// When an operator (`start_delete_operator`, `start_yank_operator`, or
+/// `start_change_operator`) is pressed, the next keypress is matched against
+/// this context to determine the motion range. Repeating delete/yank (`dd`,
+/// `yy`) acts on the whole line; change uses the normal-mode change key
+/// (`cc`). `Esc` cancels the pending operator and returns to normal mode.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct VimOperatorKeymap {
     pub(crate) delete_line: Vec<KeyBinding>,
@@ -496,6 +504,13 @@ impl RuntimeKeymap {
             move_word_end: resolve_local!(keymap, defaults, vim_normal, move_word_end),
             move_line_start: resolve_local!(keymap, defaults, vim_normal, move_line_start),
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
+            start_goto_sequence: resolve_local!(keymap, defaults, vim_normal, start_goto_sequence),
+            jump_bottom: resolve_local!(keymap, defaults, vim_normal, jump_bottom),
+            enter_visual: resolve_local!(keymap, defaults, vim_normal, enter_visual),
+            enter_visual_line: resolve_local!(keymap, defaults, vim_normal, enter_visual_line),
+            undo: resolve_local!(keymap, defaults, vim_normal, undo),
+            redo: resolve_local!(keymap, defaults, vim_normal, redo),
+            repeat_last_edit: resolve_local!(keymap, defaults, vim_normal, repeat_last_edit),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
             substitute_char: resolve_local!(keymap, defaults, vim_normal, substitute_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
@@ -580,8 +595,34 @@ impl RuntimeKeymap {
                 vim_normal.move_line_end.as_slice(),
             ),
             (
+                keymap.vim_normal.start_goto_sequence.as_ref(),
+                vim_normal.start_goto_sequence.as_slice(),
+            ),
+            (
+                keymap.vim_normal.jump_bottom.as_ref(),
+                vim_normal.jump_bottom.as_slice(),
+            ),
+            (
+                keymap.vim_normal.enter_visual.as_ref(),
+                vim_normal.enter_visual.as_slice(),
+            ),
+            (
+                keymap.vim_normal.enter_visual_line.as_ref(),
+                vim_normal.enter_visual_line.as_slice(),
+            ),
+            (keymap.vim_normal.undo.as_ref(), vim_normal.undo.as_slice()),
+            (keymap.vim_normal.redo.as_ref(), vim_normal.redo.as_slice()),
+            (
+                keymap.vim_normal.repeat_last_edit.as_ref(),
+                vim_normal.repeat_last_edit.as_slice(),
+            ),
+            (
                 keymap.vim_normal.delete_char.as_ref(),
                 vim_normal.delete_char.as_slice(),
+            ),
+            (
+                keymap.vim_normal.substitute_char.as_ref(),
+                vim_normal.substitute_char.as_slice(),
             ),
             (
                 keymap.vim_normal.change_to_line_end.as_ref(),
@@ -625,6 +666,41 @@ impl RuntimeKeymap {
         if keymap.vim_normal.substitute_char.is_none() {
             vim_normal
                 .substitute_char
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.start_goto_sequence.is_none() {
+            vim_normal
+                .start_goto_sequence
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.jump_bottom.is_none() {
+            vim_normal
+                .jump_bottom
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.enter_visual.is_none() {
+            vim_normal
+                .enter_visual
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.enter_visual_line.is_none() {
+            vim_normal
+                .enter_visual_line
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.undo.is_none() {
+            vim_normal
+                .undo
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.redo.is_none() {
+            vim_normal
+                .redo
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.repeat_last_edit.is_none() {
+            vim_normal
+                .repeat_last_edit
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
         }
 
@@ -1028,6 +1104,19 @@ impl RuntimeKeymap {
                     plain(KeyCode::Char('$')),
                     shift(KeyCode::Char('$'))
                 ],
+                start_goto_sequence: default_bindings![plain(KeyCode::Char('g'))],
+                jump_bottom: default_bindings![
+                    shift(KeyCode::Char('g')),
+                    plain(KeyCode::Char('G'))
+                ],
+                enter_visual: default_bindings![plain(KeyCode::Char('v'))],
+                enter_visual_line: default_bindings![
+                    shift(KeyCode::Char('v')),
+                    plain(KeyCode::Char('V'))
+                ],
+                undo: default_bindings![plain(KeyCode::Char('u'))],
+                redo: default_bindings![ctrl(KeyCode::Char('r'))],
+                repeat_last_edit: default_bindings![plain(KeyCode::Char('.'))],
                 delete_char: default_bindings![plain(KeyCode::Char('x'))],
                 substitute_char: default_bindings![plain(KeyCode::Char('s'))],
                 delete_to_line_end: default_bindings![
@@ -1473,6 +1562,22 @@ impl RuntimeKeymap {
                     self.vim_normal.move_line_start.as_slice(),
                 ),
                 ("move_line_end", self.vim_normal.move_line_end.as_slice()),
+                (
+                    "start_goto_sequence",
+                    self.vim_normal.start_goto_sequence.as_slice(),
+                ),
+                ("jump_bottom", self.vim_normal.jump_bottom.as_slice()),
+                ("enter_visual", self.vim_normal.enter_visual.as_slice()),
+                (
+                    "enter_visual_line",
+                    self.vim_normal.enter_visual_line.as_slice(),
+                ),
+                ("undo", self.vim_normal.undo.as_slice()),
+                ("redo", self.vim_normal.redo.as_slice()),
+                (
+                    "repeat_last_edit",
+                    self.vim_normal.repeat_last_edit.as_slice(),
+                ),
                 ("delete_char", self.vim_normal.delete_char.as_slice()),
                 (
                     "substitute_char",
@@ -2463,6 +2568,93 @@ mod tests {
     }
 
     #[test]
+    fn configured_vim_substitute_binding_prunes_new_undo_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.substitute_char = Some(one("u"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.substitute_char,
+            vec![key_hint::plain(KeyCode::Char('u'))]
+        );
+        assert_eq!(runtime.vim_normal.undo, Vec::new());
+    }
+
+    #[test]
+    fn configured_legacy_vim_normal_bindings_prune_new_jump_defaults() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("g"));
+        keymap.vim_normal.move_right = Some(one("shift-g"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.move_left,
+            vec![key_hint::plain(KeyCode::Char('g'))]
+        );
+        assert_eq!(
+            runtime.vim_normal.move_right,
+            vec![key_hint::shift(KeyCode::Char('g'))]
+        );
+        assert_eq!(runtime.vim_normal.start_goto_sequence, Vec::new());
+        assert_eq!(
+            runtime.vim_normal.jump_bottom,
+            vec![key_hint::plain(KeyCode::Char('G'))]
+        );
+    }
+
+    #[test]
+    fn explicit_new_vim_normal_jump_bindings_still_conflict_with_legacy_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("g"));
+        keymap.vim_normal.start_goto_sequence = Some(one("g"));
+
+        expect_conflict(&keymap, "move_left", "start_goto_sequence");
+
+        keymap.vim_normal.start_goto_sequence = None;
+        keymap.vim_normal.move_left = Some(one("shift-g"));
+        keymap.vim_normal.jump_bottom = Some(one("shift-g"));
+
+        expect_conflict(&keymap, "move_left", "jump_bottom");
+    }
+
+    #[test]
+    fn configured_legacy_vim_normal_bindings_prune_new_visual_and_undo_defaults() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("v"));
+        keymap.vim_normal.move_right = Some(one("u"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.move_left,
+            vec![key_hint::plain(KeyCode::Char('v'))]
+        );
+        assert_eq!(
+            runtime.vim_normal.move_right,
+            vec![key_hint::plain(KeyCode::Char('u'))]
+        );
+        assert_eq!(runtime.vim_normal.enter_visual, Vec::new());
+        assert_eq!(runtime.vim_normal.undo, Vec::new());
+    }
+
+    #[test]
+    fn explicit_new_vim_normal_visual_and_undo_bindings_still_conflict_with_legacy_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("v"));
+        keymap.vim_normal.enter_visual = Some(one("v"));
+
+        expect_conflict(&keymap, "move_left", "enter_visual");
+
+        keymap.vim_normal.enter_visual = None;
+        keymap.vim_normal.move_left = Some(one("u"));
+        keymap.vim_normal.undo = Some(one("u"));
+
+        expect_conflict(&keymap, "move_left", "undo");
+    }
+
+    #[test]
     fn configured_legacy_vim_operator_bindings_prune_new_text_object_defaults() {
         let mut keymap = TuiKeymap::default();
         keymap.vim_operator.motion_left = Some(one("i"));
@@ -2529,6 +2721,25 @@ mod tests {
                 key_hint::plain(KeyCode::Char('j')),
                 key_hint::plain(KeyCode::Down)
             ]
+        );
+        assert_eq!(
+            runtime.vim_normal.start_goto_sequence,
+            vec![key_hint::plain(KeyCode::Char('g'))]
+        );
+        assert_eq!(
+            runtime.vim_normal.jump_bottom,
+            vec![
+                key_hint::shift(KeyCode::Char('g')),
+                key_hint::plain(KeyCode::Char('G'))
+            ]
+        );
+        assert_eq!(
+            runtime.vim_normal.enter_visual,
+            vec![key_hint::plain(KeyCode::Char('v'))]
+        );
+        assert_eq!(
+            runtime.vim_normal.undo,
+            vec![key_hint::plain(KeyCode::Char('u'))]
         );
     }
 
