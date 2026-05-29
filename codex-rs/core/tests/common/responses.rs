@@ -664,6 +664,27 @@ pub fn ev_completed_with_tokens(id: &str, total_tokens: i64) -> Value {
     })
 }
 
+pub fn ev_completed_with_usage(
+    id: &str,
+    input_tokens: i64,
+    cached_input_tokens: i64,
+    output_tokens: i64,
+) -> Value {
+    serde_json::json!({
+        "type": "response.completed",
+        "response": {
+            "id": id,
+            "usage": {
+                "input_tokens": input_tokens,
+                "input_tokens_details": { "cached_tokens": cached_input_tokens },
+                "output_tokens": output_tokens,
+                "output_tokens_details": null,
+                "total_tokens": input_tokens + output_tokens
+            }
+        }
+    })
+}
+
 /// Convenience: SSE event for a single assistant message output item.
 pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     serde_json::json!({

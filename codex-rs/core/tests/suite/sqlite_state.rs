@@ -1,6 +1,8 @@
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -15,6 +17,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -33,9 +36,30 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
+use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::time::Duration;
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
+
+async fn write_usage_skill(cwd: AbsolutePathBuf, fs: Arc<dyn ExecutorFileSystem>) -> Result<()> {
+    let skill_dir = cwd.join(".agents").join("skills").join("usage-e2e");
+    fs.create_directory(
+        &skill_dir,
+        CreateDirectoryOptions { recursive: true },
+        /*sandbox*/ None,
+    )
+    .await?;
+    fs.write_file(
+        &skill_dir.join("SKILL.md"),
+        b"---\nname: usage-e2e\ndescription: usage metric test\n---\n\nUse the rmcp echo tool.\n"
+            .to_vec(),
+        /*sandbox*/ None,
+    )
+    .await?;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_thread_is_recorded_in_state_db() -> Result<()> {
@@ -513,6 +537,164 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     }
 
     assert_eq!(memory_mode.as_deref(), Some("polluted"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn usage_records_blended_tokens_for_skill_and_mcp_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "call-usage";
+    let server_name = "rmcp";
+    let namespace = format!("mcp__{server_name}");
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("resp-usage-1"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                "{\"message\":\"ping\"}",
+            ),
+            responses::ev_completed_with_usage(
+                "resp-usage-1",
+                /*input_tokens*/ 1_200,
+                /*cached_input_tokens*/ 200,
+                /*output_tokens*/ 100,
+            ),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-usage", "rmcp echo tool completed."),
+            responses::ev_completed_with_usage(
+                "resp-usage-2",
+                /*input_tokens*/ 1_400,
+                /*cached_input_tokens*/ 1_000,
+                /*output_tokens*/ 80,
+            ),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut builder = test_codex()
+        .with_workspace_setup(|cwd, fs| async move { write_usage_skill(cwd, fs).await })
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
+
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: Some(HashMap::from([(
+                            "MCP_TEST_VALUE".to_string(),
+                            "propagated-env".to_string(),
+                        )])),
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    environment_id: "local".to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let cwd = test.cwd_path().to_path_buf();
+    let skill_path = cwd
+        .join(".agents/skills/usage-e2e/SKILL.md")
+        .canonicalize()
+        .unwrap_or_else(|_| cwd.join(".agents/skills/usage-e2e/SKILL.md"))
+        .to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![
+                UserInput::Text {
+                    text: "use $usage-e2e and call the rmcp echo tool".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Skill {
+                    name: "usage-e2e".to_string(),
+                    path: skill_path.clone(),
+                },
+            ],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(cwd),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(err) => Some(Err(anyhow::anyhow!(err.message.clone()))),
+        EventMsg::TurnComplete(_) => Some(Ok(())),
+        _ => None,
+    })
+    .await?;
+
+    let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())? + 1;
+    let report = db
+        .read_usage_report(codex_state::UsageRange::Day, now)
+        .await?;
+
+    assert_eq!(report.total_tokens, 1_580);
+    assert!(report.tracked_from.is_some());
+    assert_eq!(report.skills.len(), 1);
+    assert_eq!(report.skills[0].label, "usage-e2e");
+    assert_eq!(report.skills[0].id, skill_path.to_string_lossy());
+    assert!(report.skills[0].attributed_tokens > 0);
+    assert_eq!(report.mcp_servers.len(), 1);
+    assert_eq!(report.mcp_servers[0].label, server_name);
+    assert!(report.mcp_servers[0].attributed_tokens > 0);
+
     Ok(())
 }
 
