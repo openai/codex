@@ -3,6 +3,7 @@ use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
+use codex_core::context::image_generation_output_hint;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
@@ -26,7 +27,6 @@ use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
 
 const RESULT: &str = "cG5n";
-const OUTPUT_HINT: &str = "Generated images are saved to /tmp as /tmp/call-1.png by default.";
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
@@ -56,9 +56,10 @@ fn generate_uses_fixed_request_defaults() {
 
 #[test]
 fn generated_output_returns_image_input_and_output_hint() {
+    let output_hint = image_generation_output_hint("/tmp", "/tmp/call-1.png");
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
-        output_hint: Some(OUTPUT_HINT.to_string()),
+        output_hint: output_hint.clone(),
     };
 
     let ResponseInputItem::FunctionCallOutput {
@@ -78,9 +79,7 @@ fn generated_output_returns_image_input_and_output_hint() {
                 image_url: format!("data:image/png;base64,{RESULT}"),
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
-            FunctionCallOutputContentItem::InputText {
-                text: OUTPUT_HINT.to_string(),
-            },
+            FunctionCallOutputContentItem::InputText { text: output_hint },
         ]
     );
 }

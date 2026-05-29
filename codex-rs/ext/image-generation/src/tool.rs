@@ -3,6 +3,9 @@ use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
+use codex_core::context::image_generation_output_hint;
+use codex_core::image_generation_artifact_path;
+use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
@@ -11,6 +14,7 @@ use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
+use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -23,6 +27,7 @@ use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolExposure;
 use codex_tools::default_namespace_description;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
@@ -40,12 +45,16 @@ const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
+    codex_home: AbsolutePathBuf,
 }
 
 impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
-    pub(crate) fn new(backend: CodexImagesBackend) -> Self {
-        Self { backend }
+    pub(crate) fn new(backend: CodexImagesBackend, codex_home: AbsolutePathBuf) -> Self {
+        Self {
+            backend,
+            codex_home,
+        }
     }
 }
 
@@ -84,6 +93,15 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
         let request = request_for_action(&args, call.conversation_history.items())?;
+        call.turn_item_emitter
+            .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                id: call.call_id.clone(),
+                status: "in_progress".to_string(),
+                revised_prompt: None,
+                result: String::new(),
+                saved_path: None,
+            }))
+            .await;
         let response = match request {
             ImageRequest::Generate(request) => self.backend.generate(request).await,
             ImageRequest::Edit(request) => self.backend.edit(request).await,
@@ -96,10 +114,21 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
                 "image generation returned no image data".to_string(),
             ));
         };
-        let output_hint = call
-            .turn_item_emitter
-            .image_generation_completed(call.call_id.clone(), args.prompt, result.clone())
+        call.turn_item_emitter
+            .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                id: call.call_id.clone(),
+                status: "completed".to_string(),
+                revised_prompt: Some(args.prompt),
+                result: result.clone(),
+                saved_path: None,
+            }))
             .await;
+        let output_path =
+            image_generation_artifact_path(&self.codex_home, &call.thread_id, &call.call_id);
+        let output_dir = output_path
+            .parent()
+            .unwrap_or_else(|| self.codex_home.clone());
+        let output_hint = image_generation_output_hint(output_dir.display(), output_path.display());
         Ok(Box::new(GeneratedImageOutput {
             result,
             output_hint,
@@ -284,7 +313,7 @@ fn imagegen_tool_spec() -> ToolSpec {
 
 struct GeneratedImageOutput {
     result: String,
-    output_hint: Option<String>,
+    output_hint: String,
 }
 
 impl ToolOutput for GeneratedImageOutput {
@@ -304,11 +333,9 @@ impl ToolOutput for GeneratedImageOutput {
             image_url: format!("data:image/png;base64,{}", self.result),
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }];
-        if let Some(output_hint) = &self.output_hint {
-            content.push(FunctionCallOutputContentItem::InputText {
-                text: output_hint.clone(),
-            });
-        }
+        content.push(FunctionCallOutputContentItem::InputText {
+            text: self.output_hint.clone(),
+        });
         ResponseInputItem::FunctionCallOutput {
             call_id: call_id.to_string(),
             output: FunctionCallOutputPayload {

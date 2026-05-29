@@ -1,6 +1,16 @@
 use super::ContextualUserFragment;
 use std::fmt::Display;
 
+/// Returns the model-facing hint for the host's generated-image artifact path.
+pub fn image_generation_output_hint(
+    image_output_dir: impl Display,
+    image_output_path: impl Display,
+) -> String {
+    format!(
+        "Generated images are saved to {image_output_dir} as {image_output_path} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it."
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ImageGenerationInstructions {
     image_output_dir: String,
@@ -30,9 +40,6 @@ impl ContextualUserFragment for ImageGenerationInstructions {
     }
 
     fn body(&self) -> String {
-        format!(
-            "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
-            self.image_output_dir, self.image_output_path
-        )
+        image_generation_output_hint(&self.image_output_dir, &self.image_output_path)
     }
 }
