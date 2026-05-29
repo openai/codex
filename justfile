@@ -6,6 +6,7 @@ set shell := ["python3", "-c", python_shell]
 set windows-shell := ["python", "-c", python_shell]
 
 rust_min_stack := "8388608" # 8 MiB
+python := if os_family() == "windows" { "python" } else { "python3" }
 
 # Display help
 help:
@@ -166,14 +167,9 @@ argument-comment-lint *args:
       {{ justfile_directory() }}/tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
     fi
 
-[unix]
 [no-cd]
 argument-comment-lint-from-source *args:
-    {{ justfile_directory() }}/tools/argument-comment-lint/run.py "$@"
-
-[windows]
-argument-comment-lint-from-source *args:
-    python {{ justfile_directory() }}/tools/argument-comment-lint/run.py @($args | Select-Object -Skip 1)
+    {{ python }} {{ justfile_directory() }}/tools/argument-comment-lint/run.py {args}
 
 # Tail logs from the state SQLite database
 [unix]
