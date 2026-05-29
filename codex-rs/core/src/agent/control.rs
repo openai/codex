@@ -266,7 +266,6 @@ impl AgentControl {
                     &state,
                     config,
                     session_source,
-                    multi_agent_version,
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
@@ -377,11 +376,11 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         config: crate::config::Config,
         session_source: SessionSource,
-        multi_agent_version: Option<MultiAgentVersion>,
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<crate::thread_manager::NewThread> {
+        let multi_agent_version = options.multi_agent_version;
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
                 "spawn_agent fork requires a parent spawn call id".to_string(),
