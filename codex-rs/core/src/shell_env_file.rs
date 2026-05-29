@@ -256,7 +256,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 2"#;
 
 const CMD_DUMP_ENV_SCRIPT: &str = "set";
 
-const CMD_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = "if defined CODEX_ENV_FILE if exist \"%CODEX_ENV_FILE%\" call \"%CODEX_ENV_FILE%\" >nul 2>&1\r\nset";
+const CMD_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = "if defined CODEX_ENV_FILE if exist \"%CODEX_ENV_FILE%\" call \"%CODEX_ENV_FILE%\" >nul 2>&1 & set";
 
 fn parse_posix_env_output(output: &[u8]) -> Result<HashMap<String, String>> {
     let mut env = HashMap::new();
