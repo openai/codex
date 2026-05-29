@@ -610,6 +610,11 @@ client_request_definitions! {
         serialization: global_shared_read("config"),
         response: v2::SkillsListResponse,
     },
+    SkillsExtraRootsSet => "skills/extraRoots/set" {
+        params: v2::SkillsExtraRootsSetParams,
+        serialization: global("config"),
+        response: v2::SkillsExtraRootsSetResponse,
+    },
     HooksList => "hooks/list" {
         params: v2::HooksListParams,
         serialization: global("config"),
@@ -1719,6 +1724,17 @@ mod tests {
         assert_eq!(
             skills_list.serialization_scope(),
             Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
+        );
+
+        let skills_extra_roots_set = ClientRequest::SkillsExtraRootsSet {
+            request_id: request_id(),
+            params: v2::SkillsExtraRootsSetParams {
+                extra_roots: vec![absolute_path("/tmp/skills")],
+            },
+        };
+        assert_eq!(
+            skills_extra_roots_set.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("config"))
         );
 
         let plugin_list = ClientRequest::PluginList {

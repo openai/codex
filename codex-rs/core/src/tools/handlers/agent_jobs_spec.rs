@@ -4,6 +4,14 @@ use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
 pub fn create_spawn_agents_on_csv_tool() -> ToolSpec {
+    let mut output_schema = JsonSchema::object(
+        BTreeMap::new(),
+        /*required*/ None,
+        /*additional_properties*/ None,
+    );
+    output_schema.description =
+        Some("JSON Schema for each worker result. Omit to accept any result object.".to_string());
+
     let properties = BTreeMap::from([
         (
             "csv_path".to_string(),
@@ -19,12 +27,15 @@ pub fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         (
             "id_column".to_string(),
             JsonSchema::string(Some(
-                "Optional column name to use as stable item id.".to_string(),
+                "CSV column to use as stable item id. Omit to use row numbers.".to_string(),
             )),
         ),
         (
             "output_csv_path".to_string(),
-            JsonSchema::string(Some("Optional output CSV path for exported results.".to_string())),
+            JsonSchema::string(Some(
+                "Output CSV path for exported results. Omit to create one next to the input CSV."
+                    .to_string(),
+            )),
         ),
         (
             "max_concurrency".to_string(),
@@ -36,20 +47,17 @@ pub fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         (
             "max_workers".to_string(),
             JsonSchema::number(Some(
-                "Alias for max_concurrency. Set to 1 to run sequentially.".to_string(),
+                "Alias for max_concurrency. Defaults to 16 and is capped by config.".to_string(),
             )),
         ),
         (
             "max_runtime_seconds".to_string(),
             JsonSchema::number(Some(
-                "Maximum runtime per worker before it is failed. Defaults to 1800 seconds."
+                "Maximum runtime per worker before failure. Defaults to 1800 seconds; config may set a different default."
                     .to_string(),
             )),
         ),
-        (
-            "output_schema".to_string(),
-            JsonSchema::object(BTreeMap::new(), /*required*/ None, /*additional_properties*/ None),
-        ),
+        ("output_schema".to_string(), output_schema),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
@@ -64,6 +72,13 @@ pub fn create_spawn_agents_on_csv_tool() -> ToolSpec {
 }
 
 pub fn create_report_agent_job_result_tool() -> ToolSpec {
+    let mut result_schema = JsonSchema::object(
+        BTreeMap::new(),
+        /*required*/ None,
+        /*additional_properties*/ None,
+    );
+    result_schema.description = Some("Result object for this job item.".to_string());
+
     let properties = BTreeMap::from([
         (
             "job_id".to_string(),
@@ -73,14 +88,11 @@ pub fn create_report_agent_job_result_tool() -> ToolSpec {
             "item_id".to_string(),
             JsonSchema::string(Some("Identifier of the job item.".to_string())),
         ),
-        (
-            "result".to_string(),
-            JsonSchema::object(BTreeMap::new(), /*required*/ None, /*additional_properties*/ None),
-        ),
+        ("result".to_string(), result_schema),
         (
             "stop".to_string(),
             JsonSchema::boolean(Some(
-                "Optional. When true, cancels the remaining job items after this result is recorded."
+                "True cancels remaining job items after this result is recorded; false or omitted continues the job."
                     .to_string(),
             )),
         ),

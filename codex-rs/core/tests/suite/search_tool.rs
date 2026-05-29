@@ -47,6 +47,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -163,7 +164,7 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query for deferred tools."},
-                    "limit": {"type": "number", "description": "Maximum number of tools to return (defaults to 8)."},
+                    "limit": {"type": "number", "description": "Maximum number of tools to return. Defaults to 8."},
                 },
                 "required": ["query"],
                 "additionalProperties": false,
@@ -1114,6 +1115,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                 .expect("test mcp servers should accept any configuration");
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Find the rmcp echo and image tools.",
@@ -1243,6 +1245,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
                 .expect("test mcp servers should accept any configuration");
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -1391,6 +1394,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                 .expect("test mcp servers should accept any configuration");
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Find the rmcp echo tool.",

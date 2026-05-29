@@ -196,6 +196,7 @@ Example with notification opt-out:
 - `environment/add` — experimental; add or replace a named remote environment by `environmentId` and `execServerUrl` for later selection by `thread/start` or `turn/start`; returns `{}` and does not change the default environment.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). Built-in presets do not select a model; the Plan preset selects medium reasoning effort. This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `skills/extraRoots/set` — replace the app-server process runtime extra standalone skill roots. The roots are not persisted; missing directories are accepted and simply load no skills.
 - `hooks/list` — list discovered hooks for one or more `cwd` values.
 - `marketplace/add` — add a remote plugin marketplace from an HTTP(S) Git URL, SSH Git URL, or GitHub `owner/repo` shorthand, then persist it into the user marketplace config. Returns the installed root path plus whether the marketplace was already present.
 - `marketplace/remove` — remove a configured marketplace by name from the user marketplace config, and delete its installed marketplace root when one exists.
@@ -1506,6 +1507,7 @@ $skill-creator Add a new skill for triaging flaky CI and include step-by-step us
 Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
+Use `skills/extraRoots/set` to replace additional standalone skill roots for the current app-server process. These roots use the same layout as other standalone skill roots: each root contains skill directories, and each skill directory contains `SKILL.md`. Missing roots are accepted and load no skills until they exist. This setting is lost when app-server exits.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
@@ -1542,12 +1544,23 @@ The server also emits `skills/changed` notifications when watched local skill fi
 }
 ```
 
+```json
+{
+  "method": "skills/extraRoots/set",
+  "id": 26,
+  "params": {
+    "extraRoots": ["/Users/me/generated-skills"]
+  }
+}
+{ "id": 26, "result": {} }
+```
+
 To enable or disable a skill by absolute path:
 
 ```json
 {
   "method": "skills/config/write",
-  "id": 26,
+  "id": 27,
   "params": {
     "path": "/Users/alice/.codex/skills/skill-creator/SKILL.md",
     "name": null,
@@ -1561,7 +1574,7 @@ To enable or disable a skill by name:
 ```json
 {
   "method": "skills/config/write",
-  "id": 27,
+  "id": 28,
   "params": {
     "path": null,
     "name": "github:yeet",

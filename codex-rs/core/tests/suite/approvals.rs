@@ -10,6 +10,12 @@ use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -3240,6 +3246,212 @@ allow_local_binding = true
         output_contains: "",
     }
     .verify(&test, &second_output)?;
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tokio::test(flavor = "current_thread")]
+async fn network_approval_retry_keeps_deny_read_sandbox_for_escalated_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = true
+"#,
+    )?;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        });
+    let test = builder.build(&server).await?;
+    assert!(
+        test.config.managed_network_requirements_enabled(),
+        "expected managed network requirements to be enabled"
+    );
+    assert!(
+        test.config.permissions.network.is_some(),
+        "expected managed network proxy config to be present"
+    );
+    test.session_configured
+        .network_proxy
+        .as_ref()
+        .expect("expected runtime managed network proxy addresses");
+
+    let mut file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+            &sandbox_policy,
+            test.config.cwd.as_path(),
+        );
+    file_system_sandbox_policy
+        .entries
+        .push(FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: format!("{}/**/*.env", test.config.cwd.as_path().display()),
+            },
+            access: FileSystemAccessMode::Deny,
+        });
+    assert!(
+        file_system_sandbox_policy.has_denied_read_restrictions(),
+        "test must exercise a permission profile with denied reads"
+    );
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let call_id = "deny-read-network-retry";
+    let fetch_command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=30).read().decode(errors='replace'))""#
+        .to_string();
+    let event = shell_event(
+        call_id,
+        &fetch_command,
+        /*timeout_ms*/ 30_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-deny-read-network-1"),
+            event,
+            ev_completed("resp-deny-read-network-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-deny-read-network-1", "done"),
+            ev_completed("resp-deny-read-network-2"),
+        ]),
+    )
+    .await;
+
+    let (turn_sandbox_policy, turn_permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "deny-read network retry".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(turn_sandbox_policy),
+                permission_profile: turn_permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut command_approval_count = 0;
+    let approval = loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .expect("timed out waiting for network approval request");
+        let event = wait_for_event_with_timeout(
+            &test.codex,
+            |event| {
+                matches!(
+                    event,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+                )
+            },
+            remaining,
+        )
+        .await;
+        match event {
+            EventMsg::ExecApprovalRequest(approval) => {
+                if approval.command.first().map(std::string::String::as_str)
+                    == Some("network-access")
+                {
+                    break approval;
+                }
+                command_approval_count += 1;
+                assert_eq!(
+                    command_approval_count, 1,
+                    "expected only the outer explicit escalation approval"
+                );
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: None,
+                        decision: ReviewDecision::Approved,
+                    })
+                    .await?;
+            }
+            EventMsg::TurnComplete(_) => {
+                panic!("expected network approval request before completion");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    };
+    assert_eq!(command_approval_count, 1);
+    let network_context = approval
+        .network_approval_context
+        .clone()
+        .expect("expected network approval context");
+    assert_eq!(network_context.protocol, NetworkApprovalProtocol::Http);
+    let allow_network_amendment = approval
+        .proposed_network_policy_amendments
+        .clone()
+        .expect("expected proposed network policy amendments")
+        .into_iter()
+        .find(|amendment| amendment.action == NetworkPolicyRuleAction::Allow)
+        .expect("expected allow network policy amendment");
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment: allow_network_amendment,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let output = parse_result(&results.single_request().function_call_output(call_id));
+    assert!(
+        output.exit_code.is_some(),
+        "expected the approved retry to report command output"
+    );
 
     Ok(())
 }

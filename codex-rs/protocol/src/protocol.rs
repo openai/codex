@@ -2440,12 +2440,22 @@ impl InitialHistory {
         }
     }
 
+    pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
+        let meta = self.get_resumed_session_meta()?;
+        Some((meta.source.clone(), meta.thread_source))
+    }
+
     pub fn get_resumed_thread_source(&self) -> Option<ThreadSource> {
+        self.get_resumed_session_meta()
+            .and_then(|meta| meta.thread_source)
+    }
+
+    fn get_resumed_session_meta(&self) -> Option<&SessionMeta> {
         match self {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.thread_source,
+                    RolloutItem::SessionMeta(meta_line) => Some(&meta_line.meta),
                     _ => None,
                 })
             }
@@ -2630,6 +2640,19 @@ impl SessionSource {
                 .restriction_product()
                 .is_some_and(|product| product.matches_product_restriction(products))
     }
+
+    pub fn parent_thread_id(&self) -> Option<ThreadId> {
+        match self {
+            SessionSource::SubAgent(subagent_source) => subagent_source.parent_thread_id(),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Custom(_)
+            | SessionSource::Internal(_)
+            | SessionSource::Unknown => None,
+        }
+    }
 }
 
 impl fmt::Display for SubAgentSource {
@@ -2646,6 +2669,30 @@ impl fmt::Display for SubAgentSource {
                 write!(f, "thread_spawn_{parent_thread_id}_d{depth}")
             }
             SubAgentSource::Other(other) => f.write_str(other),
+        }
+    }
+}
+
+impl SubAgentSource {
+    pub fn kind(&self) -> &str {
+        match self {
+            SubAgentSource::Review => "review",
+            SubAgentSource::Compact => "compact",
+            SubAgentSource::ThreadSpawn { .. } => "thread_spawn",
+            SubAgentSource::MemoryConsolidation => "memory_consolidation",
+            SubAgentSource::Other(other) => other,
+        }
+    }
+
+    pub fn parent_thread_id(&self) -> Option<ThreadId> {
+        match self {
+            SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            } => Some(*parent_thread_id),
+            SubAgentSource::Review
+            | SubAgentSource::Compact
+            | SubAgentSource::MemoryConsolidation
+            | SubAgentSource::Other(_) => None,
         }
     }
 }
