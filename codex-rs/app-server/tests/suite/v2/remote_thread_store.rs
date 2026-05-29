@@ -142,7 +142,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
     assert_eq!(data[0].id, thread.id);
     assert_eq!(data[0].path, None);
 
-    delete_thread(&client, 4, thread.id.clone()).await?;
+    delete_thread(&client, /*request_id*/ 4, thread.id.clone()).await?;
 
     client.shutdown().await?;
 
@@ -279,7 +279,7 @@ async fn thread_delete_with_non_local_thread_store_deletes_unloaded_thread_witho
 
     let client = start_in_process_server(codex_home.path()).await?;
 
-    delete_thread(&client, 1, thread_id.to_string()).await?;
+    delete_thread(&client, /*request_id*/ 1, thread_id.to_string()).await?;
 
     client.shutdown().await?;
 
