@@ -1386,7 +1386,7 @@ mod tests {
         .expect("skills should render");
         assert_eq!(
             plan.aliases.skill_root_lines,
-            vec!["- `r0` = `/tmp/repo/.agents/skills`"]
+            vec![format!("- `r0` = `{}`", normalized_path(&root))]
         );
         assert_eq!(
             aliased.skill_lines,
