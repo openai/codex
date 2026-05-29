@@ -163,6 +163,7 @@ fn remote_control_handle_with_pairing_client(
             client: pairing_client,
             generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         },
+        pairing_request_cancellation_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         pairing_refresh_tx: Arc::new(pairing_refresh_tx),
         auth_change_rx: Arc::new(StdMutex::new(auth_change_rx)),
     }

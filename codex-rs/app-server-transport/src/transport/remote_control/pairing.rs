@@ -48,8 +48,13 @@ impl RemoteControlPairingClient {
         self.auth_change_revision == auth_change_revision
     }
 
-    pub(super) fn generation(&self) -> u64 {
-        self.generation
+    pub(super) fn matches_pairing_auth(&self, other: &Self) -> bool {
+        self.pairing_url == other.pairing_url
+            && self.remote_control_token == other.remote_control_token
+            && self.server_id == other.server_id
+            && self.environment_id == other.environment_id
+            && self.auth_change_revision == other.auth_change_revision
+            && self.generation == other.generation
     }
 
     pub(super) async fn start(
@@ -86,11 +91,19 @@ impl RemoteControlPairingClient {
         })?;
         let body_preview = preview_remote_control_response_body(&body);
         if !status.is_success() {
-            return Err(io::Error::other(format!(
-                "remote control pairing failed at `{}`: HTTP {status}, {}, body: {body_preview}",
-                self.pairing_url,
-                format_headers(&headers)
-            )));
+            let error_kind = match status.as_u16() {
+                401 | 403 => ErrorKind::PermissionDenied,
+                404 => ErrorKind::NotFound,
+                _ => ErrorKind::Other,
+            };
+            return Err(io::Error::new(
+                error_kind,
+                format!(
+                    "remote control pairing failed at `{}`: HTTP {status}, {}, body: {body_preview}",
+                    self.pairing_url,
+                    format_headers(&headers)
+                ),
+            ));
         }
 
         let pairing = serde_json::from_slice::<StartRemoteControlPairingResponse>(&body).map_err(

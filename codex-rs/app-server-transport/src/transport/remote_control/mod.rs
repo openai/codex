@@ -60,9 +60,17 @@ pub struct RemoteControlHandle {
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
     pairing: PairingClientState,
-    #[cfg(test)]
+    pairing_request_cancellation_revision: Arc<AtomicU64>,
     pairing_refresh_tx: Arc<watch::Sender<u64>>,
     auth_change_rx: Arc<StdMutex<watch::Receiver<u64>>>,
+}
+
+// `/server/pair` runs outside the websocket task, so keep the auth and disable
+// revisions that make its eventual response safe to return to app-server.
+struct PairingRequestContext {
+    auth_change_revision: u64,
+    cancellation_revision: u64,
+    pairing_client: RemoteControlPairingClient,
 }
 
 #[derive(Clone)]
@@ -135,6 +143,7 @@ impl RemoteControlHandle {
             changed
         });
         clear_pairing_client(&self.pairing);
+        self.cancel_pending_pairing_requests();
 
         let status = self.status();
         info!(
@@ -146,6 +155,11 @@ impl RemoteControlHandle {
             "remote control disable requested"
         );
         self.publish_status(RemoteControlConnectionStatus::Disabled)
+    }
+
+    pub fn cancel_pending_pairing_requests(&self) {
+        self.pairing_request_cancellation_revision
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn status(&self) -> RemoteControlStatusChangedNotification {
@@ -160,6 +174,22 @@ impl RemoteControlHandle {
         &self,
         params: RemoteControlPairingStartParams,
     ) -> io::Result<RemoteControlPairingStartResponse> {
+        let pairing_request = self.pairing_request_context()?;
+        let pairing_response = pairing_request
+            .pairing_client
+            .start(protocol::StartRemoteControlPairingRequest {
+                manual_code: params.manual_code,
+            })
+            .await;
+        self.refresh_pairing_auth_after_rejection(
+            &pairing_request.pairing_client,
+            &pairing_response,
+        );
+        self.validate_pairing_response(&pairing_request, &pairing_response)?;
+        pairing_response
+    }
+
+    fn pairing_request_context(&self) -> io::Result<PairingRequestContext> {
         if !*self.enabled_tx.borrow() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -189,18 +219,49 @@ impl RemoteControlHandle {
             current_pairing_client
         }
         .ok_or_else(Self::pairing_unavailable_error)?;
-        let pairing_response = pairing_client
-            .start(protocol::StartRemoteControlPairingRequest {
-                manual_code: params.manual_code,
-            })
-            .await;
-        if self.auth_change_revision() != auth_change_revision {
+
+        Ok(PairingRequestContext {
+            auth_change_revision,
+            cancellation_revision: self
+                .pairing_request_cancellation_revision
+                .load(Ordering::Relaxed),
+            pairing_client,
+        })
+    }
+
+    fn refresh_pairing_auth_after_rejection(
+        &self,
+        pairing_client: &RemoteControlPairingClient,
+        pairing_response: &io::Result<RemoteControlPairingStartResponse>,
+    ) {
+        if pairing_response.as_ref().is_err_and(|err| {
+            matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+            )
+        }) && clear_pairing_client_if_current(&self.pairing, pairing_client)
+        {
+            self.request_pairing_auth_refresh();
+        }
+    }
+
+    fn validate_pairing_response(
+        &self,
+        pairing_request: &PairingRequestContext,
+        pairing_response: &io::Result<RemoteControlPairingStartResponse>,
+    ) -> io::Result<()> {
+        if self.auth_change_revision() != pairing_request.auth_change_revision {
             return Err(Self::pairing_unavailable_error());
         }
-        if pairing_response.is_ok() && !self.pairing_client_is_current(&pairing_client) {
+        if pairing_response.is_ok()
+            && self
+                .pairing_request_cancellation_revision
+                .load(Ordering::Relaxed)
+                != pairing_request.cancellation_revision
+        {
             return Err(Self::pairing_unavailable_error());
         }
-        pairing_response
+        Ok(())
     }
 
     fn auth_change_revision(&self) -> u64 {
@@ -218,21 +279,6 @@ impl RemoteControlHandle {
         )
     }
 
-    fn pairing_client_is_current(&self, pairing_client: &RemoteControlPairingClient) -> bool {
-        *self.enabled_tx.borrow()
-            && self.status().status == RemoteControlConnectionStatus::Connected
-            && self
-                .pairing
-                .client
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-                .is_some_and(|current_pairing_client| {
-                    current_pairing_client.generation() == pairing_client.generation()
-                })
-    }
-
-    #[cfg(test)]
     fn request_pairing_auth_refresh(&self) {
         self.pairing_refresh_tx
             .send_modify(|revision| *revision = revision.wrapping_add(1));
@@ -293,6 +339,25 @@ fn clear_pairing_client(pairing: &PairingClientState) {
     pairing.generation.fetch_add(1, Ordering::Relaxed);
 }
 
+fn clear_pairing_client_if_current(
+    pairing: &PairingClientState,
+    expected_pairing_client: &RemoteControlPairingClient,
+) -> bool {
+    let mut pairing_client = pairing
+        .client
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if pairing_client
+        .as_ref()
+        .is_none_or(|pairing_client| !pairing_client.matches_pairing_auth(expected_pairing_client))
+    {
+        return false;
+    }
+    *pairing_client = None;
+    pairing.generation.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
 pub async fn start_remote_control(
     config: RemoteControlStartConfig,
     state_db: Option<Arc<StateRuntime>>,
@@ -317,6 +382,7 @@ pub async fn start_remote_control(
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
     let pairing = PairingClientState::new();
     let websocket_pairing = pairing.clone();
+    let pairing_request_cancellation_revision = Arc::new(AtomicU64::new(0));
     let (pairing_refresh_tx, pairing_refresh_rx) = watch::channel(0u64);
     let websocket_pairing_refresh_tx = pairing_refresh_tx.clone();
     let auth_change_rx = Arc::new(StdMutex::new(auth_manager.auth_change_receiver()));
@@ -415,7 +481,7 @@ pub async fn start_remote_control(
             status_tx: Arc::new(status_tx),
             state_db_available,
             pairing,
-            #[cfg(test)]
+            pairing_request_cancellation_revision,
             pairing_refresh_tx: Arc::new(pairing_refresh_tx),
             auth_change_rx,
         },

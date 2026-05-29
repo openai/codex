@@ -301,6 +301,162 @@ async fn remote_control_handle_keeps_pairing_response_after_pairing_auth_refresh
 }
 
 #[tokio::test]
+async fn remote_control_handle_keeps_pairing_response_after_connection_cycle_end() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let remote_handle = remote_control_handle_with_pairing_client(
+        &remote_control_url,
+        watch::channel(/*init*/ 0u64).1,
+    );
+    let pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+
+    let pairing_request = accept_http_request(&listener).await;
+    clear_pairing_client(&remote_handle.pairing);
+    respond_with_json(
+        pairing_request.stream,
+        json!({
+            "pairing_code": "fresh-pairing-code",
+            "manual_pairing_code": "ABCD-EFGH",
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
+            "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        pairing_task
+            .await
+            .expect("pairing task should join")
+            .expect("pairing response should be kept")
+            .pairing_code,
+        "fresh-pairing-code"
+    );
+}
+
+#[tokio::test]
+async fn remote_control_handle_discards_pairing_response_after_disable_and_reenable() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let remote_handle = remote_control_handle_with_pairing_client(
+        &remote_control_url,
+        watch::channel(/*init*/ 0u64).1,
+    );
+    let pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+
+    let pairing_request = accept_http_request(&listener).await;
+    remote_handle.disable();
+    remote_handle.enable().expect("enable should succeed");
+    respond_with_json(
+        pairing_request.stream,
+        json!({
+            "pairing_code": "stale-pairing-code",
+            "manual_pairing_code": "ABCD-EFGH",
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
+            "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        pairing_task
+            .await
+            .expect("pairing task should join")
+            .expect_err("disabled remote control should discard pairing response")
+            .to_string(),
+        "remote control pairing is unavailable until enrollment completes"
+    );
+}
+
+#[tokio::test]
+async fn remote_control_handle_keeps_refreshed_pairing_auth_after_stale_rejection() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let remote_handle = remote_control_handle_with_pairing_client(
+        &remote_control_url,
+        watch::channel(/*init*/ 0u64).1,
+    );
+    let pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+
+    let pairing_request = accept_http_request(&listener).await;
+    let generation = remote_handle
+        .pairing
+        .generation
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let refreshed_pairing_client = RemoteControlPairingClient::new(
+        &normalize_remote_control_url(&remote_control_url)
+            .expect("remote control url should normalize"),
+        TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN.to_string(),
+        "srv_e_test".to_string(),
+        "env_test".to_string(),
+        OffsetDateTime::parse(
+            TEST_REMOTE_CONTROL_SERVER_TOKEN_EXPIRES_AT,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("server token expiry should parse"),
+        /*auth_change_revision*/ 0,
+        generation,
+    );
+    *remote_handle
+        .pairing
+        .client
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some(refreshed_pairing_client.clone());
+    respond_with_status(pairing_request.stream, "401 Unauthorized", "stale token").await;
+
+    assert_eq!(
+        pairing_task
+            .await
+            .expect("pairing task should join")
+            .expect_err("stale pairing token should be rejected")
+            .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert!(
+        remote_handle
+            .pairing
+            .client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|pairing_client| {
+                pairing_client.matches_pairing_auth(&refreshed_pairing_client)
+            }),
+        "stale pairing rejection should keep refreshed pairing auth"
+    );
+    assert_eq!(*remote_handle.pairing_refresh_tx.borrow(), 0);
+}
+
+#[tokio::test]
 async fn remote_control_handle_clears_pairing_client_after_auth_change() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -806,6 +962,156 @@ async fn remote_control_connected_refresh_404_reenrolls() {
         .await
         .expect("second websocket should close");
 
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn remote_control_pairing_rejection_refreshes_server_token_while_connected() {
+    remote_control_pairing_rejection_recovers_while_connected("401 Unauthorized").await;
+}
+
+#[tokio::test]
+async fn remote_control_pairing_not_found_refreshes_server_token_while_connected() {
+    remote_control_pairing_rejection_recovers_while_connected("404 Not Found").await;
+}
+
+async fn remote_control_pairing_rejection_recovers_while_connected(pair_status: &str) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let enroll_request = accept_http_request(&listener).await;
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    let mut first_websocket = accept_remote_control_connection(&listener).await;
+    timeout(Duration::from_secs(5), async {
+        while remote_handle.status().status != RemoteControlConnectionStatus::Connected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("remote control should publish connected before pairing");
+
+    let stale_pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+    let pairing_request = accept_http_request(&listener).await;
+    assert_eq!(
+        pairing_request.headers.get("authorization"),
+        Some(&format!("Bearer {TEST_REMOTE_CONTROL_SERVER_TOKEN}"))
+    );
+    respond_with_status(pairing_request.stream, pair_status, "stale token").await;
+    assert_eq!(
+        stale_pairing_task
+            .await
+            .expect("stale pairing task should join")
+            .expect_err("stale pairing token should be rejected")
+            .kind(),
+        if pair_status == "404 Not Found" {
+            std::io::ErrorKind::NotFound
+        } else {
+            std::io::ErrorKind::PermissionDenied
+        }
+    );
+    assert!(
+        remote_handle
+            .pairing
+            .client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none(),
+        "pairing rejection should clear cached pairing auth"
+    );
+    assert_eq!(*remote_handle.pairing_refresh_tx.borrow(), 1);
+
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    respond_with_json(
+        refresh_request.stream,
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    assert!(
+        timeout(Duration::from_millis(100), first_websocket.next())
+            .await
+            .is_err(),
+        "pairing auth refresh should keep the websocket open"
+    );
+
+    let refreshed_pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+    let pairing_request = accept_http_request(&listener).await;
+    assert_eq!(
+        pairing_request.headers.get("authorization"),
+        Some(&format!(
+            "Bearer {TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN}"
+        ))
+    );
+    respond_with_json(
+        pairing_request.stream,
+        json!({
+            "pairing_code": "pairing-code",
+            "manual_pairing_code": "ABCD-EFGH",
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
+            "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await;
+    refreshed_pairing_task
+        .await
+        .expect("refreshed pairing task should join")
+        .expect("refreshed pairing token should pair");
+
+    first_websocket
+        .close(None)
+        .await
+        .expect("websocket should close");
     shutdown_token.cancel();
     let _ = remote_task.await;
 }
