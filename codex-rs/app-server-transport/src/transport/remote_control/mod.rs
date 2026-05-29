@@ -60,6 +60,8 @@ pub struct RemoteControlHandle {
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
     pairing: PairingClientState,
+    #[cfg(test)]
+    pairing_refresh_tx: Arc<watch::Sender<u64>>,
     auth_change_rx: Arc<StdMutex<watch::Receiver<u64>>>,
 }
 
@@ -230,6 +232,12 @@ impl RemoteControlHandle {
                 })
     }
 
+    #[cfg(test)]
+    fn request_pairing_auth_refresh(&self) {
+        self.pairing_refresh_tx
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
     fn publish_status(
         &self,
         connection_status: RemoteControlConnectionStatus,
@@ -309,6 +317,8 @@ pub async fn start_remote_control(
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
     let pairing = PairingClientState::new();
     let websocket_pairing = pairing.clone();
+    let (pairing_refresh_tx, pairing_refresh_rx) = watch::channel(0u64);
+    let websocket_pairing_refresh_tx = pairing_refresh_tx.clone();
     let auth_change_rx = Arc::new(StdMutex::new(auth_manager.auth_change_receiver()));
     let server_name = gethostname().to_string_lossy().trim().to_string();
     let remote_control_url = config.remote_control_url;
@@ -358,6 +368,8 @@ pub async fn start_remote_control(
                 transport_event_tx,
                 status_publisher,
                 pairing: websocket_pairing,
+                pairing_refresh_tx: websocket_pairing_refresh_tx,
+                pairing_refresh_rx,
             },
             shutdown_token,
             enabled_rx,
@@ -403,6 +415,8 @@ pub async fn start_remote_control(
             status_tx: Arc::new(status_tx),
             state_db_available,
             pairing,
+            #[cfg(test)]
+            pairing_refresh_tx: Arc::new(pairing_refresh_tx),
             auth_change_rx,
         },
     ))

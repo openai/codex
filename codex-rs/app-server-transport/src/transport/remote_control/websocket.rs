@@ -256,6 +256,8 @@ pub(crate) struct RemoteControlWebsocket {
     auth_recovery: UnauthorizedRecovery,
     auth_change_rx: watch::Receiver<u64>,
     pairing: PairingClientState,
+    _pairing_refresh_tx: watch::Sender<u64>,
+    pairing_refresh_rx: watch::Receiver<u64>,
     client_tracker: Arc<Mutex<ClientTracker>>,
     state: Arc<Mutex<WebsocketState>>,
     server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
@@ -289,13 +291,50 @@ enum ConnectionEndReason {
     EnabledWatchClosed,
     AuthChanged,
     AuthWatchClosed,
+    PairingRefreshWatchClosed,
+    ServerTokenRefreshRejected,
+    StaleEnrollment,
     ConnectionWorkerStopped,
+}
+
+enum ConnectionLoopAction {
+    End(ConnectionEndReason),
+    RefreshServerToken,
+}
+
+enum ConnectedServerTokenRefreshAction {
+    Continue,
+    Retry(io::Error),
+    End(ConnectionEndReason),
+}
+
+struct ConnectedServerTokenRefreshRequest {
+    remote_control_target: RemoteControlTarget,
+    auth: RemoteControlConnectionAuth,
+    installation_id: String,
+    enrollment: RemoteControlEnrollment,
+    auth_change_revision: u64,
+}
+
+struct PendingConnectedServerTokenRefreshRequest {
+    remote_control_target: RemoteControlTarget,
+    auth_manager: Arc<AuthManager>,
+    auth_change_rx: watch::Receiver<u64>,
+    installation_id: String,
+    enrollment: RemoteControlEnrollment,
+}
+
+struct ConnectedServerTokenRefreshResponse {
+    enrollment: RemoteControlEnrollment,
+    auth_change_revision: u64,
 }
 
 pub(super) struct RemoteControlChannels {
     pub(super) transport_event_tx: mpsc::Sender<TransportEvent>,
     pub(super) status_publisher: RemoteControlStatusPublisher,
     pub(super) pairing: PairingClientState,
+    pub(super) pairing_refresh_tx: watch::Sender<u64>,
+    pub(super) pairing_refresh_rx: watch::Receiver<u64>,
 }
 
 #[derive(Clone)]
@@ -413,6 +452,8 @@ impl RemoteControlWebsocket {
             auth_recovery,
             auth_change_rx,
             pairing: channels.pairing,
+            _pairing_refresh_tx: channels.pairing_refresh_tx,
+            pairing_refresh_rx: channels.pairing_refresh_rx,
             client_tracker: Arc::new(Mutex::new(client_tracker)),
             state: Arc::new(Mutex::new(WebsocketState {
                 outbound_buffer,
@@ -498,7 +539,11 @@ impl RemoteControlWebsocket {
             };
 
             let connection_end_reason = self
-                .run_connection(websocket_connection, shutdown_token)
+                .run_connection(
+                    websocket_connection,
+                    shutdown_token,
+                    app_server_client_name.as_deref(),
+                )
                 .await;
             let status = self.status_publisher.status();
             info!(
@@ -710,6 +755,7 @@ impl RemoteControlWebsocket {
         &mut self,
         websocket_connection: WebSocketStream<MaybeTlsStream<TcpStream>>,
         shutdown_token: CancellationToken,
+        app_server_client_name: Option<&str>,
     ) -> ConnectionEndReason {
         let (websocket_writer, websocket_reader) = websocket_connection.split();
         let mut join_set = tokio::task::JoinSet::new();
@@ -731,26 +777,79 @@ impl RemoteControlWebsocket {
         ));
 
         let mut enabled_rx = self.enabled_rx.clone();
-        let connection_end_reason = tokio::select! {
-            _ = shutdown_token.cancelled() => ConnectionEndReason::Shutdown,
-            changed = enabled_rx.wait_for(|enabled| !*enabled) => {
-                if changed.is_ok() {
-                    self.status_publisher
-                        .publish_status(RemoteControlConnectionStatus::Disabled);
-                    ConnectionEndReason::Disabled
-                } else {
-                    ConnectionEndReason::EnabledWatchClosed
+        let mut server_token_refresh_retry_delay = None;
+        let connection_end_reason = loop {
+            let server_token_refresh_delay =
+                server_token_refresh_retry_delay.take().or_else(|| {
+                    self.enrollment
+                        .as_ref()
+                        .and_then(RemoteControlEnrollment::server_token_refresh_delay)
+                });
+            let server_token_refresh = async move {
+                match server_token_refresh_delay {
+                    Some(delay) => tokio::time::sleep(delay).await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::pin!(server_token_refresh);
+            let connection_loop_action = tokio::select! {
+                _ = shutdown_token.cancelled() => ConnectionLoopAction::End(ConnectionEndReason::Shutdown),
+                changed = enabled_rx.wait_for(|enabled| !*enabled) => {
+                    if changed.is_ok() {
+                        self.status_publisher
+                            .publish_status(RemoteControlConnectionStatus::Disabled);
+                        ConnectionLoopAction::End(ConnectionEndReason::Disabled)
+                    } else {
+                        ConnectionLoopAction::End(ConnectionEndReason::EnabledWatchClosed)
+                    }
+                }
+                changed = self.auth_change_rx.changed() => {
+                    if changed.is_ok() {
+                        self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                        ConnectionLoopAction::End(ConnectionEndReason::AuthChanged)
+                    } else {
+                        ConnectionLoopAction::End(ConnectionEndReason::AuthWatchClosed)
+                    }
+                }
+                changed = self.pairing_refresh_rx.changed() => {
+                    if changed.is_ok() {
+                        ConnectionLoopAction::RefreshServerToken
+                    } else {
+                        ConnectionLoopAction::End(ConnectionEndReason::PairingRefreshWatchClosed)
+                    }
+                }
+                _ = &mut server_token_refresh => ConnectionLoopAction::RefreshServerToken,
+                _ = join_set.join_next() => ConnectionLoopAction::End(ConnectionEndReason::ConnectionWorkerStopped),
+            };
+            match connection_loop_action {
+                ConnectionLoopAction::End(connection_end_reason) => break connection_end_reason,
+                ConnectionLoopAction::RefreshServerToken => {
+                    match self
+                        .refresh_connected_server_token_while_connected(
+                            &mut enabled_rx,
+                            &mut join_set,
+                            &shutdown_token,
+                            app_server_client_name,
+                        )
+                        .await
+                    {
+                        ConnectedServerTokenRefreshAction::Continue => {}
+                        ConnectedServerTokenRefreshAction::Retry(err) => {
+                            warn!(
+                                error = %err,
+                                error_kind = ?err.kind(),
+                                retry_delay = ?REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL,
+                                "failed to refresh connected app-server remote control server token"
+                            );
+                            server_token_refresh_retry_delay =
+                                Some(REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL);
+                        }
+                        ConnectedServerTokenRefreshAction::End(connection_end_reason) => {
+                            break connection_end_reason;
+                        }
+                    }
                 }
             }
-            changed = self.auth_change_rx.changed() => {
-                if changed.is_ok() {
-                    self.auth_recovery = self.auth_manager.unauthorized_recovery();
-                    ConnectionEndReason::AuthChanged
-                } else {
-                    ConnectionEndReason::AuthWatchClosed
-                }
-            }
-            _ = join_set.join_next() => ConnectionEndReason::ConnectionWorkerStopped,
         };
         clear_pairing_client(&self.pairing);
         shutdown_token.cancel();
@@ -758,6 +857,209 @@ impl RemoteControlWebsocket {
         Self::join_connection_workers(&mut join_set, REMOTE_CONTROL_CONNECTION_SHUTDOWN_TIMEOUT)
             .await;
         connection_end_reason
+    }
+
+    async fn refresh_connected_server_token_while_connected(
+        &mut self,
+        enabled_rx: &mut watch::Receiver<bool>,
+        join_set: &mut tokio::task::JoinSet<()>,
+        shutdown_token: &CancellationToken,
+        app_server_client_name: Option<&str>,
+    ) -> ConnectedServerTokenRefreshAction {
+        let refresh_request = match self.connected_server_token_refresh_request() {
+            Ok(refresh_request) => refresh_request,
+            Err(err) => return ConnectedServerTokenRefreshAction::Retry(err),
+        };
+        let refresh_request = tokio::select! {
+            _ = shutdown_token.cancelled() => {
+                return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::Shutdown);
+            }
+            changed = enabled_rx.wait_for(|enabled| !*enabled) => {
+                if changed.is_ok() {
+                    self.status_publisher
+                        .publish_status(RemoteControlConnectionStatus::Disabled);
+                    return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::Disabled);
+                }
+                return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::EnabledWatchClosed);
+            }
+            _ = join_set.join_next() => {
+                return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::ConnectionWorkerStopped);
+            }
+            refresh_request = prepare_connected_server_token_refresh(refresh_request) => refresh_request,
+        };
+        let refresh_request = match refresh_request {
+            Ok(refresh_request) => refresh_request,
+            Err(err) => {
+                return self
+                    .apply_connected_server_token_refresh(Err(err), app_server_client_name)
+                    .await;
+            }
+        };
+        if !mark_connected_refresh_auth_change_seen(
+            &mut self.auth_change_rx,
+            refresh_request.auth_change_revision,
+        ) {
+            clear_pairing_client(&self.pairing);
+            self.auth_recovery = self.auth_manager.unauthorized_recovery();
+            return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::AuthChanged);
+        }
+        let refresh_result = tokio::select! {
+            _ = shutdown_token.cancelled() => {
+                return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::Shutdown);
+            }
+            changed = enabled_rx.wait_for(|enabled| !*enabled) => {
+                if changed.is_ok() {
+                    self.status_publisher
+                        .publish_status(RemoteControlConnectionStatus::Disabled);
+                    return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::Disabled);
+                }
+                return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::EnabledWatchClosed);
+            }
+            changed = self.auth_change_rx.changed() => {
+                if changed.is_ok() {
+                    self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                    return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::AuthChanged);
+                }
+                return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::AuthWatchClosed);
+            }
+            _ = join_set.join_next() => {
+                return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::ConnectionWorkerStopped);
+            }
+            refresh_result = refresh_connected_server_token(refresh_request) => refresh_result,
+        };
+        self.apply_connected_server_token_refresh(refresh_result, app_server_client_name)
+            .await
+    }
+
+    fn connected_server_token_refresh_request(
+        &self,
+    ) -> io::Result<PendingConnectedServerTokenRefreshRequest> {
+        let remote_control_target = self.remote_control_target.clone().ok_or_else(|| {
+            io::Error::other("missing remote control target while refreshing server token")
+        })?;
+        let enrollment = self.enrollment.clone().ok_or_else(|| {
+            io::Error::other("missing remote control enrollment while refreshing server token")
+        })?;
+        Ok(PendingConnectedServerTokenRefreshRequest {
+            remote_control_target,
+            auth_manager: self.auth_manager.clone(),
+            auth_change_rx: self.auth_change_rx.clone(),
+            installation_id: self.installation_id.clone(),
+            enrollment,
+        })
+    }
+
+    async fn apply_connected_server_token_refresh(
+        &mut self,
+        refresh_result: io::Result<ConnectedServerTokenRefreshResponse>,
+        app_server_client_name: Option<&str>,
+    ) -> ConnectedServerTokenRefreshAction {
+        let refresh_response = match refresh_result {
+            Ok(refresh_response) => refresh_response,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                self.clear_stale_connected_enrollment(app_server_client_name)
+                    .await;
+                return ConnectedServerTokenRefreshAction::End(
+                    ConnectionEndReason::StaleEnrollment,
+                );
+            }
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                if recover_remote_control_auth(&mut self.auth_recovery, &mut self.auth_change_rx)
+                    .await
+                {
+                    return ConnectedServerTokenRefreshAction::Retry(io::Error::other(format!(
+                        "{err}; retrying after auth recovery"
+                    )));
+                }
+                if let Some(enrollment) = self.enrollment.as_mut() {
+                    enrollment.clear_server_token();
+                }
+                clear_pairing_client(&self.pairing);
+                return ConnectedServerTokenRefreshAction::End(
+                    ConnectionEndReason::ServerTokenRefreshRejected,
+                );
+            }
+            Err(err) if err.kind() == ErrorKind::InvalidInput => {
+                clear_pairing_client(&self.pairing);
+                self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::AuthChanged);
+            }
+            Err(err) => return ConnectedServerTokenRefreshAction::Retry(err),
+        };
+        if *self.auth_change_rx.borrow() != refresh_response.auth_change_revision {
+            clear_pairing_client(&self.pairing);
+            self.auth_recovery = self.auth_manager.unauthorized_recovery();
+            return ConnectedServerTokenRefreshAction::End(ConnectionEndReason::AuthChanged);
+        }
+        let current_enrollment = match self.enrollment.as_ref() {
+            Some(current_enrollment) => current_enrollment,
+            None => return ConnectedServerTokenRefreshAction::Continue,
+        };
+        if !same_remote_control_enrollment_identity(
+            current_enrollment,
+            &refresh_response.enrollment,
+        ) {
+            return ConnectedServerTokenRefreshAction::Continue;
+        }
+        self.enrollment = Some(refresh_response.enrollment);
+        let Some(remote_control_target) = self.remote_control_target.as_ref() else {
+            return ConnectedServerTokenRefreshAction::Retry(io::Error::other(
+                "missing remote control target after refreshing server token",
+            ));
+        };
+        let Some(enrollment) = self.enrollment.as_ref() else {
+            return ConnectedServerTokenRefreshAction::Retry(io::Error::other(
+                "missing remote control enrollment after refreshing server token",
+            ));
+        };
+        match set_pairing_client(
+            &self.pairing,
+            remote_control_target,
+            enrollment,
+            refresh_response.auth_change_revision,
+        ) {
+            Ok(()) => ConnectedServerTokenRefreshAction::Continue,
+            Err(err) => ConnectedServerTokenRefreshAction::Retry(err),
+        }
+    }
+
+    async fn clear_stale_connected_enrollment(&mut self, app_server_client_name: Option<&str>) {
+        let Some(remote_control_target) = self.remote_control_target.as_ref() else {
+            clear_pairing_client(&self.pairing);
+            self.enrollment = None;
+            self.status_publisher
+                .publish_environment_id(/*environment_id*/ None);
+            return;
+        };
+        let Some(account_id) = self
+            .enrollment
+            .as_ref()
+            .map(|enrollment| enrollment.account_id.clone())
+        else {
+            clear_pairing_client(&self.pairing);
+            return;
+        };
+        info!(
+            "connected remote control server refresh returned HTTP 404; clearing stale enrollment before re-enrolling: websocket_url={}, account_id={}",
+            remote_control_target.websocket_url, account_id
+        );
+        if let Some(state_db) = self.state_db.as_deref() {
+            clear_remote_control_enrollment(
+                state_db,
+                remote_control_target,
+                &account_id,
+                app_server_client_name,
+                &mut self.enrollment,
+                &self.status_publisher,
+                &self.pairing,
+            )
+            .await;
+            return;
+        }
+        self.enrollment = None;
+        self.status_publisher
+            .publish_environment_id(/*environment_id*/ None);
+        clear_pairing_client(&self.pairing);
     }
 
     async fn join_connection_workers(
@@ -1184,6 +1486,73 @@ fn build_remote_control_websocket_request(
         )?;
     }
     Ok(request)
+}
+
+async fn refresh_connected_server_token(
+    mut refresh_request: ConnectedServerTokenRefreshRequest,
+) -> io::Result<ConnectedServerTokenRefreshResponse> {
+    info!(
+        "refreshing connected remote control server token: websocket_url={}, refresh_url={}, account_id={}, server_id={}, environment_id={}",
+        refresh_request.remote_control_target.websocket_url,
+        refresh_request.remote_control_target.refresh_url,
+        refresh_request.auth.account_id,
+        refresh_request.enrollment.server_id,
+        refresh_request.enrollment.environment_id
+    );
+    refresh_remote_control_server(
+        &refresh_request.remote_control_target,
+        &refresh_request.auth,
+        &refresh_request.installation_id,
+        &mut refresh_request.enrollment,
+    )
+    .await?;
+    Ok(ConnectedServerTokenRefreshResponse {
+        enrollment: refresh_request.enrollment,
+        auth_change_revision: refresh_request.auth_change_revision,
+    })
+}
+
+async fn prepare_connected_server_token_refresh(
+    mut refresh_request: PendingConnectedServerTokenRefreshRequest,
+) -> io::Result<ConnectedServerTokenRefreshRequest> {
+    let auth = load_remote_control_auth(&refresh_request.auth_manager).await?;
+    // Loading auth may reload or proactively refresh through the same watch
+    // receiver. Treat the auth used for this refresh as the current revision
+    // before waiting for later auth changes to cancel the HTTP request.
+    let auth_change_revision = *refresh_request.auth_change_rx.borrow_and_update();
+    if refresh_request.enrollment.account_id != auth.account_id {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "remote control auth changed while refreshing server token",
+        ));
+    }
+    Ok(ConnectedServerTokenRefreshRequest {
+        remote_control_target: refresh_request.remote_control_target,
+        auth,
+        installation_id: refresh_request.installation_id,
+        enrollment: refresh_request.enrollment,
+        auth_change_revision,
+    })
+}
+
+fn mark_connected_refresh_auth_change_seen(
+    auth_change_rx: &mut watch::Receiver<u64>,
+    auth_change_revision: u64,
+) -> bool {
+    if *auth_change_rx.borrow() != auth_change_revision {
+        return false;
+    }
+    auth_change_rx.borrow_and_update();
+    true
+}
+
+fn same_remote_control_enrollment_identity(
+    left: &RemoteControlEnrollment,
+    right: &RemoteControlEnrollment,
+) -> bool {
+    left.account_id == right.account_id
+        && left.server_id == right.server_id
+        && left.environment_id == right.environment_id
 }
 
 pub(crate) async fn load_remote_control_auth(
@@ -1802,6 +2171,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mark_connected_refresh_auth_change_seen_marks_loaded_auth_revision_seen() {
+        let (auth_change_tx, mut auth_change_rx) = watch::channel(0u64);
+        auth_change_tx.send_modify(|revision| *revision += 1);
+        let auth_change_revision = *auth_change_rx.borrow();
+
+        assert!(mark_connected_refresh_auth_change_seen(
+            &mut auth_change_rx,
+            auth_change_revision
+        ));
+        assert!(
+            !auth_change_rx
+                .has_changed()
+                .expect("auth change watch should remain open")
+        );
+    }
+
+    #[test]
+    fn mark_connected_refresh_auth_change_seen_preserves_racing_auth_change() {
+        let (auth_change_tx, mut auth_change_rx) = watch::channel(0u64);
+        auth_change_tx.send_modify(|revision| *revision += 1);
+        let auth_change_revision = *auth_change_rx.borrow();
+        auth_change_tx.send_modify(|revision| *revision += 1);
+
+        assert!(!mark_connected_refresh_auth_change_seen(
+            &mut auth_change_rx,
+            auth_change_revision
+        ));
+        assert!(
+            auth_change_rx
+                .has_changed()
+                .expect("auth change watch should remain open")
+        );
+    }
+
     async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime> {
         StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string())
             .await
@@ -2325,6 +2729,7 @@ mod tests {
         let (status_publisher, _status_rx) = remote_control_status_channel();
         let shutdown_token = CancellationToken::new();
         let (_enabled_tx, enabled_rx) = watch::channel(true);
+        let (pairing_refresh_tx, pairing_refresh_rx) = watch::channel(0u64);
         let websocket_task = tokio::spawn({
             let shutdown_token = shutdown_token.clone();
             async move {
@@ -2341,6 +2746,8 @@ mod tests {
                         transport_event_tx,
                         status_publisher,
                         pairing: test_pairing(),
+                        pairing_refresh_tx,
+                        pairing_refresh_rx,
                     },
                     shutdown_token,
                     enabled_rx,

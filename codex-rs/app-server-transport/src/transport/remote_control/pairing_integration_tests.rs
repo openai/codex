@@ -394,3 +394,186 @@ async fn remote_control_handle_clears_pairing_client_after_auth_change() {
     shutdown_token.cancel();
     let _ = remote_task.await;
 }
+
+#[tokio::test]
+async fn remote_control_refreshes_server_token_while_connected() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let enroll_request = accept_http_request(&listener).await;
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    let mut first_websocket = accept_remote_control_connection(&listener).await;
+
+    remote_handle.request_pairing_auth_refresh();
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    respond_with_json(
+        refresh_request.stream,
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    assert!(
+        timeout(Duration::from_millis(100), first_websocket.next())
+            .await
+            .is_err(),
+        "server token refresh should keep the websocket open"
+    );
+
+    let pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+    let pairing_request = accept_http_request(&listener).await;
+    assert_eq!(
+        pairing_request.request_line,
+        "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+    );
+    assert_eq!(
+        pairing_request.headers.get("authorization"),
+        Some(&format!(
+            "Bearer {TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN}"
+        ))
+    );
+    respond_with_json(
+        pairing_request.stream,
+        json!({
+            "pairing_code": "pairing-code",
+            "manual_pairing_code": "ABCD-EFGH",
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
+            "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await;
+    assert_eq!(
+        pairing_task
+            .await
+            .expect("pairing task should join")
+            .expect("pairing should use refreshed server token"),
+        codex_app_server_protocol::RemoteControlPairingStartResponse {
+            pairing_code: "pairing-code".to_string(),
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+            environment_id: "env_test".to_string(),
+            expires_at: 33_336_362_096,
+        }
+    );
+
+    first_websocket
+        .close(None)
+        .await
+        .expect("first websocket should close");
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn remote_control_schedules_server_token_refresh_while_connected() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, _remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let scheduled_refresh_expires_at = (OffsetDateTime::now_utc() + time::Duration::seconds(35))
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("scheduled refresh expiry should format");
+    let enroll_request = accept_http_request(&listener).await;
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response_with_expires_at(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+            &scheduled_refresh_expires_at,
+        ),
+    )
+    .await;
+    let mut first_websocket = accept_remote_control_connection(&listener).await;
+
+    let refresh_request = timeout(Duration::from_secs(10), accept_http_request(&listener))
+        .await
+        .expect("scheduled server token refresh should arrive");
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    respond_with_json(
+        refresh_request.stream,
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    assert!(
+        timeout(Duration::from_millis(100), first_websocket.next())
+            .await
+            .is_err(),
+        "scheduled server token refresh should keep the websocket open"
+    );
+
+    first_websocket
+        .close(None)
+        .await
+        .expect("first websocket should close");
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}

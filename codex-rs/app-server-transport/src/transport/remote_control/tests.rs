@@ -144,6 +144,7 @@ fn remote_control_handle_with_pairing_client(
         installation_id: TEST_INSTALLATION_ID.to_string(),
         environment_id: Some("env_test".to_string()),
     });
+    let (pairing_refresh_tx, _pairing_refresh_rx) = watch::channel(0u64);
     let pairing_client = Arc::new(StdMutex::new(Some(RemoteControlPairingClient::new(
         &normalize_remote_control_url(remote_control_url)
             .expect("remote control target should normalize"),
@@ -162,6 +163,7 @@ fn remote_control_handle_with_pairing_client(
             client: pairing_client,
             generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         },
+        pairing_refresh_tx: Arc::new(pairing_refresh_tx),
         auth_change_rx: Arc::new(StdMutex::new(auth_change_rx)),
     }
 }
@@ -171,11 +173,25 @@ fn remote_control_server_token_response(
     environment_id: &str,
     remote_control_token: &str,
 ) -> serde_json::Value {
+    remote_control_server_token_response_with_expires_at(
+        server_id,
+        environment_id,
+        remote_control_token,
+        TEST_REMOTE_CONTROL_SERVER_TOKEN_EXPIRES_AT,
+    )
+}
+
+fn remote_control_server_token_response_with_expires_at(
+    server_id: &str,
+    environment_id: &str,
+    remote_control_token: &str,
+    expires_at: &str,
+) -> serde_json::Value {
     json!({
         "server_id": server_id,
         "environment_id": environment_id,
         "remote_control_token": remote_control_token,
-        "expires_at": TEST_REMOTE_CONTROL_SERVER_TOKEN_EXPIRES_AT,
+        "expires_at": expires_at,
     })
 }
 
