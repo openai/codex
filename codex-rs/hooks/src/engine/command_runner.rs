@@ -435,8 +435,35 @@ mod tests {
         CommandShell {
             program: String::new(),
             args: Vec::new(),
-            local_cwd: test_path_buf("/tmp").abs(),
+            local_cwd: codex_utils_absolute_path::AbsolutePathBuf::current_dir()
+                .expect("test current dir"),
             environment_manager,
+        }
+    }
+
+    fn print_command(output: &str) -> String {
+        if cfg!(windows) {
+            format!("echo|set /p={output}")
+        } else {
+            format!("printf {output}")
+        }
+    }
+
+    fn echo_stdin_to_stdout_and_stderr_with_exit_code(exit_code: i32) -> String {
+        if cfg!(windows) {
+            format!(
+                "set /p input= & echo|set /p=%input% & echo|set /p=stderr 1>&2 & exit /B {exit_code}"
+            )
+        } else {
+            format!("cat; printf stderr >&2; exit {exit_code}")
+        }
+    }
+
+    fn sleep_command(seconds: u64) -> String {
+        if cfg!(windows) {
+            format!("ping -n {} 127.0.0.1 >NUL", seconds + 1)
+        } else {
+            format!("sleep {seconds}")
         }
     }
 
@@ -497,7 +524,7 @@ mod tests {
     async fn omitted_environment_id_runs_locally() {
         let result = run_command(
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
-            &handler("printf local-hook", /*environment_id*/ None),
+            &handler(&print_command("local-hook"), /*environment_id*/ None),
             "{}",
             &Default::default(),
         )
@@ -529,11 +556,8 @@ mod tests {
 
         assert_eq!(result.exit_code, Some(0));
         assert_eq!(
-            result.stdout.trim(),
-            std::fs::canonicalize(local_cwd.as_path())
-                .expect("canonical local cwd")
-                .display()
-                .to_string()
+            std::fs::canonicalize(result.stdout.trim()).expect("canonical actual cwd"),
+            std::fs::canonicalize(local_cwd.as_path()).expect("canonical local cwd")
         );
         assert_eq!(result.error, None);
     }
@@ -542,7 +566,7 @@ mod tests {
     async fn explicit_local_environment_id_runs_locally() {
         let result = run_command(
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
-            &handler("printf explicit-local-hook", Some("local")),
+            &handler(&print_command("explicit-local-hook"), Some("local")),
             "{}",
             &Default::default(),
         )
@@ -558,7 +582,7 @@ mod tests {
         let result = run_command(
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
             &handler(
-                "cat; printf stderr >&2; exit 7",
+                &echo_stdin_to_stdout_and_stderr_with_exit_code(/*exit_code*/ 7),
                 /*environment_id*/ None,
             ),
             "{\"hook\":true}",
@@ -574,7 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_hook_timeout_returns_error() {
-        let mut handler = handler("sleep 5", /*environment_id*/ None);
+        let mut handler = handler(&sleep_command(/*seconds*/ 5), /*environment_id*/ None);
         handler.timeout_sec = 1;
         let result = run_command(
             &shell(std::sync::Arc::new(EnvironmentManager::default_for_tests())),
