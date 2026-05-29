@@ -298,7 +298,6 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
-        let expected_goal_id = goal.goal_id.clone();
         let item = continuation_steering_item(&protocol_goal_from_state(goal));
         let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
             tracing::debug!("skipping goal continuation because thread manager is unavailable");
@@ -309,30 +308,7 @@ impl GoalRuntimeHandle {
             return Ok(());
         };
 
-        let state_dbs = Arc::clone(&self.inner.state_dbs);
-        let thread_id = self.inner.thread_id;
-        thread
-            .start_idle_turn_if_current(vec![item], move || async move {
-                match state_dbs.thread_goals().get_thread_goal(thread_id).await {
-                    Ok(Some(goal))
-                        if goal.goal_id == expected_goal_id
-                            && goal.status == codex_state::ThreadGoalStatus::Active =>
-                    {
-                        true
-                    }
-                    Ok(Some(_)) | Ok(None) => {
-                        tracing::debug!(
-                            "skipping active goal continuation because the goal changed before launch"
-                        );
-                        false
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to re-read thread goal before continuation: {err}");
-                        false
-                    }
-                }
-            })
-            .await;
+        thread.inject_or_start_turn(vec![item]).await;
 
         let current_turn_is_goal_active = self
             .inner

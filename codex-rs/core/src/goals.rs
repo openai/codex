@@ -8,8 +8,12 @@ use crate::StateDbHandle;
 use crate::context::ContextualUserFragment;
 use crate::context::InternalContextSource;
 use crate::context::InternalModelContextFragment;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::state::ActiveTurn;
+use crate::state::TurnState;
+use crate::tasks::RegularTask;
 use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
 use codex_features::Feature;
@@ -895,6 +899,16 @@ impl Session {
         }
     }
 
+    async fn clear_reserved_goal_continuation_turn(&self, turn_state: &Arc<Mutex<TurnState>>) {
+        let mut active_turn_guard = self.active_turn.lock().await;
+        if let Some(active_turn) = active_turn_guard.as_ref()
+            && active_turn.task.is_none()
+            && Arc::ptr_eq(&active_turn.turn_state, turn_state)
+        {
+            *active_turn_guard = None;
+        }
+    }
+
     async fn finish_thread_goal_turn(
         self: &Arc<Self>,
         turn_context: &TurnContext,
@@ -1268,43 +1282,80 @@ impl Session {
             return;
         };
 
-        let session = Arc::clone(self);
-        let goal_id = candidate.goal_id;
-        self.start_idle_turn_if_current(candidate.items, move || async move {
-            match session.state_db_for_thread_goals().await {
-                Ok(Some(state_db)) => match state_db
-                    .thread_goals()
-                    .get_thread_goal(session.conversation_id)
-                    .await
+        let turn_state = {
+            let mut active_turn = self.active_turn.lock().await;
+            if active_turn.is_some() {
+                return;
+            }
+            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
+            Arc::clone(&active_turn.turn_state)
+        };
+        let goal_is_current = match self.state_db_for_thread_goals().await {
+            Ok(Some(state_db)) => match state_db
+                .thread_goals()
+                .get_thread_goal(self.conversation_id)
+                .await
+            {
+                Ok(Some(goal))
+                    if goal.goal_id == candidate.goal_id
+                        && goal.status == codex_state::ThreadGoalStatus::Active =>
                 {
-                    Ok(Some(goal))
-                        if goal.goal_id == goal_id
-                            && goal.status == codex_state::ThreadGoalStatus::Active =>
-                    {
-                        true
-                    }
-                    Ok(Some(_)) | Ok(None) => {
-                        tracing::debug!(
-                            "skipping active goal continuation because the goal changed before launch"
-                        );
-                        false
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to re-read thread goal before continuation: {err}");
-                        false
-                    }
-                },
-                Ok(None) => {
-                    tracing::debug!("skipping active goal continuation for ephemeral thread");
+                    true
+                }
+                Ok(Some(_)) | Ok(None) => {
+                    tracing::debug!(
+                        "skipping active goal continuation because the goal changed before launch"
+                    );
                     false
                 }
                 Err(err) => {
-                    tracing::warn!("failed to open state db before goal continuation: {err}");
+                    tracing::warn!("failed to re-read thread goal before continuation: {err}");
                     false
                 }
+            },
+            Ok(None) => {
+                tracing::debug!("skipping active goal continuation for ephemeral thread");
+                false
             }
-        })
-        .await;
+            Err(err) => {
+                tracing::warn!("failed to open state db before goal continuation: {err}");
+                false
+            }
+        };
+        if !goal_is_current {
+            self.clear_reserved_goal_continuation_turn(&turn_state)
+                .await;
+            return;
+        }
+        self.input_queue
+            .extend_pending_input_for_turn_state(
+                turn_state.as_ref(),
+                candidate
+                    .items
+                    .into_iter()
+                    .map(TurnInput::ResponseItem)
+                    .collect(),
+            )
+            .await;
+
+        let turn_context = self
+            .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
+            .await;
+        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        let still_reserved = {
+            let active_turn = self.active_turn.lock().await;
+            active_turn.as_ref().is_some_and(|active_turn| {
+                active_turn.task.is_none() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
+            })
+        };
+        if !still_reserved {
+            self.clear_reserved_goal_continuation_turn(&turn_state)
+                .await;
+            return;
+        }
+        self.start_task(turn_context, Vec::new(), RegularTask::new())
+            .await;
     }
 
     async fn goal_continuation_candidate_if_active(

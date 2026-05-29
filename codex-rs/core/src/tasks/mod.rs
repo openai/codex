@@ -4,7 +4,6 @@ mod regular;
 mod review;
 mod user_shell;
 
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -34,7 +33,6 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
-use crate::state::TurnState;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -53,7 +51,6 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 
 use codex_features::Feature;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
@@ -480,78 +477,6 @@ impl Session {
             .await;
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
-    }
-
-    pub(crate) async fn start_idle_turn_if_current<F, Fut>(
-        self: &Arc<Self>,
-        items: Vec<ResponseItem>,
-        validate: F,
-    ) where
-        F: FnOnce() -> Fut + Send,
-        Fut: Future<Output = bool> + Send,
-    {
-        if self.input_queue.has_trigger_turn_mailbox_items().await {
-            self.maybe_start_turn_for_pending_work().await;
-            return;
-        }
-        if self.collaboration_mode().await.mode == ModeKind::Plan {
-            return;
-        }
-
-        let turn_state = {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
-                return;
-            }
-            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
-        };
-
-        if !validate().await {
-            self.clear_reserved_idle_turn(&turn_state).await;
-            return;
-        }
-        if self.input_queue.has_trigger_turn_mailbox_items().await {
-            self.clear_reserved_idle_turn(&turn_state).await;
-            self.maybe_start_turn_for_pending_work().await;
-            return;
-        }
-
-        self.input_queue
-            .extend_pending_input_for_turn_state(
-                turn_state.as_ref(),
-                items.into_iter().map(TurnInput::ResponseItem).collect(),
-            )
-            .await;
-
-        let turn_context = self
-            .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        let still_reserved = {
-            let active_turn = self.active_turn.lock().await;
-            active_turn.as_ref().is_some_and(|active_turn| {
-                active_turn.task.is_none() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
-            })
-        };
-        if !still_reserved {
-            self.clear_reserved_idle_turn(&turn_state).await;
-            return;
-        }
-
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
-    }
-
-    async fn clear_reserved_idle_turn(&self, turn_state: &Arc<tokio::sync::Mutex<TurnState>>) {
-        let mut active_turn_guard = self.active_turn.lock().await;
-        if let Some(active_turn) = active_turn_guard.as_ref()
-            && active_turn.task.is_none()
-            && Arc::ptr_eq(&active_turn.turn_state, turn_state)
-        {
-            *active_turn_guard = None;
-        }
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
