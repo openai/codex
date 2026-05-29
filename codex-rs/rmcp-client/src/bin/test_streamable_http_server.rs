@@ -63,11 +63,13 @@ struct TestToolServer {
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
+const INITIALIZE_FAILURE_CONTROL_PATH: &str = "/test/control/initialize-failure";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
 
 #[derive(Clone, Default)]
-struct SessionFailureState {
-    armed_failure: Arc<Mutex<Option<ArmedFailure>>>,
+struct FailureState {
+    initialize_failure: Arc<Mutex<Option<ArmedFailure>>>,
+    session_post_failure: Arc<Mutex<Option<ArmedFailure>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -79,7 +81,7 @@ struct ArmedFailure {
 }
 
 #[derive(Debug, Deserialize)]
-struct ArmSessionPostFailureRequest {
+struct ArmFailureRequest {
     status: u16,
     remaining: usize,
     /// Raw `WWW-Authenticate` challenge header field values to add to the failure.
@@ -97,7 +99,7 @@ struct EchoArgs {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = parse_bind_addr()?;
-    let session_failure_state = SessionFailureState::default();
+    let failure_state = FailureState::default();
     const MAX_BIND_RETRIES: u32 = 20;
     const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -125,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("starting rmcp streamable http test server on http://{actual_bind_addr}/mcp");
 
     let router = Router::new()
+        .route(INITIALIZE_FAILURE_CONTROL_PATH, post(arm_initialize_failure))
         .route(
             SESSION_POST_FAILURE_CONTROL_PATH,
             post(arm_session_post_failure),
@@ -162,10 +165,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         )
         .layer(middleware::from_fn_with_state(
-            session_failure_state.clone(),
-            fail_session_post_when_armed,
+            failure_state.clone(),
+            fail_post_when_armed,
         ))
-        .with_state(session_failure_state);
+        .with_state(failure_state);
 
     let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
         let expected = Arc::new(format!("Bearer {token}"));
@@ -404,8 +407,22 @@ async fn require_bearer(
 }
 
 async fn arm_session_post_failure(
-    State(state): State<SessionFailureState>,
-    Json(request): Json<ArmSessionPostFailureRequest>,
+    State(state): State<FailureState>,
+    Json(request): Json<ArmFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    arm_failure(&state.session_post_failure, request).await
+}
+
+async fn arm_initialize_failure(
+    State(state): State<FailureState>,
+    Json(request): Json<ArmFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    arm_failure(&state.initialize_failure, request).await
+}
+
+async fn arm_failure(
+    armed_failure: &Arc<Mutex<Option<ArmedFailure>>>,
+    request: ArmFailureRequest,
 ) -> Result<StatusCode, StatusCode> {
     let status = StatusCode::from_u16(request.status).map_err(|_| StatusCode::BAD_REQUEST)?;
     let www_authenticate_headers = request
@@ -413,7 +430,7 @@ async fn arm_session_post_failure(
         .into_iter()
         .map(|value| HeaderValue::from_str(&value).map_err(|_| StatusCode::BAD_REQUEST))
         .collect::<Result<Vec<_>, _>>()?;
-    let armed_failure = if request.remaining == 0 {
+    let failure = if request.remaining == 0 {
         None
     } else {
         Some(ArmedFailure {
@@ -422,45 +439,56 @@ async fn arm_session_post_failure(
             www_authenticate_headers,
         })
     };
-    *state.armed_failure.lock().await = armed_failure;
+    *armed_failure.lock().await = failure;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn fail_session_post_when_armed(
-    State(state): State<SessionFailureState>,
+async fn fail_post_when_armed(
+    State(state): State<FailureState>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if request.uri().path() != "/mcp"
-        || request.method() != Method::POST
-        || !request.headers().contains_key(MCP_SESSION_ID_HEADER)
-    {
+    if request.uri().path() != "/mcp" || request.method() != Method::POST {
         return next.run(request).await;
     }
 
-    {
-        let mut armed_failure = state.armed_failure.lock().await;
-        if let Some(failure) = armed_failure.as_mut()
-            && failure.remaining > 0
-        {
-            failure.remaining -= 1;
-            let status = failure.status;
-            let www_authenticate_headers = failure.www_authenticate_headers.clone();
-            if failure.remaining == 0 {
-                *armed_failure = None;
-            }
-            let mut response = Response::new(Body::from(format!(
-                "forced session failure with status {status}"
-            )));
-            *response.status_mut() = status;
-            for www_authenticate_header in www_authenticate_headers {
-                response
-                    .headers_mut()
-                    .append(WWW_AUTHENTICATE, www_authenticate_header);
-            }
-            return response;
-        }
+    let (armed_failure, label) = if request.headers().contains_key(MCP_SESSION_ID_HEADER) {
+        (&state.session_post_failure, "session")
+    } else {
+        (&state.initialize_failure, "initialize")
+    };
+
+    if let Some(response) = consume_failure(armed_failure, label).await {
+        return response;
     }
 
     next.run(request).await
+}
+
+async fn consume_failure(
+    armed_failure: &Arc<Mutex<Option<ArmedFailure>>>,
+    label: &str,
+) -> Option<Response> {
+    let mut armed_failure = armed_failure.lock().await;
+    let failure = armed_failure.as_mut()?;
+    if failure.remaining == 0 {
+        return None;
+    }
+
+    failure.remaining -= 1;
+    let status = failure.status;
+    let www_authenticate_headers = failure.www_authenticate_headers.clone();
+    if failure.remaining == 0 {
+        *armed_failure = None;
+    }
+    let mut response = Response::new(Body::from(format!(
+        "forced {label} failure with status {status}"
+    )));
+    *response.status_mut() = status;
+    for www_authenticate_header in www_authenticate_headers {
+        response
+            .headers_mut()
+            .append(WWW_AUTHENTICATE, www_authenticate_header);
+    }
+    Some(response)
 }

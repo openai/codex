@@ -58,6 +58,8 @@ pub(crate) struct StreamableHttpClientAdapter {
 pub(crate) enum StreamableHttpClientAdapterError {
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
+    #[error("streamable HTTP request returned retryable HTTP {0}")]
+    RetryableHttpStatus(u16),
     #[error(transparent)]
     HttpRequest(#[from] ExecServerError),
     #[error("invalid HTTP header: {0}")]
@@ -181,6 +183,11 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             Some(StatusCode::ACCEPTED | StatusCode::NO_CONTENT)
         ) {
             return Ok(StreamableHttpPostResponse::Accepted);
+        }
+        if is_retryable_http_status(response.status) {
+            return Err(StreamableHttpError::Client(
+                StreamableHttpClientAdapterError::RetryableHttpStatus(response.status),
+            ));
         }
 
         let content_type = response_header(&response.headers, CONTENT_TYPE);
@@ -461,6 +468,10 @@ fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<Stri
 
 fn status_is_success(status: u16) -> bool {
     StatusCode::from_u16(status).is_ok_and(|status| status.is_success())
+}
+
+fn is_retryable_http_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
 }
 
 async fn collect_body(
