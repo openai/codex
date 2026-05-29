@@ -584,7 +584,7 @@ impl CatalogRequestProcessor {
                         );
                     };
                     let skills_input = codex_core::skills::SkillsLoadInput::new(
-                        codex_core::skills::EnvironmentPathRef::new(
+                        codex_exec_server::EnvironmentPathRef::new(
                             environment.get_filesystem(),
                             cwd_abs.clone(),
                         ),
