@@ -695,17 +695,20 @@ impl RolloutRecorder {
 
                 (None, Some(log_file_info), path, Some(session_meta))
             }
-            RolloutRecorderParams::Resume { path } => (
-                Some(
-                    tokio::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&path)
-                        .await?,
-                ),
-                None,
-                path,
-                None,
-            ),
+            RolloutRecorderParams::Resume { path } => {
+                let path = compression::materialize_rollout_for_append(path.as_path()).await?;
+                (
+                    Some(
+                        tokio::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .await?,
+                    ),
+                    None,
+                    path,
+                    None,
+                )
+            }
         };
 
         // Clone the cwd for the spawned task to collect git info asynchronously
@@ -1359,6 +1362,7 @@ fn precompute_log_file_info(
 }
 
 fn open_log_file(path: &Path) -> std::io::Result<File> {
+    let path = compression::materialize_rollout_for_append_blocking(path)?;
     let Some(parent) = path.parent() else {
         return Err(IoError::other(format!(
             "rollout path has no parent: {}",
@@ -1618,6 +1622,7 @@ pub async fn append_rollout_item_to_path(
     rollout_path: &Path,
     item: &RolloutItem,
 ) -> std::io::Result<()> {
+    let rollout_path = compression::materialize_rollout_for_append(rollout_path).await?;
     let file = tokio::fs::OpenOptions::new()
         .append(true)
         .open(rollout_path)

@@ -1,4 +1,6 @@
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
@@ -14,6 +16,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::RolloutRecorder;
+use crate::append_rollout_item_to_path;
 
 #[tokio::test]
 async fn load_rollout_items_reads_compressed_rollout() -> anyhow::Result<()> {
@@ -64,6 +67,93 @@ fn rollout_file_from_path_hides_compressed_sibling_when_plain_exists() -> anyhow
         RolloutFile::from_path(compressed_rollout_path(&rollout_path)),
         None
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn append_rollout_item_materializes_compressed_rollout() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(2);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "hello before append")?;
+    compress_now(&rollout_path)?;
+
+    append_rollout_item_to_path(
+        &rollout_path,
+        &RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "hello after append".to_string(),
+            ..Default::default()
+        })),
+    )
+    .await?;
+
+    assert!(rollout_path.exists());
+    assert!(!compressed_rollout_path(&rollout_path).exists());
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 3);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn append_materialization_preserves_compressed_rollout_permissions() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(6);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "restricted transcript")?;
+    compress_now(&rollout_path)?;
+    let compressed_path = compressed_rollout_path(&rollout_path);
+    fs::set_permissions(&compressed_path, fs::Permissions::from_mode(0o600))?;
+
+    append_rollout_item_to_path(
+        &rollout_path,
+        &RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "materialize restricted transcript".to_string(),
+            ..Default::default()
+        })),
+    )
+    .await?;
+
+    assert!(rollout_path.exists());
+    assert!(!compressed_path.exists());
+    assert_eq!(
+        fs::metadata(&rollout_path)?.permissions().mode() & 0o777,
+        0o600
+    );
+    Ok(())
+}
+
+#[test]
+fn persist_temp_file_noclobber_installs_completed_temp() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let temp_path = home.path().join("rollout.jsonl.tmp");
+    let destination = home.path().join("rollout.jsonl");
+    fs::write(&temp_path, "completed rollout")?;
+
+    persist_temp_file_noclobber(&temp_path, &destination)?;
+
+    assert!(!temp_path.exists());
+    assert_eq!(fs::read_to_string(destination)?, "completed rollout");
+    Ok(())
+}
+
+#[test]
+fn persist_temp_file_noclobber_does_not_replace_existing_destination() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let temp_path = home.path().join("rollout.jsonl.tmp");
+    let destination = home.path().join("rollout.jsonl");
+    fs::write(&temp_path, "candidate rollout")?;
+    fs::write(&destination, "existing rollout")?;
+
+    persist_temp_file_noclobber(&temp_path, &destination)?;
+
+    assert!(!temp_path.exists());
+    assert_eq!(fs::read_to_string(destination)?, "existing rollout");
     Ok(())
 }
 
