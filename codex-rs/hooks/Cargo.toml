@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
@@ -32,7 +33,6 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-base64 = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
