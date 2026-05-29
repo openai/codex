@@ -20,7 +20,7 @@ index a240dd6..6e64dfd 100644
      // temporary fix to avoid github workflow issue
      fs::create_dir_all(&dir).context("Failed to create scratch_path")?;
      let flock = File::create(dir.join(".lock"))
-@@ -233,6 +233,10 @@ pub fn download_webrtc() -> Result<()> {
+@@ -233,5 +233,9 @@ pub fn download_webrtc() -> Result<()> {
      Ok(())
  }
  
