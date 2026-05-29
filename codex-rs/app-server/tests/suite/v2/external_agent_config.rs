@@ -21,6 +21,7 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -392,10 +393,13 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "follow up".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![UserInput::Text {
+                    text: "follow up".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -966,10 +970,13 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "follow up".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![UserInput::Text {
+                    text: "follow up".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;

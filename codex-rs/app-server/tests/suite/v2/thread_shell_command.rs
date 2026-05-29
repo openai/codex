@@ -21,6 +21,7 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -30,6 +31,7 @@ use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::shell::default_user_shell;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
@@ -276,12 +278,17 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "run python".to_string(),
-                text_elements: Vec::new(),
-            }],
-            cwd: Some(workspace.clone()),
-            ..Default::default()
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "run python".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+            thread_settings: ThreadSettingsOverrides {
+                cwd: Some(workspace.clone()),
+                ..Default::default()
+            },
         })
         .await?;
     let turn_resp: JSONRPCResponse = timeout(

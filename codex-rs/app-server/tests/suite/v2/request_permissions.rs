@@ -11,10 +11,12 @@ use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use tokio::time::timeout;
 
@@ -50,12 +52,17 @@ async fn request_permissions_round_trip() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "pick a directory".to_string(),
-                text_elements: Vec::new(),
-            }],
-            model: Some("mock-model".to_string()),
-            ..Default::default()
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "pick a directory".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+            thread_settings: ThreadSettingsOverrides {
+                model: Some("mock-model".to_string()),
+                ..Default::default()
+            },
         })
         .await?;
     let turn_start_resp: JSONRPCResponse = timeout(

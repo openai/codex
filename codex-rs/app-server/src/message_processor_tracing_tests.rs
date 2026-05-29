@@ -17,10 +17,12 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
@@ -651,28 +653,32 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
             ClientRequest::TurnStart {
                 request_id: RequestId::Integer(3),
                 params: TurnStartParams {
-                    environments: None,
+                    submission: TurnSubmissionParams {
+                        environments: None,
+                        input: vec![UserInput::Text {
+                            text: "hello".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        responsesapi_client_metadata: None,
+                        additional_context: None,
+                        output_schema: None,
+                    },
                     thread_id,
                     client_user_message_id: None,
-                    input: vec![UserInput::Text {
-                        text: "hello".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    responsesapi_client_metadata: None,
-                    additional_context: None,
-                    cwd: None,
-                    runtime_workspace_roots: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    permissions: None,
-                    approvals_reviewer: None,
-                    model: None,
-                    service_tier: None,
-                    effort: None,
-                    summary: None,
-                    personality: None,
-                    output_schema: None,
-                    collaboration_mode: None,
+                    thread_settings: ThreadSettingsOverrides {
+                        cwd: None,
+                        runtime_workspace_roots: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        permissions: None,
+                        approvals_reviewer: None,
+                        model: None,
+                        service_tier: None,
+                        effort: None,
+                        summary: None,
+                        personality: None,
+                        collaboration_mode: None,
+                    },
                 },
             },
             Some(remote_trace),

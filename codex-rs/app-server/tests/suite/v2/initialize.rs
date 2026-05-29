@@ -13,6 +13,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cargo_bin::cargo_bin;
@@ -307,10 +308,13 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;

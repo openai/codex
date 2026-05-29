@@ -20,6 +20,7 @@ use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudRequirementsLoader;
@@ -82,10 +83,13 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "materialize".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![UserInput::Text {
+                    text: "materialize".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;

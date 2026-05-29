@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -58,10 +59,13 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: first_text.to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: first_text.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -80,10 +84,13 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Second".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Second".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;

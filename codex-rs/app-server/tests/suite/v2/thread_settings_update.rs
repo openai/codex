@@ -13,6 +13,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
@@ -20,6 +21,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::test_support::all_model_presets;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -260,12 +262,17 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            model: Some("mock-model-3".to_string()),
-            ..Default::default()
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+            thread_settings: ThreadSettingsOverrides {
+                model: Some("mock-model-3".to_string()),
+                ..Default::default()
+            },
         })
         .await?;
     let turn_response: JSONRPCResponse = timeout(
@@ -306,10 +313,13 @@ async fn start_text_turn(mcp: &mut McpProcess, thread_id: String) -> Result<()> 
     let turn_request_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id,
-            input: vec![V2UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;

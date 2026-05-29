@@ -91,6 +91,7 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
@@ -109,6 +110,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::TurnSubmission;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -707,28 +709,30 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     client_user_message_id: None,
-                    input: items,
-                    responsesapi_client_metadata: None,
-                    additional_context: None,
-                    environments: None,
-                    cwd: Some(cwd),
-                    runtime_workspace_roots: Some(
-                        workspace_roots
-                            .iter()
-                            .map(AbsolutePathBuf::to_path_buf)
-                            .collect(),
-                    ),
-                    approval_policy: Some(approval_policy),
-                    approvals_reviewer: Some(approvals_reviewer.into()),
-                    sandbox_policy,
-                    permissions,
-                    model: Some(model),
-                    service_tier,
-                    effort,
-                    summary,
-                    personality,
-                    output_schema,
-                    collaboration_mode,
+                    submission: TurnSubmissionParams {
+                        input: items,
+                        output_schema,
+                        ..Default::default()
+                    },
+                    thread_settings: ThreadSettingsOverrides {
+                        cwd: Some(cwd),
+                        runtime_workspace_roots: Some(
+                            workspace_roots
+                                .iter()
+                                .map(AbsolutePathBuf::to_path_buf)
+                                .collect(),
+                        ),
+                        approval_policy: Some(approval_policy),
+                        approvals_reviewer: Some(approvals_reviewer.into()),
+                        sandbox_policy,
+                        permissions,
+                        model: Some(model),
+                        service_tier,
+                        effort,
+                        summary,
+                        personality,
+                        collaboration_mode,
+                    },
                 },
             })
             .await

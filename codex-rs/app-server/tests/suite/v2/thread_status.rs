@@ -9,12 +9,14 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -49,12 +51,17 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "collect status updates".to_string(),
-                text_elements: Vec::new(),
-            }],
-            model: Some("mock-model".to_string()),
-            ..Default::default()
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "collect status updates".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+            thread_settings: ThreadSettingsOverrides {
+                model: Some("mock-model".to_string()),
+                ..Default::default()
+            },
         })
         .await?;
     let turn_start_resp: JSONRPCResponse = timeout(
@@ -173,12 +180,17 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "run once".to_string(),
-                text_elements: Vec::new(),
-            }],
-            model: Some("mock-model".to_string()),
-            ..Default::default()
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "run once".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+            thread_settings: ThreadSettingsOverrides {
+                model: Some("mock-model".to_string()),
+                ..Default::default()
+            },
         })
         .await?;
     let turn_start_resp: JSONRPCResponse = timeout(

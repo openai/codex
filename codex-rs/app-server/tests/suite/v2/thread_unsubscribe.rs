@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -25,6 +26,7 @@ use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
@@ -152,12 +154,17 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "run deterministic tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            cwd: Some(working_directory),
-            ..Default::default()
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "run deterministic tool".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+            thread_settings: ThreadSettingsOverrides {
+                cwd: Some(working_directory),
+                ..Default::default()
+            },
         })
         .await?;
     let turn_resp: JSONRPCResponse = timeout(
@@ -262,10 +269,13 @@ async fn thread_unsubscribe_preserves_cached_status_before_idle_unload() -> Resu
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "fail this turn".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "fail this turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;

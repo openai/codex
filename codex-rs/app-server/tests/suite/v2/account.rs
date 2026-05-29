@@ -32,6 +32,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::login_with_api_key;
@@ -507,10 +508,13 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
             thread_id: thread.thread.id,
             client_user_message_id: None,
-            input: vec![codex_app_server_protocol::UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![codex_app_server_protocol::UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -614,10 +618,13 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
             thread_id: thread.thread.id.clone(),
             client_user_message_id: None,
-            input: vec![codex_app_server_protocol::UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![codex_app_server_protocol::UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -737,10 +744,13 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
             thread_id: thread.thread.id.clone(),
             client_user_message_id: None,
-            input: vec![codex_app_server_protocol::UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![codex_app_server_protocol::UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -853,10 +863,13 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
         .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
             thread_id: thread.thread.id.clone(),
             client_user_message_id: None,
-            input: vec![codex_app_server_protocol::UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![codex_app_server_protocol::UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;

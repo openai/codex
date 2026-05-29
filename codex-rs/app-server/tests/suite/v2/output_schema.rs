@@ -7,6 +7,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -60,11 +61,14 @@ async fn turn_start_accepts_output_schema_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            output_schema: Some(output_schema.clone()),
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                output_schema: Some(output_schema.clone()),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -143,11 +147,14 @@ async fn turn_start_output_schema_is_per_turn_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            output_schema: Some(output_schema.clone()),
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                output_schema: Some(output_schema.clone()),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -186,11 +193,14 @@ async fn turn_start_output_schema_is_per_turn_v2() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Hello again".to_string(),
-                text_elements: Vec::new(),
-            }],
-            output_schema: None,
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Hello again".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                output_schema: None,
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;

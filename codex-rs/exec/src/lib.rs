@@ -38,6 +38,7 @@ use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadSourceKind;
@@ -50,6 +51,7 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_config::ConfigLoadError;
@@ -780,23 +782,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     params: TurnStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
                         client_user_message_id: None,
-                        input: items.into_iter().map(Into::into).collect(),
-                        responsesapi_client_metadata: None,
-                        additional_context: None,
-                        environments: None,
-                        cwd: Some(default_cwd),
-                        runtime_workspace_roots: None,
-                        approval_policy: Some(default_approval_policy.into()),
-                        approvals_reviewer: None,
-                        sandbox_policy: None,
-                        permissions: None,
-                        model: None,
-                        service_tier: None,
-                        effort: default_effort,
-                        summary: None,
-                        personality: None,
-                        output_schema,
-                        collaboration_mode: None,
+                        submission: TurnSubmissionParams {
+                            input: items.into_iter().map(Into::into).collect(),
+                            output_schema,
+                            ..Default::default()
+                        },
+                        thread_settings: ThreadSettingsOverrides {
+                            cwd: Some(default_cwd),
+                            approval_policy: Some(default_approval_policy.into()),
+                            effort: default_effort,
+                            ..Default::default()
+                        },
                     },
                 },
                 "turn/start",

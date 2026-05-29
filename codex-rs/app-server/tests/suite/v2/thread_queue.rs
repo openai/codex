@@ -27,10 +27,13 @@ use codex_app_server_protocol::ThreadQueueListParams;
 use codex_app_server_protocol::ThreadQueueListResponse;
 use codex_app_server_protocol::ThreadQueueReorderParams;
 use codex_app_server_protocol::ThreadQueueReorderResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSubmission;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -636,6 +639,97 @@ async fn queued_turns_wait_for_a_just_accepted_direct_turn_to_become_visible() -
 }
 
 #[tokio::test]
+async fn queued_turn_uses_current_thread_settings_when_dispatched() -> Result<()> {
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            /*workdir*/ None,
+            Some(5000),
+            "queued-settings-blocker",
+        )?,
+        create_final_assistant_message_sse_response("direct turn done")?,
+        create_final_assistant_message_sse_response("queued follow-up done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    write_queue_test_config(codex_home.path(), &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    initialize_experimental(&mut mcp).await?;
+    let thread = start_thread(&mut mcp).await?;
+
+    let direct_turn_request_id = mcp
+        .send_turn_start_request(text_turn(&thread.id, "direct turn first"))
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(direct_turn_request_id)),
+    )
+    .await??;
+
+    let approval_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = approval_request else {
+        panic!("expected direct turn approval request to keep the direct turn open");
+    };
+
+    queue_turn(&mut mcp, &thread.id, "queued turn after settings update").await?;
+    let settings_request_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            model: Some("updated-queued-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let settings_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(settings_request_id)),
+    )
+    .await??;
+    let _: ThreadSettingsUpdateResponse = to_response(settings_response)?;
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    assert_eq!(requests.len(), 3);
+    let queued_request: serde_json::Value = serde_json::from_slice(&requests[2].body)?;
+    assert_eq!(
+        queued_request
+            .get("model")
+            .and_then(serde_json::Value::as_str),
+        Some("updated-queued-model")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn queued_turns_drain_after_a_direct_turn_has_already_completed() -> Result<()> {
     let responses = vec![
         create_final_assistant_message_sse_response("direct turn done")?,
@@ -825,7 +919,10 @@ fn text_submission(text: &str) -> TurnSubmission {
 fn text_turn(thread_id: &str, text: &str) -> TurnStartParams {
     TurnStartParams {
         thread_id: thread_id.to_string(),
-        input: text_submission(text).input,
+        submission: TurnSubmissionParams {
+            input: text_submission(text).input,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

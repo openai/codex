@@ -711,7 +711,7 @@ fn permission_profile_selection_uses_id_string() {
         "permissions": "dev",
     }))
     .expect("turn/start params deserialize");
-    assert_eq!(turn.permissions, Some("dev".to_string()));
+    assert_eq!(turn.thread_settings.permissions, Some("dev".to_string()));
 
     let command: CommandExecParams = serde_json::from_value(json!({
         "command": ["echo", "hello"],
@@ -1757,14 +1757,16 @@ fn client_request_turn_start_granular_approval_policy_is_marked_experimental() {
             params: TurnStartParams {
                 thread_id: "thr_123".to_string(),
                 client_user_message_id: None,
-                input: Vec::new(),
-                approval_policy: Some(AskForApproval::Granular {
-                    sandbox_approval: false,
-                    rules: true,
-                    skill_approval: false,
-                    request_permissions: false,
-                    mcp_elicitations: true,
-                }),
+                thread_settings: ThreadSettingsOverrides {
+                    approval_policy: Some(AskForApproval::Granular {
+                        sandbox_approval: false,
+                        rules: true,
+                        skill_approval: false,
+                        request_permissions: false,
+                        mcp_elicitations: true,
+                    }),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         },
@@ -3596,7 +3598,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         "serviceTier": null
     }))
     .expect("params should deserialize");
-    assert_eq!(params.service_tier, Some(None));
+    assert_eq!(params.thread_settings.service_tier, Some(None));
 
     let serialized = serde_json::to_value(&params).expect("params should serialize");
     assert_eq!(
@@ -3607,23 +3609,8 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     let without_override = TurnStartParams {
         thread_id: "thread_123".to_string(),
         client_user_message_id: None,
-        input: vec![],
-        responsesapi_client_metadata: None,
-        additional_context: None,
-        environments: None,
-        cwd: None,
-        runtime_workspace_roots: None,
-        approval_policy: None,
-        approvals_reviewer: None,
-        sandbox_policy: None,
-        permissions: None,
-        model: None,
-        service_tier: None,
-        effort: None,
-        summary: None,
-        output_schema: None,
-        collaboration_mode: None,
-        personality: None,
+        submission: TurnSubmissionParams::default(),
+        thread_settings: ThreadSettingsOverrides::default(),
     };
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
@@ -3717,7 +3704,7 @@ fn turn_start_params_round_trip_environments() {
     .expect("params should deserialize");
 
     assert_eq!(
-        params.environments,
+        params.submission.environments,
         Some(vec![TurnEnvironmentParams {
             environment_id: "local".to_string(),
             cwd: cwd.clone(),
@@ -3749,7 +3736,7 @@ fn turn_start_params_preserve_empty_environments() {
     }))
     .expect("params should deserialize");
 
-    assert_eq!(params.environments, Some(Vec::new()));
+    assert_eq!(params.submission.environments, Some(Vec::new()));
     assert_eq!(
         crate::experimental_api::ExperimentalApi::experimental_reason(&params),
         Some("turn/start.environments")
@@ -3773,8 +3760,8 @@ fn turn_start_params_treat_null_or_omitted_environments_as_default() {
     }))
     .expect("params should deserialize");
 
-    assert_eq!(null_environments.environments, None);
-    assert_eq!(omitted_environments.environments, None);
+    assert_eq!(null_environments.submission.environments, None);
+    assert_eq!(omitted_environments.submission.environments, None);
     assert_eq!(
         crate::experimental_api::ExperimentalApi::experimental_reason(&null_environments),
         None

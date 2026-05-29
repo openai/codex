@@ -140,28 +140,7 @@ impl From<TurnSubmission> for TurnSubmissionParams {
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
 )]
 #[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TurnStartParams {
-    pub thread_id: String,
-    #[ts(optional = nullable)]
-    pub client_user_message_id: Option<String>,
-    pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
-    #[experimental("turn/start.responsesapiClientMetadata")]
-    #[ts(optional = nullable)]
-    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
-    /// Optional client-provided context fragments keyed by an opaque source identifier.
-    #[experimental("turn/start.additionalContext")]
-    #[ts(optional = nullable)]
-    pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
-    /// Optional turn-scoped environments.
-    ///
-    /// Omitted uses the thread sticky environments. Empty disables
-    /// environment access for this turn. Non-empty selects the first
-    /// environment as the current turn environment for this turn.
-    #[experimental("turn/start.environments")]
-    #[ts(optional = nullable)]
-    pub environments: Option<Vec<TurnEnvironmentParams>>,
+pub struct ThreadSettingsOverrides {
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -208,11 +187,6 @@ pub struct TurnStartParams {
     /// Override the personality for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
-    /// Optional JSON Schema used to constrain the final assistant message for
-    /// this turn.
-    #[ts(optional = nullable)]
-    pub output_schema: Option<JsonValue>,
-
     /// EXPERIMENTAL - Set a pre-set collaboration mode.
     /// Takes precedence over model, reasoning_effort, and developer instructions if set.
     ///
@@ -221,6 +195,25 @@ pub struct TurnStartParams {
     #[experimental("turn/start.collaborationMode")]
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnStartParams {
+    pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub client_user_message_id: Option<String>,
+    #[serde(flatten)]
+    #[ts(flatten)]
+    #[experimental(nested)]
+    pub submission: TurnSubmissionParams,
+    #[serde(flatten)]
+    #[ts(flatten)]
+    #[experimental(nested)]
+    pub thread_settings: ThreadSettingsOverrides,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

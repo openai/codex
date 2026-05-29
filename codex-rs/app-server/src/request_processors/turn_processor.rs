@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 
@@ -133,11 +134,7 @@ impl TurnRequestProcessor {
         let (_, thread) = self.load_thread(&thread_id_string).await?;
         let params = TurnStartParams {
             thread_id: thread_id_string,
-            input: submission.input,
-            responsesapi_client_metadata: submission.responsesapi_client_metadata,
-            additional_context: submission.additional_context,
-            environments: submission.environments,
-            output_schema: submission.output_schema,
+            submission: submission.into(),
             ..Default::default()
         };
         self.start_turn_from_params(thread_id, thread, params, /*trace_context*/ None)
@@ -408,7 +405,7 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
-        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+        if let Err(error) = Self::validate_v2_input_limit(&params.submission.input) {
             self.track_error_response(
                 &request_id,
                 &error,
@@ -473,34 +470,57 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         trace_context: Option<W3cTraceContext>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
-        let environment_selections = self.parse_environment_selections(params.environments)?;
+        let TurnStartParams {
+            client_user_message_id,
+            submission:
+                TurnSubmissionParams {
+                    input,
+                    responsesapi_client_metadata,
+                    additional_context,
+                    environments,
+                    output_schema,
+                },
+            thread_settings:
+                ThreadSettingsOverrides {
+                    cwd,
+                    runtime_workspace_roots,
+                    approval_policy,
+                    approvals_reviewer,
+                    sandbox_policy,
+                    permissions,
+                    model,
+                    service_tier,
+                    effort,
+                    summary,
+                    personality,
+                    collaboration_mode,
+                },
+            ..
+        } = params;
+        let environment_selections = self.parse_environment_selections(environments)?;
 
         // Map v2 input items to core input items.
-        let mapped_items: Vec<CoreInputItem> = params
-            .input
-            .into_iter()
-            .map(V2UserInput::into_core)
-            .collect();
-        let client_user_message_id = params.client_user_message_id;
-        let additional_context = map_additional_context(params.additional_context);
+        let mapped_items: Vec<CoreInputItem> =
+            input.into_iter().map(V2UserInput::into_core).collect();
+        let additional_context = map_additional_context(additional_context);
         let turn_has_input = !mapped_items.is_empty();
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),
                 ThreadSettingsBuildParams {
                     method: "turn/start",
-                    cwd: params.cwd,
-                    runtime_workspace_roots: params.runtime_workspace_roots,
-                    approval_policy: params.approval_policy,
-                    approvals_reviewer: params.approvals_reviewer,
-                    sandbox_policy: params.sandbox_policy,
-                    permissions: params.permissions,
-                    model: params.model,
-                    service_tier: params.service_tier,
-                    effort: params.effort,
-                    summary: params.summary,
-                    collaboration_mode: params.collaboration_mode,
-                    personality: params.personality,
+                    cwd,
+                    runtime_workspace_roots,
+                    approval_policy,
+                    approvals_reviewer,
+                    sandbox_policy,
+                    permissions,
+                    model,
+                    service_tier,
+                    effort,
+                    summary,
+                    collaboration_mode,
+                    personality,
                 },
             )
             .await?;
@@ -509,8 +529,8 @@ impl TurnRequestProcessor {
         let turn_op = Op::UserInput {
             items: mapped_items,
             environments: environment_selections,
-            final_output_json_schema: params.output_schema,
-            responsesapi_client_metadata: params.responsesapi_client_metadata,
+            final_output_json_schema: output_schema,
+            responsesapi_client_metadata,
             additional_context,
             thread_settings,
         };

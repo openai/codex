@@ -61,11 +61,13 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSettingsOverrides;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::Config;
 use codex_otel::OtelProvider;
@@ -735,14 +737,17 @@ async fn trigger_zsh_fork_multi_cmd_approval(
             let mut turn_params = TurnStartParams {
                 thread_id: thread_response.thread.id.clone(),
                 client_user_message_id: None,
-                input: vec![V2UserInput::Text {
-                    text: message,
-                    text_elements: Vec::new(),
-                }],
+                submission: TurnSubmissionParams {
+                    input: vec![V2UserInput::Text {
+                        text: message,
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                },
                 ..Default::default()
             };
-            turn_params.approval_policy = Some(AskForApproval::OnRequest);
-            turn_params.sandbox_policy = Some(SandboxPolicy::ReadOnly {
+            turn_params.thread_settings.approval_policy = Some(AskForApproval::OnRequest);
+            turn_params.thread_settings.sandbox_policy = Some(SandboxPolicy::ReadOnly {
                 network_access: false,
             });
 
@@ -820,10 +825,13 @@ async fn resume_message_v2(
         let turn_response = client.turn_start(TurnStartParams {
             thread_id: resume_response.thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: user_message,
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: user_message,
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })?;
         println!("< turn/start response: {turn_response:?}");
@@ -962,15 +970,18 @@ async fn send_message_v2_with_policies(
             let mut turn_params = TurnStartParams {
                 thread_id: thread_response.thread.id.clone(),
                 client_user_message_id: None,
-                input: vec![V2UserInput::Text {
-                    text: user_message,
-                    // Test client sends plain text without UI element ranges.
-                    text_elements: Vec::new(),
-                }],
+                submission: TurnSubmissionParams {
+                    input: vec![V2UserInput::Text {
+                        text: user_message,
+                        // Test client sends plain text without UI element ranges.
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                },
                 ..Default::default()
             };
-            turn_params.approval_policy = policies.approval_policy;
-            turn_params.sandbox_policy = policies.sandbox_policy;
+            turn_params.thread_settings.approval_policy = policies.approval_policy;
+            turn_params.thread_settings.sandbox_policy = policies.sandbox_policy;
 
             let turn_response = client.turn_start(turn_params)?;
             println!("< turn/start response: {turn_response:?}");
@@ -1003,11 +1014,14 @@ async fn send_follow_up_v2(
         let first_turn_params = TurnStartParams {
             thread_id: thread_response.thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: first_message,
-                // Test client sends plain text without UI element ranges.
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: first_message,
+                    // Test client sends plain text without UI element ranges.
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let first_turn_response = client.turn_start(first_turn_params)?;
@@ -1017,11 +1031,14 @@ async fn send_follow_up_v2(
         let follow_up_params = TurnStartParams {
             thread_id: thread_response.thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: follow_up_message,
-                // Test client sends plain text without UI element ranges.
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: follow_up_message,
+                    // Test client sends plain text without UI element ranges.
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let follow_up_response = client.turn_start(follow_up_params)?;
@@ -1261,15 +1278,20 @@ fn live_elicitation_timeout_pause(
     let turn_response = client.turn_start(TurnStartParams {
         thread_id: thread_id.clone(),
         client_user_message_id: None,
-        input: vec![V2UserInput::Text {
-            text: prompt,
-            text_elements: Vec::new(),
-        }],
-        approval_policy: Some(AskForApproval::Never),
-        sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-        effort: Some(ReasoningEffort::High),
-        cwd: Some(workspace),
-        ..Default::default()
+        submission: TurnSubmissionParams {
+            input: vec![V2UserInput::Text {
+                text: prompt,
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        },
+        thread_settings: ThreadSettingsOverrides {
+            approval_policy: Some(AskForApproval::Never),
+            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+            effort: Some(ReasoningEffort::High),
+            cwd: Some(workspace),
+            ..Default::default()
+        },
     })?;
     println!("< turn/start response: {turn_response:?}");
 

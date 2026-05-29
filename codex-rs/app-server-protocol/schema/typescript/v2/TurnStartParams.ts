@@ -11,6 +11,10 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, clientUserMessageId?: string | null, input: Array<UserInput>, /**
+ * Optional JSON Schema used to constrain the final assistant message for
+ * this turn.
+ */
+outputSchema?: JsonValue | null, /**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd?: string | null, /**
@@ -38,8 +42,4 @@ effort?: ReasoningEffort | null, /**
 summary?: ReasoningSummary | null, /**
  * Override the personality for this turn and subsequent turns.
  */
-personality?: Personality | null, /**
- * Optional JSON Schema used to constrain the final assistant message for
- * this turn.
- */
-outputSchema?: JsonValue | null};
+personality?: Personality | null};

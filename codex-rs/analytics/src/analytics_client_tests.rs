@@ -122,6 +122,7 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput;
 use codex_login::default_client::DEFAULT_ORIGINATOR;
 use codex_login::default_client::originator;
@@ -273,16 +274,19 @@ fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest 
         params: TurnStartParams {
             thread_id: thread_id.to_string(),
             client_user_message_id: None,
-            input: vec![
-                UserInput::Text {
-                    text: "hello".to_string(),
-                    text_elements: vec![],
-                },
-                UserInput::Image {
-                    url: "https://example.com/a.png".to_string(),
-                    detail: None,
-                },
-            ],
+            submission: TurnSubmissionParams {
+                input: vec![
+                    UserInput::Text {
+                        text: "hello".to_string(),
+                        text_elements: vec![],
+                    },
+                    UserInput::Image {
+                        url: "https://example.com/a.png".to_string(),
+                        detail: None,
+                    },
+                ],
+                ..Default::default()
+            },
             ..Default::default()
         },
     }

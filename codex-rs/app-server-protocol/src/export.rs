@@ -49,6 +49,10 @@ const FLAT_V2_SHARED_DEFINITIONS: &[&str] = &["ClientRequest", "ServerNotificati
 const V1_CLIENT_REQUEST_METHODS: &[&str] =
     &["getConversationSummary", "gitDiffToRemote", "getAuthStatus"];
 const EXCLUDED_SERVER_NOTIFICATION_METHODS_FOR_JSON: &[&str] = &["rawResponseItem/completed"];
+const FLATTENED_EXPERIMENTAL_FIELD_SOURCES: &[(&str, &[&str])] = &[(
+    "TurnStartParams",
+    &["TurnSubmission", "ThreadSettingsOverrides"],
+)];
 
 #[derive(Clone)]
 pub struct GeneratedSchema {
@@ -264,10 +268,7 @@ pub(crate) fn filter_experimental_ts_tree(tree: &mut BTreeMap<PathBuf, String>) 
 
     let mut fields_by_type_name: HashMap<String, HashSet<String>> = HashMap::new();
     for field in registered_fields {
-        fields_by_type_name
-            .entry(field.type_name.to_string())
-            .or_default()
-            .insert(field.field_name.to_string());
+        register_experimental_field(&mut fields_by_type_name, field);
     }
 
     for (path, content) in tree.iter_mut() {
@@ -334,10 +335,7 @@ fn filter_experimental_type_fields_ts(
 ) -> Result<()> {
     let mut fields_by_type_name: HashMap<String, HashSet<String>> = HashMap::new();
     for field in experimental_fields {
-        fields_by_type_name
-            .entry(field.type_name.to_string())
-            .or_default()
-            .insert(field.field_name.to_string());
+        register_experimental_field(&mut fields_by_type_name, field);
     }
     if fields_by_type_name.is_empty() {
         return Ok(());
@@ -394,6 +392,36 @@ fn filter_experimental_type_fields_ts_contents(
     prune_unused_type_imports(content, &import_usage_scope)
 }
 
+fn register_experimental_field(
+    fields_by_type_name: &mut HashMap<String, HashSet<String>>,
+    field: &crate::experimental_api::ExperimentalField,
+) {
+    fields_by_type_name
+        .entry(field.type_name.to_string())
+        .or_default()
+        .insert(field.field_name.to_string());
+    for (flattened_type, sources) in FLATTENED_EXPERIMENTAL_FIELD_SOURCES {
+        if sources.contains(&field.type_name) {
+            fields_by_type_name
+                .entry((*flattened_type).to_string())
+                .or_default()
+                .insert(field.field_name.to_string());
+        }
+    }
+}
+
+fn experimental_field_applies_to_type(
+    field: &crate::experimental_api::ExperimentalField,
+    type_name: &str,
+) -> bool {
+    field.type_name == type_name
+        || FLATTENED_EXPERIMENTAL_FIELD_SOURCES
+            .iter()
+            .any(|(flattened_type, sources)| {
+                *flattened_type == type_name && sources.contains(&field.type_name)
+            })
+}
+
 fn filter_experimental_schema(bundle: &mut Value) -> Result<()> {
     let registered_fields = experimental_fields();
     filter_experimental_fields_in_root(bundle, &registered_fields);
@@ -413,7 +441,7 @@ fn filter_experimental_fields_in_root(
     let title = title.to_string();
 
     for field in experimental_fields {
-        if title != field.type_name {
+        if !experimental_field_applies_to_type(field, &title) {
             continue;
         }
         remove_property_from_schema(schema, field.field_name);
@@ -444,7 +472,14 @@ fn filter_experimental_fields_in_definitions_map(
         }
 
         for field in experimental_fields {
-            if !definition_matches_type(def_name, field.type_name) {
+            if !definition_matches_type(def_name, field.type_name)
+                && !FLATTENED_EXPERIMENTAL_FIELD_SOURCES
+                    .iter()
+                    .any(|(flattened_type, sources)| {
+                        definition_matches_type(def_name, flattened_type)
+                            && sources.contains(&field.type_name)
+                    })
+            {
                 continue;
             }
             remove_property_from_schema(def_schema, field.field_name);
@@ -2157,6 +2192,7 @@ mod tests {
                                 | "CollabCloseEndEvent"
                                 | "CollabResumeBeginEvent"
                                 | "CollabResumeEndEvent"
+                                | "TurnSubmission"
                         )
                 });
 
@@ -2680,6 +2716,42 @@ mod tests {
     }
 
     #[test]
+    fn experimental_type_fields_ts_filter_handles_flattened_sources() -> Result<()> {
+        let output_dir = std::env::temp_dir().join(format!("codex_ts_filter_{}", Uuid::now_v7()));
+        fs::create_dir_all(&output_dir)?;
+
+        struct TempDirGuard(PathBuf);
+
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let _guard = TempDirGuard(output_dir.clone());
+        let path = output_dir.join("TurnStartParams.ts");
+        let content = r#"export type TurnStartParams = {
+  input: Array<string>;
+  environments?: Array<string> | null;
+}
+"#;
+        fs::write(&path, content)?;
+
+        static TURN_SUBMISSION_FIELD: crate::experimental_api::ExperimentalField =
+            crate::experimental_api::ExperimentalField {
+                type_name: "TurnSubmission",
+                field_name: "environments",
+                reason: "turn/start.environments",
+            };
+        filter_experimental_type_fields_ts(&output_dir, &[&TURN_SUBMISSION_FIELD])?;
+
+        let filtered = fs::read_to_string(&path)?;
+        assert_eq!(filtered.contains("environments"), false);
+        assert_eq!(filtered.contains("input"), true);
+        Ok(())
+    }
+
+    #[test]
     fn experimental_type_fields_ts_filter_keeps_imports_used_in_intersection_suffix() -> Result<()>
     {
         let output_dir = std::env::temp_dir().join(format!("codex_ts_filter_{}", Uuid::now_v7()));
@@ -2809,9 +2881,11 @@ permissionProfile?: string | null};
         fs::create_dir(&output_dir)?;
         generate_json_with_experimental(&output_dir, /*experimental_api*/ false)?;
 
-        let thread_start_json =
-            fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;
-        assert_eq!(thread_start_json.contains("mockExperimentalField"), false);
+        let turn_start_json =
+            fs::read_to_string(output_dir.join("v2").join("TurnStartParams.json"))?;
+        assert_eq!(turn_start_json.contains("mockExperimentalField"), false);
+        assert_eq!(turn_start_json.contains("\"environments\""), false);
+        assert_eq!(turn_start_json.contains("\"runtimeWorkspaceRoots\""), false);
         let command_execution_request_approval_json =
             fs::read_to_string(output_dir.join("CommandExecutionRequestApprovalParams.json"))?;
         assert_eq!(

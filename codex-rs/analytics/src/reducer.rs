@@ -577,7 +577,7 @@ impl AnalyticsReducer {
                     (connection_id, request_id),
                     RequestState::TurnStart(PendingTurnStartState {
                         thread_id: params.thread_id,
-                        num_input_images: num_input_images(&params.input),
+                        num_input_images: num_input_images(&params.submission.input),
                     }),
                 );
             }

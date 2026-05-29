@@ -20,6 +20,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+use codex_app_server_protocol::TurnSubmissionParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::ThreadId as CoreThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -80,11 +81,14 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            responsesapi_client_metadata: Some(client_metadata.clone()),
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                responsesapi_client_metadata: Some(client_metadata.clone()),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -161,10 +165,13 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Continue".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Continue".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -356,10 +363,13 @@ async fn turn_start_sends_subagent_lineage_after_cold_thread_resume_v2() -> Resu
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
-            input: vec![V2UserInput::Text {
-                text: "Continue".to_string(),
-                text_elements: Vec::new(),
-            }],
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Continue".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -440,11 +450,14 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Run sleep".to_string(),
-                text_elements: Vec::new(),
-            }],
-            responsesapi_client_metadata: Some(start_metadata.clone()),
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Run sleep".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                responsesapi_client_metadata: Some(start_metadata.clone()),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
@@ -567,11 +580,14 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            responsesapi_client_metadata: Some(client_metadata),
+            submission: TurnSubmissionParams {
+                input: vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                responsesapi_client_metadata: Some(client_metadata),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await?;
