@@ -1,37 +1,18 @@
-use super::*;
-use crate::AppRequirementToml;
-use crate::AppToolApproval;
-use crate::AppToolRequirementToml;
-use crate::AppToolsRequirementsToml;
-use crate::AppsRequirementsToml;
-use crate::FeatureRequirementsToml;
-use crate::HookEventsToml;
-use crate::HookHandlerConfig;
-use crate::ManagedHooksRequirementsToml;
-use crate::MatcherGroup;
-use crate::McpServerIdentity;
-use crate::McpServerRequirement;
-use crate::NetworkDomainPermissionToml;
-use crate::NetworkDomainPermissionsToml;
-use crate::NetworkUnixSocketPermissionToml;
-use crate::NetworkUnixSocketPermissionsToml;
+use super::RequirementsLayerEntry;
+use super::hooks::HookDirectoryField;
+use super::stack::RequirementsCompositionError;
+use super::stack::compose_requirements_for_hostname;
+use super::stack::compose_requirements_for_hostname_and_hook_directory;
+use crate::ConfigRequirementsToml;
+use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
-use crate::RequirementsExecPolicyDecisionToml;
-use crate::RequirementsExecPolicyPatternTokenToml;
-use crate::RequirementsExecPolicyPrefixRuleToml;
-use crate::RequirementsExecPolicyToml;
-use crate::SandboxModeRequirement;
 use crate::Sourced;
-use crate::config_requirements::FilesystemRequirementsToml;
-use crate::config_requirements::PermissionsRequirementsToml;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 
-fn layer(id: &str, name: &str, contents: &str) -> RequirementsLayer {
-    RequirementsLayer::from_toml(
+fn layer(id: &str, name: &str, contents: &str) -> RequirementsLayerEntry {
+    RequirementsLayerEntry::from_toml(
         RequirementSource::EnterpriseManaged {
             id: id.to_string(),
             name: name.to_string(),
@@ -41,7 +22,7 @@ fn layer(id: &str, name: &str, contents: &str) -> RequirementsLayer {
 }
 
 fn compose(
-    layers: Vec<RequirementsLayer>,
+    layers: Vec<RequirementsLayerEntry>,
 ) -> Result<Option<ConfigRequirementsToml>, RequirementsCompositionError> {
     Ok(
         compose_requirements_for_hostname(layers, /*hostname*/ None)?
@@ -50,7 +31,7 @@ fn compose(
 }
 
 fn compose_with_hook_directory_field(
-    layers: Vec<RequirementsLayer>,
+    layers: Vec<RequirementsLayerEntry>,
     hook_directory_field: HookDirectoryField,
 ) -> Result<Option<ConfigRequirementsToml>, RequirementsCompositionError> {
     Ok(compose_requirements_for_hostname_and_hook_directory(
@@ -59,6 +40,10 @@ fn compose_with_hook_directory_field(
         hook_directory_field,
     )?
     .map(ConfigRequirementsWithSources::into_toml))
+}
+
+fn expected_requirements(contents: impl AsRef<str>) -> ConfigRequirementsToml {
+    toml::from_str(contents.as_ref()).expect("parse expected requirements TOML")
 }
 
 #[test]
@@ -91,12 +76,13 @@ allowed_sandbox_modes = ["read-only"]
     .expect("requirements present");
 
     assert_eq!(
-        composed.allowed_approval_policies,
-        Some(vec![AskForApproval::Never])
-    );
-    assert_eq!(
-        composed.allowed_sandbox_modes,
-        Some(vec![SandboxModeRequirement::ReadOnly])
+        composed,
+        expected_requirements(
+            r#"
+allowed_approval_policies = ["never"]
+allowed_sandbox_modes = ["read-only"]
+"#
+        )
     );
 }
 
@@ -127,7 +113,7 @@ fn composition_strategy_applies_to_non_cloud_layers() {
 
     let composed = compose_requirements_for_hostname(
         vec![
-            RequirementsLayer::from_toml(
+            RequirementsLayerEntry::from_toml(
                 system_source,
                 format!(
                     r#"
@@ -146,7 +132,7 @@ deny_read = [{low_path:?}]
 "#
                 ),
             ),
-            RequirementsLayer::from_toml(
+            RequirementsLayerEntry::from_toml(
                 mdm_source.clone(),
                 format!(
                     r#"
@@ -171,36 +157,31 @@ deny_read = [{high_path:?}]
     .expect("requirements present");
 
     assert_eq!(
+        composed.clone().into_toml(),
+        expected_requirements(format!(
+            r#"
+allowed_approval_policies = ["never"]
+
+[features]
+shared = true
+system = true
+
+[[rules.prefix_rules]]
+pattern = [{{ token = "git" }}]
+decision = "forbidden"
+
+[[rules.prefix_rules]]
+pattern = [{{ token = "npm" }}]
+decision = "prompt"
+
+[permissions.filesystem]
+deny_read = [{high_path:?}, {low_path:?}]
+"#
+        ))
+    );
+    assert_eq!(
         composed.allowed_approval_policies,
         Some(Sourced::new(vec![AskForApproval::Never], mdm_source))
-    );
-    assert_eq!(
-        composed
-            .feature_requirements
-            .expect("feature requirements")
-            .value,
-        FeatureRequirementsToml {
-            entries: BTreeMap::from([("shared".to_string(), true), ("system".to_string(), true),]),
-        }
-    );
-    assert_eq!(composed.rules.expect("rules").value.prefix_rules.len(), 2);
-    assert_eq!(
-        composed
-            .permissions
-            .expect("permissions")
-            .value
-            .filesystem
-            .expect("filesystem")
-            .deny_read
-            .expect("deny_read"),
-        vec![
-            AbsolutePathBuf::from_absolute_path(high_path)
-                .expect("absolute path")
-                .into(),
-            AbsolutePathBuf::from_absolute_path(low_path)
-                .expect("absolute path")
-                .into(),
-        ]
     );
 }
 
@@ -272,41 +253,24 @@ approval_mode = "approve"
     .expect("requirements present");
 
     assert_eq!(
-        composed.feature_requirements,
-        Some(FeatureRequirementsToml {
-            entries: BTreeMap::from([
-                ("alpha".to_string(), true),
-                ("beta".to_string(), false),
-                ("shared".to_string(), true),
-            ]),
-        })
-    );
-    assert_eq!(
-        composed.apps,
-        Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_1".to_string(),
-                AppRequirementToml {
-                    enabled: Some(true),
-                    tools: Some(AppToolsRequirementsToml {
-                        tools: BTreeMap::from([
-                            (
-                                "list".to_string(),
-                                AppToolRequirementToml {
-                                    approval_mode: Some(AppToolApproval::Prompt),
-                                },
-                            ),
-                            (
-                                "search".to_string(),
-                                AppToolRequirementToml {
-                                    approval_mode: Some(AppToolApproval::Approve),
-                                },
-                            ),
-                        ]),
-                    }),
-                },
-            )]),
-        })
+        composed,
+        expected_requirements(
+            r#"
+[features]
+alpha = true
+beta = false
+shared = true
+
+[apps.connector_1]
+enabled = true
+
+[apps.connector_1.tools.list]
+approval_mode = "prompt"
+
+[apps.connector_1.tools.search]
+approval_mode = "approve"
+"#
+        )
     );
 }
 
@@ -322,14 +286,14 @@ fn merged_table_source_is_composite_in_priority_order() {
     };
     let composed = compose_requirements_for_hostname(
         vec![
-            RequirementsLayer::from_toml(
+            RequirementsLayerEntry::from_toml(
                 low_source.clone(),
                 r#"
 [features]
 beta = true
 "#,
             ),
-            RequirementsLayer::from_toml(
+            RequirementsLayerEntry::from_toml(
                 high_source.clone(),
                 r#"
 [features]
@@ -375,25 +339,16 @@ command = "high-mcp"
     .expect("requirements present");
 
     assert_eq!(
-        composed.mcp_servers,
-        Some(BTreeMap::from([
-            (
-                "low".to_string(),
-                McpServerRequirement {
-                    identity: McpServerIdentity::Url {
-                        url: "https://low.example.com/mcp".to_string(),
-                    },
-                },
-            ),
-            (
-                "shared".to_string(),
-                McpServerRequirement {
-                    identity: McpServerIdentity::Command {
-                        command: "high-mcp".to_string(),
-                    },
-                },
-            ),
-        ]))
+        composed,
+        expected_requirements(
+            r#"
+[mcp_servers.low.identity]
+url = "https://low.example.com/mcp"
+
+[mcp_servers.shared.identity]
+command = "high-mcp"
+"#
+        )
     );
 }
 
@@ -434,52 +389,23 @@ fn network_maps_use_regular_toml_merge() {
     .expect("compose requirements")
     .expect("requirements present");
 
-    let network = composed.network.expect("network requirements");
     assert_eq!(
-        network.domains,
-        Some(NetworkDomainPermissionsToml {
-            entries: BTreeMap::from([
-                (
-                    "example.com".to_string(),
-                    NetworkDomainPermissionToml::Allow,
-                ),
-                (
-                    "high.example.com".to_string(),
-                    NetworkDomainPermissionToml::Allow,
-                ),
-                (
-                    "internal.example.com".to_string(),
-                    NetworkDomainPermissionToml::Deny,
-                ),
-                (
-                    "low.example.com".to_string(),
-                    NetworkDomainPermissionToml::Deny,
-                ),
-            ]),
-        })
-    );
-    assert_eq!(
-        network.unix_sockets,
-        Some(NetworkUnixSocketPermissionsToml {
-            entries: BTreeMap::from([
-                (
-                    "/tmp/admin.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::None,
-                ),
-                (
-                    "/tmp/high.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::Allow,
-                ),
-                (
-                    "/tmp/low.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::Allow,
-                ),
-                (
-                    "/tmp/shared.sock".to_string(),
-                    NetworkUnixSocketPermissionToml::Allow,
-                ),
-            ]),
-        })
+        composed,
+        expected_requirements(
+            r#"
+[experimental_network.domains]
+"example.com" = "allow"
+"high.example.com" = "allow"
+"internal.example.com" = "deny"
+"low.example.com" = "deny"
+
+[experimental_network.unix_sockets]
+"/tmp/admin.sock" = "none"
+"/tmp/high.sock" = "allow"
+"/tmp/low.sock" = "allow"
+"/tmp/shared.sock" = "allow"
+"#
+        )
     );
 }
 
@@ -511,8 +437,12 @@ allowed_sandbox_modes = ["workspace-write"]
     .into_toml();
 
     assert_eq!(
-        composed.allowed_sandbox_modes,
-        Some(vec![SandboxModeRequirement::WorkspaceWrite])
+        composed,
+        expected_requirements(
+            r#"
+allowed_sandbox_modes = ["workspace-write"]
+"#
+        )
     );
 }
 
@@ -544,8 +474,12 @@ allowed_sandbox_modes = ["workspace-write"]
     .into_toml();
 
     assert_eq!(
-        composed.allowed_sandbox_modes,
-        Some(vec![SandboxModeRequirement::ReadOnly])
+        composed,
+        expected_requirements(
+            r#"
+allowed_sandbox_modes = ["read-only"]
+"#
+        )
     );
 }
 
@@ -575,27 +509,18 @@ decision = "forbidden"
     .expect("requirements present");
 
     assert_eq!(
-        composed.rules,
-        Some(RequirementsExecPolicyToml {
-            prefix_rules: vec![
-                RequirementsExecPolicyPrefixRuleToml {
-                    pattern: vec![RequirementsExecPolicyPatternTokenToml {
-                        token: Some("git".to_string()),
-                        any_of: None,
-                    }],
-                    decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
-                    justification: None,
-                },
-                RequirementsExecPolicyPrefixRuleToml {
-                    pattern: vec![RequirementsExecPolicyPatternTokenToml {
-                        token: Some("npm".to_string()),
-                        any_of: None,
-                    }],
-                    decision: Some(RequirementsExecPolicyDecisionToml::Prompt),
-                    justification: None,
-                },
-            ],
-        })
+        composed,
+        expected_requirements(
+            r#"
+[[rules.prefix_rules]]
+pattern = [{ token = "git" }]
+decision = "forbidden"
+
+[[rules.prefix_rules]]
+pattern = [{ token = "npm" }]
+decision = "prompt"
+"#
+        )
     );
 }
 
@@ -640,36 +565,27 @@ command = "high"
     .expect("requirements present");
 
     assert_eq!(
-        composed.hooks,
-        Some(ManagedHooksRequirementsToml {
-            managed_dir: Some(PathBuf::from("/managed/hooks")),
-            windows_managed_dir: None,
-            hooks: HookEventsToml {
-                pre_tool_use: vec![
-                    MatcherGroup {
-                        matcher: Some("Edit".to_string()),
-                        hooks: vec![HookHandlerConfig::Command {
-                            command: "high".to_string(),
-                            command_windows: None,
-                            timeout_sec: None,
-                            r#async: false,
-                            status_message: None,
-                        }],
-                    },
-                    MatcherGroup {
-                        matcher: Some("Bash".to_string()),
-                        hooks: vec![HookHandlerConfig::Command {
-                            command: "low".to_string(),
-                            command_windows: None,
-                            timeout_sec: None,
-                            r#async: false,
-                            status_message: None,
-                        }],
-                    },
-                ],
-                ..HookEventsToml::default()
-            },
-        })
+        composed,
+        expected_requirements(
+            r#"
+[hooks]
+managed_dir = "/managed/hooks"
+
+[[hooks.PreToolUse]]
+matcher = "Edit"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "high"
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "low"
+"#
+        )
     );
 
     let err = compose_with_hook_directory_field(
@@ -771,13 +687,30 @@ command = "high"
     .expect("inactive windows managed dir conflict should not fail")
     .expect("requirements present");
 
-    let hooks = composed.hooks.expect("hooks");
-    assert_eq!(hooks.managed_dir, Some(PathBuf::from("/managed/hooks")));
     assert_eq!(
-        hooks.windows_managed_dir,
-        Some(PathBuf::from(r"C:\managed\high"))
+        composed,
+        expected_requirements(
+            r#"
+[hooks]
+managed_dir = "/managed/hooks"
+windows_managed_dir = 'C:\managed\high'
+
+[[hooks.PreToolUse]]
+matcher = "Edit"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "high"
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "low"
+"#
+        )
     );
-    assert_eq!(hooks.hooks.pre_tool_use.len(), 2);
 
     let composed = compose_with_hook_directory_field(
         vec![
@@ -819,13 +752,30 @@ command = "high"
     .expect("inactive managed dir conflict should not fail")
     .expect("requirements present");
 
-    let hooks = composed.hooks.expect("hooks");
-    assert_eq!(hooks.managed_dir, Some(PathBuf::from("/managed/high")));
     assert_eq!(
-        hooks.windows_managed_dir,
-        Some(PathBuf::from(r"C:\managed\hooks"))
+        composed,
+        expected_requirements(
+            r#"
+[hooks]
+managed_dir = "/managed/high"
+windows_managed_dir = 'C:\managed\hooks'
+
+[[hooks.PreToolUse]]
+matcher = "Edit"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "high"
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "low"
+"#
+        )
     );
-    assert_eq!(hooks.hooks.pre_tool_use.len(), 2);
 }
 
 #[test]
@@ -872,27 +822,19 @@ description = "High profile"
     .expect("compose requirements")
     .expect("requirements present");
 
-    let permissions = composed.permissions.expect("permissions");
     assert_eq!(
-        permissions.filesystem,
-        Some(FilesystemRequirementsToml {
-            deny_read: Some(vec![
-                AbsolutePathBuf::from_absolute_path(high_path)
-                    .expect("absolute path")
-                    .into(),
-                AbsolutePathBuf::from_absolute_path(low_path)
-                    .expect("absolute path")
-                    .into(),
-            ]),
-        })
-    );
+        composed,
+        expected_requirements(format!(
+            r#"
+[permissions.filesystem]
+deny_read = [{high_path:?}, {low_path:?}]
 
-    let profile = permissions
-        .profiles
-        .get("managed-standard")
-        .expect("merged profile");
-    assert_eq!(profile.description.as_deref(), Some("High profile"));
-    assert_eq!(profile.extends.as_deref(), Some(":workspace"));
+[permissions.managed-standard]
+description = "High profile"
+extends = ":workspace"
+"#
+        ))
+    );
 }
 
 #[test]
@@ -916,17 +858,13 @@ deny_read = [{path:?}]
     .expect("requirements present");
 
     assert_eq!(
-        composed.permissions,
-        Some(PermissionsRequirementsToml {
-            filesystem: Some(FilesystemRequirementsToml {
-                deny_read: Some(vec![
-                    AbsolutePathBuf::from_absolute_path(path)
-                        .expect("absolute path")
-                        .into(),
-                ]),
-            }),
-            profiles: BTreeMap::new(),
-        })
+        composed,
+        expected_requirements(format!(
+            r#"
+[permissions.filesystem]
+deny_read = [{path:?}]
+"#
+        ))
     );
 }
 

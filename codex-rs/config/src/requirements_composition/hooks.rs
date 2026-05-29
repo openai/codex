@@ -1,5 +1,9 @@
-use super::composition_conflict;
-use super::merge_output_source;
+//! Hook events are append-only across requirements layers. The managed hook
+//! directory is different: only one directory is usable on a given platform, so
+//! conflicting values for the active platform fail closed. The inactive platform
+//! field is first-filled to allow the same layer stack to carry OS-specific
+//! directories.
+
 use crate::HookEventsToml;
 use crate::ManagedHooksRequirementsToml;
 use crate::RequirementSource;
@@ -7,11 +11,8 @@ use crate::Sourced;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-// Hook events are append-only across requirements layers. The managed hook
-// directory is different: only one directory is usable on a given platform, so
-// conflicting values for the active platform fail closed. The inactive platform
-// field is first-filled to allow the same layer stack to carry OS-specific
-// directories.
+use super::stack::composition_conflict;
+use super::stack::merge_output_source;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum HookDirectoryField {
@@ -62,7 +63,7 @@ impl HookMergeState {
         target: &mut Option<Sourced<ManagedHooksRequirementsToml>>,
         incoming: Option<ManagedHooksRequirementsToml>,
         source: &RequirementSource,
-    ) -> Result<(), super::RequirementsCompositionError> {
+    ) -> Result<(), super::stack::RequirementsCompositionError> {
         let Some(mut incoming) = incoming.filter(|value| !value.is_empty()) else {
             return Ok(());
         };
@@ -124,7 +125,7 @@ impl HookMergeState {
         existing: &mut Option<PathBuf>,
         incoming: Option<PathBuf>,
         incoming_source: &RequirementSource,
-    ) -> Result<bool, super::RequirementsCompositionError> {
+    ) -> Result<bool, super::stack::RequirementsCompositionError> {
         let Some(incoming) = incoming else {
             return Ok(false);
         };
@@ -172,9 +173,10 @@ impl HookMergeState {
             self.dir_sources
                 .entry(field)
                 .or_insert_with(|| incoming_source.clone());
-            return true;
+            true
+        } else {
+            false
         }
-        false
     }
 }
 

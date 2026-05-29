@@ -112,7 +112,7 @@ pub use plugin_edit::clear_user_plugin;
 pub use plugin_edit::set_user_plugin_enabled;
 pub use project_root_markers::default_project_root_markers;
 pub use project_root_markers::project_root_markers_from_config;
-pub use requirements_composition::RequirementsLayer;
+pub use requirements_composition::RequirementsLayerEntry;
 pub use requirements_composition::compose_requirements;
 pub use requirements_exec_policy::RequirementsExecPolicy;
 pub use requirements_exec_policy::RequirementsExecPolicyDecisionToml;

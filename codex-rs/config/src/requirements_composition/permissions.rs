@@ -1,13 +1,14 @@
-use super::merge_output_source;
+//! `permissions.filesystem.deny_read` is intentionally additive across
+//! requirements layers. Other `[permissions]` content stays in the regular TOML
+//! merge path so permission profile tables follow config-style precedence.
+
 use crate::FilesystemDenyReadPattern;
 use crate::RequirementSource;
 use crate::Sourced;
 use crate::config_requirements::FilesystemRequirementsToml;
 use crate::config_requirements::PermissionsRequirementsToml;
 
-// `permissions.filesystem.deny_read` is intentionally additive across
-// requirements layers. Other `[permissions]` content stays in the regular TOML
-// merge path so permission profile tables follow config-style precedence.
+use super::stack::merge_output_source;
 
 #[derive(Default)]
 pub(super) struct DenyReadMergeState {
