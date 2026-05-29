@@ -16,7 +16,7 @@ pub(crate) fn create_tool_search_tool(
         (
             "limit".to_string(),
             JsonSchema::number(Some(format!(
-                "Maximum number of tools to return (defaults to {default_limit})."
+                "Maximum number of tools to return. Defaults to {default_limit}."
             ))),
         ),
     ]);
@@ -98,7 +98,7 @@ mod tests {
                         (
                             "limit".to_string(),
                             JsonSchema::number(Some(
-                                    "Maximum number of tools to return (defaults to 8)."
+                                    "Maximum number of tools to return. Defaults to 8."
                                         .to_string(),
                                 ),),
                         ),

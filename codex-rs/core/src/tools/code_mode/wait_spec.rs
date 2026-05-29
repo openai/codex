@@ -12,20 +12,19 @@ pub(crate) fn create_wait_tool() -> ToolSpec {
         (
             "yield_time_ms".to_string(),
             JsonSchema::number(Some(
-                "How long to wait (in milliseconds) for more output before yielding again."
-                    .to_string(),
+                "Wait before yielding more output. Defaults to 10000 ms.".to_string(),
             )),
         ),
         (
             "max_tokens".to_string(),
             JsonSchema::number(Some(
-                "Maximum number of output tokens to return for this wait call.".to_string(),
+                "Output token budget for this wait call. Defaults to 10000 tokens.".to_string(),
             )),
         ),
         (
             "terminate".to_string(),
             JsonSchema::boolean(Some(
-                "Whether to terminate the running exec cell.".to_string(),
+                "True stops the running exec cell; false or omitted waits for output.".to_string(),
             )),
         ),
     ]);
@@ -77,20 +76,21 @@ mod tests {
                         (
                             "max_tokens".to_string(),
                             JsonSchema::number(Some(
-                                "Maximum number of output tokens to return for this wait call."
+                                "Output token budget for this wait call. Defaults to 10000 tokens."
                                     .to_string(),
                             )),
                         ),
                         (
                             "terminate".to_string(),
                             JsonSchema::boolean(Some(
-                                "Whether to terminate the running exec cell.".to_string(),
+                                "True stops the running exec cell; false or omitted waits for output."
+                                    .to_string(),
                             )),
                         ),
                         (
                             "yield_time_ms".to_string(),
                             JsonSchema::number(Some(
-                                "How long to wait (in milliseconds) for more output before yielding again."
+                                "Wait before yielding more output. Defaults to 10000 ms."
                                     .to_string(),
                             )),
                         ),

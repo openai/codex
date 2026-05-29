@@ -1,21 +1,30 @@
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
+use serde_json::json;
 use std::collections::BTreeMap;
 
 pub fn create_update_plan_tool() -> ToolSpec {
     let plan_item_properties = BTreeMap::from([
-        ("step".to_string(), JsonSchema::string(/*description*/ None)),
+        (
+            "step".to_string(),
+            JsonSchema::string(Some("Task step text.".to_string())),
+        ),
         (
             "status".to_string(),
-            JsonSchema::string(Some("One of: pending, in_progress, completed".to_string())),
+            JsonSchema::string_enum(
+                vec![json!("pending"), json!("in_progress"), json!("completed")],
+                Some("Step status.".to_string()),
+            ),
         ),
     ]);
 
     let properties = BTreeMap::from([
         (
             "explanation".to_string(),
-            JsonSchema::string(/*description*/ None),
+            JsonSchema::string(Some(
+                "Optional explanation for this plan update.".to_string(),
+            )),
         ),
         (
             "plan".to_string(),

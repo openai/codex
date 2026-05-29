@@ -8710,24 +8710,13 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
     })
     .await??;
 
-    let continuation_request = responses
+    let goal_context_text = responses
         .requests()
         .into_iter()
-        .find(|request| request.body_contains_text("<goal_context>"))
-        .expect("expected a goal continuation request");
-    let body = continuation_request.body_json();
-    let goal_context_message = body["input"]
-        .as_array()
-        .expect("input should be an array")
-        .iter()
-        .find(|item| item.to_string().contains("<goal_context>"))
+        .flat_map(|request| request.message_input_texts("user"))
+        .find(|text| text.contains("<codex_internal_context source=\"goal\">"))
         .expect("goal context message should be present");
-    assert_eq!(goal_context_message["role"].as_str(), Some("user"));
-    assert!(
-        goal_context_message
-            .to_string()
-            .contains("Continue working toward the active thread goal.")
-    );
+    assert!(goal_context_text.contains("Continue working toward the active thread goal."));
 
     Ok(())
 }
@@ -8997,8 +8986,8 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     let [ContentItem::InputText { text }] = content.as_slice() else {
         panic!("expected one text span in budget-limit steering message, got {content:#?}");
     };
-    assert!(text.starts_with("<goal_context>"));
-    assert!(text.trim_end().ends_with("</goal_context>"));
+    assert!(text.starts_with("<codex_internal_context source=\"goal\">"));
+    assert!(text.trim_end().ends_with("</codex_internal_context>"));
     assert!(text.contains("budget_limited"));
     assert!(text.to_lowercase().contains("wrap up this turn soon"));
     assert!(sess.active_turn.lock().await.is_some());
@@ -9220,8 +9209,8 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
                         && content.iter().any(|content| matches!(
                             content,
                             ContentItem::InputText { text }
-                                if text.starts_with("<goal_context>")
-                                    && text.trim_end().ends_with("</goal_context>")
+                                if text.starts_with("<codex_internal_context source=\"goal\">")
+                                    && text.trim_end().ends_with("</codex_internal_context>")
                                     && text.contains("The active thread goal objective was edited")
                                     && text.contains("Write a concise benchmark summary")
                         ))
