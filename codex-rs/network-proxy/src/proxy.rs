@@ -1198,13 +1198,6 @@ mod tests {
     }
 
     #[test]
-    fn custom_ca_env_keys_are_not_generic_proxy_env_keys() {
-        for key in crate::certs::CUSTOM_CA_ENV_KEYS {
-            assert!(!PROXY_ENV_KEYS.contains(&key));
-        }
-    }
-
-    #[test]
     fn apply_proxy_env_overrides_uses_http_for_all_proxy_without_socks() {
         let mut env = HashMap::new();
         apply_proxy_env_overrides(

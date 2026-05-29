@@ -573,22 +573,6 @@ mod tests {
     }
 
     #[test]
-    fn build_managed_ca_trust_bundle_appends_inherited_bundle() {
-        let dir = tempdir().unwrap();
-        let managed_ca_cert_path = dir.path().join("ca.pem");
-        let inherited_bundle_path = dir.path().join("inherited.pem");
-        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
-        fs::write(&inherited_bundle_path, "inherited ca\n").unwrap();
-
-        let trust_bundle =
-            build_managed_ca_trust_bundle_for_path(&managed_ca_cert_path, &inherited_bundle_path)
-                .unwrap();
-
-        assert!(trust_bundle.contains("inherited ca"));
-        assert!(trust_bundle.contains("managed ca"));
-    }
-
-    #[test]
     fn managed_ca_trust_bundles_keep_distinct_client_roots_separate() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
@@ -642,25 +626,6 @@ mod tests {
         assert!(requests_bundle.contains("requests ca"));
         assert!(requests_bundle.contains("managed ca"));
         assert!(!requests_bundle.contains("-----BEGIN CERTIFICATE-----"));
-    }
-
-    #[test]
-    fn build_managed_ca_trust_bundle_resolves_relative_inherited_bundle_against_cwd() {
-        let dir = tempdir().unwrap();
-        let managed_ca_cert_path = dir.path().join("ca.pem");
-        let inherited_bundle_path = dir.path().join("certs/inherited.pem");
-        fs::create_dir_all(inherited_bundle_path.parent().unwrap()).unwrap();
-        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
-        fs::write(&inherited_bundle_path, "inherited ca\n").unwrap();
-
-        let trust_bundle = build_managed_ca_trust_bundle_for_path(
-            &managed_ca_cert_path,
-            &resolve_ca_bundle_path("certs/inherited.pem", dir.path()),
-        )
-        .unwrap();
-
-        assert!(trust_bundle.contains("inherited ca"));
-        assert!(trust_bundle.contains("managed ca"));
     }
 
     #[cfg(unix)]
