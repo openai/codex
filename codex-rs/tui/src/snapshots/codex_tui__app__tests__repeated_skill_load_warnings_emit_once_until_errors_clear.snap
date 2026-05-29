@@ -1,0 +1,7 @@
+---
+source: tui/src/app/tests.rs
+expression: rendered
+---
+⚠ Skipped loading 1 skill(s) due to invalid SKILL.md files.
+
+⚠ /tmp/user/skills/planning/SKILL.md: invalid YAML

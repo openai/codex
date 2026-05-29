@@ -2301,12 +2301,16 @@ async fn repeated_skill_load_warnings_emit_once_until_errors_clear() {
     app.handle_skills_list_response(response.clone());
     app.handle_skills_list_response(response.clone());
 
-    assert_eq!(
-        drain_insert_history_transcripts(&mut app_event_rx),
-        vec![
-            "⚠ Skipped loading 1 skill(s) due to invalid SKILL.md files.".to_string(),
-            format!("⚠ {expected_path}: invalid YAML"),
-        ],
+    let warnings = drain_insert_history_cells(&mut app_event_rx);
+    assert_eq!(warnings.len(), 2);
+    app.transcript_cells.extend(warnings);
+    let rendered = lines_to_single_string(&crate::terminal_hyperlinks::visible_lines(
+        app.render_transcript_lines_for_reflow(/*width*/ 80).lines,
+    ))
+    .replace(&expected_path, "/tmp/user/skills/planning/SKILL.md");
+    assert_app_snapshot!(
+        "repeated_skill_load_warnings_emit_once_until_errors_clear",
+        rendered,
     );
 
     app.handle_skills_list_response(codex_app_server_protocol::SkillsListResponse {
@@ -2316,25 +2320,22 @@ async fn repeated_skill_load_warnings_emit_once_until_errors_clear() {
             errors: Vec::new(),
         }],
     });
-    assert_eq!(
-        drain_insert_history_transcripts(&mut app_event_rx),
-        Vec::<String>::new(),
-    );
+    assert!(drain_insert_history_cells(&mut app_event_rx).is_empty());
 
     app.handle_skills_list_response(response);
-    assert_eq!(drain_insert_history_transcripts(&mut app_event_rx).len(), 2);
+    assert_eq!(drain_insert_history_cells(&mut app_event_rx).len(), 2);
 }
 
-fn drain_insert_history_transcripts(
+fn drain_insert_history_cells(
     app_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-) -> Vec<String> {
-    let mut transcripts = Vec::new();
+) -> Vec<Arc<dyn HistoryCell>> {
+    let mut cells = Vec::new();
     while let Ok(event) = app_event_rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {
-            transcripts.push(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)));
+            cells.push(cell.into());
         }
     }
-    transcripts
+    cells
 }
 
 #[tokio::test]
