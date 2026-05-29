@@ -101,6 +101,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
+use codex_app_server_protocol::UsageReadParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use tokio::process::Command;
@@ -816,6 +817,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/start", params).await
+    }
+
+    /// Send a `usage/read` JSON-RPC request (v2).
+    pub async fn send_usage_read_request(
+        &mut self,
+        params: UsageReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("usage/read", params).await
     }
 
     /// Send a `thread/inject_items` JSON-RPC request (v2).
