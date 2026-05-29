@@ -426,7 +426,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
     tokio::time::sleep(Duration::from_millis(200)).await;
     session
         .process
-        .write(Some(b"hello\n".to_vec()), false)
+        .write(Some(b"hello\n".to_vec()), /*close_stdin*/ false)
         .await?;
     let StartedExecProcess { process } = session;
     let wake_rx = process.subscribe_wake();
@@ -466,7 +466,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
     tokio::time::sleep(Duration::from_millis(200)).await;
     let write_response = session
         .process
-        .write(Some(b"hello\n".to_vec()), false)
+        .write(Some(b"hello\n".to_vec()), /*close_stdin*/ false)
         .await?;
     assert_eq!(write_response.status, WriteStatus::Accepted);
     let StartedExecProcess { process } = session;
@@ -497,7 +497,10 @@ async fn assert_exec_process_write_can_close_stdin(use_remote: bool) -> Result<(
         })
         .await?;
 
-    let write_response = session.process.write(Some(b"hello".to_vec()), true).await?;
+    let write_response = session
+        .process
+        .write(Some(b"hello".to_vec()), /*close_stdin*/ true)
+        .await?;
     assert_eq!(write_response.status, WriteStatus::Accepted);
     let StartedExecProcess { process } = session;
     let wake_rx = process.subscribe_wake();
@@ -531,7 +534,7 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
 
     let write_response = session
         .process
-        .write(Some(b"ignored\n".to_vec()), false)
+        .write(Some(b"ignored\n".to_vec()), /*close_stdin*/ false)
         .await?;
     assert_eq!(write_response.status, WriteStatus::StdinClosed);
     let StartedExecProcess { process } = session;
@@ -652,7 +655,9 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
 
     let write_result = timeout(
         Duration::from_secs(2),
-        session.process.write(Some(b"hello".to_vec()), false),
+        session
+            .process
+            .write(Some(b"hello".to_vec()), /*close_stdin*/ false),
     )
     .await
     .context("timed out waiting for write after disconnect")?;
