@@ -309,6 +309,7 @@ async fn skill_roots_bind_repo_and_local_roots_to_their_own_file_systems() -> an
         Some(&local_file_system),
         &cfg.config_layer_stack,
         Vec::new(),
+        Vec::new(),
     )
     .await;
 
@@ -330,6 +331,7 @@ async fn skill_roots_bind_repo_and_local_roots_to_their_own_file_systems() -> an
         &env_path,
         /*local_file_system*/ None,
         &cfg.config_layer_stack,
+        Vec::new(),
         Vec::new(),
     )
     .await;
