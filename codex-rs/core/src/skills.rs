@@ -4,6 +4,7 @@ use crate::session::turn_context::TurnContext;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
+pub use codex_exec_server::EnvironmentPathRef;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
@@ -51,10 +52,17 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     command: &str,
     workdir: &AbsolutePathBuf,
 ) {
+    let workdir = turn_context
+        .environments
+        .primary()
+        .map(|environment| {
+            EnvironmentPathRef::new(environment.environment.get_filesystem(), workdir.clone())
+        })
+        .unwrap_or_else(|| EnvironmentPathRef::local(workdir.clone()));
     let Some(candidate) = detect_implicit_skill_invocation_for_command(
         turn_context.turn_skills.outcome.as_ref(),
         command,
-        workdir,
+        &workdir,
     ) else {
         return;
     };

@@ -26,12 +26,25 @@ use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SkillsLoadInput {
     pub cwd: AbsolutePathBuf,
+    local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
+}
+
+impl std::fmt::Debug for SkillsLoadInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillsLoadInput")
+            .field("cwd", &self.cwd)
+            .field("has_local_file_system", &self.local_file_system.is_some())
+            .field("effective_skill_roots", &self.effective_skill_roots)
+            .field("config_layer_stack", &self.config_layer_stack)
+            .field("bundled_skills_enabled", &self.bundled_skills_enabled)
+            .finish()
+    }
 }
 
 impl SkillsLoadInput {
@@ -43,14 +56,33 @@ impl SkillsLoadInput {
     ) -> Self {
         Self {
             cwd,
+            local_file_system: Some(Arc::clone(&LOCAL_FS)),
             effective_skill_roots,
             config_layer_stack,
             bundled_skills_enabled,
         }
     }
 
-    fn env_path(&self, fs: Option<Arc<dyn ExecutorFileSystem>>) -> Option<EnvironmentPathRef> {
-        fs.map(|fs| EnvironmentPathRef::new(fs, self.cwd.clone()))
+    #[cfg(test)]
+    fn with_local_file_system(
+        mut self,
+        local_file_system: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> Self {
+        self.local_file_system = local_file_system;
+        self
+    }
+
+    fn authorities(
+        &self,
+        fs: Option<Arc<dyn ExecutorFileSystem>>,
+    ) -> (
+        Option<EnvironmentPathRef>,
+        Option<Arc<dyn ExecutorFileSystem>>,
+    ) {
+        (
+            fs.map(|fs| EnvironmentPathRef::new(fs, self.cwd.clone())),
+            self.local_file_system.clone(),
+        )
     }
 }
 
@@ -132,11 +164,10 @@ impl SkillsManager {
         input: &SkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> Vec<SkillRoot> {
-        let env_path = input.env_path(fs);
-        let local_file_system = Arc::clone(&LOCAL_FS);
+        let (env_path, local_file_system) = input.authorities(fs);
         let mut roots = skill_roots(
             env_path.as_ref(),
-            Some(&local_file_system),
+            local_file_system.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
             self.extra_roots(),
@@ -154,11 +185,10 @@ impl SkillsManager {
         force_reload: bool,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
-        let env_path = input.env_path(fs);
-        let local_file_system = Arc::clone(&LOCAL_FS);
+        let (env_path, local_file_system) = input.authorities(fs);
         let path_ref_cache_key = SkillsPathCacheKey {
             env_path: env_path.clone(),
-            local_file_system: Some(ExecutorFileSystemRef::new(&local_file_system)),
+            local_file_system: local_file_system.as_ref().map(ExecutorFileSystemRef::new),
         };
         if !force_reload
             && let Some(outcome) = self.cached_outcome_for_path_ref(&path_ref_cache_key)
@@ -168,7 +198,7 @@ impl SkillsManager {
 
         let mut roots = skill_roots(
             env_path.as_ref(),
-            Some(&local_file_system),
+            local_file_system.as_ref(),
             &input.config_layer_stack,
             input.effective_skill_roots.clone(),
             self.extra_roots(),
@@ -337,7 +367,7 @@ fn config_skills_cache_key(
 
 fn finalize_skill_outcome(
     mut outcome: SkillLoadOutcome,
-    disabled_paths: HashSet<AbsolutePathBuf>,
+    disabled_paths: HashSet<EnvironmentPathRef>,
 ) -> SkillLoadOutcome {
     outcome.disabled_paths = disabled_paths;
     let (by_scripts_dir, by_doc_path) =
