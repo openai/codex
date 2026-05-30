@@ -3,6 +3,8 @@
 export type { Account } from "./Account";
 export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedNotification";
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
+export type { AccountTokenUsageDailyBucket } from "./AccountTokenUsageDailyBucket";
+export type { AccountTokenUsageSummary } from "./AccountTokenUsageSummary";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { ActivePermissionProfile } from "./ActivePermissionProfile";
 export type { AddCreditsNudgeCreditType } from "./AddCreditsNudgeCreditType";
@@ -141,6 +143,7 @@ export type { FsWriteFileResponse } from "./FsWriteFileResponse";
 export type { GetAccountParams } from "./GetAccountParams";
 export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsResponse";
 export type { GetAccountResponse } from "./GetAccountResponse";
+export type { GetAccountTokenUsageResponse } from "./GetAccountTokenUsageResponse";
 export type { GitInfo } from "./GitInfo";
 export type { GrantedPermissionProfile } from "./GrantedPermissionProfile";
 export type { GuardianApprovalReview } from "./GuardianApprovalReview";

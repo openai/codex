@@ -4,6 +4,7 @@ use crate::types::ConfigBundleResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitReachedKind as BackendRateLimitReachedKind;
 use crate::types::RateLimitStatusPayload;
+use crate::types::TokenUsageProfile;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_api::SharedAuthProvider;
@@ -311,6 +312,20 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json(&url, &ct, &body)
+    }
+
+    pub async fn get_token_usage_profile(&self) -> Result<TokenUsageProfile> {
+        let url = self.token_usage_profile_url();
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json(&url, &ct, &body)
+    }
+
+    fn token_usage_profile_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/profiles/me", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/profiles/me", self.base_url),
+        }
     }
 
     pub async fn send_add_credits_nudge_email(
@@ -924,6 +939,37 @@ mod tests {
             })
             .unwrap(),
             serde_json::json!({ "credit_type": "usage_limit" })
+        );
+    }
+
+    #[test]
+    fn token_usage_profile_uses_expected_paths() {
+        let codex_client = Client {
+            base_url: "https://example.test".to_string(),
+            http: reqwest::Client::new(),
+            auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+            user_agent: None,
+            chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
+            path_style: PathStyle::CodexApi,
+        };
+        assert_eq!(
+            codex_client.token_usage_profile_url(),
+            "https://example.test/api/codex/profiles/me"
+        );
+
+        let chatgpt_client = Client {
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            http: reqwest::Client::new(),
+            auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+            user_agent: None,
+            chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
+            path_style: PathStyle::ChatGptApi,
+        };
+        assert_eq!(
+            chatgpt_client.token_usage_profile_url(),
+            "https://chatgpt.com/backend-api/wham/profiles/me"
         );
     }
 }

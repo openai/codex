@@ -949,6 +949,12 @@ client_request_definitions! {
         response: v2::GetAccountRateLimitsResponse,
     },
 
+    GetAccountTokenUsage => "account/tokenUsage/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::GetAccountTokenUsageResponse,
+    },
+
     SendAddCreditsNudgeEmail => "account/sendAddCreditsNudgeEmail" {
         params: v2::SendAddCreditsNudgeEmailParams,
         serialization: global("account-auth"),
@@ -2365,6 +2371,24 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
+                "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_get_account_token_usage() -> Result<()> {
+        let request = ClientRequest::GetAccountTokenUsage {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        assert_eq!(request.id(), &RequestId::Integer(1));
+        assert_eq!(request.method(), "account/tokenUsage/read");
+        assert_eq!(
+            json!({
+                "method": "account/tokenUsage/read",
                 "id": 1,
             }),
             serde_json::to_value(&request)?,

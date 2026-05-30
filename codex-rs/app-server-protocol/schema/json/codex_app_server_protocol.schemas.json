@@ -1840,6 +1840,29 @@
             },
             "method": {
               "enum": [
+                "account/tokenUsage/read"
+              ],
+              "title": "Account/tokenUsage/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/tokenUsage/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/sendAddCreditsNudgeEmail"
               ],
               "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
@@ -5759,6 +5782,62 @@
         "title": "AccountRateLimitsUpdatedNotification",
         "type": "object"
       },
+      "AccountTokenUsageDailyBucket": {
+        "properties": {
+          "startDate": {
+            "type": "string"
+          },
+          "tokens": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "startDate",
+          "tokens"
+        ],
+        "type": "object"
+      },
+      "AccountTokenUsageSummary": {
+        "properties": {
+          "currentStreakDays": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lifetimeTokens": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "longestRunningTurnSec": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "longestStreakDays": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "peakDailyTokens": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "AccountUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -9624,6 +9703,28 @@
           "requiresOpenaiAuth"
         ],
         "title": "GetAccountResponse",
+        "type": "object"
+      },
+      "GetAccountTokenUsageResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "dailyUsageBuckets": {
+            "items": {
+              "$ref": "#/definitions/v2/AccountTokenUsageDailyBucket"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "summary": {
+            "$ref": "#/definitions/v2/AccountTokenUsageSummary"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "GetAccountTokenUsageResponse",
         "type": "object"
       },
       "GitInfo": {
