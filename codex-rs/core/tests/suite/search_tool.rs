@@ -1456,6 +1456,7 @@ async fn tool_search_matches_mcp_tools_by_distinct_name_description_and_schema_t
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "codex_apps").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Search for calendar tooling.",
