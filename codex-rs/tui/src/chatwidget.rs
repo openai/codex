@@ -551,6 +551,7 @@ pub(crate) struct ChatWidget {
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
     refreshing_token_activity_output: Option<tokens::PendingTokenActivityOutput>,
+    completed_token_activity_output: Option<history_cell::CompositeHistoryCell>,
     next_token_activity_request_id: u64,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,

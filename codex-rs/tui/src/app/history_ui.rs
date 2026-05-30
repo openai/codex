@@ -30,6 +30,24 @@ impl App {
         }
     }
 
+    pub(super) fn insert_completed_token_activity_output_if_ready(&mut self, tui: &mut tui::Tui) {
+        if self.chat_widget.token_activity_history_insertion_blocked()
+            || self.transcript_cells.last().is_some_and(|cell| {
+                cell.as_any().is::<history_cell::AgentMessageCell>()
+                    || cell.as_any().is::<history_cell::ProposedPlanStreamCell>()
+            })
+        {
+            return;
+        }
+        self.insert_completed_token_activity_output(tui);
+    }
+
+    pub(super) fn insert_completed_token_activity_output(&mut self, tui: &mut tui::Tui) {
+        if let Some(cell) = self.chat_widget.take_completed_token_activity_output() {
+            self.insert_history_cell(tui, Box::new(cell));
+        }
+    }
+
     pub(super) fn open_url_in_browser(&mut self, url: String) {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget

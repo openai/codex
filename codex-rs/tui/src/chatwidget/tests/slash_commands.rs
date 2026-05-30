@@ -1199,11 +1199,10 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
     chat.clear_pending_token_activity_refreshes();
 
     assert!(
-        chat.finish_token_activity_refresh(
+        !chat.finish_token_activity_refresh(
             request_id,
             Err("stale token activity result".to_string()),
         )
-        .is_none()
     );
 }
 
@@ -1247,8 +1246,15 @@ async fn completed_token_activity_refresh_returns_one_history_cell() {
     };
     assert!(chat.pending_token_activity_output().is_some());
 
+    assert!(
+        chat.finish_token_activity_refresh(
+            request_id,
+            Err("token activity unavailable".to_string()),
+        )
+    );
+    assert!(chat.pending_token_activity_output().is_some());
     let cell = chat
-        .finish_token_activity_refresh(request_id, Err("token activity unavailable".to_string()))
+        .take_completed_token_activity_output()
         .expect("completed token activity cell");
 
     assert!(chat.pending_token_activity_output().is_none());
@@ -1256,6 +1262,36 @@ async fn completed_token_activity_refresh_returns_one_history_cell() {
         lines_to_single_string(&cell.display_lines(u16::MAX)),
         "/tokens daily\n\n Token activity\n   Token activity unavailable\n",
     );
+}
+
+#[tokio::test]
+async fn completed_token_activity_refresh_waits_for_active_stream() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Tokens);
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected token activity refresh request, got {other:?}"),
+    };
+    chat.on_agent_message_delta("partial response".to_string());
+    assert!(chat.token_activity_history_insertion_blocked());
+
+    assert!(
+        chat.finish_token_activity_refresh(
+            request_id,
+            Err("token activity unavailable".to_string()),
+        )
+    );
+    assert_eq!(
+        chat.pending_token_activity_output()
+            .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
+        Some("/tokens daily\n\n Token activity\n   Token activity unavailable\n".to_string()),
+    );
+
+    chat.stream_controller = None;
+    assert!(!chat.token_activity_history_insertion_blocked());
+    assert!(chat.take_completed_token_activity_output().is_some());
 }
 
 #[tokio::test]
@@ -1280,20 +1316,14 @@ async fn repeated_token_activity_refreshes_keep_only_latest_card() {
             .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
         Some("/tokens weekly\n\n Token activity\n   Loading...\n".to_string()),
     );
-    assert!(
-        chat.finish_token_activity_refresh(
-            first_request_id,
-            Err("stale token activity result".to_string()),
-        )
-        .is_none()
-    );
-    assert!(
-        chat.finish_token_activity_refresh(
-            second_request_id,
-            Err("token activity unavailable".to_string()),
-        )
-        .is_some()
-    );
+    assert!(!chat.finish_token_activity_refresh(
+        first_request_id,
+        Err("stale token activity result".to_string()),
+    ));
+    assert!(chat.finish_token_activity_refresh(
+        second_request_id,
+        Err("token activity unavailable".to_string()),
+    ));
 }
 
 #[tokio::test]

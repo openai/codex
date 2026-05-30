@@ -642,6 +642,7 @@ impl ChatWidget {
         self.next_token_activity_request_id =
             self.next_token_activity_request_id.wrapping_add(/*rhs*/ 1);
         let (cell, handle) = new_token_activity_output(view);
+        self.completed_token_activity_output = None;
         self.refreshing_token_activity_output = Some(PendingTokenActivityOutput {
             request_id,
             cell,
@@ -657,26 +658,46 @@ impl ChatWidget {
         self.refreshing_token_activity_output
             .as_ref()
             .map(|output| &output.cell as &dyn HistoryCell)
+            .or_else(|| {
+                self.completed_token_activity_output
+                    .as_ref()
+                    .map(|cell| cell as &dyn HistoryCell)
+            })
     }
 
     pub(crate) fn finish_token_activity_refresh(
         &mut self,
         request_id: u64,
         result: Result<GetAccountTokenUsageResponse, String>,
-    ) -> Option<CompositeHistoryCell> {
-        let output = self.refreshing_token_activity_output.take()?;
+    ) -> bool {
+        let Some(output) = self.refreshing_token_activity_output.take() else {
+            return false;
+        };
         if output.request_id != request_id {
             self.refreshing_token_activity_output = Some(output);
-            return None;
+            return false;
         }
         output.handle.finish(result);
+        self.completed_token_activity_output = Some(output.cell);
         self.bump_active_cell_revision();
         self.request_redraw();
-        Some(output.cell)
+        true
+    }
+
+    pub(crate) fn token_activity_history_insertion_blocked(&self) -> bool {
+        self.stream_controller.is_some() || self.plan_stream_controller.is_some()
+    }
+
+    pub(crate) fn take_completed_token_activity_output(&mut self) -> Option<CompositeHistoryCell> {
+        let output = self.completed_token_activity_output.take()?;
+        self.bump_active_cell_revision();
+        Some(output)
     }
 
     pub(crate) fn clear_pending_token_activity_refreshes(&mut self) {
-        if self.refreshing_token_activity_output.take().is_some() {
+        let cleared_refresh = self.refreshing_token_activity_output.take().is_some();
+        let cleared_completed = self.completed_token_activity_output.take().is_some();
+        if cleared_refresh || cleared_completed {
             self.bump_active_cell_revision();
             self.request_redraw();
         }
