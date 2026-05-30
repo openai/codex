@@ -276,15 +276,13 @@ impl<'a> FlexRenderable<'a> {
         let mut allocated_rects = Vec::with_capacity(self.children.len());
         let mut child_sizes = vec![0; self.children.len()];
         let mut allocated_size = 0;
-        let mut total_flex = 0;
+        let mut flex_children = Vec::new();
 
         // 1. Allocate space to non-flex children.
         let max_size = area.height;
-        let mut last_flex_child_idx = 0;
         for (i, FlexChild { flex, child }) in self.children.iter().enumerate() {
             if *flex > 0 {
-                total_flex += flex;
-                last_flex_child_idx = i;
+                flex_children.push((i, *flex as u16, child.desired_height(area.width)));
             } else {
                 child_sizes[i] = child
                     .desired_height(area.width)
@@ -293,24 +291,41 @@ impl<'a> FlexRenderable<'a> {
             }
         }
         let free_space = max_size.saturating_sub(allocated_size);
-        // 2. Allocate space to flex children, proportional to their flex factor.
-        let mut allocated_flex_space = 0;
-        if total_flex > 0 {
-            let space_per_flex = free_space / total_flex as u16;
-            for (i, FlexChild { flex, child }) in self.children.iter().enumerate() {
-                if *flex > 0 {
-                    // Last flex child gets all the remaining space, to prevent a rounding error
-                    // from not allocating all the space.
-                    let max_child_extent = if i == last_flex_child_idx {
-                        free_space - allocated_flex_space
-                    } else {
-                        space_per_flex * *flex as u16
-                    };
-                    let child_size = child.desired_height(area.width).min(max_child_extent);
-                    child_sizes[i] = child_size;
-                    allocated_flex_space += child_size;
+        // 2. Satisfy flex children that need less than their proportional share so their unused
+        // space can be redistributed instead of leaving blank rows.
+        let mut remaining_space = free_space;
+        while !flex_children.is_empty() {
+            let total_flex = flex_children.iter().map(|(_, flex, _)| *flex).sum::<u16>();
+            let mut satisfied_any = false;
+            flex_children.retain(|(i, flex, desired_height)| {
+                let proportional_share =
+                    (u32::from(remaining_space) * u32::from(*flex) / u32::from(total_flex)) as u16;
+                if *desired_height <= proportional_share {
+                    child_sizes[*i] = *desired_height;
+                    remaining_space = remaining_space.saturating_sub(*desired_height);
+                    satisfied_any = true;
+                    false
+                } else {
+                    true
                 }
+            });
+            if !satisfied_any {
+                break;
             }
+        }
+        // 3. Divide the remaining space proportionally. The final child absorbs rounding slack.
+        let total_flex = flex_children.iter().map(|(_, flex, _)| *flex).sum::<u16>();
+        let mut allocated_flex_space = 0;
+        let last_flex_child_idx = flex_children.last().map(|(i, _, _)| *i);
+        for (i, flex, desired_height) in flex_children {
+            let max_child_extent = if Some(i) == last_flex_child_idx {
+                remaining_space.saturating_sub(allocated_flex_space)
+            } else {
+                (u32::from(remaining_space) * u32::from(flex) / u32::from(total_flex)) as u16
+            };
+            let child_size = desired_height.min(max_child_extent);
+            child_sizes[i] = child_size;
+            allocated_flex_space += child_size;
         }
 
         let mut y = area.y;
@@ -480,5 +495,81 @@ where
         let child: RenderableItem<'a> =
             RenderableItem::Owned(Box::new(self) as Box<dyn Renderable + 'a>);
         RenderableItem::Owned(Box::new(InsetRenderable { child, insets }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    struct HeightRenderable(u16);
+
+    impl HeightRenderable {
+        fn with_height(height: u16) -> Self {
+            Self(height)
+        }
+    }
+
+    impl Renderable for HeightRenderable {
+        fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn flex_redistributes_space_unused_by_short_children() {
+        let mut flex = FlexRenderable::new();
+        flex.push(
+            /*flex*/ 1,
+            RenderableItem::Owned(Box::new(HeightRenderable::with_height(/*height*/ 20))),
+        );
+        flex.push(
+            /*flex*/ 1,
+            RenderableItem::Owned(Box::new(HeightRenderable::with_height(/*height*/ 2))),
+        );
+
+        let allocated = flex.allocate(Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 10,
+        ));
+
+        assert_eq!(
+            allocated
+                .into_iter()
+                .map(|area| area.height)
+                .collect::<Vec<_>>(),
+            vec![8, 2],
+        );
+    }
+
+    #[test]
+    fn flex_reserves_non_flex_space_before_flexible_children() {
+        let mut flex = FlexRenderable::new();
+        flex.push(
+            /*flex*/ 1,
+            RenderableItem::Owned(Box::new(HeightRenderable::with_height(/*height*/ 20))),
+        );
+        flex.push(
+            /*flex*/ 0,
+            RenderableItem::Owned(Box::new(HeightRenderable::with_height(/*height*/ 2))),
+        );
+        flex.push(
+            /*flex*/ 1,
+            RenderableItem::Owned(Box::new(HeightRenderable::with_height(/*height*/ 20))),
+        );
+
+        let allocated = flex.allocate(Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 10,
+        ));
+
+        assert_eq!(
+            allocated
+                .into_iter()
+                .map(|area| area.height)
+                .collect::<Vec<_>>(),
+            vec![4, 2, 4],
+        );
     }
 }
