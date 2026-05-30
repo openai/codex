@@ -59,20 +59,20 @@ async fn list_tool_suggest_discoverable_plugins_includes_remote_vertical_plugins
         .respond_with(ResponseTemplate::new(200).set_body_string(
             r#"{
   "plugins": [{
-    "id": "plugins~Plugin_data_analytics",
-    "name": "data-analytics",
+    "id": "plugins~Plugin_sample_remote",
+    "name": "sample-remote",
     "scope": "GLOBAL",
     "installation_policy": "AVAILABLE",
     "authentication_policy": "ON_USE",
     "status": "ENABLED",
     "release": {
-      "display_name": "Data Analytics",
-      "description": "Analyze product and business metrics",
-      "app_ids": ["asdk_app_databricks_workspace"],
+      "display_name": "Sample Remote",
+      "description": "Sample remote plugin",
+      "app_ids": ["asdk_app_sample_source"],
       "interface": {},
       "skills": [{
-        "name": "build-report",
-        "description": "Build an analytics report",
+        "name": "sample-skill",
+        "description": "Run a sample workflow",
         "plugin_release_skill_id": "skill-1",
         "interface": {}
       }]
@@ -111,12 +111,12 @@ async fn list_tool_suggest_discoverable_plugins_includes_remote_vertical_plugins
     assert_eq!(
         discoverable_plugins,
         vec![DiscoverablePluginInfo {
-            id: "data-analytics@openai-curated-remote".to_string(),
-            name: "Data Analytics".to_string(),
-            description: Some("Analyze product and business metrics".to_string()),
+            id: "sample-remote@openai-curated-remote".to_string(),
+            name: "Sample Remote".to_string(),
+            description: Some("Sample remote plugin".to_string()),
             has_skills: true,
             mcp_server_names: Vec::new(),
-            app_connector_ids: vec!["asdk_app_databricks_workspace".to_string()],
+            app_connector_ids: vec!["asdk_app_sample_source".to_string()],
         }]
     );
     assert_eq!(cached_discoverable_plugins, discoverable_plugins);

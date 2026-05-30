@@ -453,7 +453,7 @@ async fn connect_remote_app_server(
 ) -> color_eyre::Result<AppServerClient> {
     let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
         endpoint,
-        client_name: "codex-tui".to_string(),
+        client_name: "codex-plugin-suggestion-test".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
@@ -616,7 +616,7 @@ where
         session_source: serde_json::from_value(serde_json::json!("cli"))
             .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
         enable_codex_api_key_env: false,
-        client_name: "codex-tui".to_string(),
+        client_name: "codex-plugin-suggestion-test".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),

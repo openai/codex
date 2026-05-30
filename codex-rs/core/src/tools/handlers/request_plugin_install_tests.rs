@@ -81,15 +81,15 @@ async fn verified_plugin_install_completed_checks_remote_installed_state() {
         .respond_with(ResponseTemplate::new(200).set_body_string(
             r#"{
   "plugins": [{
-    "id": "plugins~Plugin_data_analytics",
-    "name": "data-analytics",
+    "id": "plugins~Plugin_sample_remote",
+    "name": "sample-remote",
     "scope": "GLOBAL",
     "installation_policy": "AVAILABLE",
     "authentication_policy": "ON_USE",
     "status": "ENABLED",
     "release": {
-      "display_name": "Data Analytics",
-      "description": "Analyze metrics",
+      "display_name": "Sample Remote",
+      "description": "Sample remote plugin",
       "interface": {},
       "skills": []
     },
@@ -120,7 +120,7 @@ async fn verified_plugin_install_completed_checks_remote_installed_state() {
 
     assert!(
         verified_plugin_install_completed(
-            "data-analytics@openai-curated-remote",
+            "sample-remote@openai-curated-remote",
             &config,
             &plugins_manager,
             Some(&auth),
