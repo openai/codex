@@ -63,6 +63,25 @@ pub(super) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
     }
 }
 
+/// Normalizes platform-specific test paths without collapsing box alignment.
+pub(super) fn normalize_box_snapshot_paths(text: &str) -> String {
+    text.lines()
+        .map(|rendered| {
+            let normalized = normalize_snapshot_paths(rendered);
+            let padding = rendered
+                .chars()
+                .count()
+                .saturating_sub(normalized.chars().count());
+            if let Some((content, suffix)) = normalized.rsplit_once('│') {
+                format!("{content}{}│{suffix}", " ".repeat(padding))
+            } else {
+                normalized
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub(super) fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> String {
     let platform_test_cwd = test_path_display("/tmp/project");
     let rendered = format!("{value}");
@@ -79,7 +98,7 @@ pub(super) fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> St
                 .and_then(|line| line.strip_suffix('"'))
             {
                 let width = content.chars().count();
-                let normalized = normalize_snapshot_paths(content);
+                let normalized = normalize_box_snapshot_paths(content);
                 format!("\"{normalized:width$}\"")
             } else {
                 normalize_snapshot_paths(line)
