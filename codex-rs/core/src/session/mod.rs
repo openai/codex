@@ -1493,6 +1493,8 @@ impl Session {
             .map(|configuration| configuration.thread_config_snapshot())
     }
 
+    // Used by the model workspace-mutation tools introduced in a follow-up layer.
+    #[allow(dead_code)]
     pub(crate) async fn update_runtime_workspace(
         &self,
         turn_context: &TurnContext,

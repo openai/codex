@@ -185,6 +185,7 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
             )),
             ..RequestPermissionProfile::default()
         },
+        workspace_mutation: None,
     };
 
     chat.on_guardian_assessment(GuardianAssessmentEvent {

@@ -296,6 +296,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
                 entries: None,
             }),
         },
+        workspace_mutation: None,
     });
 
     assert_eq!(

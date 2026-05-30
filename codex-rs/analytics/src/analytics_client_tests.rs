@@ -901,6 +901,7 @@ fn sample_permissions_approval_request(request_id: i64) -> ServerRequest {
                 }),
                 file_system: None,
             },
+            workspace_mutation: None,
         },
     }
 }
