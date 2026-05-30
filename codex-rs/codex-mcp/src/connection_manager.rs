@@ -393,7 +393,7 @@ impl McpConnectionManager {
     pub fn wait_for_servers_ready(
         &self,
         server_names: &[String],
-    ) -> impl std::future::Future<Output = Vec<McpStartupFailure>> + Send + 'static {
+    ) -> impl std::future::Future<Output = Vec<McpStartupFailure>> + Send + 'static + use<> {
         let clients = server_names
             .iter()
             .map(|server_name| (server_name.clone(), self.clients.get(server_name).cloned()))
@@ -417,6 +417,17 @@ impl McpConnectionManager {
             }
             failures
         }
+    }
+
+    /// Returns an owned future that waits for every configured MCP server.
+    pub fn wait_for_all_servers_ready(
+        &self,
+    ) -> impl std::future::Future<Output = (Vec<String>, Vec<McpStartupFailure>)> + Send + 'static
+    {
+        let mut server_names = self.clients.keys().cloned().collect::<Vec<_>>();
+        server_names.sort();
+        let readiness = self.wait_for_servers_ready(&server_names);
+        async move { (server_names, readiness.await) }
     }
 
     pub async fn required_startup_failures(
