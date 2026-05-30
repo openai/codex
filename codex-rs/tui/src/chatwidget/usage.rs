@@ -27,8 +27,10 @@ use unicode_width::UnicodeWidthStr;
 
 const USAGE_CARD_MAX_INNER_WIDTH: usize = 72;
 const USAGE_BAR_WIDTH: usize = 20;
+const USAGE_BAR_BORDER_WIDTH: usize = 2;
 const USAGE_BAR_MIN_LABEL_WIDTH: usize = 8;
-const USAGE_BAR_GLYPH: &str = "▄";
+const USAGE_BAR_FILLED_GLYPH: &str = "█";
+const USAGE_BAR_EMPTY_GLYPH: &str = "░";
 const USAGE_TITLE: &str = "Usage by token share";
 const USAGE_SUBTITLE: &str = "Percent of consumed tokens in this selected range";
 
@@ -244,8 +246,12 @@ fn usage_content_width(
 
     let prefix_width = text_width("  ├─ ");
     let percent_width = text_width("100%");
-    let row_width_with_bar =
-        prefix_width + label_column_width + USAGE_BAR_WIDTH + 2 + percent_width;
+    let row_width_with_bar = prefix_width
+        + label_column_width
+        + percent_width
+        + 2
+        + USAGE_BAR_BORDER_WIDTH
+        + USAGE_BAR_WIDTH;
     let can_show_bar =
         available_width >= row_width_with_bar && label_column_width >= USAGE_BAR_MIN_LABEL_WIDTH;
     let row_width = if can_show_bar {
@@ -384,8 +390,8 @@ fn usage_entry_line(
     let percent = format!("{:>3}%", entry.percent_of_usage);
     let prefix_width = UnicodeWidthStr::width(prefix);
     let percent_width = UnicodeWidthStr::width(percent.as_str());
-    let trailing_bar_width = USAGE_BAR_WIDTH + 2 + percent_width;
-    let include_bar = inner_width >= prefix_width + label_column_width + trailing_bar_width
+    let trailing_metrics_width = percent_width + 2 + USAGE_BAR_BORDER_WIDTH + USAGE_BAR_WIDTH;
+    let include_bar = inner_width >= prefix_width + label_column_width + trailing_metrics_width
         && label_column_width >= USAGE_BAR_MIN_LABEL_WIDTH;
     let label_width = if include_bar {
         label_column_width
@@ -394,7 +400,7 @@ fn usage_entry_line(
     };
     let label = truncate_to_width(&entry.label, label_width);
     let used_width = if include_bar {
-        prefix_width + label_column_width + trailing_bar_width
+        prefix_width + label_column_width + trailing_metrics_width
     } else {
         prefix_width + UnicodeWidthStr::width(label.as_str()) + percent_width
     };
@@ -413,12 +419,16 @@ fn usage_entry_line(
         let label_padding = label_column_width
             .saturating_sub(UnicodeWidthStr::width(entry.label.as_str()).min(label_width));
         spans.push(Span::from(" ".repeat(label_padding)).dim());
-        let (filled, empty) = usage_bar_segments(entry.percent_of_usage);
-        spans.push(usage_bar_filled_span(USAGE_BAR_GLYPH.repeat(filled)));
-        spans.push(usage_bar_empty_span(USAGE_BAR_GLYPH.repeat(empty)));
+        spans.push(Span::from(percent));
         spans.push(Span::from("  ").dim());
+        spans.push(Span::styled("|", table_separator_style()));
+        let (filled, empty) = usage_bar_segments(entry.percent_of_usage);
+        spans.push(usage_bar_filled_span(USAGE_BAR_FILLED_GLYPH.repeat(filled)));
+        spans.push(usage_bar_empty_span(USAGE_BAR_EMPTY_GLYPH.repeat(empty)));
+        spans.push(Span::styled("|", table_separator_style()));
+    } else {
+        spans.push(Span::from(percent));
     }
-    spans.push(Span::from(percent));
     Line::from(spans)
 }
 

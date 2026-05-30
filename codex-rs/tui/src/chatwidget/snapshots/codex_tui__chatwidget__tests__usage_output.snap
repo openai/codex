@@ -13,16 +13,16 @@ Percent of consumed tokens in this selected range
  compact or disable sources you do not need.
 
  Skills
-  ├─ /tmux         ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    8%
-  └─ /babysit      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    6%
+  ├─ /tmux           8%  |██░░░░░░░░░░░░░░░░░░|
+  └─ /babysit        6%  |██░░░░░░░░░░░░░░░░░░|
 
  Subagents
-  ├─ babysit       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   13%
-  └─ code-review   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    9%
+  ├─ babysit        13%  |███░░░░░░░░░░░░░░░░░|
+  └─ code-review     9%  |██░░░░░░░░░░░░░░░░░░|
 
  Agent tasks
-  ├─ guardian      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   17%
-  └─ review        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    5%
+  ├─ guardian       17%  |████░░░░░░░░░░░░░░░░|
+  └─ review          5%  |█░░░░░░░░░░░░░░░░░░░|
 
  Apps
-  └─ testmcp       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   11%
+  └─ testmcp        11%  |███░░░░░░░░░░░░░░░░░|

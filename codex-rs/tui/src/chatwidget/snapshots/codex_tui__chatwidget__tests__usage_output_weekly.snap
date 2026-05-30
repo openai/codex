@@ -10,10 +10,10 @@ Percent of consumed tokens in this selected range
 17% of consumed tokens came from agent task "guardian"
 
  Skills
-  └─ /tmux      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    8%
+  └─ /tmux        8%  |██░░░░░░░░░░░░░░░░░░|
 
  Subagents
-  └─ default    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   13%
+  └─ default     13%  |███░░░░░░░░░░░░░░░░░|
 
  Agent tasks
-  └─ guardian   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   17%
+  └─ guardian    17%  |████░░░░░░░░░░░░░░░░|
