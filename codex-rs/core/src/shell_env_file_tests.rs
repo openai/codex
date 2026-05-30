@@ -34,6 +34,7 @@ async fn shell_env_file_captures_exports_without_exposing_writable_path() -> Res
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             "real-thread".to_string(),
         ),
+        ("REMOVED_BY_HOOK".to_string(), "remove-me".to_string()),
     ]);
     std::fs::write(
         env_file.path(),
@@ -47,6 +48,7 @@ export CODEX_ENV_FILE='/tmp/poison'
 export CLAUDE_ENV_FILE='/tmp/poison'
 export CODEX_THREAD_ID='poisoned-thread'
 export EXPLICIT_OVERRIDE='from-hook'
+unset REMOVED_BY_HOOK
 ",
     )?;
     let cwd = std::env::current_dir()?;
@@ -91,6 +93,26 @@ export EXPLICIT_OVERRIDE='from-hook'
         ])
     );
 
+    let mut snapshot_overrides = policy.r#set.clone();
+    env_file.extend_snapshot_overrides(&mut snapshot_overrides, &env, &policy);
+    assert_eq!(
+        snapshot_overrides,
+        HashMap::from([
+            ("PATH".to_string(), "/plugin/bin:/usr/bin".to_string()),
+            (
+                "CODEX_SESSION_START_TEST".to_string(),
+                "from-session-start".to_string(),
+            ),
+            ("COMMAND_SUBSTITUTION".to_string(), "unsafe".to_string()),
+            (
+                "FUNCTION_DEF".to_string(),
+                "() { echo unsafe; }".to_string(),
+            ),
+            ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
+            ("REMOVED_BY_HOOK".to_string(), String::new()),
+        ])
+    );
+
     Ok(())
 }
 
@@ -131,53 +153,12 @@ export EXPLICIT_OVERRIDE='from-hook'
     };
 
     env_file.apply_exports(&mut env, &policy);
-
     assert_eq!(
         env,
         HashMap::from([
             ("PATH".to_string(), "/plugin/bin:/usr/bin".to_string()),
             ("ALLOWED_VALUE".to_string(), "allowed".to_string()),
             ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
-        ])
-    );
-
-    Ok(())
-}
-
-#[cfg(not(windows))]
-#[tokio::test]
-async fn shell_env_file_snapshot_overrides_include_captured_export_keys() -> Result<()> {
-    let env_file = ShellEnvFile::new(ThreadId::new(), ShellEnvCapture::Posix)?;
-    let base_env = HashMap::from([
-        ("PATH".to_string(), "/usr/bin".to_string()),
-        ("REMOVED_BY_HOOK".to_string(), "remove-me".to_string()),
-    ]);
-    std::fs::write(
-        env_file.path(),
-        "\
-export PATH=\"/plugin/bin:$PATH\"
-export HOOK_ONLY='from-hook'
-unset REMOVED_BY_HOOK
-",
-    )?;
-    let cwd = std::env::current_dir()?;
-    env_file
-        .capture_exports(&test_shell(), cwd.as_path(), &base_env)
-        .await?;
-
-    let mut env = base_env;
-    let policy = ShellEnvironmentPolicy::default();
-    env_file.apply_exports(&mut env, &policy);
-
-    let mut overrides = HashMap::new();
-    env_file.extend_snapshot_overrides(&mut overrides, &env, &policy);
-
-    assert_eq!(
-        overrides,
-        HashMap::from([
-            ("PATH".to_string(), "/plugin/bin:/usr/bin".to_string()),
-            ("HOOK_ONLY".to_string(), "from-hook".to_string()),
-            ("REMOVED_BY_HOOK".to_string(), String::new()),
         ])
     );
 
