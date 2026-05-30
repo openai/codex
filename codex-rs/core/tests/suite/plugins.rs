@@ -103,11 +103,11 @@ fn write_plugin_app_plugin(home: &TempDir) {
 
 async fn build_analytics_plugin_test_codex(
     server: &MockServer,
-    codex_home: Arc<TempDir>,
+    codex_home: &Arc<TempDir>,
 ) -> Result<TestCodex> {
     let chatgpt_base_url = server.uri();
     let mut builder = test_codex()
-        .with_home(codex_home)
+        .with_home(Arc::clone(codex_home))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model("gpt-5.2")
         .with_config(move |config| {
@@ -121,11 +121,11 @@ async fn build_analytics_plugin_test_codex(
 
 async fn build_apps_enabled_plugin_test_codex(
     server: &MockServer,
-    codex_home: Arc<TempDir>,
+    codex_home: &Arc<TempDir>,
     chatgpt_base_url: String,
 ) -> Result<TestCodex> {
     let mut builder = test_codex()
-        .with_home(codex_home)
+        .with_home(Arc::clone(codex_home))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config
@@ -172,12 +172,9 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
     let codex_home = Arc::new(TempDir::new()?);
     write_plugin_skill_plugin(codex_home.as_ref());
     write_plugin_app_plugin(codex_home.as_ref());
-    let test_codex = build_apps_enabled_plugin_test_codex(
-        &server,
-        Arc::clone(&codex_home),
-        apps_server.chatgpt_base_url,
-    )
-    .await?;
+    let test_codex =
+        build_apps_enabled_plugin_test_codex(&server, &codex_home, apps_server.chatgpt_base_url)
+            .await?;
     let codex = Arc::clone(&test_codex.codex);
     wait_for_mcp_server(&codex, "codex_apps").await?;
 
@@ -257,7 +254,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     write_plugin_app_plugin(codex_home.as_ref());
 
     let test_codex =
-        build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
+        build_apps_enabled_plugin_test_codex(&server, &codex_home, apps_server.chatgpt_base_url)
             .await?;
     let codex = Arc::clone(&test_codex.codex);
     wait_for_mcp_server(&codex, "sample").await?;
@@ -351,7 +348,7 @@ async fn explicit_app_only_plugin_mention_waits_for_pending_apps_startup() -> Re
     let codex_home = Arc::new(TempDir::new()?);
     write_plugin_app_plugin(codex_home.as_ref());
     let codex =
-        build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
+        build_apps_enabled_plugin_test_codex(&server, &codex_home, apps_server.chatgpt_base_url)
             .await?;
 
     codex
@@ -411,7 +408,7 @@ async fn explicitly_selected_skill_waits_for_pending_apps_startup() -> Result<()
     )
     .expect("write plugin app skill");
     let codex =
-        build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
+        build_apps_enabled_plugin_test_codex(&server, &codex_home, apps_server.chatgpt_base_url)
             .await?;
 
     codex
@@ -458,7 +455,7 @@ async fn explicitly_selected_non_app_skill_does_not_wait_for_pending_apps_startu
     let codex_home = Arc::new(TempDir::new()?);
     let skill_path = write_plugin_skill_plugin(codex_home.as_ref());
     let codex =
-        build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
+        build_apps_enabled_plugin_test_codex(&server, &codex_home, apps_server.chatgpt_base_url)
             .await?;
 
     let completed = tokio::time::timeout(Duration::from_secs(/*secs*/ 2), async {
@@ -529,7 +526,7 @@ async fn selected_skill_rewaits_for_app_after_installing_mcp_dependency() -> Res
     )
     .expect("write plugin skill dependencies");
     let codex =
-        build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
+        build_apps_enabled_plugin_test_codex(&server, &codex_home, apps_server.chatgpt_base_url)
             .await?;
 
     codex
@@ -578,7 +575,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
 
     let codex_home = Arc::new(TempDir::new()?);
     write_plugin_skill_plugin(codex_home.as_ref());
-    let test_codex = build_analytics_plugin_test_codex(&server, codex_home).await?;
+    let test_codex = build_analytics_plugin_test_codex(&server, &codex_home).await?;
     let codex = Arc::clone(&test_codex.codex);
 
     codex
