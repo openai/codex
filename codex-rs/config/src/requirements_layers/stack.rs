@@ -278,3 +278,7 @@ pub(super) fn composition_conflict(
         message: message.into(),
     }
 }
+
+#[cfg(test)]
+#[path = "stack_tests.rs"]
+mod tests;
