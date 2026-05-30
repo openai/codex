@@ -2750,10 +2750,6 @@ async fn assert_session_start_env_file_reaches_bash_surface(
     assert_eq!(requests.len(), 2);
     let output = requests[1].function_call_output(&call_id).to_string();
     assert!(
-        output.contains("from-session-start"),
-        "expected hook-exported value in {surface:?} output: {output}"
-    );
-    assert!(
         output.contains("from-session-start||"),
         "expected env-file paths to stay hidden from {surface:?} command: {output}"
     );

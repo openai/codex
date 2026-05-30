@@ -120,8 +120,11 @@ fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
     // Only SessionStart hooks receive session env-file paths.
     command.env_remove(CODEX_ENV_FILE_ENV_VAR);
     command.env_remove(CLAUDE_ENV_FILE_ENV_VAR);
-    if handler.event_name == HookEventName::SessionStart {
-        command.envs(&shell.session_start_env);
+    if handler.event_name == HookEventName::SessionStart
+        && let Some(path) = &shell.session_start_env_file
+    {
+        command.env(CODEX_ENV_FILE_ENV_VAR, path);
+        command.env(CLAUDE_ENV_FILE_ENV_VAR, path);
     }
     command
 }
@@ -165,16 +168,7 @@ mod tests {
         CommandShell {
             program: "hook-shell".to_string(),
             args: Vec::new(),
-            session_start_env: HashMap::from([
-                (
-                    CODEX_ENV_FILE_ENV_VAR.to_string(),
-                    "session-owned-env-file".to_string(),
-                ),
-                (
-                    CLAUDE_ENV_FILE_ENV_VAR.to_string(),
-                    "session-owned-env-file".to_string(),
-                ),
-            ]),
+            session_start_env_file: Some("session-owned-env-file".to_string()),
         }
     }
 

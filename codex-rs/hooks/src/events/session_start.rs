@@ -365,7 +365,13 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::SessionStartHandlerData;
+    use super::SessionStartOutcome;
+    use super::SessionStartRequest;
+    use super::SessionStartSource;
+    use super::StartHookTarget;
     use super::parse_completed;
+    use super::run;
+    use crate::engine::CommandShell;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
 
@@ -522,36 +528,11 @@ mod tests {
     #[cfg(not(windows))]
     #[tokio::test]
     async fn session_start_hooks_merge_env_file_in_configured_order_after_parallel_runs() {
-        use std::collections::HashMap;
         use std::fs;
 
-        use codex_protocol::ThreadId;
-        use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
-        use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
-        use tempfile::NamedTempFile;
         use tempfile::tempdir;
 
-        use super::SessionStartRequest;
-        use super::SessionStartSource;
-        use super::StartHookTarget;
-        use super::run;
-        use crate::engine::CommandShell;
-
-        let env_file = NamedTempFile::new().expect("create env file");
-        let shell = CommandShell {
-            program: "sh".to_string(),
-            args: vec!["-c".to_string()],
-            session_start_env: HashMap::from([
-                (
-                    CODEX_ENV_FILE_ENV_VAR.to_string(),
-                    env_file.path().display().to_string(),
-                ),
-                (
-                    CLAUDE_ENV_FILE_ENV_VAR.to_string(),
-                    env_file.path().display().to_string(),
-                ),
-            ]),
-        };
+        let env_file = tempfile::NamedTempFile::new().expect("create env file");
         let cwd = tempdir().expect("create cwd");
         let marker = cwd.path().join("second-started");
         let mut first = handler();
@@ -577,22 +558,8 @@ printf 'export FIRST=1\n' >> "$CLAUDE_ENV_FILE""#
             r#"printf 'export SECOND=1\n' >> "$CODEX_ENV_FILE"; touch "$MARKER""#.to_string();
         second.display_order = 1;
 
-        let outcome = run(
-            &[first, second],
-            &shell,
-            SessionStartRequest {
-                session_id: ThreadId::new(),
-                cwd: cwd.path().to_path_buf().abs(),
-                transcript_path: None,
-                model: "gpt-test".to_string(),
-                permission_mode: "default".to_string(),
-                target: StartHookTarget::SessionStart {
-                    source: SessionStartSource::Startup,
-                },
-            },
-            /*turn_id*/ None,
-        )
-        .await;
+        let outcome =
+            run_session_start_env_file_hooks(&[first, second], &env_file, cwd.path()).await;
 
         assert_eq!(
             outcome
@@ -611,29 +578,11 @@ printf 'export FIRST=1\n' >> "$CLAUDE_ENV_FILE""#
     #[cfg(not(windows))]
     #[tokio::test]
     async fn session_start_hooks_merge_only_successful_env_files_with_separator() {
-        use std::collections::HashMap;
         use std::fs;
 
-        use codex_protocol::ThreadId;
-        use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
-        use tempfile::NamedTempFile;
         use tempfile::tempdir;
 
-        use super::SessionStartRequest;
-        use super::SessionStartSource;
-        use super::StartHookTarget;
-        use super::run;
-        use crate::engine::CommandShell;
-
-        let env_file = NamedTempFile::new().expect("create env file");
-        let shell = CommandShell {
-            program: "sh".to_string(),
-            args: vec!["-c".to_string()],
-            session_start_env: HashMap::from([(
-                CODEX_ENV_FILE_ENV_VAR.to_string(),
-                env_file.path().display().to_string(),
-            )]),
-        };
+        let env_file = tempfile::NamedTempFile::new().expect("create env file");
         let mut first = handler();
         first.command = r#"printf 'export FIRST=1' >> "$CODEX_ENV_FILE""#.to_string();
         let mut failed = handler();
@@ -644,22 +593,8 @@ printf 'export FIRST=1\n' >> "$CLAUDE_ENV_FILE""#
         third.display_order = 2;
         let cwd = tempdir().expect("create cwd");
 
-        let outcome = run(
-            &[first, failed, third],
-            &shell,
-            SessionStartRequest {
-                session_id: ThreadId::new(),
-                cwd: cwd.path().to_path_buf().abs(),
-                transcript_path: None,
-                model: "gpt-test".to_string(),
-                permission_mode: "default".to_string(),
-                target: StartHookTarget::SessionStart {
-                    source: SessionStartSource::Startup,
-                },
-            },
-            /*turn_id*/ None,
-        )
-        .await;
+        let outcome =
+            run_session_start_env_file_hooks(&[first, failed, third], &env_file, cwd.path()).await;
 
         assert_eq!(
             outcome
@@ -677,6 +612,34 @@ printf 'export FIRST=1\n' >> "$CLAUDE_ENV_FILE""#
             fs::read_to_string(env_file.path()).expect("read env file"),
             "export FIRST=1\nexport THIRD=1\n"
         );
+    }
+
+    #[cfg(not(windows))]
+    async fn run_session_start_env_file_hooks(
+        handlers: &[ConfiguredHandler],
+        env_file: &tempfile::NamedTempFile,
+        cwd: &std::path::Path,
+    ) -> SessionStartOutcome {
+        run(
+            handlers,
+            &CommandShell {
+                program: "sh".to_string(),
+                args: vec!["-c".to_string()],
+                session_start_env_file: Some(env_file.path().display().to_string()),
+            },
+            SessionStartRequest {
+                session_id: codex_protocol::ThreadId::new(),
+                cwd: cwd.to_path_buf().abs(),
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                target: StartHookTarget::SessionStart {
+                    source: SessionStartSource::Startup,
+                },
+            },
+            /*turn_id*/ None,
+        )
+        .await
     }
 
     fn handler() -> ConfiguredHandler {

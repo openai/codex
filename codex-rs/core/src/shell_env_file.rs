@@ -7,9 +7,9 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::exec_output::bytes_to_string_smart;
+use codex_protocol::shell_environment;
 use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
@@ -31,11 +31,13 @@ pub(crate) struct ShellEnvFile {
 }
 
 impl ShellEnvFile {
-    pub(crate) fn for_session(thread_id: ThreadId, shell: &Shell) -> Result<Option<Self>> {
-        let Some(capture) = ShellEnvCapture::for_shell_type(&shell.shell_type) else {
-            return Ok(None);
+    pub(crate) fn for_session(thread_id: ThreadId, shell: &Shell) -> Result<Self> {
+        let capture = match shell.shell_type {
+            ShellType::Zsh | ShellType::Bash | ShellType::Sh => ShellEnvCapture::Posix,
+            ShellType::PowerShell => ShellEnvCapture::PowerShell,
+            ShellType::Cmd => ShellEnvCapture::Cmd,
         };
-        Self::new(thread_id, capture).map(Some)
+        Self::new(thread_id, capture)
     }
 
     fn new(thread_id: ThreadId, capture: ShellEnvCapture) -> Result<Self> {
@@ -55,12 +57,6 @@ impl ShellEnvFile {
         self.path.as_ref()
     }
 
-    pub(crate) fn insert_path_into_env(&self, env: &mut HashMap<String, String>) {
-        let path = self.path().to_string_lossy().to_string();
-        insert_env_var(env, CODEX_ENV_FILE_ENV_VAR.to_string(), path.clone());
-        insert_env_var(env, CLAUDE_ENV_FILE_ENV_VAR.to_string(), path);
-    }
-
     /// Sources the hook-writable env file once and stores the resulting
     /// environment diff.
     ///
@@ -75,14 +71,16 @@ impl ShellEnvFile {
         cwd: &Path,
         base_env: &HashMap<String, String>,
     ) -> Result<()> {
-        if ShellEnvCapture::for_shell_type(&shell.shell_type) != Some(self.capture) {
-            return Ok(());
-        }
-
         let mut capture_env = base_env.clone();
         remove_env_var(&mut capture_env, CODEX_ENV_FILE_ENV_VAR);
         remove_env_var(&mut capture_env, CLAUDE_ENV_FILE_ENV_VAR);
-        self.insert_path_into_env(&mut capture_env);
+        let path = self.path().to_string_lossy().to_string();
+        insert_env_var(
+            &mut capture_env,
+            CODEX_ENV_FILE_ENV_VAR.to_string(),
+            path.clone(),
+        );
+        insert_env_var(&mut capture_env, CLAUDE_ENV_FILE_ENV_VAR.to_string(), path);
 
         let (baseline_script, source_script) = self.capture.scripts();
         let baseline = self
@@ -168,14 +166,6 @@ enum ShellEnvCapture {
 }
 
 impl ShellEnvCapture {
-    fn for_shell_type(shell_type: &ShellType) -> Option<Self> {
-        match shell_type {
-            ShellType::Zsh | ShellType::Bash | ShellType::Sh => Some(Self::Posix),
-            ShellType::PowerShell => Some(Self::PowerShell),
-            ShellType::Cmd => Some(Self::Cmd),
-        }
-    }
-
     fn file_suffix(self) -> &'static str {
         match self {
             Self::Posix => ".sh",
@@ -359,30 +349,7 @@ fn ignored_capture_key(key: &str) -> bool {
 }
 
 fn should_apply_captured_export(key: &str, policy: &ShellEnvironmentPolicy) -> bool {
-    !ignored_capture_key(key) && captured_export_allowed_by_policy(key, policy)
-}
-
-fn captured_export_allowed_by_policy(key: &str, policy: &ShellEnvironmentPolicy) -> bool {
-    if !policy.ignore_default_excludes {
-        let default_excludes = [
-            EnvironmentVariablePattern::new_case_insensitive("*KEY*"),
-            EnvironmentVariablePattern::new_case_insensitive("*SECRET*"),
-            EnvironmentVariablePattern::new_case_insensitive("*TOKEN*"),
-        ];
-        if matches_any_pattern(key, &default_excludes) {
-            return false;
-        }
-    }
-
-    if matches_any_pattern(key, &policy.exclude) {
-        return false;
-    }
-
-    policy.include_only.is_empty() || matches_any_pattern(key, &policy.include_only)
-}
-
-fn matches_any_pattern(key: &str, patterns: &[EnvironmentVariablePattern]) -> bool {
-    patterns.iter().any(|pattern| pattern.matches(key))
+    !ignored_capture_key(key) && shell_environment::inherited_env_var_allowed_by_policy(key, policy)
 }
 
 fn get_env_var<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a String> {

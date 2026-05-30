@@ -865,8 +865,10 @@ impl Session {
                 default_shell.shell_snapshot = rx;
                 tx
             };
-            let shell_env_file =
-                crate::shell_env_file::ShellEnvFile::for_session(thread_id, &default_shell)?;
+            let shell_env_file = Some(crate::shell_env_file::ShellEnvFile::for_session(
+                thread_id,
+                &default_shell,
+            )?);
             let thread_name =
                 thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
                     .instrument(info_span!(

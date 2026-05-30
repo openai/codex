@@ -1,19 +1,13 @@
 use std::io::ErrorKind;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use tempfile::TempPath;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use uuid::Uuid;
-
-use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
-use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
@@ -38,63 +32,28 @@ pub(super) async fn execute_handlers<T>(
 ) -> Vec<dispatcher::ParsedHandler<T>> {
     // No env file means there is nothing special to isolate; use the standard
     // parallel dispatcher.
-    let Some(env_file_path) = shell
-        .session_start_env
-        .get(CODEX_ENV_FILE_ENV_VAR)
-        .or_else(|| shell.session_start_env.get(CLAUDE_ENV_FILE_ENV_VAR))
-        .map(PathBuf::from)
-    else {
+    let Some(env_file_path) = shell.session_start_env_file.as_deref() else {
         return dispatcher::execute_handlers(shell, handlers, input_json, cwd, turn_id, parse)
             .await;
     };
-
-    let file_name = env_file_path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_else(|| "env".into());
+    let env_file_path = Path::new(env_file_path);
+    let scratch_dir = env_file_path.parent().unwrap_or_else(|| Path::new("."));
 
     let mut pending = FuturesUnordered::new();
     for (configured_order, handler) in handlers.into_iter().enumerate() {
         // Each handler writes to an isolated env file, but still sees both
         // compatibility aliases when the original shell had them.
-        let scratch_path = env_file_path.with_file_name(format!(
-            ".{file_name}.{configured_order}.{}.tmp",
-            Uuid::new_v4()
-        ));
-        let scratch_result = async {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            options.mode(0o600);
-            options.open(&scratch_path).with_context(|| {
-                format!(
-                    "failed to create SessionStart scratch env file {}",
-                    scratch_path.display()
-                )
-            })?;
+        let scratch_result = tempfile::NamedTempFile::new_in(scratch_dir)
+            .context("failed to create SessionStart scratch env file")
+            .map(|scratch_file| {
+                let scratch_path = scratch_file.into_temp_path();
 
-            let mut scratch_shell = shell.clone();
-            let scratch_path_env = scratch_path.to_string_lossy().to_string();
-            if scratch_shell
-                .session_start_env
-                .contains_key(CODEX_ENV_FILE_ENV_VAR)
-            {
-                scratch_shell
-                    .session_start_env
-                    .insert(CODEX_ENV_FILE_ENV_VAR.to_string(), scratch_path_env.clone());
-            }
-            if scratch_shell
-                .session_start_env
-                .contains_key(CLAUDE_ENV_FILE_ENV_VAR)
-            {
-                scratch_shell
-                    .session_start_env
-                    .insert(CLAUDE_ENV_FILE_ENV_VAR.to_string(), scratch_path_env);
-            }
+                let mut scratch_shell = shell.clone();
+                scratch_shell.session_start_env_file =
+                    Some(scratch_path.to_string_lossy().to_string());
 
-            Ok((scratch_path, scratch_shell))
-        }
-        .await;
+                (scratch_path, scratch_shell)
+            });
 
         let input_json = input_json.clone();
         let turn_id = turn_id.clone();
@@ -133,7 +92,7 @@ pub(super) async fn execute_handlers<T>(
     }
     completed.sort_by_key(|execution| execution.configured_order);
 
-    let mut env_file_ends_with_newline = match fs::read(&env_file_path).await {
+    let mut env_file_ends_with_newline = match fs::read(env_file_path).await {
         Ok(contents) => contents.last().is_none_or(|byte| *byte == b'\n'),
         Err(error) if error.kind() == ErrorKind::NotFound => true,
         Err(error) => {
@@ -149,7 +108,7 @@ pub(super) async fn execute_handlers<T>(
     // core session layer will source this single canonical file after hooks
     // finish.
     for execution in &mut completed {
-        let Some(scratch_path) = execution.scratch_path.take() else {
+        let Some(scratch_path) = execution.scratch_path.as_ref() else {
             continue;
         };
         let result: Result<bool> = async {
@@ -157,7 +116,7 @@ pub(super) async fn execute_handlers<T>(
                 return Ok(env_file_ends_with_newline);
             }
 
-            let contents = fs::read(&scratch_path).await.with_context(|| {
+            let contents = fs::read(scratch_path).await.with_context(|| {
                 format!(
                     "failed to read SessionStart scratch env file {}",
                     scratch_path.display()
@@ -170,7 +129,7 @@ pub(super) async fn execute_handlers<T>(
             let mut file = fs::OpenOptions::new()
                 .append(true)
                 .create(true)
-                .open(&env_file_path)
+                .open(env_file_path)
                 .await
                 .with_context(|| format!("failed to open {}", env_file_path.display()))?;
             if !env_file_ends_with_newline && contents.first() != Some(&b'\n') {
@@ -188,15 +147,6 @@ pub(super) async fn execute_handlers<T>(
         }
         .await;
 
-        let cleanup_result = fs::remove_file(&scratch_path).await;
-        if let Err(error) = cleanup_result
-            && error.kind() != ErrorKind::NotFound
-        {
-            tracing::warn!(
-                "failed to remove SessionStart scratch env file {}: {error}",
-                scratch_path.display()
-            );
-        }
         match result {
             Ok(ends_with_newline) => {
                 env_file_ends_with_newline = ends_with_newline;
@@ -222,7 +172,7 @@ struct HandlerExecution {
     completion_order: usize,
     handler: ConfiguredHandler,
     run_result: CommandRunResult,
-    scratch_path: Option<PathBuf>,
+    scratch_path: Option<TempPath>,
     turn_id: Option<String>,
 }
 

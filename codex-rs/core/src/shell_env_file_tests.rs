@@ -57,18 +57,8 @@ unset REMOVED_BY_HOOK
         .await?;
 
     let mut env = base_env;
-    env.insert(
-        CODEX_ENV_FILE_ENV_VAR.to_string(),
-        env_file.path().display().to_string(),
-    );
-    env.insert(
-        CLAUDE_ENV_FILE_ENV_VAR.to_string(),
-        env_file.path().display().to_string(),
-    );
-    let policy = ShellEnvironmentPolicy {
-        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
-        ..Default::default()
-    };
+    insert_env_file_paths(&env_file, &mut env);
+    let policy = explicit_override_policy();
 
     env_file.apply_exports(&mut env, &policy);
 
@@ -175,29 +165,14 @@ fn test_shell() -> Shell {
 }
 
 #[test]
-fn shell_env_file_for_session_uses_powershell_script_suffix() -> Result<()> {
-    let shell = test_powershell_shell();
-    let env_file = ShellEnvFile::for_session(ThreadId::new(), &shell)?
-        .expect("PowerShell should support a session env file");
-
-    assert_eq!(
-        env_file.path().extension().and_then(|ext| ext.to_str()),
-        Some("ps1")
-    );
-
-    Ok(())
-}
-
-#[test]
-fn shell_env_file_for_session_uses_cmd_script_suffix() -> Result<()> {
-    let shell = test_cmd_shell();
-    let env_file = ShellEnvFile::for_session(ThreadId::new(), &shell)?
-        .expect("cmd should support a session env file");
-
-    assert_eq!(
-        env_file.path().extension().and_then(|ext| ext.to_str()),
-        Some("cmd")
-    );
+fn shell_env_file_for_session_uses_shell_script_suffix() -> Result<()> {
+    for (shell, suffix) in [(test_powershell_shell(), "ps1"), (test_cmd_shell(), "cmd")] {
+        let env_file = ShellEnvFile::for_session(ThreadId::new(), &shell)?;
+        assert_eq!(
+            env_file.path().extension().and_then(|ext| ext.to_str()),
+            Some(suffix)
+        );
+    }
 
     Ok(())
 }
@@ -230,17 +205,9 @@ fn cmd_env_output_parser_accepts_set_output() {
 #[cfg(windows)]
 #[tokio::test]
 async fn powershell_env_file_applies_exports_without_exposing_writable_path() -> Result<()> {
-    let env_file = ShellEnvFile::new(ThreadId::new(), ShellEnvCapture::PowerShell)?;
-    let base_env = HashMap::from([
-        ("BASE".to_string(), "keep".to_string()),
-        (
-            CODEX_THREAD_ID_ENV_VAR.to_string(),
-            "real-thread".to_string(),
-        ),
-        ("REMOVED_BY_HOOK".to_string(), "remove-me".to_string()),
-    ]);
-    std::fs::write(
-        env_file.path(),
+    assert_windows_env_file_applies_exports(
+        ShellEnvCapture::PowerShell,
+        test_powershell_shell(),
         r#"
 Write-Output "hidden"
 $env:CODEX_SESSION_START_TEST = "from-session-start"
@@ -251,30 +218,6 @@ $env:CODEX_THREAD_ID = "poisoned-thread"
 $env:EXPLICIT_OVERRIDE = "from-hook"
 Remove-Item Env:REMOVED_BY_HOOK -ErrorAction SilentlyContinue
 "#,
-    )?;
-    let cwd = std::env::current_dir()?;
-    env_file
-        .capture_exports(&test_powershell_shell(), cwd.as_path(), &base_env)
-        .await?;
-
-    let mut env = base_env;
-    env.insert(
-        CODEX_ENV_FILE_ENV_VAR.to_string(),
-        env_file.path().display().to_string(),
-    );
-    env.insert(
-        CLAUDE_ENV_FILE_ENV_VAR.to_string(),
-        env_file.path().display().to_string(),
-    );
-    let policy = ShellEnvironmentPolicy {
-        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
-        ..Default::default()
-    };
-
-    env_file.apply_exports(&mut env, &policy);
-
-    assert_eq!(
-        env,
         HashMap::from([
             ("BASE".to_string(), "keep".to_string()),
             (
@@ -287,26 +230,17 @@ Remove-Item Env:REMOVED_BY_HOOK -ErrorAction SilentlyContinue
                 "real-thread".to_string(),
             ),
             ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
-        ])
-    );
-
-    Ok(())
+        ]),
+    )
+    .await
 }
 
 #[cfg(windows)]
 #[tokio::test]
 async fn cmd_env_file_applies_exports_without_exposing_writable_path() -> Result<()> {
-    let env_file = ShellEnvFile::new(ThreadId::new(), ShellEnvCapture::Cmd)?;
-    let base_env = HashMap::from([
-        ("BASE".to_string(), "keep".to_string()),
-        (
-            CODEX_THREAD_ID_ENV_VAR.to_string(),
-            "real-thread".to_string(),
-        ),
-        ("REMOVED_BY_HOOK".to_string(), "remove-me".to_string()),
-    ]);
-    std::fs::write(
-        env_file.path(),
+    assert_windows_env_file_applies_exports(
+        ShellEnvCapture::Cmd,
+        test_cmd_shell(),
         "\
 @echo off\r
 set CODEX_SESSION_START_TEST=from-session-start\r
@@ -316,30 +250,6 @@ set CODEX_THREAD_ID=poisoned-thread\r
 set EXPLICIT_OVERRIDE=from-hook\r
 set REMOVED_BY_HOOK=\r
 ",
-    )?;
-    let cwd = std::env::current_dir()?;
-    env_file
-        .capture_exports(&test_cmd_shell(), cwd.as_path(), &base_env)
-        .await?;
-
-    let mut env = base_env;
-    env.insert(
-        CODEX_ENV_FILE_ENV_VAR.to_string(),
-        env_file.path().display().to_string(),
-    );
-    env.insert(
-        CLAUDE_ENV_FILE_ENV_VAR.to_string(),
-        env_file.path().display().to_string(),
-    );
-    let policy = ShellEnvironmentPolicy {
-        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
-        ..Default::default()
-    };
-
-    env_file.apply_exports(&mut env, &policy);
-
-    assert_eq!(
-        env,
         HashMap::from([
             ("BASE".to_string(), "keep".to_string()),
             (
@@ -351,10 +261,54 @@ set REMOVED_BY_HOOK=\r
                 "real-thread".to_string(),
             ),
             ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
-        ])
-    );
+        ]),
+    )
+    .await
+}
+
+#[cfg(windows)]
+async fn assert_windows_env_file_applies_exports(
+    capture: ShellEnvCapture,
+    shell: Shell,
+    script: &str,
+    expected: HashMap<String, String>,
+) -> Result<()> {
+    let env_file = ShellEnvFile::new(ThreadId::new(), capture)?;
+    let base_env = HashMap::from([
+        ("BASE".to_string(), "keep".to_string()),
+        (
+            CODEX_THREAD_ID_ENV_VAR.to_string(),
+            "real-thread".to_string(),
+        ),
+        ("REMOVED_BY_HOOK".to_string(), "remove-me".to_string()),
+    ]);
+    std::fs::write(env_file.path(), script)?;
+    let cwd = std::env::current_dir()?;
+    env_file
+        .capture_exports(&shell, cwd.as_path(), &base_env)
+        .await?;
+
+    let mut env = base_env;
+    insert_env_file_paths(&env_file, &mut env);
+    let policy = explicit_override_policy();
+    env_file.apply_exports(&mut env, &policy);
+
+    assert_eq!(env, expected);
 
     Ok(())
+}
+
+fn insert_env_file_paths(env_file: &ShellEnvFile, env: &mut HashMap<String, String>) {
+    let path = env_file.path().display().to_string();
+    env.insert(CODEX_ENV_FILE_ENV_VAR.to_string(), path.clone());
+    env.insert(CLAUDE_ENV_FILE_ENV_VAR.to_string(), path);
+}
+
+fn explicit_override_policy() -> ShellEnvironmentPolicy {
+    ShellEnvironmentPolicy {
+        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
+        ..Default::default()
+    }
 }
 
 fn test_powershell_shell() -> Shell {

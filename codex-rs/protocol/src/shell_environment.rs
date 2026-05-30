@@ -2,6 +2,15 @@ use crate::config_types::EnvironmentVariablePattern;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyInherit;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+static DEFAULT_EXCLUDES: LazyLock<[EnvironmentVariablePattern; 3]> = LazyLock::new(|| {
+    [
+        EnvironmentVariablePattern::new_case_insensitive("*KEY*"),
+        EnvironmentVariablePattern::new_case_insensitive("*SECRET*"),
+        EnvironmentVariablePattern::new_case_insensitive("*TOKEN*"),
+    ]
+});
 
 pub const CODEX_ENV_FILE_ENV_VAR: &str = "CODEX_ENV_FILE";
 pub const CLAUDE_ENV_FILE_ENV_VAR: &str = "CLAUDE_ENV_FILE";
@@ -74,24 +83,8 @@ where
         }
     };
 
-    let matches_any = |name: &str, patterns: &[EnvironmentVariablePattern]| -> bool {
-        patterns.iter().any(|pattern| pattern.matches(name))
-    };
-
-    // Step 2 - Apply the default exclude if not disabled.
-    if !policy.ignore_default_excludes {
-        let default_excludes = vec![
-            EnvironmentVariablePattern::new_case_insensitive("*KEY*"),
-            EnvironmentVariablePattern::new_case_insensitive("*SECRET*"),
-            EnvironmentVariablePattern::new_case_insensitive("*TOKEN*"),
-        ];
-        env_map.retain(|k, _| !matches_any(k, &default_excludes));
-    }
-
-    // Step 3 - Apply custom excludes.
-    if !policy.exclude.is_empty() {
-        env_map.retain(|k, _| !matches_any(k, &policy.exclude));
-    }
+    // Steps 2, 3, and 5 - Filter inherited variables.
+    env_map.retain(|key, _| inherited_env_var_allowed_by_policy(key, policy));
 
     // Step 4 - Apply user-provided overrides.
     for (key, val) in &policy.r#set {
@@ -100,7 +93,7 @@ where
 
     // Step 5 - If include_only is non-empty, keep only the matching vars.
     if !policy.include_only.is_empty() {
-        env_map.retain(|k, _| matches_any(k, &policy.include_only));
+        env_map.retain(|key, _| matches_any_pattern(key, &policy.include_only));
     }
 
     // Step 6 - Populate the thread ID environment variable when provided.
@@ -109,6 +102,18 @@ where
     }
 
     env_map
+}
+
+/// Returns whether an inherited variable is permitted by the filtering parts
+/// of a shell-environment policy.
+pub fn inherited_env_var_allowed_by_policy(name: &str, policy: &ShellEnvironmentPolicy) -> bool {
+    (policy.ignore_default_excludes || !matches_any_pattern(name, DEFAULT_EXCLUDES.as_slice()))
+        && !matches_any_pattern(name, &policy.exclude)
+        && (policy.include_only.is_empty() || matches_any_pattern(name, &policy.include_only))
+}
+
+fn matches_any_pattern(name: &str, patterns: &[EnvironmentVariablePattern]) -> bool {
+    patterns.iter().any(|pattern| pattern.matches(name))
 }
 
 #[cfg(not(target_os = "windows"))]
