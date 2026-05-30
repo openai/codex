@@ -689,12 +689,41 @@ pub(crate) async fn fetch_remote_installed_plugins(
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
 
-    let (global, workspace) = tokio::try_join!(global, workspace)?;
-    let mut installed_plugins = [global, workspace]
-        .into_iter()
-        .flat_map(|(_scope, plugins)| plugins)
-        .map(|plugin| remote_installed_plugin_to_cache_entry(&plugin))
-        .collect::<Result<Vec<_>, _>>()?;
+    let (global, workspace) = tokio::join!(global, workspace);
+
+    let mut installed_plugins = Vec::new();
+    let mut first_error = None;
+    let mut any_scope_succeeded = false;
+    for (scope, result) in [
+        (RemotePluginScope::Global, global),
+        (RemotePluginScope::Workspace, workspace),
+    ] {
+        match result.and_then(|(_scope, plugins)| {
+            plugins
+                .into_iter()
+                .map(|plugin| remote_installed_plugin_to_cache_entry(&plugin))
+                .collect::<Result<Vec<_>, _>>()
+        }) {
+            Ok(scope_plugins) => {
+                any_scope_succeeded = true;
+                installed_plugins.extend(scope_plugins);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    scope = scope.api_value(),
+                    error = %err,
+                    "failed to fetch remote installed plugins for scope"
+                );
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
+    }
+    if !any_scope_succeeded && let Some(err) = first_error {
+        return Err(err);
+    }
+
     installed_plugins.sort_by(|left, right| {
         left.marketplace_name
             .cmp(&right.marketplace_name)
