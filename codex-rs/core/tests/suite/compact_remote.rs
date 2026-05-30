@@ -368,6 +368,13 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         compact_request.header("thread-id").as_deref(),
         Some(thread_id.as_str())
     );
+    assert!(
+        compact_request
+            .header("x-codex-installation-id")
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
+        "compact request should include a non-empty installation id header"
+    );
     let compact_metadata: Value = serde_json::from_str(
         &compact_request
             .header("x-codex-turn-metadata")

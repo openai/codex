@@ -149,6 +149,10 @@ async fn responses_websocket_streams_request() {
         Some(codex_login::default_client::get_codex_user_agent())
     );
     assert_eq!(
+        handshake.header("x-codex-installation-id"),
+        Some(TEST_INSTALLATION_ID.to_string())
+    );
+    assert_eq!(
         body["client_metadata"]["x-codex-installation-id"].as_str(),
         Some(TEST_INSTALLATION_ID)
     );

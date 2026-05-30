@@ -507,9 +507,6 @@ impl ModelClient {
         };
 
         let mut extra_headers = ApiHeaderMap::new();
-        if let Ok(header_value) = HeaderValue::from_str(&self.state.installation_id) {
-            extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
-        }
         extra_headers.extend(build_responses_headers(
             self.state.beta_features_header.as_deref(),
             /*turn_state*/ None,
@@ -637,6 +634,11 @@ impl ModelClient {
 
     fn build_responses_identity_headers(&self) -> ApiHeaderMap {
         let mut extra_headers = self.build_subagent_headers();
+        if !self.state.installation_id.is_empty()
+            && let Ok(val) = HeaderValue::from_str(&self.state.installation_id)
+        {
+            extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, val);
+        }
         if let Some(parent_thread_id) = parent_thread_id_header_value(&self.state.session_source)
             && let Ok(val) = HeaderValue::from_str(&parent_thread_id)
         {

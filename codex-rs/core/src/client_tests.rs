@@ -61,13 +61,20 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
+    test_model_client_with_installation_id(session_source, "11111111-1111-4111-8111-111111111111")
+}
+
+fn test_model_client_with_installation_id(
+    session_source: SessionSource,
+    installation_id: &str,
+) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let thread_id = ThreadId::new();
     ModelClient::new(
         /*auth_manager*/ None,
         thread_id.into(),
         thread_id,
-        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        /*installation_id*/ installation_id.to_string(),
         provider,
         session_source,
         /*model_verbosity*/ None,
@@ -267,6 +274,23 @@ fn build_subagent_headers_sets_internal_memory_consolidation_label() {
         .get(X_OPENAI_SUBAGENT_HEADER)
         .and_then(|value| value.to_str().ok());
     assert_eq!(value, Some("memory_consolidation"));
+}
+
+#[test]
+fn build_responses_identity_headers_includes_installation_id_when_present() {
+    let client = test_model_client(SessionSource::Exec);
+    let headers = client.build_responses_identity_headers();
+    let value = headers
+        .get(X_CODEX_INSTALLATION_ID_HEADER)
+        .and_then(|value| value.to_str().ok());
+    assert_eq!(value, Some("11111111-1111-4111-8111-111111111111"));
+}
+
+#[test]
+fn build_responses_identity_headers_omits_installation_id_when_empty() {
+    let client = test_model_client_with_installation_id(SessionSource::Exec, "");
+    let headers = client.build_responses_identity_headers();
+    assert_eq!(headers.get(X_CODEX_INSTALLATION_ID_HEADER), None);
 }
 
 #[test]
@@ -547,6 +571,17 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
         Some("v1.header-1"),
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn websocket_handshake_omits_installation_id_when_empty() {
+    let model_client = test_model_client_with_installation_id(SessionSource::Exec, "");
+
+    let headers = model_client
+        .build_websocket_headers(/*turn_state*/ None, /*turn_metadata_header*/ None)
+        .await;
+
+    assert_eq!(headers.get(X_CODEX_INSTALLATION_ID_HEADER), None);
 }
 
 #[tokio::test]
