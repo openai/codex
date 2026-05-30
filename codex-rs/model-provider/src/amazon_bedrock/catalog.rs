@@ -9,7 +9,7 @@ const GPT_5_5_OPENAI_MODEL_ID: &str = "gpt-5.5";
 const GPT_5_4_OPENAI_MODEL_ID: &str = "gpt-5.4";
 
 pub(crate) fn static_model_catalog() -> ModelsResponse {
-    ModelsResponse {
+    without_service_tiers(ModelsResponse {
         models: vec![
             gpt_5_bedrock_model(
                 GPT_5_5_OPENAI_MODEL_ID,
@@ -22,16 +22,22 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
                 /*priority*/ 1,
             ),
         ],
+    })
+}
+
+pub(crate) fn without_service_tiers(mut catalog: ModelsResponse) -> ModelsResponse {
+    for model in &mut catalog.models {
+        model.additional_speed_tiers.clear();
+        model.service_tiers.clear();
+        model.default_service_tier = None;
     }
+    catalog
 }
 
 fn gpt_5_bedrock_model(openai_slug: &str, bedrock_slug: &str, priority: i32) -> ModelInfo {
     let mut model = bundled_openai_model(openai_slug);
     model.slug = bedrock_slug.to_string();
     model.priority = priority;
-    model.additional_speed_tiers.clear();
-    model.service_tiers.clear();
-    model.default_service_tier = None;
     model.context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
     model.max_context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
     model
