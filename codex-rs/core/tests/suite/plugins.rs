@@ -64,7 +64,7 @@ fn write_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
         "---\ndescription: inspect sample data\n---\n\n# body\n",
     )
     .expect("write plugin skill");
-    skill_dir.join("SKILL.md")
+    std::fs::canonicalize(skill_dir.join("SKILL.md")).expect("canonicalize plugin skill")
 }
 
 fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {

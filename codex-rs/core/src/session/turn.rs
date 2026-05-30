@@ -26,7 +26,6 @@ use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
-use crate::injection::extract_tool_mentions;
 use crate::injection::tool_kind_for_path;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
@@ -511,8 +510,7 @@ async fn build_skills_and_plugins(
     )
     .await;
     let structured_skill_may_reference_apps =
-        skill_injections_may_reference_apps(&skill_injections)
-            || structured_skill_inputs_may_reference_apps(&structured_skill_input).await;
+        skill_injections_may_reference_apps(&skill_injections);
     // Plain text skill mentions can collide with app slugs, so preserve their
     // existing app-inventory resolution behavior.
     let text_skill_input = user_input
@@ -804,22 +802,8 @@ fn skill_injections_may_reference_apps(
         .any(|skill| skill_contents_may_reference_apps(&skill.contents))
 }
 
-async fn structured_skill_inputs_may_reference_apps(inputs: &[UserInput]) -> bool {
-    for input in inputs {
-        let UserInput::Skill { path, .. } = input else {
-            continue;
-        };
-        if let Ok(contents) = tokio::fs::read_to_string(path).await
-            && skill_contents_may_reference_apps(&contents)
-        {
-            return true;
-        }
-    }
-    false
-}
-
 fn skill_contents_may_reference_apps(contents: &str) -> bool {
-    let mentions = extract_tool_mentions(contents);
+    let mentions = crate::injection::extract_tool_mentions(contents);
     mentions.plain_names().next().is_some()
         || mentions
             .paths()
