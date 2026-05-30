@@ -44,6 +44,8 @@ pub const CODEX_FS_HELPER_ARG1: &str = "--codex-run-as-fs-helper";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "params")]
 pub(crate) enum FsHelperRequest {
+    #[serde(rename = "fs/canonicalize")]
+    Canonicalize(FsCanonicalizeParams),
     #[serde(rename = "fs/readFile")]
     ReadFile(FsReadFileParams),
     #[serde(rename = "fs/writeFile")]
@@ -72,6 +74,8 @@ pub(crate) enum FsHelperResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "response")]
 pub(crate) enum FsHelperPayload {
+    #[serde(rename = "fs/canonicalize")]
+    Canonicalize(FsCanonicalizeResponse),
     #[serde(rename = "fs/readFile")]
     ReadFile(FsReadFileResponse),
     #[serde(rename = "fs/writeFile")]
@@ -93,6 +97,7 @@ pub(crate) enum FsHelperPayload {
 impl FsHelperPayload {
     fn operation(&self) -> &'static str {
         match self {
+            Self::Canonicalize(_) => FS_CANONICALIZE_METHOD,
             Self::ReadFile(_) => FS_READ_FILE_METHOD,
             Self::WriteFile(_) => FS_WRITE_FILE_METHOD,
             Self::CreateDirectory(_) => FS_CREATE_DIRECTORY_METHOD,
@@ -101,6 +106,16 @@ impl FsHelperPayload {
             Self::ReadDirectory(_) => FS_READ_DIRECTORY_METHOD,
             Self::Remove(_) => FS_REMOVE_METHOD,
             Self::Copy(_) => FS_COPY_METHOD,
+        }
+    }
+
+    pub(crate) fn expect_canonicalize(self) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        match self {
+            Self::Canonicalize(response) => Ok(response),
+            other => Err(unexpected_response(
+                FS_CANONICALIZE_METHOD,
+                other.operation(),
+            )),
         }
     }
 
@@ -188,6 +203,15 @@ pub(crate) async fn run_direct_request(
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
     let file_system = DirectFileSystem;
     match request {
+        FsHelperRequest::Canonicalize(params) => {
+            let path = file_system
+                .canonicalize(&params.path, /*sandbox*/ None)
+                .await
+                .map_err(map_fs_error)?;
+            Ok(FsHelperPayload::Canonicalize(FsCanonicalizeResponse {
+                path,
+            }))
+        }
         FsHelperRequest::ReadFile(params) => {
             let data = file_system
                 .read_file(&params.path, /*sandbox*/ None)

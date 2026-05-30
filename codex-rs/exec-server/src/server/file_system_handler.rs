@@ -48,6 +48,18 @@ impl FileSystemHandler {
         }
     }
 
+    pub(crate) async fn canonicalize(
+        &self,
+        params: FsCanonicalizeParams,
+    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        let path = self
+            .file_system
+            .canonicalize(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsCanonicalizeResponse { path })
+    }
+
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,

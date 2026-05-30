@@ -222,6 +222,14 @@ impl ExecServerHandler {
         self.file_system.read_file(params).await
     }
 
+    pub(crate) async fn fs_canonicalize(
+        &self,
+        params: FsCanonicalizeParams,
+    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.canonicalize(params).await
+    }
+
     pub(crate) async fn fs_write_file(
         &self,
         params: FsWriteFileParams,
