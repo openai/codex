@@ -1,3 +1,16 @@
+//! Unicode mascot rendering primitives for the startup session header.
+//!
+//! This module owns the small amount of runtime state needed to animate the generated frame
+//! tables in `codex_logo_frames`. It does not decide where the mascot is rendered or schedule
+//! redraws; the session-header cell renders the selected frame and `ChatWidget` drives the
+//! lifecycle while the header remains active.
+//!
+//! A startup animation is intentionally copyable. The placeholder header created before session
+//! configuration and the configured session header must share the same selected motion and
+//! `Instant`, otherwise the mascot can restart or switch motions when session metadata arrives.
+//! Once the fixed startup window expires, callers render `STATIC_FRAME` and stop scheduling
+//! mascot redraws.
+
 use crate::codex_logo_frames::BLINK_FRAMES;
 use crate::codex_logo_frames::READ_BELOW_FRAMES;
 use crate::codex_logo_frames::THINKING_FRAMES;
@@ -11,6 +24,7 @@ pub(crate) use crate::codex_logo_frames::HEIGHT;
 pub(crate) use crate::codex_logo_frames::LogoFrame;
 pub(crate) use crate::codex_logo_frames::WIDTH;
 
+/// Number of columns reserved between the mascot and session text.
 pub(crate) const GAP_WIDTH: usize = 1;
 
 const ANIMATION_FRAME_MILLIS: u64 = 200;
@@ -36,6 +50,7 @@ const DARK_GRADIENT: [(u8, u8, u8); HEIGHT] = [
     (27, 57, 176),
 ];
 
+/// Motion sequences eligible for the one-shot startup animation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StartupAnimationKind {
     ReadBelow,
@@ -43,6 +58,11 @@ pub(crate) enum StartupAnimationKind {
     Working,
 }
 
+/// Selected startup motion and the clock origin shared across header handoffs.
+///
+/// Keep this value intact when replacing the placeholder header with configured session
+/// information. Constructing another value during that handoff would restart the animation and
+/// could choose a different motion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct StartupAnimation {
     kind: StartupAnimationKind,
@@ -55,8 +75,10 @@ const STARTUP_ANIMATION_KINDS: [StartupAnimationKind; 3] = [
     StartupAnimationKind::ReadBelow,
 ];
 
+/// Reference frame rendered after startup motion settles or when animations are disabled.
 pub(crate) const STATIC_FRAME: LogoFrame = BLINK_FRAMES[0];
 
+/// Starts one randomly selected mascot motion at the current instant.
 pub(crate) fn startup_animation() -> StartupAnimation {
     let mut rng = rand::rng();
     StartupAnimation {
@@ -65,14 +87,19 @@ pub(crate) fn startup_animation() -> StartupAnimation {
     }
 }
 
+/// Returns the total lifetime of the one-shot startup motion.
 pub(crate) fn startup_animation_duration() -> Duration {
     Duration::from_millis(ANIMATION_FRAME_MILLIS * FRAME_COUNT as u64 * STARTUP_ANIMATION_LOOPS)
 }
 
+/// Returns the redraw cadence expected while startup motion is active.
 pub(crate) fn animation_frame_interval() -> Duration {
     Duration::from_millis(ANIMATION_FRAME_MILLIS)
 }
 
+/// Returns the current frame tick while startup motion remains active.
+///
+/// `None` means the caller should settle the header to `STATIC_FRAME` and stop scheduling redraws.
 pub(crate) fn animation_tick(animation: StartupAnimation) -> Option<u64> {
     let elapsed = animation.start.elapsed();
     if elapsed >= startup_animation_duration() {
@@ -82,10 +109,12 @@ pub(crate) fn animation_tick(animation: StartupAnimation) -> Option<u64> {
     }
 }
 
+/// Resolves the generated mascot frame for an active animation tick.
 pub(crate) fn frame_for_tick(animation: StartupAnimation, tick: u64) -> &'static LogoFrame {
     &animation_frames(animation.kind)[tick as usize % FRAME_COUNT]
 }
 
+/// Selects a readable static mascot gradient for the terminal background.
 pub(crate) fn gradient_for_bg(bg: Option<(u8, u8, u8)>) -> [(u8, u8, u8); HEIGHT] {
     if bg.is_some_and(color::is_light) {
         DARK_GRADIENT
@@ -94,6 +123,7 @@ pub(crate) fn gradient_for_bg(bg: Option<(u8, u8, u8)>) -> [(u8, u8, u8); HEIGHT
     }
 }
 
+/// Selects the mascot gradient for an active tick, including the moving highlight row.
 pub(crate) fn gradient_for_animation_tick(
     bg: Option<(u8, u8, u8)>,
     tick: u64,

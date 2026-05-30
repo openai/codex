@@ -297,6 +297,11 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     }
 
     /// Settles transient visuals before an active cell is committed to transcript history.
+    ///
+    /// Implementations with time-dependent rendering should discard that state here so committed
+    /// history remains stable and does not require redraw scheduling. `ChatWidget` calls this when
+    /// flushing an active cell; forgetting to forward it through wrapper cells can leave transcript
+    /// history dependent on an expired animation clock.
     fn finalize_for_history(&mut self) {}
 }
 

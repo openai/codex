@@ -61,6 +61,7 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
+        // Select startup motion once so the placeholder and configured headers share one clock.
         let startup_logo_animation = config.animations.then(codex_logo::startup_animation);
         let active_cell = Some(Self::placeholder_session_header_cell(
             &config,

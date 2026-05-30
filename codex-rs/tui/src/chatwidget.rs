@@ -633,6 +633,8 @@ pub(crate) struct ChatWidget {
     forked_from: Option<ThreadId>,
     interrupted_turn_notice_mode: InterruptedTurnNoticeMode,
     frame_requester: FrameRequester,
+    // Shared by the placeholder and configured headers so startup motion does not restart while
+    // session metadata arrives.
     startup_logo_animation: Option<codex_logo::StartupAnimation>,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -1159,6 +1161,8 @@ impl ChatWidget {
         if let Some(pet) = self.ambient_pet.as_ref() {
             pet.schedule_next_frame();
         }
+        // Session-header cells expose a tick only while the one-shot mascot motion is active.
+        // Once it expires, settle configured session info into stable transcript history.
         if self.startup_logo_animation.is_some() {
             if self
                 .transcript
@@ -1495,7 +1499,10 @@ impl ChatWidget {
         Box::new(header)
     }
 
-    /// Merge the real session info cell with any placeholder header to avoid double boxes.
+    /// Merge configured session info with the placeholder while preserving startup mascot motion.
+    ///
+    /// The configured header remains active until the shared startup animation settles, avoiding a
+    /// second header box and keeping transcript history static after the eventual flush.
     fn apply_session_info_cell(&mut self, cell: history_cell::SessionInfoCell) {
         let mut session_info_cell = Some(Box::new(cell) as Box<dyn HistoryCell>);
         let merged_header = if let Some(active) = self.transcript.active_cell.take() {

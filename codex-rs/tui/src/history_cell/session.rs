@@ -120,10 +120,17 @@ impl HistoryCell for TooltipHistoryCell {
     }
 }
 
+/// Session header plus any startup guidance or tooltip cells rendered with it.
 #[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
 impl SessionInfoCell {
+    /// Preserves a startup mascot animation when configured session information replaces a placeholder.
+    ///
+    /// `new_session_info` always includes one `SessionHeaderHistoryCell`. This method locates that
+    /// nested header so the placeholder and configured header can share the same selected motion
+    /// and clock origin. If the session-info composition changes, keep this propagation path
+    /// intact or the startup mascot will stop or restart during the handoff.
     pub(crate) fn with_startup_logo_animation(
         mut self,
         animation: codex_logo::StartupAnimation,
@@ -266,6 +273,11 @@ pub(crate) fn has_yolo_permissions(
                 }
         )
 }
+/// Header card rendered while a session is configuring and after its metadata arrives.
+///
+/// The same type is used for the dim placeholder and configured header so both layouts follow the
+/// same mascot width and fallback rules. `logo_animation` is transient: active cells may render
+/// time-dependent frames, while committed history must be finalized to the static reference frame.
 #[derive(Debug)]
 pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
@@ -321,6 +333,10 @@ impl SessionHeaderHistoryCell {
         self
     }
 
+    /// Attaches transient startup mascot state to this header.
+    ///
+    /// Pass through the original `StartupAnimation` when replacing a placeholder header. Creating
+    /// a new value here would restart the clock and may switch the selected motion mid-startup.
     pub(crate) fn with_startup_logo_animation(
         mut self,
         animation: codex_logo::StartupAnimation,
@@ -459,6 +475,9 @@ impl HistoryCell for SessionHeaderHistoryCell {
         };
 
         let text_lines = build_text_lines(text_width);
+        // Rebuild text against the full inner width when the side-by-side layout cannot fit.
+        // Reusing `text_lines` would keep the directory truncated for mascot space after the
+        // mascot itself has been removed.
         if !show_logo || text_lines.iter().any(|line| line_width(line) > text_width) {
             return with_border(build_text_lines(inner_width));
         }

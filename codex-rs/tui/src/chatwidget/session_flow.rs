@@ -121,6 +121,7 @@ impl ChatWidget {
                 show_fast_status,
             );
             if let Some(animation) = self.startup_logo_animation {
+                // Continue the placeholder's original motion instead of restarting at handoff.
                 session_info_cell = session_info_cell.with_startup_logo_animation(animation);
             }
             self.apply_session_info_cell(session_info_cell);
