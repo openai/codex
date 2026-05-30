@@ -437,27 +437,30 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!("{dir_label} ");
         let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
-        let dir_max_width = text_width.saturating_sub(dir_prefix_width);
-        let dir = self.format_directory(Some(dir_max_width));
-        let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
+        let build_text_lines = |width: usize| {
+            let dir_max_width = width.saturating_sub(dir_prefix_width);
+            let dir = self.format_directory(/*max_width*/ Some(dir_max_width));
+            let dir_spans = vec![Span::from(dir_prefix.clone()).dim(), Span::from(dir)];
+            let mut lines = vec![
+                make_row(title_spans.clone()),
+                make_row(Vec::new()),
+                make_row(model_spans.clone()),
+                make_row(dir_spans),
+            ];
 
-        let mut text_lines = vec![
-            make_row(title_spans),
-            make_row(Vec::new()),
-            make_row(model_spans),
-            make_row(dir_spans),
-        ];
+            if self.yolo_mode {
+                let permissions_label = format!("{PERMISSIONS_LABEL:<label_width$}");
+                lines.push(make_row(vec![
+                    Span::from(format!("{permissions_label} ")).dim(),
+                    "YOLO mode".magenta().bold(),
+                ]));
+            }
+            lines
+        };
 
-        if self.yolo_mode {
-            let permissions_label = format!("{PERMISSIONS_LABEL:<label_width$}");
-            text_lines.push(make_row(vec![
-                Span::from(format!("{permissions_label} ")).dim(),
-                "YOLO mode".magenta().bold(),
-            ]));
-        }
-
+        let text_lines = build_text_lines(text_width);
         if !show_logo || text_lines.iter().any(|line| line_width(line) > text_width) {
-            return with_border(text_lines);
+            return with_border(build_text_lines(inner_width));
         }
 
         let logo_animation_tick = self.logo_animation_tick();

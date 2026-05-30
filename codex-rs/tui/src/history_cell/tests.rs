@@ -1499,18 +1499,38 @@ fn session_header_hides_fast_status_when_disabled() {
 
 #[test]
 fn session_header_hides_logo_when_text_would_not_fit() {
+    let directory = test_path_buf("/tmp/project/with/a/long/directory/name")
+        .abs()
+        .to_path_buf();
     let cell = SessionHeaderHistoryCell::new(
         "gpt-4o".to_string(),
         Some(ReasoningEffortConfig::High),
         /*show_fast_status*/ true,
-        std::env::temp_dir(),
+        directory.clone(),
         "test",
     );
 
     let rendered = render_lines(&cell.display_lines(/*width*/ 48)).join("\n");
+    let inner_width = card_inner_width(/*width*/ 48, SESSION_HEADER_MAX_INNER_WIDTH)
+        .expect("session header should fit");
+    let full_width_directory = SessionHeaderHistoryCell::format_directory_inner(
+        &directory,
+        /*max_width*/ Some(inner_width.saturating_sub("directory: ".len())),
+    );
+    let logo_width_directory = SessionHeaderHistoryCell::format_directory_inner(
+        &directory,
+        /*max_width*/
+        Some(
+            inner_width
+                .saturating_sub(codex_logo::WIDTH + codex_logo::GAP_WIDTH)
+                .saturating_sub("directory: ".len()),
+        ),
+    );
 
     assert!(rendered.contains("OpenAI Codex"));
     assert!(!rendered.contains("⣿"));
+    assert!(rendered.contains(&full_width_directory));
+    assert_ne!(full_width_directory, logo_width_directory);
 }
 
 #[tokio::test]
