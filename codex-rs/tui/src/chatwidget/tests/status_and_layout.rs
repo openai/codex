@@ -1581,6 +1581,21 @@ async fn ui_snapshots_small_heights_task_running() {
 
 #[tokio::test]
 async fn startup_header_handoff_visible_states_snapshot() {
+    fn visible_text(text: &str) -> String {
+        text.lines()
+            .filter_map(|line| {
+                let line = line.trim_matches('"').trim();
+                if line.is_empty() || line.starts_with('╭') || line.starts_with('╰') {
+                    None
+                } else {
+                    Some(line.trim_matches('│').trim())
+                }
+            })
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
@@ -1616,7 +1631,7 @@ async fn startup_header_handoff_visible_states_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw placeholder header");
-    let placeholder = normalized_backend_snapshot(terminal.backend());
+    let placeholder = visible_text(&normalized_backend_snapshot(terminal.backend()));
 
     let rollout_file = NamedTempFile::new().expect("rollout file");
     chat.handle_thread_session(crate::session_state::ThreadSessionState {

@@ -66,6 +66,13 @@ impl AppsTestServer {
     }
 
     pub async fn mount_searchable(server: &MockServer) -> Result<Self> {
+        Self::mount_searchable_with_tools_list_delay(server, /*tools_list_delay*/ None).await
+    }
+
+    pub async fn mount_searchable_with_tools_list_delay(
+        server: &MockServer,
+        tools_list_delay: Option<Duration>,
+    ) -> Result<Self> {
         mount_oauth_metadata(server).await;
         mount_connectors_directory(server).await;
         mount_streamable_http_json_rpc(
@@ -74,7 +81,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
-            /*tools_list_delay*/ None,
+            tools_list_delay,
         )
         .await;
         Ok(Self {

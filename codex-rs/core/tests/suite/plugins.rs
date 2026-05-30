@@ -501,6 +501,9 @@ async fn selected_skill_rewaits_for_app_after_installing_mcp_dependency() -> Res
         Some(Duration::from_secs(/*secs*/ 2)),
     )
     .await?;
+    let dependency_server = start_mock_server().await;
+    AppsTestServer::mount_with_connector_name(&dependency_server, "Dependency").await?;
+    let dependency_url = format!("{}/api/codex/apps", dependency_server.uri());
     let mock = mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),

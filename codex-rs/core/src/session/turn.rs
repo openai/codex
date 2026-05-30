@@ -53,6 +53,8 @@ use crate::stream_events_utils::record_completed_response_item_with_finalized_fa
 use crate::tasks::emit_compact_metric;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::handlers::LazyMcpToolSearchLoader;
+use crate::tools::handlers::LazyMcpToolSearchLoaders;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
@@ -97,6 +99,7 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::DiscoverableTool;
 use codex_tools::ToolName;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
@@ -1177,7 +1180,7 @@ async fn run_sampling_request(
 
 #[expect(
     clippy::await_holding_invalid_type,
-    reason = "ready-or-cached tool inspection never awaits unresolved MCP startup"
+    reason = "MCP tool inspection holds the session-owned manager guard while listing tools"
 )]
 #[instrument(level = "trace",
     skip_all,
@@ -1199,10 +1202,28 @@ pub(crate) async fn built_tools(
         .instrument(trace_span!("read_mcp_connection_manager"))
         .await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = mcp_connection_manager
-        .list_ready_or_cached_tools()
-        .or_cancel(cancellation_token)
-        .await?;
+    let lazy_mcp_tool_search_available =
+        search_tool_enabled(turn_context) && turn_context.provider.capabilities().namespace_tools;
+    let (all_mcp_tools, mut pending_mcp_server_names) = if lazy_mcp_tool_search_available {
+        let pending_mcp_server_names =
+            mcp_connection_manager.pending_server_names_without_cached_tool_info_snapshot();
+        let tools = mcp_connection_manager
+            .list_ready_or_cached_tools()
+            .or_cancel(cancellation_token)
+            .await?;
+        (tools, pending_mcp_server_names)
+    } else {
+        let tools = mcp_connection_manager
+            .list_all_tools()
+            .or_cancel(cancellation_token)
+            .await?;
+        (tools, Vec::new())
+    };
+    pending_mcp_server_names.retain(|server_name| {
+        !all_mcp_tools
+            .iter()
+            .any(|tool| tool.server_name == *server_name)
+    });
     drop(mcp_connection_manager);
     let loaded_plugins = sess
         .services
@@ -1211,6 +1232,11 @@ pub(crate) async fn built_tools(
         .await;
 
     let apps_enabled = turn_context.apps_enabled();
+    let effective_plugin_connector_ids = loaded_plugins
+        .effective_apps()
+        .into_iter()
+        .map(|connector_id| connector_id.0)
+        .collect::<Vec<_>>();
     let accessible_connectors =
         apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
     let accessible_connectors_with_enabled_state =
@@ -1219,10 +1245,7 @@ pub(crate) async fn built_tools(
         });
     let connectors = if apps_enabled {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
-            loaded_plugins
-                .effective_apps()
-                .into_iter()
-                .map(|connector_id| connector_id.0),
+            effective_plugin_connector_ids.iter().cloned(),
             accessible_connectors.clone().unwrap_or_default(),
         );
         Some(connectors::with_app_enabled_state(
@@ -1232,6 +1255,41 @@ pub(crate) async fn built_tools(
     } else {
         None
     };
+    let apps_inventory_pending = pending_mcp_server_names
+        .iter()
+        .any(|server_name| server_name == CODEX_APPS_MCP_SERVER_NAME);
+    // Keep the tool_search schema stable as background startup finishes.
+    let lazy_mcp_tools: Option<LazyMcpToolSearchLoaders> =
+        (lazy_mcp_tool_search_available && has_mcp_servers).then(|| {
+            let mcp_connection_manager = Arc::clone(&sess.services.mcp_connection_manager);
+            let config = Arc::clone(&turn_context.config);
+            let effective_plugin_connector_ids = effective_plugin_connector_ids.clone();
+            let available = {
+                let mcp_connection_manager = Arc::clone(&mcp_connection_manager);
+                let config = Arc::clone(&config);
+                let effective_plugin_connector_ids = effective_plugin_connector_ids.clone();
+                Arc::new(move || {
+                    load_available_mcp_tools_for_search(
+                        Arc::clone(&mcp_connection_manager),
+                        apps_enabled,
+                        effective_plugin_connector_ids.clone(),
+                        Arc::clone(&config),
+                    )
+                    .boxed()
+                }) as LazyMcpToolSearchLoader
+            };
+            let pending = Arc::new(move || {
+                load_pending_mcp_tools_for_search(
+                    Arc::clone(&mcp_connection_manager),
+                    pending_mcp_server_names.clone(),
+                    apps_enabled,
+                    effective_plugin_connector_ids.clone(),
+                    Arc::clone(&config),
+                )
+                .boxed()
+            }) as LazyMcpToolSearchLoader;
+            LazyMcpToolSearchLoaders { available, pending }
+        });
     let auth = sess.services.auth_manager.auth().await;
     let loaded_plugin_app_connector_ids = loaded_plugins
         .effective_apps()
@@ -1248,6 +1306,10 @@ pub(crate) async fn built_tools(
             )
             .await
             .map(|discoverable_tools| {
+                let discoverable_tools = filter_discoverable_tools_while_apps_inventory_pending(
+                    discoverable_tools,
+                    apps_inventory_pending,
+                );
                 filter_request_plugin_install_discoverable_tools_for_client(
                     discoverable_tools,
                     turn_context.app_server_client_name.as_deref(),
@@ -1271,7 +1333,7 @@ pub(crate) async fn built_tools(
         &all_mcp_tools,
         connectors.as_deref(),
         &turn_context.config,
-        search_tool_enabled(turn_context),
+        lazy_mcp_tool_search_available,
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
@@ -1280,12 +1342,86 @@ pub(crate) async fn built_tools(
         ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
-            lazy_mcp_tools: None,
+            lazy_mcp_tools,
             discoverable_tools,
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
     )))
+}
+
+pub(super) fn filter_discoverable_tools_while_apps_inventory_pending(
+    discoverable_tools: Vec<DiscoverableTool>,
+    apps_inventory_pending: bool,
+) -> Vec<DiscoverableTool> {
+    if !apps_inventory_pending {
+        return discoverable_tools;
+    }
+
+    // Connector installability depends on current Apps accessibility, which is
+    // unknown until codex_apps startup completes. Plugin suggestions are
+    // independent of that pending inventory.
+    discoverable_tools
+        .into_iter()
+        .filter(|tool| matches!(tool, DiscoverableTool::Plugin(_)))
+        .collect()
+}
+
+async fn load_pending_mcp_tools_for_search(
+    mcp_connection_manager: Arc<tokio::sync::RwLock<codex_mcp::McpConnectionManager>>,
+    pending_mcp_server_names: Vec<String>,
+    apps_enabled: bool,
+    effective_plugin_connector_ids: Vec<String>,
+    config: Arc<crate::config::Config>,
+) -> Vec<codex_mcp::ToolInfo> {
+    let readiness = {
+        let manager = mcp_connection_manager.read().await;
+        manager.wait_for_servers_ready(&pending_mcp_server_names)
+    };
+    let _failures = readiness.await;
+    load_available_mcp_tools_for_search(
+        mcp_connection_manager,
+        apps_enabled,
+        effective_plugin_connector_ids,
+        config,
+    )
+    .await
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "post-readiness tool inspection only reads available MCP inventory"
+)]
+async fn load_available_mcp_tools_for_search(
+    mcp_connection_manager: Arc<tokio::sync::RwLock<codex_mcp::McpConnectionManager>>,
+    apps_enabled: bool,
+    effective_plugin_connector_ids: Vec<String>,
+    config: Arc<crate::config::Config>,
+) -> Vec<codex_mcp::ToolInfo> {
+    // Names are normalized across the entire visible MCP inventory. Rebuild
+    // all searchable MCP entries together so a newly introduced collision
+    // cannot invalidate a previously returned name.
+    let available_mcp_tools = mcp_connection_manager
+        .read()
+        .await
+        .list_ready_or_cached_tools()
+        .await;
+    let connectors = apps_enabled.then(|| {
+        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+            effective_plugin_connector_ids,
+            connectors::accessible_connectors_from_mcp_tools(&available_mcp_tools),
+        );
+        connectors::with_app_enabled_state(connectors, config.as_ref())
+    });
+    let mcp_tool_exposure = build_mcp_tool_exposure(
+        &available_mcp_tools,
+        connectors.as_deref(),
+        config.as_ref(),
+        /*search_tool_enabled*/ true,
+    );
+    let mut searchable_tools = mcp_tool_exposure.direct_tools;
+    searchable_tools.extend(mcp_tool_exposure.deferred_tools.unwrap_or_default());
+    searchable_tools
 }
 
 #[derive(Debug)]

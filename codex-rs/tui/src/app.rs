@@ -1211,10 +1211,8 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        if self.should_defer_draw_for_session_header_commit(&event) {
-            return Ok(AppRunControl::Continue);
-        }
-
+        let defer_draw_for_session_header_commit =
+            self.should_defer_draw_for_session_header_commit(&event);
         let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
         if terminal_resize_reflow_enabled && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
@@ -1223,6 +1221,12 @@ See the Codex keymap documentation for supported actions and examples."
             if size != tui.terminal.last_known_screen_size {
                 self.refresh_status_line();
             }
+        }
+        if defer_draw_for_session_header_commit {
+            // Preserve current dimensions for the queued session header insert while keeping the
+            // provisional header and composer from being painted as separate frames.
+            tui.terminal.autoresize()?;
+            return Ok(AppRunControl::Continue);
         }
 
         if self.overlay.is_some() {

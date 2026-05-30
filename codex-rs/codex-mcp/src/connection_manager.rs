@@ -551,6 +551,23 @@ impl McpConnectionManager {
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
+    /// Returns servers whose tool inventory is not yet available without waiting.
+    pub fn pending_server_names_without_cached_tool_info_snapshot(&self) -> Vec<String> {
+        let mut pending = self
+            .clients
+            .iter()
+            .filter(|(_, managed_client)| {
+                managed_client.cached_tool_info_snapshot.is_none()
+                    && !managed_client
+                        .startup_complete
+                        .load(std::sync::atomic::Ordering::Acquire)
+            })
+            .map(|(server_name, _)| server_name.clone())
+            .collect::<Vec<_>>();
+        pending.sort();
+        pending
+    }
+
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
     /// On success, the refreshed tools replace the cache contents and the

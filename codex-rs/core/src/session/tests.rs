@@ -1581,6 +1581,37 @@ fn collect_explicit_app_ids_from_skill_items_skips_plain_mentions_with_skill_con
     assert_eq!(connector_ids, HashSet::<String>::new());
 }
 
+#[test]
+fn pending_apps_inventory_omits_connector_install_suggestions_but_keeps_plugins() {
+    let tools = vec![
+        codex_tools::DiscoverableTool::Connector(Box::new(make_connector("calendar", "Calendar"))),
+        codex_tools::DiscoverableTool::Plugin(Box::new(codex_tools::DiscoverablePluginInfo {
+            id: "docs".to_string(),
+            name: "Docs".to_string(),
+            description: None,
+            has_skills: false,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        })),
+    ];
+
+    assert_eq!(
+        filter_discoverable_tools_while_apps_inventory_pending(
+            tools, /*apps_inventory_pending*/ true
+        ),
+        vec![codex_tools::DiscoverableTool::Plugin(Box::new(
+            codex_tools::DiscoverablePluginInfo {
+                id: "docs".to_string(),
+                name: "Docs".to_string(),
+                description: None,
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            }
+        ))]
+    );
+}
+
 #[tokio::test]
 async fn reconstruct_history_matches_live_compactions() {
     let (session, turn_context) = make_session_and_context().await;
@@ -9737,8 +9768,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         &turn_context,
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
-            lazy_mcp_tools: None,
             mcp_tools: Some(tools),
+            lazy_mcp_tools: None,
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

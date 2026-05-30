@@ -47,6 +47,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -266,15 +267,6 @@ async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> R
         namespace_child_tool(
             &requests[0].body_json(),
             SEARCH_CALENDAR_NAMESPACE,
-            SEARCH_CALENDAR_CREATE_TOOL
-        )
-        .is_some(),
-        "visible tool from the app-only tool's connector should be declared"
-    );
-    assert!(
-        namespace_child_tool(
-            &requests[0].body_json(),
-            SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_APP_ONLY_TOOL
         )
         .is_none(),
@@ -421,6 +413,66 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_search_model_waits_for_pending_apps_tools_on_first_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_connector_name_and_tools_list_delay(
+        &server,
+        "Calendar",
+        Some(Duration::from_secs(/*secs*/ 2)),
+    )
+    .await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder =
+        apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            configure_search_capable_model(config);
+            let model = config
+                .model_catalog
+                .as_mut()
+                .and_then(|catalog| {
+                    catalog
+                        .models
+                        .iter_mut()
+                        .find(|model| model.slug == "gpt-5.4")
+                })
+                .expect("gpt-5.4 exists in bundled models.json");
+            model.supports_search_tool = false;
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "Create a calendar event",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let body = mock.single_request().body_json();
+    let tools = tool_names(&body);
+    assert!(!tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
+    assert!(
+        namespace_child_tool(
+            &body,
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL
+        )
+        .is_some()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_app_mentions_respect_always_defer() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -480,7 +532,11 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let apps_server = AppsTestServer::mount_searchable_with_tools_list_delay(
+        &server,
+        Some(Duration::from_secs(/*secs*/ 2)),
+    )
+    .await?;
     let call_id = "tool-search-1";
     let mock = mount_sse_sequence(
         &server,
@@ -681,6 +737,11 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .iter()
             .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
         "app namespace should still be hidden before search: {first_request_tools:?}"
+    );
+    assert!(
+        tool_search_description(&first_request_body).is_some_and(|description| description
+            .contains("- MCP tools: Tools from MCP servers still starting")),
+        "pending Apps startup should be advertised as an MCP tool_search source"
     );
 
     let output_item = tool_search_output_item(&requests[1], call_id);
@@ -1137,17 +1198,6 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
             .any(|name| name == TOOL_SEARCH_TOOL_NAME),
         "first request should advertise tool_search: {first_request_tools:?}"
     );
-    assert!(
-        !first_request_tools
-            .iter()
-            .any(|name| name == "mcp__rmcp__echo"),
-        "non-app MCP tools should be hidden before search in large-search mode: {first_request_tools:?}"
-    );
-    assert!(
-        !first_request_tools.iter().any(|name| name == "mcp__rmcp"),
-        "non-app MCP namespace should be hidden before search in large-search mode: {first_request_tools:?}"
-    );
-
     let echo_tools = tool_search_output_tools(&requests[1], echo_call_id);
     let echo_output = json!({ "tools": echo_tools });
     let rmcp_echo_tool = namespace_child_tool(&echo_output, "mcp__rmcp", "echo")

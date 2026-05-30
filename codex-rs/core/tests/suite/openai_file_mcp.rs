@@ -160,7 +160,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
     tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
-        "Extract the report text with the app tool.",
+        "Use [$calendar](app://calendar) to extract the report text.",
         AskForApproval::Never,
         PermissionProfile::Disabled,
     )
