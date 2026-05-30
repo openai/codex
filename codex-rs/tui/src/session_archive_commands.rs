@@ -142,7 +142,7 @@ async fn lookup_session_by_exact_name(
                 archived: Some(matches!(action, SessionArchiveAction::Unarchive)),
                 cwd: None,
                 use_state_db_only: false,
-                search_term: None,
+                search_term: Some(name.to_string()),
             })
             .await
             .wrap_err("failed to list sessions while resolving session name")?;
