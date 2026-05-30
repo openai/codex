@@ -24,6 +24,7 @@
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -321,6 +322,7 @@ impl ModelClient {
         thread_id: ThreadId,
         installation_id: String,
         provider_info: ModelProviderInfo,
+        codex_home: PathBuf,
         session_source: SessionSource,
         parent_thread_id: Option<ThreadId>,
         model_verbosity: Option<VerbosityConfig>,
@@ -329,7 +331,7 @@ impl ModelClient {
         beta_features_header: Option<String>,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
-        let model_provider = create_model_provider(provider_info, auth_manager);
+        let model_provider = create_model_provider(provider_info, auth_manager, Some(codex_home));
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
             .as_ref()

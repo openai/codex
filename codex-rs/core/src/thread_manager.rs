@@ -221,7 +221,11 @@ pub fn build_models_manager(
     config: &Config,
     auth_manager: Arc<AuthManager>,
 ) -> SharedModelsManager {
-    let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
+    let provider = create_model_provider(
+        config.model_provider.clone(),
+        Some(auth_manager),
+        Some(config.codex_home.to_path_buf()),
+    );
     provider.models_manager(
         config.codex_home.to_path_buf(),
         config.model_catalog.clone(),
@@ -380,8 +384,12 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(codex_home, /*config_model_catalog*/ None),
+                models_manager: create_model_provider(
+                    provider,
+                    Some(auth_manager.clone()),
+                    Some(codex_home.clone()),
+                )
+                .models_manager(codex_home, /*config_model_catalog*/ None),
                 environment_manager,
                 skills_manager,
                 plugins_manager,

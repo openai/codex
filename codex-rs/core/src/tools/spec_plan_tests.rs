@@ -271,6 +271,7 @@ fn use_chatgpt_auth(turn: &mut TurnContext) {
     turn.provider = create_model_provider(
         turn.config.model_provider.clone(),
         turn.auth_manager.clone(),
+        Some(turn.config.codex_home.to_path_buf()),
     );
 }
 
@@ -280,7 +281,11 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
         config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
         config.model_provider = provider_info.clone();
     });
-    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+    turn.provider = create_model_provider(
+        provider_info,
+        turn.auth_manager.clone(),
+        Some(turn.config.codex_home.to_path_buf()),
+    );
 }
 
 struct WebRunExtensionTool;

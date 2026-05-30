@@ -238,6 +238,9 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
+            LoginAccountParams::AmazonBedrock { key, region } => {
+                self.login_amazon_bedrock_v2(request_id, key, region).await;
+            }
         }
         Ok(())
     }
@@ -298,6 +301,123 @@ impl AccountRequestProcessor {
             self.send_login_success_notifications(/*login_id*/ None)
                 .await;
         }
+    }
+
+    async fn login_amazon_bedrock_common(
+        &self,
+        key: &str,
+        region: &str,
+    ) -> std::result::Result<(), JSONRPCErrorError> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(invalid_request("Amazon Bedrock key must not be empty."));
+        }
+
+        let region = region.trim();
+        if !is_supported_amazon_bedrock_region(region) {
+            return Err(invalid_request(format!(
+                "Amazon Bedrock Mantle does not support region `{region}`"
+            )));
+        }
+
+        // Cancel any active login attempt.
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                drop(active);
+            }
+        }
+
+        save_amazon_bedrock_auth(&self.config.codex_home, key, region)
+            .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
+
+        self.config_manager
+            .batch_write(ConfigBatchWriteParams {
+                edits: vec![
+                    ConfigWriteEdit {
+                        key_path: "model_provider".to_string(),
+                        value: serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
+                        merge_strategy: MergeStrategy::Upsert,
+                    },
+                    ConfigWriteEdit {
+                        key_path: format!(
+                            "model_providers.{AMAZON_BEDROCK_PROVIDER_ID}.aws.region"
+                        ),
+                        value: serde_json::json!(region),
+                        merge_strategy: MergeStrategy::Upsert,
+                    },
+                ],
+                file_path: None,
+                expected_version: None,
+                reload_user_config: false,
+            })
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to update Amazon Bedrock config: {err}"))
+            })?;
+
+        let next_config = self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+        for thread_id in self.thread_manager.list_thread_ids().await {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                continue;
+            };
+            thread.refresh_runtime_config(next_config.clone()).await;
+        }
+        Self::spawn_effective_plugins_changed_task(
+            Arc::clone(&self.thread_manager),
+            self.config_manager.clone(),
+        );
+
+        Ok(())
+    }
+
+    async fn login_amazon_bedrock_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        key: String,
+        region: String,
+    ) {
+        let result = self
+            .login_amazon_bedrock_common(&key, &region)
+            .await
+            .map(|()| LoginAccountResponse::AmazonBedrock {});
+        let logged_in = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
+
+        if logged_in {
+            self.send_amazon_bedrock_login_success_notifications().await;
+        }
+    }
+
+    async fn send_amazon_bedrock_login_success_notifications(&self) {
+        Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+            &self.config_manager,
+            &self.thread_manager,
+            self.auth_manager.auth_cached(),
+        )
+        .await;
+
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountLoginCompleted(
+                AccountLoginCompletedNotification {
+                    login_id: None,
+                    success: true,
+                    error: None,
+                },
+            ))
+            .await;
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                AccountUpdatedNotification {
+                    auth_mode: None,
+                    plan_type: None,
+                },
+            ))
+            .await;
     }
 
     // Build options for a ChatGPT login attempt; performs validation.
@@ -682,6 +802,9 @@ impl AccountRequestProcessor {
                 return Err(internal_error(format!("logout failed: {err}")));
             }
         }
+        delete_amazon_bedrock_auth(&self.config.codex_home).map_err(|err| {
+            internal_error(format!("failed to remove Amazon Bedrock auth: {err}"))
+        })?;
 
         Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
             &self.config_manager,
@@ -810,9 +933,15 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
+        let config = self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
         let provider = create_model_provider(
-            self.config.model_provider.clone(),
+            config.model_provider.clone(),
             Some(self.auth_manager.clone()),
+            Some(config.codex_home.to_path_buf()),
         );
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,

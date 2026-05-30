@@ -1037,6 +1037,7 @@ impl Session {
                     thread_id,
                     installation_id.clone(),
                     session_configuration.provider.clone(),
+                    config.codex_home.to_path_buf(),
                     session_configuration.session_source.clone(),
                     session_configuration.parent_thread_id,
                     config.model_verbosity,

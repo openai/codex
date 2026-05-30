@@ -2339,6 +2339,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     turn_context.provider = create_model_provider(
         config.model_provider.clone(),
         turn_context.auth_manager.clone(),
+        Some(config.codex_home.to_path_buf()),
     );
 
     let session = Arc::new(session);
@@ -2623,6 +2624,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     turn_context.provider = create_model_provider(
         config.model_provider.clone(),
         turn_context.auth_manager.clone(),
+        Some(config.codex_home.to_path_buf()),
     );
 
     let session = Arc::new(session);
@@ -2843,6 +2845,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
         turn_context.provider = create_model_provider(
             config.model_provider.clone(),
             turn_context.auth_manager.clone(),
+            Some(config.codex_home.to_path_buf()),
         );
 
         let session = Arc::new(session);

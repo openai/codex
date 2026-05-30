@@ -18,4 +18,4 @@ chatgptAccountId: string,
  * When `null`, Codex attempts to derive the plan type from access-token
  * claims. If unavailable, the plan defaults to `unknown`.
  */
-chatgptPlanType?: string | null, };
+chatgptPlanType?: string | null, } | { "type": "amazonBedrock", key: string, region: string, };

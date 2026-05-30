@@ -5,6 +5,7 @@ use codex_protocol::error::Result;
 
 use super::auth::BedrockAuthMethod;
 use super::auth::resolve_auth_method;
+use super::provider_auth::AmazonBedrockAuth;
 
 const BEDROCK_MANTLE_SERVICE_NAME: &str = "bedrock-mantle";
 const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 12] = [
@@ -39,7 +40,7 @@ pub(super) fn region_from_config(aws: &ModelProviderAwsAuthInfo) -> Option<Strin
 }
 
 pub(super) fn base_url(region: &str) -> Result<String> {
-    if BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region) {
+    if is_supported_region(region) {
         Ok(format!("https://bedrock-mantle.{region}.api.aws/openai/v1"))
     } else {
         Err(CodexErr::Fatal(format!(
@@ -48,14 +49,25 @@ pub(super) fn base_url(region: &str) -> Result<String> {
     }
 }
 
-pub(super) async fn runtime_base_url(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
-    let region = resolve_region(aws).await?;
+pub fn is_supported_region(region: &str) -> bool {
+    BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region)
+}
+
+pub(super) async fn runtime_base_url(
+    stored_auth: Option<&AmazonBedrockAuth>,
+    aws: &ModelProviderAwsAuthInfo,
+) -> Result<String> {
+    let region = resolve_region(stored_auth, aws).await?;
     base_url(&region)
 }
 
-async fn resolve_region(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
-    match resolve_auth_method(aws).await? {
-        BedrockAuthMethod::EnvBearerToken { region, .. } => Ok(region),
+async fn resolve_region(
+    stored_auth: Option<&AmazonBedrockAuth>,
+    aws: &ModelProviderAwsAuthInfo,
+) -> Result<String> {
+    match resolve_auth_method(stored_auth, aws).await? {
+        BedrockAuthMethod::StoredBearerToken { region, .. }
+        | BedrockAuthMethod::EnvBearerToken { region, .. } => Ok(region),
         BedrockAuthMethod::AwsSdkAuth { context } => Ok(context.region().to_string()),
     }
 }

@@ -121,7 +121,7 @@ pub fn models_manager_with_provider(
     auth_manager: Arc<AuthManager>,
     provider: ModelProviderInfo,
 ) -> SharedModelsManager {
-    let provider = create_model_provider(provider, Some(auth_manager));
+    let provider = create_model_provider(provider, Some(auth_manager), Some(codex_home.clone()));
     provider.models_manager(codex_home, /*config_model_catalog*/ None)
 }
 

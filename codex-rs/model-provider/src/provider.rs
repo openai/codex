@@ -148,9 +148,10 @@ pub type SharedModelProvider = Arc<dyn ModelProvider>;
 pub fn create_model_provider(
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
+    codex_home: Option<PathBuf>,
 ) -> SharedModelProvider {
     if provider_info.is_amazon_bedrock() {
-        Arc::new(AmazonBedrockModelProvider::new(provider_info))
+        Arc::new(AmazonBedrockModelProvider::new(provider_info, codex_home))
     } else {
         Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
     }
@@ -356,6 +357,7 @@ mod tests {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
@@ -366,6 +368,7 @@ mod tests {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
 
         assert_eq!(
@@ -379,6 +382,7 @@ mod tests {
         let provider = create_model_provider(
             provider_for("https://example.test/v1".to_string()),
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
 
         assert_eq!(
@@ -395,6 +399,7 @@ mod tests {
         let provider = create_model_provider(
             provider_info_with_command_auth(),
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
 
         let auth_manager = provider
@@ -414,6 +419,7 @@ mod tests {
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
                 "openai-api-key",
             ))),
+            /*codex_home*/ None,
         );
 
         assert!(provider.auth_manager().is_none());
@@ -424,6 +430,7 @@ mod tests {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
 
         assert_eq!(
@@ -442,6 +449,7 @@ mod tests {
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
                 "openai-api-key",
             ))),
+            /*codex_home*/ None,
         );
 
         assert_eq!(
@@ -464,6 +472,7 @@ mod tests {
                 ..Default::default()
             },
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
 
         assert_eq!(
@@ -480,6 +489,7 @@ mod tests {
         let provider = create_model_provider(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
 
         assert_eq!(
@@ -496,6 +506,7 @@ mod tests {
         let provider = create_model_provider(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
         let manager =
             provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
@@ -533,6 +544,7 @@ mod tests {
         let provider = create_model_provider(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
+            /*codex_home*/ None,
         );
         let manager = provider.models_manager(
             test_codex_home(),
@@ -579,6 +591,7 @@ mod tests {
             Some(AuthManager::from_auth_for_testing(
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
             )),
+            /*codex_home*/ None,
         );
 
         let manager =

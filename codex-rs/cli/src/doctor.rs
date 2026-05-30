@@ -2260,7 +2260,11 @@ async fn websocket_reachability_check(
         provider.websocket_connect_timeout().as_millis()
     ));
 
-    let runtime_provider = create_model_provider(provider.clone(), auth_manager);
+    let runtime_provider = create_model_provider(
+        provider.clone(),
+        auth_manager,
+        Some(config.codex_home.to_path_buf()),
+    );
     let auth = runtime_provider.auth().await;
     details.push(format!(
         "auth mode: {}",

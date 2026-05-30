@@ -589,8 +589,15 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
     .then_some(turn_error)
 }
 
-async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
-    let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
+async fn resolve_runtime_model_provider_base_url(
+    provider: &ModelProviderInfo,
+    codex_home: &Path,
+) -> Option<String> {
+    let provider = create_model_provider(
+        provider.clone(),
+        /*auth_manager*/ None,
+        Some(codex_home.to_path_buf()),
+    );
     match provider.runtime_base_url().await {
         Ok(base_url) => base_url,
         Err(err) => {
@@ -839,7 +846,8 @@ impl App {
         );
         let runtime_model_provider_started_at = Instant::now();
         let runtime_model_provider_base_url =
-            resolve_runtime_model_provider_base_url(&config.model_provider).await;
+            resolve_runtime_model_provider_base_url(&config.model_provider, &config.codex_home)
+                .await;
         let runtime_model_provider_ms = runtime_model_provider_started_at.elapsed().as_millis();
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();

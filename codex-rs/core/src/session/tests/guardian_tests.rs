@@ -114,6 +114,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
+        Some(config.codex_home.to_path_buf()),
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
@@ -205,6 +206,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
+        Some(config.codex_home.to_path_buf()),
     );
 
     let requested_permissions = RequestPermissionProfile {
@@ -320,6 +322,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
+        Some(config.codex_home.to_path_buf()),
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
@@ -425,6 +428,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
         turn_context_raw.auth_manager.clone(),
+        Some(config.codex_home.to_path_buf()),
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);

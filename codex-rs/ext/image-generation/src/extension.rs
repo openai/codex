@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
@@ -26,6 +27,7 @@ struct ImageGenerationExtension {
 struct ImageGenerationExtensionConfig {
     enabled: bool,
     provider: ModelProviderInfo,
+    codex_home: PathBuf,
 }
 
 impl From<&Config> for ImageGenerationExtensionConfig {
@@ -35,6 +37,7 @@ impl From<&Config> for ImageGenerationExtensionConfig {
             enabled: config.features.enabled(Feature::ImageGenExt)
                 && config.model_provider.is_openai(),
             provider: config.model_provider.clone(),
+            codex_home: config.codex_home.to_path_buf(),
         }
     }
 }
@@ -77,7 +80,11 @@ impl ToolContributor for ImageGenerationExtension {
         }
 
         vec![Arc::new(ImageGenerationTool::new(CodexImagesBackend::new(
-            create_model_provider(config.provider.clone(), Some(self.auth_manager.clone())),
+            create_model_provider(
+                config.provider.clone(),
+                Some(self.auth_manager.clone()),
+                Some(config.codex_home.clone()),
+            ),
         )))]
     }
 }

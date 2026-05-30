@@ -1,6 +1,7 @@
 mod auth;
 mod catalog;
 mod mantle;
+mod provider_auth;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,17 +26,23 @@ use crate::provider::ProviderCapabilities;
 use auth::resolve_provider_auth;
 pub(crate) use catalog::static_model_catalog;
 use catalog::with_default_only_service_tier;
+pub use mantle::is_supported_region;
 use mantle::runtime_base_url;
+pub use provider_auth::AmazonBedrockAuth;
+pub use provider_auth::delete_amazon_bedrock_auth;
+pub use provider_auth::load_amazon_bedrock_auth;
+pub use provider_auth::save_amazon_bedrock_auth;
 
 /// Runtime provider for Amazon Bedrock's OpenAI-compatible Mantle endpoint.
 #[derive(Clone, Debug)]
 pub(crate) struct AmazonBedrockModelProvider {
     pub(crate) info: ModelProviderInfo,
     pub(crate) aws: ModelProviderAwsAuthInfo,
+    codex_home: Option<PathBuf>,
 }
 
 impl AmazonBedrockModelProvider {
-    pub(crate) fn new(provider_info: ModelProviderInfo) -> Self {
+    pub(crate) fn new(provider_info: ModelProviderInfo, codex_home: Option<PathBuf>) -> Self {
         let aws = provider_info
             .aws
             .clone()
@@ -46,7 +53,19 @@ impl AmazonBedrockModelProvider {
         Self {
             info: provider_info,
             aws,
+            codex_home,
         }
+    }
+
+    fn stored_auth(&self) -> Result<Option<AmazonBedrockAuth>> {
+        let Some(codex_home) = self.codex_home.as_deref() else {
+            return Ok(None);
+        };
+        load_amazon_bedrock_auth(codex_home).map_err(|err| {
+            codex_protocol::error::CodexErr::Fatal(format!(
+                "failed to load Amazon Bedrock auth: {err}"
+            ))
+        })
     }
 }
 
@@ -85,16 +104,21 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     async fn api_provider(&self) -> Result<Provider> {
         let mut api_provider_info = self.info.clone();
-        api_provider_info.base_url = Some(runtime_base_url(&self.aws).await?);
+        let stored_auth = self.stored_auth()?;
+        api_provider_info.base_url = Some(runtime_base_url(stored_auth.as_ref(), &self.aws).await?);
         api_provider_info.to_api_provider(/*auth_mode*/ None)
     }
 
     async fn runtime_base_url(&self) -> Result<Option<String>> {
-        Ok(Some(runtime_base_url(&self.aws).await?))
+        let stored_auth = self.stored_auth()?;
+        Ok(Some(
+            runtime_base_url(stored_auth.as_ref(), &self.aws).await?,
+        ))
     }
 
     async fn api_auth(&self) -> Result<SharedAuthProvider> {
-        resolve_provider_auth(&self.aws).await
+        let stored_auth = self.stored_auth()?;
+        resolve_provider_auth(stored_auth.as_ref(), &self.aws).await
     }
 
     fn models_manager(
@@ -135,6 +159,7 @@ mod tests {
     fn capabilities_disable_unsupported_hosted_tools() {
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            /*codex_home*/ None,
         );
 
         assert_eq!(
@@ -151,6 +176,7 @@ mod tests {
     fn approval_review_preferred_model_uses_bedrock_gpt_5_4() {
         let provider = AmazonBedrockModelProvider::new(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            /*codex_home*/ None,
         );
 
         assert_eq!(

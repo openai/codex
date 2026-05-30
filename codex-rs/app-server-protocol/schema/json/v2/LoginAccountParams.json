@@ -89,6 +89,30 @@
       ],
       "title": "ChatgptAuthTokensv2::LoginAccountParams",
       "type": "object"
+    },
+    {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "amazonBedrock"
+          ],
+          "title": "AmazonBedrockv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "region",
+        "type"
+      ],
+      "title": "AmazonBedrockv2::LoginAccountParams",
+      "type": "object"
     }
   ],
   "title": "LoginAccountParams"

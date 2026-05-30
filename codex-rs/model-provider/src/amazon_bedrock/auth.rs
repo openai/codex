@@ -18,19 +18,29 @@ use crate::BearerAuthProvider;
 
 use super::mantle::aws_auth_config;
 use super::mantle::region_from_config;
+use super::provider_auth::AmazonBedrockAuth;
 
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_REGION_ENV_VAR: &str = "AWS_REGION";
 const AWS_DEFAULT_REGION_ENV_VAR: &str = "AWS_DEFAULT_REGION";
 
 pub(super) enum BedrockAuthMethod {
+    StoredBearerToken { token: String, region: String },
     EnvBearerToken { token: String, region: String },
     AwsSdkAuth { context: AwsAuthContext },
 }
 
 pub(super) async fn resolve_auth_method(
+    stored_auth: Option<&AmazonBedrockAuth>,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<BedrockAuthMethod> {
+    if let Some(auth) = stored_auth {
+        return Ok(BedrockAuthMethod::StoredBearerToken {
+            token: auth.bearer_token.clone(),
+            region: auth.region.clone(),
+        });
+    }
+
     if let Some(token) = non_empty_env_var_from(AWS_BEARER_TOKEN_BEDROCK_ENV_VAR, std::env::var) {
         let region = bearer_token_region(aws, std::env::var)?;
         return Ok(BedrockAuthMethod::EnvBearerToken { token, region });
@@ -44,10 +54,12 @@ pub(super) async fn resolve_auth_method(
 }
 
 pub(super) async fn resolve_provider_auth(
+    stored_auth: Option<&AmazonBedrockAuth>,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<SharedAuthProvider> {
-    match resolve_auth_method(aws).await? {
-        BedrockAuthMethod::EnvBearerToken { token, .. } => Ok(Arc::new(BearerAuthProvider {
+    match resolve_auth_method(stored_auth, aws).await? {
+        BedrockAuthMethod::StoredBearerToken { token, .. }
+        | BedrockAuthMethod::EnvBearerToken { token, .. } => Ok(Arc::new(BearerAuthProvider {
             token: Some(token),
             account_id: None,
             is_fedramp_account: false,
@@ -192,6 +204,36 @@ mod tests {
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value.starts_with("Bearer bedrock-api-key-"))
         );
+    }
+
+    #[tokio::test]
+    async fn stored_bedrock_bearer_auth_takes_precedence() {
+        let auth = AmazonBedrockAuth {
+            bearer_token: "stored-bedrock-key".to_string(),
+            region: "eu-west-1".to_string(),
+        };
+
+        let method = resolve_auth_method(
+            Some(&auth),
+            &ModelProviderAwsAuthInfo {
+                profile: None,
+                region: Some("us-east-1".to_string()),
+            },
+        )
+        .await
+        .expect("stored auth should resolve");
+
+        match method {
+            BedrockAuthMethod::StoredBearerToken { token, region } => {
+                assert_eq!(
+                    (token, region),
+                    ("stored-bedrock-key".to_string(), "eu-west-1".to_string())
+                );
+            }
+            BedrockAuthMethod::EnvBearerToken { .. } | BedrockAuthMethod::AwsSdkAuth { .. } => {
+                panic!("stored auth should take precedence")
+            }
+        }
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_api::AllowedCaller;
@@ -31,6 +32,7 @@ struct WebSearchExtension {
 struct WebSearchExtensionConfig {
     enabled: bool,
     provider: ModelProviderInfo,
+    codex_home: PathBuf,
     settings: SearchSettings,
 }
 
@@ -42,6 +44,7 @@ impl From<&Config> for WebSearchExtensionConfig {
                 && config.model_provider.is_openai()
                 && web_search_mode != WebSearchMode::Disabled,
             provider: config.model_provider.clone(),
+            codex_home: config.codex_home.to_path_buf(),
             settings: search_settings(config, web_search_mode),
         }
     }
@@ -120,6 +123,7 @@ impl ToolContributor for WebSearchExtension {
             provider: create_model_provider(
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
+                Some(config.codex_home.clone()),
             ),
             settings: config.settings.clone(),
         })]

@@ -489,7 +489,11 @@ impl Session {
         );
         let session_source = session_configuration.session_source.clone();
         let auth_manager_for_context = auth_manager.clone();
-        let provider_for_context = create_model_provider(provider, auth_manager);
+        let provider_for_context = create_model_provider(
+            provider,
+            auth_manager,
+            Some(per_turn_config.codex_home.to_path_buf()),
+        );
         let session_telemetry_for_context = session_telemetry;
         let available_models = models_manager.try_list_models().unwrap_or_default();
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
