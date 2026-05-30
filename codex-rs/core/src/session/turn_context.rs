@@ -110,7 +110,6 @@ pub(crate) fn resolve_multi_agent_version(
     config: &Config,
     session_source: &SessionSource,
     inherited_multi_agent_version: Option<MultiAgentVersion>,
-    model_info: Option<&ModelInfo>,
 ) -> Option<MultiAgentVersion> {
     if is_guardian_reviewer_source(session_source)
         || matches!(
@@ -120,17 +119,15 @@ pub(crate) fn resolve_multi_agent_version(
     {
         return None;
     }
-    inherited_multi_agent_version
-        .or_else(|| model_info.and_then(|model_info| model_info.multi_agent_version))
-        .or_else(|| {
-            if config.features.enabled(Feature::MultiAgentV2) {
-                Some(MultiAgentVersion::V2)
-            } else if config.features.enabled(Feature::Collab) {
-                Some(MultiAgentVersion::V1)
-            } else {
-                None
-            }
-        })
+    inherited_multi_agent_version.or_else(|| {
+        if config.features.enabled(Feature::MultiAgentV2) {
+            Some(MultiAgentVersion::V2)
+        } else if config.features.enabled(Feature::Collab) {
+            Some(MultiAgentVersion::V1)
+        } else {
+            None
+        }
+    })
 }
 
 impl TurnContext {

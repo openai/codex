@@ -258,7 +258,6 @@ impl AgentControl {
                         &config,
                         session_source,
                         options.multi_agent_version,
-                        /*model_info*/ None,
                     )
                 });
         let notification_source = session_source.clone();
@@ -385,12 +384,8 @@ impl AgentControl {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<crate::thread_manager::NewThread> {
-        let multi_agent_version = resolve_multi_agent_version(
-            &config,
-            &session_source,
-            options.multi_agent_version,
-            /*model_info*/ None,
-        );
+        let multi_agent_version =
+            resolve_multi_agent_version(&config, &session_source, options.multi_agent_version);
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
                 "spawn_agent fork requires a parent spawn call id".to_string(),
@@ -623,7 +618,6 @@ impl AgentControl {
             &config,
             &session_source,
             stored_thread.multi_agent_version,
-            /*model_info*/ None,
         );
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
             && *depth >= config.agent_max_depth

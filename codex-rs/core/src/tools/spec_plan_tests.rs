@@ -886,7 +886,6 @@ async fn resolved_multi_agent_version_controls_runtime_behavior() {
             turn.config.as_ref(),
             &turn.session_source,
             /*inherited_multi_agent_version*/ None,
-            Some(&turn.model_info),
         );
     })
     .await;
@@ -907,7 +906,6 @@ async fn resolved_multi_agent_version_controls_runtime_behavior() {
             turn.config.as_ref(),
             &turn.session_source,
             /*inherited_multi_agent_version*/ None,
-            Some(&turn.model_info),
         );
     })
     .await;
@@ -933,7 +931,6 @@ async fn resolved_multi_agent_version_controls_runtime_behavior() {
             turn.config.as_ref(),
             &turn.session_source,
             Some(MultiAgentVersion::V1),
-            Some(&turn.model_info),
         );
     })
     .await;

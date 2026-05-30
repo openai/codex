@@ -7237,7 +7237,6 @@ async fn build_initial_context_adds_multi_agent_v2_usage_hint_when_selector_is_v
 #[tokio::test]
 async fn spawned_child_multi_agent_version_follows_parent_system() {
     let (_session, turn_context) = make_session_and_context().await;
-    let mut model_info = turn_context.model_info.clone();
     let child_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: ThreadId::new(),
         depth: 1,
@@ -7245,20 +7244,16 @@ async fn spawned_child_multi_agent_version_follows_parent_system() {
         agent_nickname: None,
         agent_role: None,
     });
-    model_info.multi_agent_version = Some(MultiAgentVersion::V1);
     let resolved_from_v2_parent = resolve_multi_agent_version(
         turn_context.config.as_ref(),
         &child_source,
         Some(MultiAgentVersion::V2),
-        Some(&model_info),
     );
 
-    model_info.multi_agent_version = Some(MultiAgentVersion::V2);
     let resolved_from_v1_parent = resolve_multi_agent_version(
         turn_context.config.as_ref(),
         &child_source,
         Some(MultiAgentVersion::V1),
-        Some(&model_info),
     );
 
     assert_eq!(

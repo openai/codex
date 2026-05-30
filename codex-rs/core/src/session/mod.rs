@@ -543,8 +543,8 @@ impl Codex {
             &session_source,
             conversation_history
                 .get_multi_agent_version()
-                .or(parent_multi_agent_version),
-            Some(&model_info),
+                .or(parent_multi_agent_version)
+                .or(model_info.multi_agent_version),
         );
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
             && depth >= config.agent_max_depth
