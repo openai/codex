@@ -259,6 +259,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
             .await?;
     let codex = Arc::clone(&test_codex.codex);
     wait_for_mcp_server(&codex, "sample").await?;
+    wait_for_mcp_server(&codex, "codex_apps").await?;
 
     codex
         .submit(Op::UserInput {
