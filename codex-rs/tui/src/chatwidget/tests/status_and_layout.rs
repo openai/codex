@@ -1697,7 +1697,25 @@ async fn startup_header_handoff_visible_states_snapshot() {
             Ok(AppEvent::InsertHistoryCell(cell))
                 if cell.as_any().is::<history_cell::SessionInfoCell>() =>
             {
-                break normalize_snapshot_paths(lines_to_single_string(&cell.display_lines(width)));
+                let rendered = lines_to_single_string(&cell.display_lines(width));
+                let normalized = normalize_snapshot_paths(&rendered);
+                // Keep box alignment after shortening Windows test paths.
+                break normalized
+                    .lines()
+                    .zip(rendered.lines())
+                    .map(|(normalized, rendered)| {
+                        let padding = rendered
+                            .chars()
+                            .count()
+                            .saturating_sub(normalized.chars().count());
+                        if let Some(content) = normalized.strip_suffix('│') {
+                            format!("{content}{}│", " ".repeat(padding))
+                        } else {
+                            normalized.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
             }
             Ok(_) => continue,
             other => panic!("expected queued configured header, got {other:?}"),
