@@ -336,11 +336,16 @@ async fn plugin_share_save_rejects_when_plugin_sharing_disabled() -> Result<()> 
     let plugin_root = TempDir::new()?;
     let plugin_path = write_test_plugin(plugin_root.path(), "demo-plugin")?;
     let server = MockServer::start().await;
+    // This test verifies sharing makes no backend request; startup analytics
+    // would otherwise be an unrelated request to the same mock server.
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
             r#"
 chatgpt_base_url = "{}/backend-api"
+
+[analytics]
+enabled = false
 
 [features]
 plugins = true
