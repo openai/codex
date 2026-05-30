@@ -1299,6 +1299,38 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
 }
 
 #[tokio::test]
+async fn completed_token_activity_refresh_retries_after_plan_item_completion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Tokens);
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected token activity refresh request, got {other:?}"),
+    };
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        /*width*/ None,
+        &chat.config.cwd,
+        chat.history_render_mode(),
+    );
+    controller.push("Plan details");
+    chat.plan_stream_controller = Some(controller);
+    assert!(
+        chat.finish_token_activity_refresh(
+            request_id,
+            Err("token activity unavailable".to_string()),
+        )
+    );
+
+    chat.on_plan_item_completed("Plan details".to_string());
+
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CommitCompletedTokenActivityOutput))
+    );
+}
+
+#[tokio::test]
 async fn repeated_token_activity_refreshes_keep_only_latest_card() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);

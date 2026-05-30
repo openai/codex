@@ -28,7 +28,7 @@ impl ChatWidget {
         flex.push(/*flex*/ 0, active_hook_cell_renderable);
         if let Some(cell) = self.pending_token_activity_output() {
             flex.push(
-                /*flex*/ 0,
+                /*flex*/ 1,
                 RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
                     child: cell,
                     top: 1,

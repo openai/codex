@@ -186,6 +186,7 @@ impl ChatWidget {
         if should_restore_after_stream {
             self.status_state.pending_status_indicator_restore = true;
             self.maybe_restore_status_indicator_after_stream_idle();
+            self.request_completed_token_activity_output_insertion();
         }
     }
 
