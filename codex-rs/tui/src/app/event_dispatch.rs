@@ -215,12 +215,14 @@ impl App {
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
+                self.insert_completed_token_activity_output_if_ready(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
                     if !self.transcript_reflow.history_cell_refresh_requested() {
                         self.transcript_reflow.clear();
                     }
+                    self.insert_completed_token_activity_output(tui);
                     return Ok(AppRunControl::Continue);
                 }
                 let end = self.transcript_cells.len();
@@ -255,6 +257,7 @@ impl App {
 
                     self.maybe_finish_stream_reflow(tui)?;
                 }
+                self.insert_completed_token_activity_output_if_ready(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -732,14 +735,16 @@ impl App {
                 if let Err(err) = &result {
                     tracing::warn!("account/tokenUsage/read failed during TUI refresh: {err}");
                 }
-                if let Some(cell) = self
+                if self
                     .chat_widget
                     .finish_token_activity_refresh(request_id, result)
                 {
                     // Commit synchronously so an already queued /clear cannot overtake this card.
                     // Do not route through ChatWidget::add_to_history: /tokens may complete during
                     // active work, and flushing an in-progress tool cell would corrupt its lifecycle.
-                    self.insert_history_cell(tui, Box::new(cell));
+                    // If an answer stream is active, keep the settled card transient until its
+                    // provisional transcript cells have been consolidated.
+                    self.insert_completed_token_activity_output_if_ready(tui);
                 }
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
