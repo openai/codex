@@ -766,7 +766,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         "wait_agent",
         "close_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "list_agents",
     ]);
     assert_eq!(
@@ -790,7 +790,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     v2.assert_visible_contains(&[
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -895,7 +895,7 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
     for tool_name in [
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -969,7 +969,7 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
     for tool_name in [
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
