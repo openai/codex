@@ -736,6 +736,9 @@ impl App {
                     .chat_widget
                     .finish_token_activity_refresh(request_id, result)
                 {
+                    // Commit synchronously so an already queued /clear cannot overtake this card.
+                    // Do not route through ChatWidget::add_to_history: /tokens may complete during
+                    // active work, and flushing an in-progress tool cell would corrupt its lifecycle.
                     self.insert_history_cell(tui, Box::new(cell));
                 }
             }
