@@ -19,6 +19,7 @@ use crate::BearerAuthProvider;
 use super::mantle::aws_auth_config;
 use super::mantle::region_from_config;
 use super::provider_auth::AmazonBedrockAuth;
+use super::provider_auth::StoredAmazonBedrockAuth;
 
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_REGION_ENV_VAR: &str = "AWS_REGION";
@@ -31,9 +32,14 @@ pub(super) enum BedrockAuthMethod {
 }
 
 pub(super) async fn resolve_auth_method(
-    stored_auth: Option<&AmazonBedrockAuth>,
+    stored_auth: &StoredAmazonBedrockAuth,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<BedrockAuthMethod> {
+    let stored_auth = stored_auth
+        .as_ref()
+        .map(Option::as_ref)
+        .map_err(|err| CodexErr::Fatal(err.clone()))?;
+
     if let Some(auth) = stored_auth {
         return Ok(BedrockAuthMethod::StoredBearerToken {
             token: auth.bearer_token.clone(),
@@ -54,7 +60,7 @@ pub(super) async fn resolve_auth_method(
 }
 
 pub(super) async fn resolve_provider_auth(
-    stored_auth: Option<&AmazonBedrockAuth>,
+    stored_auth: &StoredAmazonBedrockAuth,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<SharedAuthProvider> {
     match resolve_auth_method(stored_auth, aws).await? {
@@ -212,9 +218,10 @@ mod tests {
             bearer_token: "stored-bedrock-key".to_string(),
             region: "eu-west-1".to_string(),
         };
+        let stored_auth: StoredAmazonBedrockAuth = Ok(Some(auth));
 
         let method = resolve_auth_method(
-            Some(&auth),
+            &stored_auth,
             &ModelProviderAwsAuthInfo {
                 profile: None,
                 region: Some("us-east-1".to_string()),

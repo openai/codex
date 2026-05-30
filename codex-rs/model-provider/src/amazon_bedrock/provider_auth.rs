@@ -13,6 +13,8 @@ pub struct AmazonBedrockAuth {
     pub region: String,
 }
 
+pub(super) type StoredAmazonBedrockAuth = std::result::Result<Option<AmazonBedrockAuth>, String>;
+
 pub fn save_amazon_bedrock_auth(
     codex_home: &Path,
     bearer_token: &str,

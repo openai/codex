@@ -5,7 +5,7 @@ use codex_protocol::error::Result;
 
 use super::auth::BedrockAuthMethod;
 use super::auth::resolve_auth_method;
-use super::provider_auth::AmazonBedrockAuth;
+use super::provider_auth::StoredAmazonBedrockAuth;
 
 const BEDROCK_MANTLE_SERVICE_NAME: &str = "bedrock-mantle";
 const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 12] = [
@@ -54,7 +54,7 @@ pub fn is_supported_region(region: &str) -> bool {
 }
 
 pub(super) async fn runtime_base_url(
-    stored_auth: Option<&AmazonBedrockAuth>,
+    stored_auth: &StoredAmazonBedrockAuth,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<String> {
     let region = resolve_region(stored_auth, aws).await?;
@@ -62,7 +62,7 @@ pub(super) async fn runtime_base_url(
 }
 
 async fn resolve_region(
-    stored_auth: Option<&AmazonBedrockAuth>,
+    stored_auth: &StoredAmazonBedrockAuth,
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<String> {
     match resolve_auth_method(stored_auth, aws).await? {
