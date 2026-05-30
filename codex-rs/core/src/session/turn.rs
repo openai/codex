@@ -511,7 +511,8 @@ async fn build_skills_and_plugins(
     )
     .await;
     let structured_skill_may_reference_apps =
-        skill_injections_may_reference_apps(&skill_injections);
+        skill_injections_may_reference_apps(&skill_injections)
+            || structured_skill_inputs_may_reference_apps(&structured_skill_input).await;
     // Plain text skill mentions can collide with app slugs, so preserve their
     // existing app-inventory resolution behavior.
     let text_skill_input = user_input
@@ -798,13 +799,31 @@ async fn wait_for_explicit_mcp_servers(
 fn skill_injections_may_reference_apps(
     skill_injections: &[crate::injection::SkillInjection],
 ) -> bool {
-    skill_injections.iter().any(|skill| {
-        let mentions = extract_tool_mentions(&skill.contents);
-        mentions.plain_names().next().is_some()
-            || mentions
-                .paths()
-                .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
-    })
+    skill_injections
+        .iter()
+        .any(|skill| skill_contents_may_reference_apps(&skill.contents))
+}
+
+async fn structured_skill_inputs_may_reference_apps(inputs: &[UserInput]) -> bool {
+    for input in inputs {
+        let UserInput::Skill { path, .. } = input else {
+            continue;
+        };
+        if let Ok(contents) = tokio::fs::read_to_string(path).await
+            && skill_contents_may_reference_apps(&contents)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn skill_contents_may_reference_apps(contents: &str) -> bool {
+    let mentions = extract_tool_mentions(contents);
+    mentions.plain_names().next().is_some()
+        || mentions
+            .paths()
+            .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
 }
 
 async fn track_turn_resolved_config_analytics(
