@@ -9,6 +9,8 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -16,6 +18,16 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::request_permissions::WorkspaceMutationOperation;
+use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -29,7 +41,10 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::wait_for_event;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -49,6 +64,84 @@ fn tool_names(body: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn workspace_write_excluding_tmp() -> PermissionProfile {
+    PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    )
+}
+
+async fn submit_workspace_mutation_turn(
+    test: &TestCodex,
+    prompt: &str,
+    approval_policy: AskForApproval,
+    permission_profile: PermissionProfile,
+) -> Result<()> {
+    let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    Ok(())
+}
+
+async fn expect_workspace_mutation_request(
+    test: &TestCodex,
+    expected_call_id: &str,
+) -> RequestPermissionsEvent {
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+
+    match event {
+        EventMsg::RequestPermissions(request) => {
+            assert_eq!(request.call_id, expected_call_id);
+            request
+        }
+        EventMsg::TurnComplete(_) => panic!("expected request_permissions before completion"),
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+async fn wait_for_completion(test: &TestCodex) {
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -82,7 +175,14 @@ async fn empty_turn_environments_omits_environment_backed_tools() -> Result<()> 
         tools.contains(&"update_plan".to_string()),
         "non-environment tool should remain available; got {tools:?}"
     );
-    for environment_tool in ["exec_command", "write_stdin", "apply_patch", "view_image"] {
+    for environment_tool in [
+        "exec_command",
+        "write_stdin",
+        "apply_patch",
+        "view_image",
+        "set_working_directory",
+        "add_workspace_root",
+    ] {
         assert!(
             !tools.contains(&environment_tool.to_string()),
             "{environment_tool} should be omitted for explicit empty turn environments; got {tools:?}"
@@ -126,7 +226,455 @@ async fn turn_environment_selection_keeps_environment_backed_tools() -> Result<(
         tools.contains(&"exec_command".to_string()),
         "environment tool should remain available with selected local environment; got {tools:?}"
     );
+    assert!(tools.contains(&"set_working_directory".to_string()));
+    assert!(tools.contains(&"add_workspace_root".to_string()));
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_mutation_updates_same_batch_shell_cwd() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
+    let test = builder.build(&server).await?;
+    let next_cwd = test.config.cwd.join("workspace-mutation-next");
+    fs::create_dir_all(next_cwd.as_path())?;
+    let mutation_call_id = "set-cwd";
+    let shell_call_id = "pwd";
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                mutation_call_id,
+                "set_working_directory",
+                &serde_json::to_string(&json!({ "path": next_cwd }))?,
+            ),
+            ev_function_call(
+                shell_call_id,
+                "shell_command",
+                &serde_json::to_string(&json!({
+                    "command": "pwd",
+                    "login": false,
+                    "timeout_ms": 1_000,
+                }))?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("change directories and print the working directory")
+        .await?;
+
+    let request = second_mock.single_request();
+    let mutation_output = request
+        .function_call_output_text(mutation_call_id)
+        .expect("mutation output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&mutation_output)?,
+        json!({
+            "changed": true,
+            "cwd": next_cwd,
+            "workspace_roots": test.config.workspace_roots,
+        })
+    );
+    let shell_output = request
+        .function_call_output_text(shell_call_id)
+        .expect("shell output");
+    assert!(shell_output.contains(next_cwd.as_path().to_string_lossy().as_ref()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_mutations_run_in_model_provided_order() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
+    let test = builder.build(&server).await?;
+    let first_cwd = test.config.cwd.join("workspace-mutation-first");
+    let second_cwd = first_cwd.join("nested");
+    fs::create_dir_all(second_cwd.as_path())?;
+    let first_mutation_call_id = "set-first-cwd";
+    let second_mutation_call_id = "set-second-cwd";
+    let shell_call_id = "pwd";
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                first_mutation_call_id,
+                "set_working_directory",
+                &serde_json::to_string(&json!({ "path": "workspace-mutation-first" }))?,
+            ),
+            ev_function_call(
+                second_mutation_call_id,
+                "set_working_directory",
+                &serde_json::to_string(&json!({ "path": "nested" }))?,
+            ),
+            ev_function_call(
+                shell_call_id,
+                "shell_command",
+                &serde_json::to_string(&json!({
+                    "command": "pwd",
+                    "login": false,
+                    "timeout_ms": 1_000,
+                }))?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("change directories twice and print the working directory")
+        .await?;
+
+    let request = second_mock.single_request();
+    let first_mutation_output = request
+        .function_call_output_text(first_mutation_call_id)
+        .expect("first mutation output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&first_mutation_output)?,
+        json!({
+            "changed": true,
+            "cwd": first_cwd,
+            "workspace_roots": test.config.workspace_roots,
+        })
+    );
+    let second_mutation_output = request
+        .function_call_output_text(second_mutation_call_id)
+        .expect("second mutation output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&second_mutation_output)?,
+        json!({
+            "changed": true,
+            "cwd": second_cwd,
+            "workspace_roots": test.config.workspace_roots,
+        })
+    );
+    let shell_output = request
+        .function_call_output_text(shell_call_id)
+        .expect("shell output");
+    assert!(shell_output.contains(second_cwd.as_path().to_string_lossy().as_ref()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn add_workspace_root_under_existing_root_is_noop() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
+    let test = builder.build(&server).await?;
+    let covered_child = test.config.cwd.join("covered-child");
+    fs::create_dir_all(covered_child.as_path())?;
+    let mutation_call_id = "add-covered-root";
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                mutation_call_id,
+                "add_workspace_root",
+                &serde_json::to_string(&json!({ "path": covered_child }))?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("add an already covered workspace root")
+        .await?;
+
+    let output = second_mock
+        .single_request()
+        .function_call_output_text(mutation_call_id)
+        .expect("mutation output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)?,
+        json!({
+            "changed": false,
+            "cwd": test.config.cwd,
+            "workspace_roots": test.config.workspace_roots,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_mutation_requires_session_scoped_approval_and_cancels_suffix() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
+    let test = builder.build(&server).await?;
+    let external_root = tempfile::tempdir()?;
+    let external_root = AbsolutePathBuf::try_from(external_root.path().canonicalize()?)?;
+    let mutation_call_id = "add-external-root";
+    let suffix_call_id = "suffix-pwd";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    mutation_call_id,
+                    "add_workspace_root",
+                    &serde_json::to_string(&json!({ "path": external_root }))?,
+                ),
+                ev_function_call(
+                    suffix_call_id,
+                    "shell_command",
+                    &serde_json::to_string(&json!({
+                        "command": "pwd",
+                        "login": false,
+                        "timeout_ms": 1_000,
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_workspace_mutation_turn(
+        &test,
+        "add an external workspace root and print cwd",
+        AskForApproval::OnRequest,
+        workspace_write_excluding_tmp(),
+    )
+    .await?;
+    let request = expect_workspace_mutation_request(&test, mutation_call_id).await;
+    let mut expected_workspace_roots = test.config.workspace_roots.clone();
+    expected_workspace_roots.push(external_root.clone());
+    let expected_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![external_root.clone()]),
+        )),
+        ..Default::default()
+    };
+    assert_eq!(request.permissions, expected_permissions);
+    assert_eq!(
+        request.workspace_mutation,
+        Some(
+            codex_protocol::request_permissions::WorkspaceMutationApprovalRequest {
+                operation: WorkspaceMutationOperation::AddWorkspaceRoot,
+                target: external_root.clone(),
+                resulting_workspace_roots: expected_workspace_roots,
+            }
+        )
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: mutation_call_id.to_string(),
+            response: RequestPermissionsResponse {
+                permissions: expected_permissions,
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let mutation_output = responses
+        .function_call_output_text(mutation_call_id)
+        .expect("mutation output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&mutation_output)?,
+        json!({
+            "code": "approval_denied",
+            "message": "workspace mutation requires session-scoped approval",
+            "cwd": test.config.cwd,
+            "workspace_roots": test.config.workspace_roots,
+        })
+    );
+    let suffix_output = responses
+        .function_call_output_text(suffix_call_id)
+        .expect("cancelled suffix output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&suffix_output)?,
+        json!({
+            "code": "dependency_cancelled",
+            "message": format!("cancelled because workspace mutation `{mutation_call_id}` failed"),
+            "failed_mutation_call_id": mutation_call_id,
+            "failed_mutation_code": "approval_denied",
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approved_workspace_root_is_available_to_same_batch_shell() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
+    let test = builder.build(&server).await?;
+    let external_root = tempfile::tempdir()?;
+    let external_root = AbsolutePathBuf::try_from(external_root.path().canonicalize()?)?;
+    let mutation_call_id = "approve-external-root";
+    let shell_call_id = "pwd-external-root";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    mutation_call_id,
+                    "add_workspace_root",
+                    &serde_json::to_string(&json!({ "path": external_root }))?,
+                ),
+                ev_function_call(
+                    shell_call_id,
+                    "shell_command",
+                    &serde_json::to_string(&json!({
+                        "command": "pwd",
+                        "workdir": external_root,
+                        "login": false,
+                        "timeout_ms": 1_000,
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_workspace_mutation_turn(
+        &test,
+        "add an external workspace root and use it immediately",
+        AskForApproval::OnRequest,
+        workspace_write_excluding_tmp(),
+    )
+    .await?;
+    let request = expect_workspace_mutation_request(&test, mutation_call_id).await;
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: mutation_call_id.to_string(),
+            response: RequestPermissionsResponse {
+                permissions: request.permissions,
+                scope: PermissionGrantScope::Session,
+                strict_auto_review: false,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let mut expected_workspace_roots = test.config.workspace_roots.clone();
+    expected_workspace_roots.push(external_root.clone());
+    let mutation_output = responses
+        .function_call_output_text(mutation_call_id)
+        .expect("mutation output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&mutation_output)?,
+        json!({
+            "changed": true,
+            "cwd": test.config.cwd,
+            "workspace_roots": expected_workspace_roots,
+        })
+    );
+    let shell_output = responses
+        .function_call_output_text(shell_call_id)
+        .expect("shell output");
+    assert!(shell_output.contains(external_root.as_path().to_string_lossy().as_ref()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_working_directory_rejects_unreadable_target() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("test-gpt-5-codex");
+    let test = builder.build(&server).await?;
+    let external_root = tempfile::tempdir()?;
+    let external_root = AbsolutePathBuf::try_from(external_root.path().canonicalize()?)?;
+    let mutation_call_id = "set-unreadable-cwd";
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                mutation_call_id,
+                "set_working_directory",
+                &serde_json::to_string(&json!({ "path": external_root }))?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(Vec::new()),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "change to an unreadable directory",
+        AskForApproval::OnRequest,
+        permission_profile,
+    )
+    .await?;
+
+    let output = second_mock
+        .single_request()
+        .function_call_output_text(mutation_call_id)
+        .expect("mutation output");
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)?,
+        json!({
+            "code": "permission_denied",
+            "message": format!(
+                "working directory is not readable under the active permission profile: {}",
+                external_root.as_path().display()
+            ),
+            "cwd": test.config.cwd,
+            "workspace_roots": test.config.workspace_roots,
+        })
+    );
     Ok(())
 }
 

@@ -33,6 +33,8 @@ pub(crate) mod tool_search_spec;
 pub(crate) mod unified_exec;
 mod view_image;
 pub(crate) mod view_image_spec;
+mod workspace_mutation;
+pub(crate) mod workspace_mutation_spec;
 
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
@@ -74,6 +76,7 @@ pub use unified_exec::ExecCommandHandler;
 pub(crate) use unified_exec::ExecCommandHandlerOptions;
 pub use unified_exec::WriteStdinHandler;
 pub use view_image::ViewImageHandler;
+pub(crate) use workspace_mutation::WorkspaceMutationHandler;
 
 pub(crate) fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
 where
