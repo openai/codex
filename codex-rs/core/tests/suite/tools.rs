@@ -429,7 +429,7 @@ async fn add_workspace_root_under_existing_root_is_noop() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn workspace_mutation_requires_session_scoped_approval_and_cancels_suffix() -> Result<()> {
+async fn workspace_mutation_rejects_reduced_approval_and_cancels_suffix() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -500,8 +500,14 @@ async fn workspace_mutation_requires_session_scoped_approval_and_cancels_suffix(
         .submit(Op::RequestPermissionsResponse {
             id: mutation_call_id.to_string(),
             response: RequestPermissionsResponse {
-                permissions: expected_permissions,
-                scope: PermissionGrantScope::Turn,
+                permissions: RequestPermissionProfile {
+                    file_system: Some(FileSystemPermissions::from_read_write_roots(
+                        /*read*/ Some(vec![external_root.clone()]),
+                        /*write*/ None,
+                    )),
+                    ..Default::default()
+                },
+                scope: PermissionGrantScope::Session,
                 strict_auto_review: false,
             },
         })
@@ -515,7 +521,7 @@ async fn workspace_mutation_requires_session_scoped_approval_and_cancels_suffix(
         serde_json::from_str::<Value>(&mutation_output)?,
         json!({
             "code": "approval_denied",
-            "message": "workspace mutation requires session-scoped approval",
+            "message": "workspace mutation requires session-scoped approval with the requested filesystem access",
             "cwd": test.config.cwd,
             "workspace_roots": test.config.workspace_roots,
         })
