@@ -1208,6 +1208,33 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
 }
 
 #[tokio::test]
+async fn pending_token_activity_refresh_renders_above_composer_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Tokens);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RefreshTokenActivity { .. }),
+        "expected token activity refresh request"
+    );
+
+    let width: u16 = 80;
+    let height = chat.desired_height(width);
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(Rect::new(/*x*/ 0, /*y*/ 0, width, height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_chatwidget_snapshot!(
+        "pending_token_activity_refresh_renders_above_composer_snapshot",
+        normalize_snapshot_paths(term.backend().vt100().screen().contents())
+    );
+}
+
+#[tokio::test]
 async fn completed_token_activity_refresh_returns_one_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
