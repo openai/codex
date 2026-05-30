@@ -29,6 +29,9 @@ fn gpt_5_bedrock_model(openai_slug: &str, bedrock_slug: &str, priority: i32) -> 
     let mut model = bundled_openai_model(openai_slug);
     model.slug = bedrock_slug.to_string();
     model.priority = priority;
+    model.additional_speed_tiers.clear();
+    model.service_tiers.clear();
+    model.default_service_tier = None;
     model.context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
     model.max_context_window = Some(GPT_5_BEDROCK_CONTEXT_WINDOW);
     model
@@ -86,5 +89,20 @@ mod tests {
                 Some(GPT_5_BEDROCK_CONTEXT_WINDOW)
             )
         );
+    }
+
+    #[test]
+    fn gpt_5_bedrock_models_do_not_advertise_service_tiers() {
+        let catalog = static_model_catalog();
+
+        for model in catalog.models {
+            assert_eq!(model.additional_speed_tiers, Vec::<String>::new());
+            assert_eq!(model.service_tiers, Vec::new());
+            assert_eq!(model.default_service_tier, None);
+            assert_eq!(
+                model.service_tier_for_request(Some("priority".to_string())),
+                None
+            );
+        }
     }
 }
