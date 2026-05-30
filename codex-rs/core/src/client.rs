@@ -244,6 +244,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    window_generation: u64,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -388,6 +389,7 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
+            window_generation: self.state.window_generation.load(Ordering::Relaxed),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -977,6 +979,10 @@ impl ModelClient {
 
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
+        // A history invalidation may advance the generation before an older turn session drops.
+        if self.window_generation != self.client.state.window_generation.load(Ordering::Relaxed) {
+            return;
+        }
         let websocket_session = std::mem::take(&mut self.websocket_session);
         self.client
             .store_cached_websocket_session(websocket_session);

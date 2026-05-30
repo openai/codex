@@ -1,6 +1,8 @@
 use anyhow::Result;
 use codex_features::Feature;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -10,6 +12,7 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::time::Duration;
@@ -250,6 +253,69 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
         handshake.header("openai-beta"),
         Some(WS_V2_BETA_HEADER_VALUE.to_string())
     );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_v2_rollback_opens_new_connection_for_rewritten_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![
+            vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+            vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "kept"),
+                ev_completed("resp-1"),
+            ],
+            vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "discarded"),
+                ev_completed("resp-2"),
+            ],
+            vec![
+                ev_response_created("should-not-be-used"),
+                ev_completed("should-not-be-used"),
+            ],
+        ],
+        vec![vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-3", "after rollback"),
+            ev_completed("resp-3"),
+        ]],
+    ])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::ResponsesWebsocketsV2)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    test.submit_turn("before rollback").await?;
+    test.submit_turn("discard me").await?;
+    test.codex
+        .submit(Op::ThreadRollback { num_turns: 1 })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ThreadRolledBack(_))
+    })
+    .await;
+    test.submit_turn("after rollback").await?;
+
+    assert_eq!(server.handshakes().len(), 2);
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(connections[0].len(), 3);
+    assert_eq!(connections[1].len(), 1);
+
+    let after_rollback = connections[1][0].body_json();
+    assert_eq!(after_rollback["type"].as_str(), Some("response.create"));
+    assert_eq!(after_rollback.get("previous_response_id"), None);
 
     server.shutdown().await;
     Ok(())
