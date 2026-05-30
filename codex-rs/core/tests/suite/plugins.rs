@@ -519,7 +519,6 @@ async fn selected_skill_rewaits_for_app_after_installing_mcp_dependency() -> Res
     .expect("write plugin app skill");
     let skill_agents_dir = skill_path.parent().expect("skill dir").join("agents");
     std::fs::create_dir_all(&skill_agents_dir).expect("create skill agents dir");
-    let dependency_url = format!("{}/api/codex/apps", server.uri());
     std::fs::write(
         skill_agents_dir.join("openai.yaml"),
         format!(

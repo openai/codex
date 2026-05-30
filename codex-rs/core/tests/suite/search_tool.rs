@@ -47,7 +47,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
