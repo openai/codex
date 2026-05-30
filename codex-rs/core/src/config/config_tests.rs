@@ -9846,7 +9846,15 @@ enabled = true
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 3_600_000);
     assert_eq!(config.multi_agent_v2.default_wait_timeout_ms, 30_000);
     assert_eq!(config.agent_max_threads, Some(3));
-    assert!(!config.multi_agent_v2.non_code_mode_only);
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some(DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT)
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some(DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT)
+    );
+    assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
 }
