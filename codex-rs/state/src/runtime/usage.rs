@@ -133,6 +133,14 @@ INSERT INTO usage_sample_contributors (
                 .bind(until)
                 .fetch_one(self.pool.as_ref())
                 .await?;
+        let apps = self
+            .read_usage_contributors(since, until, UsageContributorKind::App, total_tokens)
+            .await?;
+        let plugins = suppress_app_mirror_plugins(
+            &apps,
+            self.read_usage_contributors(since, until, UsageContributorKind::Plugin, total_tokens)
+                .await?,
+        );
         let mut report = UsageReport {
             range,
             generated_at: now,
@@ -146,9 +154,7 @@ INSERT INTO usage_sample_contributors (
             agent_tasks: self
                 .read_agent_task_usage(since, until, total_tokens)
                 .await?,
-            apps: self
-                .read_usage_contributors(since, until, UsageContributorKind::App, total_tokens)
-                .await?,
+            apps,
             mcp_servers: self
                 .read_usage_contributors(
                     since,
@@ -157,9 +163,7 @@ INSERT INTO usage_sample_contributors (
                     total_tokens,
                 )
                 .await?,
-            plugins: self
-                .read_usage_contributors(since, until, UsageContributorKind::Plugin, total_tokens)
-                .await?,
+            plugins,
         };
         report.headline = usage_headline(&report);
         Ok(report)
@@ -421,6 +425,17 @@ fn usage_headline(report: &UsageReport) -> Option<UsageHeadline> {
             .to_string()
     });
     Some(UsageHeadline { entry, note })
+}
+
+fn suppress_app_mirror_plugins(apps: &[UsageEntry], plugins: Vec<UsageEntry>) -> Vec<UsageEntry> {
+    plugins
+        .into_iter()
+        .filter(|plugin| {
+            !apps.iter().any(|app| {
+                app.label == plugin.label && app.attributed_tokens == plugin.attributed_tokens
+            })
+        })
+        .collect()
 }
 
 fn agent_task_label(source: &str) -> String {
@@ -711,6 +726,44 @@ mod tests {
                 attributed_tokens: 15,
                 percent_of_usage: 100,
             }]
+        );
+    }
+
+    #[test]
+    fn suppress_app_mirror_plugins_keeps_non_mirror_plugins() {
+        let apps = vec![usage_entry(
+            UsageContributorKind::App,
+            "connector_gmail",
+            "Gmail",
+            /*attributed_tokens*/ 340,
+            /*percent_of_usage*/ 10,
+        )];
+        let plugins = vec![
+            usage_entry(
+                UsageContributorKind::Plugin,
+                "Gmail",
+                "Gmail",
+                /*attributed_tokens*/ 340,
+                /*percent_of_usage*/ 10,
+            ),
+            usage_entry(
+                UsageContributorKind::Plugin,
+                "Workspace",
+                "Workspace",
+                /*attributed_tokens*/ 500,
+                /*percent_of_usage*/ 15,
+            ),
+        ];
+
+        assert_eq!(
+            suppress_app_mirror_plugins(&apps, plugins),
+            vec![usage_entry(
+                UsageContributorKind::Plugin,
+                "Workspace",
+                "Workspace",
+                /*attributed_tokens*/ 500,
+                /*percent_of_usage*/ 15,
+            )]
         );
     }
 
@@ -1124,6 +1177,22 @@ mod tests {
             },
             source_estimated_tokens: attributed_tokens,
             attributed_tokens,
+        }
+    }
+
+    fn usage_entry(
+        kind: UsageContributorKind,
+        id: &str,
+        label: &str,
+        attributed_tokens: i64,
+        percent_of_usage: u8,
+    ) -> UsageEntry {
+        UsageEntry {
+            kind,
+            id: id.to_string(),
+            label: label.to_string(),
+            attributed_tokens,
+            percent_of_usage,
         }
     }
 
