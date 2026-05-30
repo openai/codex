@@ -1,9 +1,9 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::task::JoinError;
 use tokio_util::either::Either;
@@ -44,6 +44,11 @@ struct DependencyFailure {
     code: String,
 }
 
+enum PendingToolCall<F> {
+    Cancelled(DependencyFailure),
+    Dispatch(F),
+}
+
 impl ToolCallRuntime {
     pub(crate) fn new(
         router: Arc<ToolRouter>,
@@ -81,33 +86,63 @@ impl ToolCallRuntime {
         let error_call = call.clone();
         let dependency_failure = Arc::clone(&self.dependency_failure);
         let cancel_suffix_on_failure = self.router.tool_cancels_suffix_on_failure(&call);
-        let future =
-            self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
+        let prior_dependency_failure = dependency_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let pending_tool_call = match prior_dependency_failure {
+            Some(dependency_failure) => PendingToolCall::Cancelled(dependency_failure),
+            None => PendingToolCall::Dispatch(self.handle_tool_call_with_source(
+                call,
+                ToolCallSource::Direct,
+                cancellation_token,
+            )),
+        };
         async move {
-            if let Some(dependency_failure) = dependency_failure.lock().await.clone() {
-                return Ok(Self::dependency_cancelled_response(
-                    error_call,
-                    dependency_failure,
-                ));
-            }
+            let future = match pending_tool_call {
+                PendingToolCall::Cancelled(dependency_failure) => {
+                    return Ok(Self::dependency_cancelled_response(
+                        error_call,
+                        dependency_failure,
+                    ));
+                }
+                PendingToolCall::Dispatch(future) => future,
+            };
             match future.await {
                 Ok(response) => {
                     let response = response.into_response();
                     if cancel_suffix_on_failure && !response_input_succeeded(&response) {
-                        *dependency_failure.lock().await = Some(DependencyFailure {
-                            call_id: error_call.call_id.clone(),
-                            code: response_input_error_code(&response),
-                        });
+                        *dependency_failure
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(DependencyFailure {
+                                call_id: error_call.call_id.clone(),
+                                code: response_input_error_code(&response),
+                            });
                     }
                     Ok(response)
                 }
-                Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
+                Err(FunctionCallError::Fatal(message)) => {
+                    if cancel_suffix_on_failure {
+                        *dependency_failure
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(DependencyFailure {
+                                call_id: error_call.call_id.clone(),
+                                code: "tool_error".to_string(),
+                            });
+                    }
+                    Err(CodexErr::Fatal(message))
+                }
                 Err(other) => {
                     if cancel_suffix_on_failure {
-                        *dependency_failure.lock().await = Some(DependencyFailure {
-                            call_id: error_call.call_id.clone(),
-                            code: "tool_error".to_string(),
-                        });
+                        *dependency_failure
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(DependencyFailure {
+                                call_id: error_call.call_id.clone(),
+                                code: "tool_error".to_string(),
+                            });
                     }
                     Ok(Self::failure_response(error_call, other))
                 }
@@ -261,6 +296,12 @@ impl ToolCallRuntime {
         })
         .to_string();
         match call.payload {
+            ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {
+                call_id: call.call_id,
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: Vec::new(),
+            },
             ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
                 call_id: call.call_id,
                 name: None,
@@ -396,6 +437,7 @@ mod tests {
 
     struct FailingBarrierHandler {
         tool_name: codex_tools::ToolName,
+        fatal: bool,
     }
 
     impl ToolExecutor<ToolInvocation> for FailingBarrierHandler {
@@ -415,7 +457,11 @@ mod tests {
         }
 
         fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
-            Box::pin(async {
+            let fatal = self.fatal;
+            Box::pin(async move {
+                if fatal {
+                    return Err(FunctionCallError::Fatal("fatal barrier".to_string()));
+                }
                 Ok(Box::new(FunctionToolOutput::from_text(
                     serde_json::json!({ "code": "path_not_found" }).to_string(),
                     /*success*/ Some(false),
@@ -728,6 +774,7 @@ mod tests {
             ToolRegistry::from_tools([
                 Arc::new(FailingBarrierHandler {
                     tool_name: barrier_name.clone(),
+                    fatal: false,
                 }) as Arc<dyn CoreToolRuntime>,
                 Arc::new(RecordingHandler {
                     tool_name: suffix_name.clone(),
@@ -757,6 +804,7 @@ mod tests {
             )
             .await?;
         let response = runtime
+            .clone()
             .handle_tool_call(
                 ToolCall {
                     tool_name: suffix_name,
@@ -781,6 +829,105 @@ mod tests {
                 "message": "cancelled because workspace mutation `barrier-call` failed",
                 "failed_mutation_call_id": "barrier-call",
                 "failed_mutation_code": "path_not_found",
+            })
+        );
+        assert!(!suffix_called.load(Ordering::Acquire));
+
+        let tool_search_response = runtime
+            .handle_tool_call(
+                ToolCall {
+                    tool_name: codex_tools::ToolName::plain("suffix"),
+                    call_id: "tool-search-call".to_string(),
+                    payload: ToolPayload::ToolSearch {
+                        arguments: codex_protocol::models::SearchToolCallParams {
+                            query: "suffix".to_string(),
+                            limit: None,
+                        },
+                    },
+                },
+                CancellationToken::new(),
+            )
+            .await?;
+        assert_eq!(
+            tool_search_response,
+            ResponseInputItem::ToolSearchOutput {
+                call_id: "tool-search-call".to_string(),
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: Vec::new(),
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fatal_barrier_cancels_suffix_without_dispatching_it() -> anyhow::Result<()> {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let barrier_name = codex_tools::ToolName::plain("barrier");
+        let suffix_name = codex_tools::ToolName::plain("suffix");
+        let suffix_called = Arc::new(AtomicBool::new(/*v*/ false));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([
+                Arc::new(FailingBarrierHandler {
+                    tool_name: barrier_name.clone(),
+                    fatal: true,
+                }) as Arc<dyn CoreToolRuntime>,
+                Arc::new(RecordingHandler {
+                    tool_name: suffix_name.clone(),
+                    called: Arc::clone(&suffix_called),
+                }) as Arc<dyn CoreToolRuntime>,
+            ]),
+            Vec::new(),
+        ));
+        let runtime = ToolCallRuntime::new(
+            router,
+            Arc::new(session),
+            Arc::new(turn_context),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+        );
+        let payload = ToolPayload::Function {
+            arguments: "{}".to_string(),
+        };
+        let barrier_response = runtime
+            .clone()
+            .handle_tool_call(
+                ToolCall {
+                    tool_name: barrier_name,
+                    call_id: "barrier-call".to_string(),
+                    payload: payload.clone(),
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(matches!(
+            barrier_response,
+            Err(CodexErr::Fatal(message)) if message == "fatal barrier"
+        ));
+
+        let response = runtime
+            .handle_tool_call(
+                ToolCall {
+                    tool_name: suffix_name,
+                    call_id: "suffix-call".to_string(),
+                    payload,
+                },
+                CancellationToken::new(),
+            )
+            .await?;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+            anyhow::bail!("cancelled suffix should return function output");
+        };
+        let FunctionCallOutputBody::Text(text) = output.body else {
+            anyhow::bail!("cancelled suffix output should be text");
+        };
+        assert_eq!(output.success, Some(false));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&text)?,
+            serde_json::json!({
+                "code": "dependency_cancelled",
+                "message": "cancelled because workspace mutation `barrier-call` failed",
+                "failed_mutation_call_id": "barrier-call",
+                "failed_mutation_code": "tool_error",
             })
         );
         assert!(!suffix_called.load(Ordering::Acquire));
