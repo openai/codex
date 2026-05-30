@@ -3,3 +3,8 @@
 pub use codex_protocol::error;
 
 mod suite;
+
+#[test]
+fn windows_bazel_concurrency_experiment_cache_bust_marker() {
+    println!("windows Bazel concurrency experiment: baseline_jobs4_threads1");
+}
