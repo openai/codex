@@ -5865,7 +5865,10 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         thread_id: inactive_thread_id.to_string(),
         thread_settings: ThreadSettings {
             cwd: test_absolute_path("/tmp/thread-settings"),
-            runtime_workspace_roots: vec![test_absolute_path("/tmp/thread-settings")],
+            runtime_workspace_roots: vec![
+                test_absolute_path("/tmp/thread-settings"),
+                test_absolute_path("/tmp/thread-settings-shared"),
+            ],
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
             sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
@@ -5902,6 +5905,13 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         .expect("inactive session should remain cached");
     assert_eq!(cached_session.model, "gpt-test");
     assert_eq!(cached_session.personality, Some(Personality::Pragmatic));
+    assert_eq!(
+        cached_session.runtime_workspace_roots,
+        vec![
+            test_absolute_path("/tmp/thread-settings"),
+            test_absolute_path("/tmp/thread-settings-shared"),
+        ]
+    );
     assert_eq!(
         cached_session.collaboration_mode.as_deref(),
         Some(&collaboration_mode)

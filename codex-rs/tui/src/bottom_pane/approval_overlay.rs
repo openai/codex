@@ -763,7 +763,8 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
                 ]));
                 header.push(Line::from(""));
                 header.push(
-                    "This grants write access to the directory for the rest of the session.".into(),
+                    "This updates the session workspace and may grant additional filesystem access."
+                        .into(),
                 );
                 header.push(Line::from(""));
             } else if let Some(reason) = reason {

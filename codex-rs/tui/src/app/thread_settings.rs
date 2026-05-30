@@ -183,7 +183,10 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
         settings.cwd.as_path(),
     );
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
-    session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
+    session.cwd.clone_from(&settings.cwd);
+    session
+        .runtime_workspace_roots
+        .clone_from(&settings.runtime_workspace_roots);
     session.personality = settings.personality;
     let mut collaboration_mode = settings.collaboration_mode.clone();
     collaboration_mode
