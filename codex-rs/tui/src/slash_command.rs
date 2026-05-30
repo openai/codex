@@ -45,6 +45,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Tokens,
     DebugConfig,
     Title,
     Statusline,
@@ -98,6 +99,7 @@ impl SlashCommand {
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Tokens => "show account token activity",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -157,6 +159,7 @@ impl SlashCommand {
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
                 | SlashCommand::Raw
+                | SlashCommand::Tokens
                 | SlashCommand::Pets
                 | SlashCommand::Side
                 | SlashCommand::Btw
@@ -174,6 +177,7 @@ impl SlashCommand {
                 | SlashCommand::Diff
                 | SlashCommand::Mention
                 | SlashCommand::Status
+                | SlashCommand::Tokens
                 | SlashCommand::Ide
         )
     }
@@ -210,6 +214,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
+            | SlashCommand::Tokens
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

@@ -1137,6 +1137,67 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
+async fn signed_out_tokens_command_reports_chatgpt_login_requirement() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/tokens");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Sign in with ChatGPT to use /tokens."),
+        "expected ChatGPT login requirement, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/tokens");
+}
+
+#[tokio::test]
+async fn signed_out_tokens_command_with_args_reports_chatgpt_login_requirement() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/tokens weekly");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Sign in with ChatGPT to use /tokens."),
+        "expected ChatGPT login requirement, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/tokens weekly");
+}
+
+#[tokio::test]
+async fn clearing_pending_token_activity_refreshes_discards_late_result() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Tokens);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected token activity refresh request, got {other:?}"),
+    };
+
+    chat.clear_pending_token_activity_refreshes();
+
+    assert!(
+        !chat.finish_token_activity_refresh(
+            request_id,
+            Err("stale token activity result".to_string()),
+        )
+    );
+}
+
+#[tokio::test]
 async fn unrecognized_slash_command_is_not_added_to_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -233,6 +233,8 @@ impl ChatWidget {
         self.has_chatgpt_account = has_chatgpt_account;
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
+        self.bottom_pane
+            .set_token_activity_command_enabled(has_chatgpt_account);
     }
 
     pub(crate) fn set_realtime_audio_device(

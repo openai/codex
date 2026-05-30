@@ -1231,7 +1231,9 @@ See the Codex keymap documentation for supported actions and examples."
         event: TuiEvent,
     ) -> Result<AppRunControl> {
         let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
-        if terminal_resize_reflow_enabled && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
+        if self.should_handle_draw_pre_render()
+            && matches!(event, TuiEvent::Draw | TuiEvent::Resize)
+        {
             self.handle_draw_pre_render(tui)?;
         } else if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             let size = tui.terminal.size()?;
@@ -1310,7 +1312,7 @@ See the Codex keymap documentation for supported actions and examples."
         self.disable_ambient_pet_before_shutdown(tui)?;
         self.chat_widget.show_shutdown_in_progress();
         let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
-        if terminal_resize_reflow_enabled {
+        if self.should_handle_draw_pre_render() {
             self.handle_draw_pre_render(tui)?;
         }
         self.chat_widget.pre_draw_tick();

@@ -35,6 +35,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const TOKENS_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /tokens.";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -414,6 +415,11 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Tokens => {
+                if self.ensure_token_activity_command_available() {
+                    self.add_token_activity_output(tokens::TokenActivityView::Daily);
+                }
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command();
             }
@@ -614,6 +620,16 @@ impl ChatWidget {
         } = prepared;
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Tokens => {
+                if self.ensure_token_activity_command_available() {
+                    match tokens::TokenActivityView::parse(trimmed) {
+                        Some(view) => self.add_token_activity_output(view),
+                        None => self.add_error_message(
+                            "Usage: /tokens [daily|weekly|cumulative]".to_string(),
+                        ),
+                    }
+                }
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
             }
@@ -944,6 +960,7 @@ impl ChatWidget {
             collaboration_modes_enabled: self.collaboration_modes_enabled(),
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
+            token_activity_command_enabled: self.has_chatgpt_account,
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
@@ -954,6 +971,14 @@ impl ChatWidget {
         }
     }
 
+    fn ensure_token_activity_command_available(&mut self) -> bool {
+        if self.has_chatgpt_account {
+            return true;
+        }
+        self.add_error_message(TOKENS_CHATGPT_LOGIN_REQUIRED.to_string());
+        false
+    }
+
     fn queued_command_drain_result(&self, cmd: SlashCommand) -> QueueDrain {
         if self.is_user_turn_pending_or_running() || !self.bottom_pane.no_modal_or_popup_active() {
             return QueueDrain::Stop;
@@ -961,6 +986,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Tokens
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

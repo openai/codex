@@ -411,6 +411,7 @@ mod status_controls;
 mod status_surfaces;
 mod streaming;
 use self::status_surfaces::CachedProjectRootName;
+mod tokens;
 mod tool_lifecycle;
 mod tool_requests;
 mod transcript;
@@ -549,6 +550,8 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
+    refreshing_token_activity_outputs: Vec<(u64, tokens::TokenActivityHandle)>,
+    next_token_activity_request_id: u64,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     rate_limit_warnings: RateLimitWarningState,

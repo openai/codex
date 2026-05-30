@@ -94,6 +94,7 @@ impl App {
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
         self.transcript_reflow.clear();
+        self.chat_widget.clear_pending_token_activity_refreshes();
         self.initial_history_replay_buffer = None;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
