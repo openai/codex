@@ -1186,6 +1186,7 @@ impl ChatWidget {
         if let Some(active) = self.transcript.active_cell.take() {
             self.transcript.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+            self.request_completed_token_activity_output_insertion();
         }
     }
 
@@ -1400,6 +1401,7 @@ impl ChatWidget {
                 tool.mark_failed();
             }
             self.add_boxed_history(cell);
+            self.request_completed_token_activity_output_insertion();
         }
     }
 

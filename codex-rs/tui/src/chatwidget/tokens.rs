@@ -685,7 +685,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn token_activity_history_insertion_blocked(&self) -> bool {
-        self.stream_controller.is_some() || self.plan_stream_controller.is_some()
+        self.stream_controller.is_some()
+            || self.plan_stream_controller.is_some()
+            || self.transcript.active_cell.is_some()
     }
 
     pub(crate) fn take_completed_token_activity_output(&mut self) -> Option<CompositeHistoryCell> {
