@@ -701,16 +701,15 @@ impl HistoryCell for StatusHistoryCell {
             }
         });
 
-        let mut labels: Vec<String> = vec![
-            "Model",
-            "Directory",
-            "Workspace roots",
-            "Permissions",
-            "Agents.md",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
+        let additional_workspace_roots = self
+            .workspace_roots
+            .iter()
+            .filter(|root| root.as_path() != self.directory)
+            .collect::<Vec<_>>();
+        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
         #[expect(clippy::expect_used)]
@@ -742,6 +741,9 @@ impl HistoryCell for StatusHistoryCell {
         }
         if self.collaboration_mode.is_some() {
             push_label(&mut labels, &mut seen, "Collaboration mode");
+        }
+        if !additional_workspace_roots.is_empty() {
+            push_label(&mut labels, &mut seen, "Workspace roots");
         }
         if self.workspace_state_stale {
             push_label(&mut labels, &mut seen, "Warning");
@@ -807,18 +809,22 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
-        let mut workspace_roots = self.workspace_roots.iter();
-        let first_root = workspace_roots
-            .next()
-            .map(|root| format_directory_display(root.as_path(), Some(value_width)))
-            .unwrap_or_else(|| "(none)".to_string());
-        lines.push(formatter.line("Workspace roots", vec![Span::from(first_root)]));
-        lines.extend(workspace_roots.map(|root| {
-            formatter.continuation(vec![Span::from(format_directory_display(
-                root.as_path(),
-                Some(value_width),
-            ))])
-        }));
+        let mut additional_workspace_roots = additional_workspace_roots.into_iter();
+        if let Some(first_root) = additional_workspace_roots.next() {
+            lines.push(formatter.line(
+                "Workspace roots",
+                vec![Span::from(format_directory_display(
+                    first_root.as_path(),
+                    Some(value_width),
+                ))],
+            ));
+            lines.extend(additional_workspace_roots.map(|root| {
+                formatter.continuation(vec![Span::from(format_directory_display(
+                    root.as_path(),
+                    Some(value_width),
+                ))])
+            }));
+        }
         lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(agents_summary)]));
         if self.workspace_state_stale {

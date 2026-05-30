@@ -537,7 +537,7 @@ async fn status_permissions_workspace_roots_do_not_repeat_additional_directories
 }
 
 #[tokio::test]
-async fn status_workspace_roots_list_all_runtime_directories() {
+async fn status_workspace_roots_list_additional_runtime_directories() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
@@ -552,23 +552,32 @@ async fn status_workspace_roots_list_all_runtime_directories() {
     assert!(
         rendered
             .lines()
+            .any(|line| line.contains("Workspace roots:") && line.contains("/workspace/extra"))
+    );
+    assert!(
+        !rendered
+            .lines()
             .any(|line| line.contains("Workspace roots:") && line.contains("/workspace/tests"))
     );
-    assert!(rendered.contains("/workspace/extra"));
 }
 
 #[tokio::test]
-async fn status_workspace_roots_show_none_when_runtime_list_is_empty() {
+async fn status_workspace_roots_omit_row_when_runtime_list_is_empty() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.workspace_roots.clear();
     config.permissions.set_workspace_roots(Vec::new());
 
-    assert!(
-        rendered_status_for(&config)
-            .lines()
-            .any(|line| line.contains("Workspace roots:") && line.contains("(none)"))
-    );
+    assert!(!rendered_status_for(&config).contains("Workspace roots:"));
+}
+
+#[tokio::test]
+async fn status_workspace_roots_omit_row_when_cwd_is_only_root() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+
+    assert!(!rendered_status_for(&config).contains("Workspace roots:"));
 }
 
 #[tokio::test]
