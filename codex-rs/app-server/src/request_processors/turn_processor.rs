@@ -340,6 +340,7 @@ impl TurnRequestProcessor {
                 .map(|environment| TurnEnvironmentSelection {
                     environment_id: environment.environment_id,
                     cwd: environment.cwd,
+                    workspace_roots: Vec::new(),
                 })
                 .collect::<Vec<_>>()
         });

@@ -780,6 +780,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 cwd: request_cwd.clone(),
                 reason: request.reason,
                 permissions: request.permissions.into(),
+                workspace_mutation: request.workspace_mutation.map(Into::into),
             };
             let (pending_request_id, rx) = outgoing
                 .send_request(ServerRequestPayload::PermissionsRequestApproval(params))
