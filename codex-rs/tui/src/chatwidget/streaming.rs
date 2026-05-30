@@ -19,7 +19,9 @@ impl ChatWidget {
     pub(super) fn flush_answer_stream_with_separator(&mut self) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
-            let scrollback_reflow = if controller.has_live_tail() {
+            let scrollback_reflow = if controller.has_live_tail()
+                && self.config.features.enabled(Feature::TerminalResizeReflow)
+            {
                 crate::app_event::ConsolidationScrollbackReflow::Required
             } else {
                 crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan

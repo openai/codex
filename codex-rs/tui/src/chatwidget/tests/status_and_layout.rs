@@ -354,6 +354,60 @@ async fn flush_answer_stream_requests_scrollback_reflow_for_live_table_tail() {
 }
 
 #[tokio::test]
+async fn flush_answer_stream_inserts_live_list_tail_when_resize_reflow_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.set_feature_enabled(Feature::TerminalResizeReflow, /*enabled*/ false);
+
+    let mut controller = crate::streaming::controller::StreamController::new(
+        Some(/*width*/ 80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("- first\n");
+    controller.push("- second\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected trailing list holdback to leave a live tail for this regression",
+    );
+    chat.stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_consolidate = false;
+    let mut saw_insert_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
+            AppEvent::ConsolidateAgentMessage {
+                scrollback_reflow,
+                deferred_history_cell,
+                ..
+            } => {
+                saw_consolidate = true;
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                );
+                assert!(deferred_history_cell.is_none());
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "expected stream finalization to consolidate"
+    );
+    assert!(
+        saw_insert_history,
+        "live list tail should insert history directly without resize reflow"
+    );
+}
+
+#[tokio::test]
 async fn completed_plan_table_tail_skips_provisional_history_insert() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.to_path_buf();
