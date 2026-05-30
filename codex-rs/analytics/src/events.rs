@@ -56,6 +56,7 @@ pub(crate) struct TrackEventsRequest {
 #[serde(untagged)]
 pub(crate) enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
+    AppServerStarted(CodexAppServerStartedEventRequest),
     ThreadInitialized(ThreadInitializedEvent),
     GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
@@ -142,6 +143,24 @@ pub(crate) struct CodexRuntimeMetadata {
     pub(crate) runtime_os: String,
     pub(crate) runtime_os_version: String,
     pub(crate) runtime_arch: String,
+}
+
+/// Analytics parameters emitted when an app-server runtime starts.
+#[derive(Serialize)]
+pub(crate) struct CodexAppServerStartedEventParams {
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) rpc_transport: AppServerRpcTransport,
+    /// Elapsed measured startup duration, in milliseconds from a monotonic clock.
+    pub(crate) duration_ms: u64,
+    /// Time at which the event was recorded, in seconds since the Unix epoch.
+    pub(crate) created_at: u64,
+}
+
+/// Analytics track-event envelope for an app-server startup event.
+#[derive(Serialize)]
+pub(crate) struct CodexAppServerStartedEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexAppServerStartedEventParams,
 }
 
 #[derive(Serialize)]

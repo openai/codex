@@ -5,6 +5,8 @@ use crate::accepted_lines::accepted_line_repo_hash_for_cwd;
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
+use crate::events::CodexAppServerStartedEventParams;
+use crate::events::CodexAppServerStartedEventRequest;
 use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCollabAgentToolCallEventParams;
 use crate::events::CodexCollabAgentToolCallEventRequest;
@@ -60,6 +62,7 @@ use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
+use crate::facts::AppServerStartedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CustomAnalyticsFact;
@@ -446,6 +449,9 @@ impl AnalyticsReducer {
                 self.ingest_server_request_aborted(completed_at_ms, request_id, out);
             }
             AnalyticsFact::Custom(input) => match input {
+                CustomAnalyticsFact::AppServerStarted(input) => {
+                    self.ingest_app_server_started(input, out);
+                }
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
                 }
@@ -481,6 +487,24 @@ impl AnalyticsReducer {
                 }
             },
         }
+    }
+
+    fn ingest_app_server_started(
+        &mut self,
+        input: AppServerStartedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(TrackEventRequest::AppServerStarted(
+            CodexAppServerStartedEventRequest {
+                event_type: "codex_app_server_started",
+                event_params: CodexAppServerStartedEventParams {
+                    runtime: input.runtime,
+                    rpc_transport: input.rpc_transport,
+                    duration_ms: input.duration_ms,
+                    created_at: input.created_at,
+                },
+            },
+        ));
     }
 
     fn ingest_initialize(

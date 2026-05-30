@@ -139,6 +139,14 @@ impl BlockingRemoteControlBackend {
             &remote_control_url,
             &remote_control_url,
         )?;
+        // This fixture implements remote-control enrollment only; prevent the
+        // startup event from becoming the first request to its blocking server.
+        let config_path = codex_home.join("config.toml");
+        let config = std::fs::read_to_string(&config_path)?;
+        std::fs::write(
+            config_path,
+            format!("{config}\n[analytics]\nenabled = false\n"),
+        )?;
         write_chatgpt_auth(
             codex_home,
             ChatGptAuthFixture::new("chatgpt-token")

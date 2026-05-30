@@ -1,15 +1,28 @@
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::DEFAULT_CLIENT_NAME;
+use app_test_support::McpProcess;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
+use codex_app_server::in_process;
+use codex_app_server::in_process::InProcessStartArgs;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeParams;
+use codex_arg0::Arg0DispatchPaths;
+use codex_config::CloudRequirementsLoader;
+use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::OtelHttpProtocol;
 use codex_core::config::ConfigBuilder;
+use codex_exec_server::EnvironmentManager;
+use codex_feedback::CodexFeedback;
+use codex_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -79,6 +92,91 @@ async fn app_server_default_analytics_enabled_with_flag() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn standalone_app_server_startup_tracks_analytics_event() -> Result<()> {
+    let server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let _mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    let event =
+        wait_for_analytics_event(&server, Duration::from_secs(10), "codex_app_server_started")
+            .await?;
+
+    assert_app_server_started_event(&event, "stdio");
+    Ok(())
+}
+
+#[tokio::test]
+async fn embedded_app_server_startup_tracks_analytics_event() -> Result<()> {
+    let server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await?;
+    let client = in_process::start(InProcessStartArgs {
+        arg0_paths: Arg0DispatchPaths::default(),
+        config: Arc::new(config),
+        cli_overrides: Vec::new(),
+        loader_overrides,
+        strict_config: false,
+        cloud_requirements: CloudRequirementsLoader::default(),
+        thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
+        feedback: CodexFeedback::new(),
+        log_db: None,
+        state_db: None,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        config_warnings: Vec::new(),
+        session_source: SessionSource::Cli,
+        enable_codex_api_key_env: false,
+        initialize: InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-tui".to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            capabilities: None,
+        },
+        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+    })
+    .await?;
+
+    let event =
+        wait_for_analytics_event(&server, Duration::from_secs(10), "codex_app_server_started")
+            .await?;
+
+    assert_app_server_started_event(&event, "in_process");
+    client.shutdown().await?;
+    Ok(())
+}
+
+fn assert_app_server_started_event(event: &Value, rpc_transport: &str) {
+    assert_eq!(event["event_params"]["rpc_transport"], rpc_transport);
+    assert!(event["event_params"]["duration_ms"].as_u64().is_some());
+    assert!(event["event_params"]["created_at"].as_u64().is_some());
+    assert!(
+        event["event_params"]["runtime"]["codex_rs_version"]
+            .as_str()
+            .is_some()
+    );
+}
+
 pub(crate) async fn mount_analytics_capture(server: &MockServer, codex_home: &Path) -> Result<()> {
     Mock::given(method("POST"))
         .and(path("/codex/analytics-events/events"))
@@ -98,26 +196,32 @@ pub(crate) async fn mount_analytics_capture(server: &MockServer, codex_home: &Pa
     Ok(())
 }
 
-pub(crate) async fn wait_for_analytics_payload(
+pub(crate) async fn wait_for_thread_initialized_payload(
     server: &MockServer,
     read_timeout: Duration,
 ) -> Result<Value> {
-    let body = timeout(read_timeout, async {
+    timeout(read_timeout, async {
         loop {
             let Some(requests) = server.received_requests().await else {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             };
-            if let Some(request) = requests.iter().find(|request| {
-                request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
-            }) {
-                break request.body.clone();
+            for request in &requests {
+                if request.method != "POST"
+                    || request.url.path() != "/codex/analytics-events/events"
+                {
+                    continue;
+                }
+                let payload: Value = serde_json::from_slice(&request.body)
+                    .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))?;
+                if thread_initialized_event(&payload).is_ok() {
+                    return Ok::<Value, anyhow::Error>(payload);
+                }
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
-    .await?;
-    serde_json::from_slice(&body).map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))
+    .await?
 }
 
 pub(crate) async fn wait_for_analytics_event(

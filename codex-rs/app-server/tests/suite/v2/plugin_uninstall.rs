@@ -122,16 +122,23 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             };
-            if let Some(request) = requests.iter().find(|request| {
+            for request in requests.iter().filter(|request| {
                 request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
             }) {
-                break request.body.clone();
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&request.body).expect("analytics payload");
+                if payload["events"].as_array().is_some_and(|events| {
+                    events
+                        .iter()
+                        .any(|event| event["event_type"] == "codex_plugin_uninstalled")
+                }) {
+                    return payload;
+                }
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await?;
-    let payload: serde_json::Value = serde_json::from_slice(&payload).expect("analytics payload");
     assert_eq!(
         payload,
         json!({

@@ -8,6 +8,7 @@ use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
+use crate::facts::AppServerStartedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunFact;
@@ -166,6 +167,21 @@ impl AnalyticsEventsClient {
     pub fn track_subagent_thread_started(&self, input: SubAgentThreadStartedInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::SubAgentThreadStarted(input),
+        ));
+    }
+
+    pub fn track_app_server_started(
+        &self,
+        rpc_transport: AppServerRpcTransport,
+        duration: Duration,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::AppServerStarted(AppServerStartedInput {
+                runtime: current_runtime_metadata(),
+                rpc_transport,
+                duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+                created_at: crate::now_unix_seconds(),
+            }),
         ));
     }
 

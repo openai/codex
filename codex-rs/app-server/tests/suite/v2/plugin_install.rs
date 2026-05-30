@@ -1352,15 +1352,22 @@ async fn wait_for_plugin_analytics_payload(server: &MockServer) -> Result<serde_
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             };
-            if let Some(request) = requests.iter().find(|request| {
+            for request in requests.iter().filter(|request| {
                 request.method == "POST"
                     && request
                         .url
                         .path()
                         .ends_with("/codex/analytics-events/events")
             }) {
-                return serde_json::from_slice(&request.body)
-                    .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"));
+                let payload: serde_json::Value = serde_json::from_slice(&request.body)
+                    .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))?;
+                if payload["events"].as_array().is_some_and(|events| {
+                    events
+                        .iter()
+                        .any(|event| event["event_type"] == "codex_plugin_installed")
+                }) {
+                    return Ok::<serde_json::Value, anyhow::Error>(payload);
+                }
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }

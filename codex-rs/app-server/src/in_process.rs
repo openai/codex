@@ -49,6 +49,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
@@ -370,6 +371,7 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
 }
 
 async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    let startup_started = Instant::now();
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
@@ -420,6 +422,8 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.thread_config_loader,
         );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
+        analytics_events_client
+            .track_app_server_started(AppServerRpcTransport::InProcess, startup_started.elapsed());
         let mut processor_handle = tokio::spawn(async move {
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),

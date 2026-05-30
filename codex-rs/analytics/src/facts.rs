@@ -324,6 +324,7 @@ pub(crate) enum AnalyticsFact {
 }
 
 pub(crate) enum CustomAnalyticsFact {
+    AppServerStarted(AppServerStartedInput),
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
     GuardianReview(Box<GuardianReviewEventParams>),
@@ -335,6 +336,16 @@ pub(crate) enum CustomAnalyticsFact {
     HookRun(HookRunInput),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
+}
+
+/// Analytics input captured when an app-server runtime starts.
+pub(crate) struct AppServerStartedInput {
+    pub runtime: CodexRuntimeMetadata,
+    pub rpc_transport: AppServerRpcTransport,
+    /// Elapsed measured startup duration, in milliseconds from a monotonic clock.
+    pub duration_ms: u64,
+    /// Time at which the event was recorded, in seconds since the Unix epoch.
+    pub created_at: u64,
 }
 
 pub(crate) struct SkillInvokedInput {

@@ -98,7 +98,7 @@ use wiremock::matchers::path;
 use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
-use super::analytics::wait_for_analytics_payload;
+use super::analytics::wait_for_thread_initialized_payload;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -424,7 +424,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     );
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
 
-    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
+    let payload = wait_for_thread_initialized_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
     assert_basic_thread_initialized_event(
         event,
