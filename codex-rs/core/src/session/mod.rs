@@ -129,6 +129,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::request_permissions::WorkspaceMutationApprovalRequest;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -208,6 +209,7 @@ mod mcp;
 mod multi_agents;
 mod review;
 mod rollout_reconstruction;
+pub(crate) use rollout_reconstruction::runtime_workspace_baseline_from_initial_history;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 mod token_budget;
@@ -1491,6 +1493,54 @@ impl Session {
             .map(|configuration| configuration.thread_config_snapshot())
     }
 
+    pub(crate) async fn update_runtime_workspace(
+        &self,
+        turn_context: &TurnContext,
+        cwd: Option<AbsolutePathBuf>,
+        workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> ConstraintResult<ThreadConfigSnapshot> {
+        let environments = {
+            let state = self.state.lock().await;
+            let mut environments = state.session_configuration.environments.clone();
+            if let Some(cwd) = cwd {
+                environments.legacy_fallback_cwd = cwd.clone();
+                if let Some(environment) = environments.environments.first_mut() {
+                    environment.cwd = cwd;
+                }
+            }
+            if let Some(environment) = environments.environments.first_mut() {
+                environment.workspace_roots = workspace_roots.clone();
+            }
+            environments
+        };
+        self.update_settings(SessionSettingsUpdate {
+            environments: Some(environments),
+            workspace_roots: Some(workspace_roots.clone()),
+            ..Default::default()
+        })
+        .await?;
+        let snapshot = {
+            let state = self.state.lock().await;
+            state.session_configuration.thread_config_snapshot()
+        };
+        let runtime_workspace = crate::session::turn_context::RuntimeWorkspaceSnapshot {
+            cwd: snapshot.cwd().clone(),
+            workspace_roots: snapshot.workspace_roots.clone(),
+            permission_profile: snapshot.permission_profile.clone(),
+        };
+        turn_context
+            .runtime_workspace
+            .replace(runtime_workspace.clone())
+            .await;
+        let turn_context_item =
+            turn_context.to_turn_context_item_with_runtime_workspace(&runtime_workspace);
+        self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
+            .await;
+        let mut state = self.state.lock().await;
+        state.set_reference_context_item(Some(turn_context_item));
+        Ok(snapshot)
+    }
+
     pub(crate) async fn set_session_startup_prewarm(
         &self,
         startup_prewarm: SessionStartupPrewarmHandle,
@@ -2172,6 +2222,67 @@ impl Session {
         environment: TurnEnvironmentSelection,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_environment_with_workspace_mutation(
+            turn_context,
+            call_id,
+            args,
+            environment,
+            /*workspace_mutation*/ None,
+            cancellation_token,
+        )
+        .await
+    }
+
+    pub(crate) async fn request_workspace_permissions_for_cwd(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        cwd: AbsolutePathBuf,
+        workspace_mutation: WorkspaceMutationApprovalRequest,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
+        let turn_environment = match args.environment_id.as_deref() {
+            Some(environment_id) => turn_context
+                .environments
+                .turn_environments
+                .iter()
+                .find(|environment| environment.environment_id == environment_id),
+            None => turn_context.environments.primary(),
+        };
+        let Some(turn_environment) = turn_environment else {
+            return Some(RequestPermissionsResponse {
+                permissions: RequestPermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            });
+        };
+        let mut environment = turn_environment.selection();
+        environment.cwd = cwd;
+        self.request_permissions_for_environment_with_workspace_mutation(
+            turn_context,
+            call_id,
+            args,
+            environment,
+            Some(workspace_mutation),
+            cancellation_token,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    async fn request_permissions_for_environment_with_workspace_mutation(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        environment: TurnEnvironmentSelection,
+        workspace_mutation: Option<WorkspaceMutationApprovalRequest>,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
         match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -2210,6 +2321,7 @@ impl Session {
                 turn_id: turn_context.sub_id.clone(),
                 reason: args.reason,
                 permissions: requested_permissions.clone(),
+                workspace_mutation: workspace_mutation.clone(),
             };
             let review_rx = crate::guardian::spawn_approval_request_review(
                 session,
@@ -2225,11 +2337,16 @@ impl Session {
                 _ = cancellation_token.cancelled() => return None,
                 decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
             };
+            let approved_scope = if workspace_mutation.is_some() {
+                PermissionGrantScope::Session
+            } else {
+                PermissionGrantScope::Turn
+            };
             let response = match decision {
                 ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                     RequestPermissionsResponse {
                         permissions: requested_permissions.clone(),
-                        scope: PermissionGrantScope::Turn,
+                        scope: approved_scope,
                         strict_auto_review: false,
                     }
                 }
@@ -2304,6 +2421,7 @@ impl Session {
             reason: args.reason,
             permissions: requested_permissions,
             cwd: Some(environment.cwd),
+            workspace_mutation,
         });
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {

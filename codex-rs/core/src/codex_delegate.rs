@@ -770,13 +770,30 @@ async fn handle_request_permissions(
         #[allow(deprecated)]
         parent_ctx.cwd.clone()
     });
-    let response_fut = parent_session.request_permissions_for_cwd(
-        parent_ctx,
-        call_id.clone(),
-        args,
-        cwd,
-        cancel_token.clone(),
-    );
+    let response_fut = async {
+        if let Some(workspace_mutation) = event.workspace_mutation {
+            parent_session
+                .request_workspace_permissions_for_cwd(
+                    parent_ctx,
+                    call_id.clone(),
+                    args,
+                    cwd,
+                    workspace_mutation,
+                    cancel_token.clone(),
+                )
+                .await
+        } else {
+            parent_session
+                .request_permissions_for_cwd(
+                    parent_ctx,
+                    call_id.clone(),
+                    args,
+                    cwd,
+                    cancel_token.clone(),
+                )
+                .await
+        }
+    };
     let response =
         await_request_permissions_with_cancel(response_fut, parent_session, &call_id, cancel_token)
             .await;

@@ -72,6 +72,20 @@ pub struct RequestPermissionsResponse {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMutationOperation {
+    SetWorkingDirectory,
+    AddWorkspaceRoot,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct WorkspaceMutationApprovalRequest {
+    pub operation: WorkspaceMutationOperation,
+    pub target: AbsolutePathBuf,
+    pub resulting_workspace_roots: Vec<AbsolutePathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestPermissionsEvent {
     /// Responses API call id for the associated tool call, if available.
     pub call_id: String,
@@ -96,4 +110,7 @@ pub struct RequestPermissionsEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cwd: Option<AbsolutePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workspace_mutation: Option<WorkspaceMutationApprovalRequest>,
 }

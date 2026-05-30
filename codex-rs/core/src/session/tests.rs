@@ -4039,6 +4039,7 @@ fn turn_environments_for_tests(
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             environment: Arc::clone(environment),
             cwd: cwd.clone(),
+            workspace_roots: vec![cwd.clone()],
             shell: None,
         }],
     }
@@ -6252,6 +6253,7 @@ async fn primary_environment_uses_first_turn_environment() {
             environment_id: "second".to_string(),
             environment: Arc::clone(&first_environment.environment),
             cwd: second_cwd.clone(),
+            workspace_roots: vec![second_cwd.clone()],
             shell: None,
         });
 
@@ -8076,6 +8078,58 @@ async fn turn_context_item_stores_split_file_system_sandbox_policy_when_differen
     assert_eq!(
         item.permission_profile,
         Some(turn_context.permission_profile())
+    );
+}
+
+#[tokio::test]
+async fn update_runtime_workspace_persists_resume_and_fork_baseline() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let updated_cwd = test_path_buf("/workspace/updated").abs();
+    let updated_roots = vec![
+        test_path_buf("/workspace").abs(),
+        test_path_buf("/external").abs(),
+    ];
+
+    let snapshot = session
+        .update_runtime_workspace(
+            &turn_context,
+            Some(updated_cwd.clone()),
+            updated_roots.clone(),
+        )
+        .await
+        .expect("update runtime workspace");
+    let runtime_workspace = turn_context.runtime_workspace.snapshot().await;
+    let expected_context_item =
+        turn_context.to_turn_context_item_with_runtime_workspace(&runtime_workspace);
+
+    assert_eq!(snapshot.cwd, updated_cwd);
+    assert_eq!(snapshot.workspace_roots, updated_roots);
+    assert_eq!(
+        serde_json::to_value(session.reference_context_item().await)
+            .expect("serialize runtime workspace reference context item"),
+        serde_json::to_value(Some(expected_context_item.clone()))
+            .expect("serialize expected runtime workspace context item")
+    );
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let persisted_context_item = resumed.history.iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(ctx) => Some(ctx.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        serde_json::to_value(persisted_context_item)
+            .expect("serialize persisted runtime workspace context item"),
+        serde_json::to_value(Some(expected_context_item))
+            .expect("serialize expected persisted runtime workspace context item")
     );
 }
 

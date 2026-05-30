@@ -143,9 +143,18 @@ impl ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd.clone();
+        let runtime_workspace = turn.runtime_workspace.snapshot().await;
+        let cwd = if turn.environments.turn_environments.len() == 1 {
+            runtime_workspace.cwd.clone()
+        } else {
+            turn_environment.cwd.clone()
+        };
         let abs_path = cwd.join(path);
-        let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, &cwd);
+        let sandbox = turn.file_system_sandbox_context_for_permission_profile(
+            &runtime_workspace.permission_profile,
+            /*additional_permissions*/ None,
+            &cwd,
+        );
         let fs = turn_environment.environment.get_filesystem();
         let path_uri = PathUri::from_abs_path(&abs_path).map_err(|error| {
             FunctionCallError::RespondToModel(format!(
@@ -389,6 +398,13 @@ mod tests {
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::Disabled;
+        turn.runtime_workspace
+            .replace(crate::session::turn_context::RuntimeWorkspaceSnapshot {
+                cwd: image_cwd,
+                workspace_roots: Vec::new(),
+                permission_profile: PermissionProfile::Disabled,
+            })
+            .await;
 
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {

@@ -19,6 +19,7 @@ use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use tokio::sync::RwLock;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
@@ -40,6 +41,7 @@ pub(crate) struct TurnEnvironment {
     pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
     pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) workspace_roots: Vec<AbsolutePathBuf>,
     pub(crate) shell: Option<shell::Shell>,
 }
 
@@ -48,7 +50,36 @@ impl TurnEnvironment {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
             cwd: self.cwd.clone(),
+            workspace_roots: self.workspace_roots.clone(),
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeWorkspaceSnapshot {
+    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) workspace_roots: Vec<AbsolutePathBuf>,
+    pub(crate) permission_profile: PermissionProfile,
+}
+
+#[derive(Debug)]
+pub(crate) struct RuntimeWorkspaceState {
+    snapshot: RwLock<RuntimeWorkspaceSnapshot>,
+}
+
+impl RuntimeWorkspaceState {
+    fn new(snapshot: RuntimeWorkspaceSnapshot) -> Self {
+        Self {
+            snapshot: RwLock::new(snapshot),
+        }
+    }
+
+    pub(crate) async fn snapshot(&self) -> RuntimeWorkspaceSnapshot {
+        self.snapshot.read().await.clone()
+    }
+
+    pub(crate) async fn replace(&self, snapshot: RuntimeWorkspaceSnapshot) {
+        *self.snapshot.write().await = snapshot;
     }
 }
 
@@ -87,6 +118,7 @@ pub struct TurnContext {
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) permission_profile: PermissionProfile,
+    pub(crate) runtime_workspace: Arc<RuntimeWorkspaceState>,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
@@ -126,10 +158,25 @@ impl TurnContext {
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
-        compatibility_sandbox_policy_for_permission_profile(
+        self.sandbox_policy_for_permission_profile(
             &self.permission_profile,
             #[allow(deprecated)]
             &self.cwd,
+        )
+    }
+
+    fn sandbox_policy_for_permission_profile(
+        &self,
+        permission_profile: &PermissionProfile,
+        cwd: &AbsolutePathBuf,
+    ) -> SandboxPolicy {
+        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
+        let network_sandbox_policy = permission_profile.network_sandbox_policy();
+        compatibility_sandbox_policy_for_permission_profile(
+            permission_profile,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+            cwd.as_path(),
         )
     }
 
@@ -256,6 +303,7 @@ impl TurnContext {
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
             permission_profile: self.permission_profile.clone(),
+            runtime_workspace: Arc::clone(&self.runtime_workspace),
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             shell_environment_policy: self.shell_environment_policy.clone(),
@@ -288,13 +336,14 @@ impl TurnContext {
             .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
     }
 
-    pub(crate) fn file_system_sandbox_context(
+    pub(crate) fn file_system_sandbox_context_for_permission_profile(
         &self,
+        permission_profile: &PermissionProfile,
         additional_permissions: Option<AdditionalPermissionProfile>,
         cwd: &AbsolutePathBuf,
     ) -> FileSystemSandboxContext {
         let (base_file_system_sandbox_policy, base_network_sandbox_policy) =
-            self.permission_profile.to_runtime_permissions();
+            permission_profile.to_runtime_permissions();
         let file_system_sandbox_policy = effective_file_system_sandbox_policy(
             &base_file_system_sandbox_policy,
             additional_permissions.as_ref(),
@@ -304,7 +353,7 @@ impl TurnContext {
             additional_permissions.as_ref(),
         );
         let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            self.permission_profile.enforcement(),
+            permission_profile.enforcement(),
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
@@ -321,17 +370,29 @@ impl TurnContext {
     }
 
     fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+        self.non_legacy_file_system_sandbox_policy_for_permission_profile(
+            &self.permission_profile,
+            #[allow(deprecated)]
+            &self.cwd,
+        )
+    }
+
+    fn non_legacy_file_system_sandbox_policy_for_permission_profile(
+        &self,
+        permission_profile: &PermissionProfile,
+        cwd: &AbsolutePathBuf,
+    ) -> Option<FileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
         // this comparison and the legacy projection should go away.
+        let sandbox_policy = self.sandbox_policy_for_permission_profile(permission_profile, cwd);
         let legacy_file_system_sandbox_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                &self.sandbox_policy(),
-                #[allow(deprecated)]
-                &self.cwd,
+                &sandbox_policy,
+                cwd.as_path(),
             );
-        let file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
         (file_system_sandbox_policy != legacy_file_system_sandbox_policy)
             .then_some(file_system_sandbox_policy)
     }
@@ -365,6 +426,27 @@ impl TurnContext {
             effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
         }
+    }
+
+    pub(crate) fn to_turn_context_item_with_runtime_workspace(
+        &self,
+        runtime_workspace: &RuntimeWorkspaceSnapshot,
+    ) -> TurnContextItem {
+        let mut item = self.to_turn_context_item();
+        item.cwd = runtime_workspace.cwd.to_path_buf();
+        item.workspace_roots = (!runtime_workspace.workspace_roots.is_empty())
+            .then_some(runtime_workspace.workspace_roots.clone());
+        item.sandbox_policy = self.sandbox_policy_for_permission_profile(
+            &runtime_workspace.permission_profile,
+            &runtime_workspace.cwd,
+        );
+        item.permission_profile = Some(runtime_workspace.permission_profile.clone());
+        item.file_system_sandbox_policy = self
+            .non_legacy_file_system_sandbox_policy_for_permission_profile(
+                &runtime_workspace.permission_profile,
+                &runtime_workspace.cwd,
+            );
+        item
     }
 
     fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {
@@ -526,6 +608,11 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
+        let runtime_workspace = Arc::new(RuntimeWorkspaceState::new(RuntimeWorkspaceSnapshot {
+            cwd: cwd.clone(),
+            workspace_roots: session_configuration.workspace_roots.clone(),
+            permission_profile: session_configuration.permission_profile(),
+        }));
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
@@ -559,6 +646,7 @@ impl Session {
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
             permission_profile: session_configuration.permission_profile(),
+            runtime_workspace,
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),

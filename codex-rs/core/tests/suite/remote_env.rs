@@ -353,6 +353,7 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: remote_cwd.clone(),
+        workspace_roots: Vec::new(),
     };
     let multi_env_output = exec_command_routing_output(
         &test,
@@ -649,6 +650,7 @@ async fn apply_patch_freeform_routes_to_selected_remote_environment() -> Result<
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: remote_cwd.clone(),
+                workspace_roots: Vec::new(),
             },
         ]),
     )
@@ -732,6 +734,7 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
         TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: remote_cwd.clone(),
+            workspace_roots: Vec::new(),
         },
     ];
     let local_patch = format!(
@@ -930,6 +933,7 @@ async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environm
             TurnEnvironmentSelection {
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: remote_cwd.clone(),
+                workspace_roots: Vec::new(),
             },
         ]),
     )

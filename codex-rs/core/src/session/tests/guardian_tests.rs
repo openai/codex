@@ -22,6 +22,7 @@ use codex_model_provider::create_model_provider;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -30,6 +31,8 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::request_permissions::WorkspaceMutationApprovalRequest;
+use codex_protocol::request_permissions::WorkspaceMutationOperation;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::codex_linux_sandbox_exe_or_skip;
@@ -165,6 +168,100 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     assert_eq!(guardian_request.path(), "/v1/responses");
     assert!(guardian_request.body_contains_text("request_permissions"));
     assert!(guardian_request.body_contains_text("need network"));
+}
+
+#[tokio::test]
+async fn workspace_mutation_permissions_approved_by_guardian_use_session_scope() {
+    let server = start_mock_server().await;
+    let _guardian_request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message(
+                "msg-guardian",
+                &serde_json::json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "The user requested the persistent workspace mutation.",
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (mut session, mut turn_context_raw) = make_session_and_context().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    turn_context_raw
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    turn_context_raw
+        .features
+        .enable(Feature::GuardianApproval)
+        .expect("test setup should allow enabling guardian approvals");
+    let mut config = (*turn_context_raw.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    let config = Arc::new(config);
+    let models_manager = models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    );
+    session.services.models_manager = models_manager;
+    turn_context_raw.config = Arc::clone(&config);
+    turn_context_raw.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context_raw.auth_manager.clone(),
+    );
+    #[allow(deprecated)]
+    let cwd = turn_context_raw.cwd.clone();
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+
+    let requested_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![cwd.clone()]),
+        )),
+        ..RequestPermissionProfile::default()
+    };
+    let response = tokio::time::timeout(
+        Duration::from_secs(45),
+        session.request_workspace_permissions_for_cwd(
+            &turn_context,
+            "perm-call-workspace-mutation".to_string(),
+            RequestPermissionsArgs {
+                reason: Some("persist workspace mutation".to_string()),
+                permissions: requested_permissions.clone(),
+            },
+            cwd.clone(),
+            WorkspaceMutationApprovalRequest {
+                operation: WorkspaceMutationOperation::SetWorkingDirectory,
+                target: cwd.clone(),
+                resulting_workspace_roots: vec![cwd],
+            },
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("workspace mutation permissions should not wait for a client approval");
+
+    assert_eq!(
+        response,
+        Some(RequestPermissionsResponse {
+            permissions: requested_permissions.clone(),
+            scope: PermissionGrantScope::Session,
+            strict_auto_review: false,
+        })
+    );
+    assert_eq!(
+        session.granted_session_permissions().await,
+        Some(requested_permissions.into())
+    );
 }
 
 #[tokio::test]

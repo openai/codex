@@ -177,6 +177,96 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
     let _: fn(&ThreadManager, Config, std::path::PathBuf) = assert_legacy_snapshot_callsite;
 }
 
+#[tokio::test]
+async fn hydrate_runtime_workspace_from_history_restores_persisted_baseline() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let persisted_cwd = PathBuf::from("/workspace/updated").abs();
+    let persisted_roots = vec![
+        PathBuf::from("/workspace").abs(),
+        PathBuf::from("/external").abs(),
+    ];
+    let mut context_item = turn_context.to_turn_context_item();
+    context_item.cwd = persisted_cwd.to_path_buf();
+    context_item.workspace_roots = Some(persisted_roots.clone());
+    let history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("mutate workspace")),
+        RolloutItem::TurnContext(context_item),
+    ]);
+    let mut config = test_config().await;
+
+    hydrate_runtime_workspace_from_history(
+        &mut config,
+        &history,
+        RuntimeWorkspaceReplayOverrides::default(),
+    );
+
+    assert_eq!(config.cwd, persisted_cwd);
+    assert_eq!(config.workspace_roots, persisted_roots);
+    assert_eq!(config.permissions.workspace_roots(), persisted_roots);
+}
+
+#[tokio::test]
+async fn hydrate_runtime_workspace_from_history_preserves_explicit_replacements() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let mut context_item = turn_context.to_turn_context_item();
+    context_item.cwd = PathBuf::from("/workspace/persisted").abs().to_path_buf();
+    context_item.workspace_roots = Some(vec![PathBuf::from("/persisted-root").abs()]);
+    let history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("mutate workspace")),
+        RolloutItem::TurnContext(context_item),
+    ]);
+    let requested_cwd = PathBuf::from("/workspace/requested").abs();
+    let requested_roots = vec![PathBuf::from("/requested-root").abs()];
+    let mut config = test_config().await;
+    config.cwd = requested_cwd.clone();
+    config.workspace_roots = requested_roots.clone();
+    config
+        .permissions
+        .set_workspace_roots(requested_roots.clone());
+
+    hydrate_runtime_workspace_from_history(
+        &mut config,
+        &history,
+        RuntimeWorkspaceReplayOverrides {
+            preserve_cwd: true,
+            preserve_workspace_roots: true,
+        },
+    );
+
+    assert_eq!(config.cwd, requested_cwd);
+    assert_eq!(config.workspace_roots, requested_roots);
+    assert_eq!(config.permissions.workspace_roots(), requested_roots);
+}
+
+#[tokio::test]
+async fn hydrate_runtime_workspace_from_history_preserves_cwd_without_retargeting_roots() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let persisted_roots = vec![PathBuf::from("/persisted-root").abs()];
+    let mut context_item = turn_context.to_turn_context_item();
+    context_item.cwd = PathBuf::from("/workspace/persisted").abs().to_path_buf();
+    context_item.workspace_roots = Some(persisted_roots.clone());
+    let history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("mutate workspace")),
+        RolloutItem::TurnContext(context_item),
+    ]);
+    let requested_cwd = PathBuf::from("/workspace/requested").abs();
+    let mut config = test_config().await;
+    config.cwd = requested_cwd.clone();
+
+    hydrate_runtime_workspace_from_history(
+        &mut config,
+        &history,
+        RuntimeWorkspaceReplayOverrides {
+            preserve_cwd: true,
+            preserve_workspace_roots: false,
+        },
+    );
+
+    assert_eq!(config.cwd, requested_cwd);
+    assert_eq!(config.workspace_roots, persisted_roots);
+    assert_eq!(config.permissions.workspace_roots(), persisted_roots);
+}
+
 #[test]
 fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
     let items = vec![
@@ -330,6 +420,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
             environments: vec![TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
                 cwd: config.cwd.clone(),
+                workspace_roots: config.workspace_roots.clone(),
             }],
             thread_extension_init: Default::default(),
         })
@@ -495,6 +586,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let environments = vec![TurnEnvironmentSelection {
         environment_id: "local".to_string(),
         cwd: selected_cwd.clone(),
+        workspace_roots: Vec::new(),
     }];
     let default_cwd = config.cwd.clone();
     let mut source_config = config.clone();

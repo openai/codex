@@ -240,6 +240,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
                         ..RequestPermissionProfile::default()
                     },
                     cwd: Some(request_cwd),
+                    workspace_mutation: None,
                 },
                 &cancel_token,
             )

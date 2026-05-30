@@ -264,7 +264,7 @@ fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
 
 async fn effective_patch_permissions(
     session: &Session,
-    turn: &TurnContext,
+    permission_profile: &codex_protocol::models::PermissionProfile,
     environment_id: &str,
     action: &ApplyPatchAction,
     cwd: &AbsolutePathBuf,
@@ -284,7 +284,7 @@ async fn effective_patch_permissions(
             .await
             .as_ref(),
     );
-    let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
+    let base_file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
         &base_file_system_sandbox_policy,
         granted_permissions.as_ref(),
@@ -358,9 +358,18 @@ impl ApplyPatchHandler {
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let cwd = turn_environment.cwd.clone();
+        let runtime_workspace = turn.runtime_workspace.snapshot().await;
+        let cwd = if turn.environments.turn_environments.len() == 1 {
+            runtime_workspace.cwd.clone()
+        } else {
+            turn_environment.cwd.clone()
+        };
         let fs = turn_environment.environment.get_filesystem();
-        let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, &cwd);
+        let sandbox = turn.file_system_sandbox_context_for_permission_profile(
+            &runtime_workspace.permission_profile,
+            /*additional_permissions*/ None,
+            &cwd,
+        );
         match codex_apply_patch::verify_apply_patch_args(args, &cwd, fs.as_ref(), Some(&sandbox))
             .await
         {
@@ -368,7 +377,7 @@ impl ApplyPatchHandler {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
                     effective_patch_permissions(
                         session.as_ref(),
-                        turn.as_ref(),
+                        &runtime_workspace.permission_profile,
                         &turn_environment.environment_id,
                         &changes,
                         &cwd,
@@ -522,7 +531,12 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, cwd);
+    let runtime_workspace = turn.runtime_workspace.snapshot().await;
+    let sandbox = turn.file_system_sandbox_context_for_permission_profile(
+        &runtime_workspace.permission_profile,
+        /*additional_permissions*/ None,
+        cwd,
+    );
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
     {
@@ -530,7 +544,7 @@ pub(crate) async fn intercept_apply_patch(
             let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
                 effective_patch_permissions(
                     session.as_ref(),
-                    turn.as_ref(),
+                    &runtime_workspace.permission_profile,
                     &turn_environment.environment_id,
                     &changes,
                     cwd,

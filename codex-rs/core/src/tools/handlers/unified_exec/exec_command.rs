@@ -122,6 +122,7 @@ impl ExecCommandHandler {
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
         let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
+        let runtime_workspace = turn.runtime_workspace.snapshot().await;
         let Some(turn_environment) =
             resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
         else {
@@ -134,8 +135,20 @@ impl ExecCommandHandler {
             .as_deref()
             .filter(|workdir| !workdir.is_empty())
             .map_or_else(
-                || turn_environment.cwd.clone(),
-                |workdir| turn_environment.cwd.join(workdir),
+                || {
+                    if turn.environments.turn_environments.len() == 1 {
+                        runtime_workspace.cwd.clone()
+                    } else {
+                        turn_environment.cwd.clone()
+                    }
+                },
+                |workdir| {
+                    if turn.environments.turn_environments.len() == 1 {
+                        runtime_workspace.cwd.join(workdir)
+                    } else {
+                        turn_environment.cwd.join(workdir)
+                    }
+                },
             );
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();

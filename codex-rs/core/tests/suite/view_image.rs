@@ -627,6 +627,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: remote_cwd.clone(),
+        workspace_roots: Vec::new(),
     };
     let call_id = "call-view-image-multi-env";
     let response_mock = mount_sse_sequence(

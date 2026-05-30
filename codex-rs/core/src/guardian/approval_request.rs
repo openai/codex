@@ -6,6 +6,7 @@ use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::request_permissions::WorkspaceMutationApprovalRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 use serde_json::Value;
@@ -73,6 +74,7 @@ pub(crate) enum GuardianApprovalRequest {
         turn_id: String,
         reason: Option<String>,
         permissions: RequestPermissionProfile,
+        workspace_mutation: Option<WorkspaceMutationApprovalRequest>,
     },
 }
 
@@ -167,6 +169,8 @@ struct RequestPermissionsApprovalAction<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a String>,
     permissions: &'a RequestPermissionProfile,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace_mutation: Option<&'a WorkspaceMutationApprovalRequest>,
 }
 
 fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value> {
@@ -363,11 +367,13 @@ pub(crate) fn guardian_approval_request_to_json(
             turn_id,
             reason,
             permissions,
+            workspace_mutation,
         } => serialize_guardian_action(RequestPermissionsApprovalAction {
             tool: "request_permissions",
             turn_id,
             reason: reason.as_ref(),
             permissions,
+            workspace_mutation: workspace_mutation.as_ref(),
         }),
     }
 }
@@ -432,10 +438,12 @@ pub(crate) fn guardian_assessment_action(
         GuardianApprovalRequest::RequestPermissions {
             reason,
             permissions,
+            workspace_mutation,
             ..
         } => GuardianAssessmentAction::RequestPermissions {
             reason: reason.clone(),
             permissions: permissions.clone(),
+            workspace_mutation: workspace_mutation.clone(),
         },
     }
 }

@@ -5,6 +5,7 @@ use crate::parse_command::ParsedCommand;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::request_permissions::RequestPermissionProfile;
+use crate::request_permissions::WorkspaceMutationApprovalRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -166,6 +167,9 @@ pub enum GuardianAssessmentAction {
     RequestPermissions {
         reason: Option<String>,
         permissions: RequestPermissionProfile,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        workspace_mutation: Option<WorkspaceMutationApprovalRequest>,
     },
 }
 

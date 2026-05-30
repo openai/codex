@@ -15,6 +15,8 @@ use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialP
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+use codex_protocol::request_permissions::WorkspaceMutationApprovalRequest as CoreWorkspaceMutationApprovalRequest;
+use codex_protocol::request_permissions::WorkspaceMutationOperation as CoreWorkspaceMutationOperation;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -656,7 +658,7 @@ impl From<CoreNetworkPolicyAmendment> for NetworkPolicyAmendment {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PermissionsRequestApprovalParams {
@@ -671,6 +673,43 @@ pub struct PermissionsRequestApprovalParams {
     pub cwd: AbsolutePathBuf,
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    pub workspace_mutation: Option<WorkspaceMutationApprovalRequest>,
+}
+
+v2_enum_from_core!(
+    pub enum WorkspaceMutationOperation from CoreWorkspaceMutationOperation {
+        SetWorkingDirectory,
+        AddWorkspaceRoot
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkspaceMutationApprovalRequest {
+    pub operation: WorkspaceMutationOperation,
+    pub target: AbsolutePathBuf,
+    pub resulting_workspace_roots: Vec<AbsolutePathBuf>,
+}
+
+impl From<CoreWorkspaceMutationApprovalRequest> for WorkspaceMutationApprovalRequest {
+    fn from(value: CoreWorkspaceMutationApprovalRequest) -> Self {
+        Self {
+            operation: value.operation.into(),
+            target: value.target,
+            resulting_workspace_roots: value.resulting_workspace_roots,
+        }
+    }
+}
+
+impl From<WorkspaceMutationApprovalRequest> for CoreWorkspaceMutationApprovalRequest {
+    fn from(value: WorkspaceMutationApprovalRequest) -> Self {
+        Self {
+            operation: value.operation.to_core(),
+            target: value.target,
+            resulting_workspace_roots: value.resulting_workspace_roots,
+        }
+    }
 }
 
 v2_enum_from_core!(

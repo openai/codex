@@ -155,7 +155,7 @@ async fn thread_settings_update(
     }
 }
 
-async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
+pub(crate) async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
     let snapshot = {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
@@ -171,6 +171,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             permission_profile: snapshot.permission_profile,
             active_permission_profile: snapshot.active_permission_profile,
             cwd,
+            workspace_roots: snapshot.workspace_roots,
             reasoning_effort: snapshot.reasoning_effort,
             reasoning_summary: snapshot.reasoning_summary,
             personality: snapshot.personality,

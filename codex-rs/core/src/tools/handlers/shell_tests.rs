@@ -94,6 +94,11 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         &turn_context.shell_environment_policy,
         Some(session.thread_id),
     );
+    let cwd = &turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .cwd;
 
     let params = ShellCommandToolCallParams {
         command,
@@ -110,6 +115,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         &params,
         &session,
         &turn_context,
+        cwd,
         session.thread_id,
         /*allow_login_shell*/ true,
     )
@@ -172,11 +178,17 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         prefix_rule: None,
         justification: None,
     };
+    let cwd = &turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .cwd;
 
     let exec_params = ShellCommandHandler::to_exec_params(
         &params,
         &session,
         &turn_context,
+        cwd,
         session.thread_id,
         /*allow_login_shell*/ false,
     )
