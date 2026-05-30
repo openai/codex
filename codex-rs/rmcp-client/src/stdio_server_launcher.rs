@@ -32,6 +32,7 @@ use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecEnvPolicy;
+use codex_exec_server::ExecLaunch;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
@@ -501,6 +502,7 @@ impl ExecutorStdioServerLauncher {
                 tty: false,
                 pipe_stdin: true,
                 arg0: None,
+                launch: ExecLaunch::Materialized,
             })
             .await
             .map_err(io::Error::other)?;

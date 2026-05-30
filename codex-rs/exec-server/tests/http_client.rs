@@ -1013,6 +1013,7 @@ impl JsonRpcPeer {
             request.id,
             InitializeResponse {
                 session_id: "session-1".to_string(),
+                capabilities: Vec::new(),
             },
         )
         .await?;

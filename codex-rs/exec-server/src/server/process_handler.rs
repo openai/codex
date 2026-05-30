@@ -17,9 +17,12 @@ pub(crate) struct ProcessHandler {
 }
 
 impl ProcessHandler {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn new(
+        notifications: RpcNotificationSender,
+        runtime_paths: crate::ExecServerRuntimePaths,
+    ) -> Self {
         Self {
-            process: LocalProcess::new(notifications),
+            process: LocalProcess::with_runtime_paths(notifications, runtime_paths),
         }
     }
 

@@ -41,6 +41,7 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecServerCapability;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
@@ -175,6 +176,7 @@ struct Inner {
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
     session_id: std::sync::RwLock<Option<String>>,
+    capabilities: std::sync::RwLock<Vec<ExecServerCapability>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -341,6 +343,14 @@ impl ExecServerClient {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *session_id = Some(response.session_id.clone());
             }
+            {
+                let mut capabilities = self
+                    .inner
+                    .capabilities
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *capabilities = response.capabilities.clone();
+            }
             self.notify_initialized().await?;
             Ok(response)
         })
@@ -459,6 +469,14 @@ impl ExecServerClient {
             .clone()
     }
 
+    pub fn supports(&self, capability: ExecServerCapability) -> bool {
+        self.inner
+            .capabilities
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&capability)
+    }
+
     fn is_disconnected(&self) -> bool {
         self.inner.disconnected.get().is_some() || self.inner.client.is_disconnected()
     }
@@ -510,6 +528,7 @@ impl ExecServerClient {
                 http_body_streams_write_lock: Mutex::new(()),
                 http_body_stream_next_id: AtomicU64::new(1),
                 session_id: std::sync::RwLock::new(None),
+                capabilities: std::sync::RwLock::new(Vec::new()),
                 reader_task,
             }
         });
@@ -1047,6 +1066,7 @@ mod tests {
                 id: request.id,
                 result: serde_json::to_value(InitializeResponse {
                     session_id: session_id.to_string(),
+                    capabilities: Vec::new(),
                 })
                 .expect("initialize response should serialize"),
             }),
@@ -1280,6 +1300,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        capabilities: Vec::new(),
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -1423,6 +1444,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        capabilities: Vec::new(),
                     })
                     .expect("initialize response should serialize"),
                 }),
@@ -1560,6 +1582,7 @@ mod tests {
                     id: request.id,
                     result: serde_json::to_value(InitializeResponse {
                         session_id: "session-1".to_string(),
+                        capabilities: Vec::new(),
                     })
                     .expect("initialize response should serialize"),
                 }),

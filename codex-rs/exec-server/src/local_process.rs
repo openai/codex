@@ -24,6 +24,7 @@ use crate::ExecServerError;
 use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::process::ExecProcessEventLog;
+use crate::process_sandbox::ProcessSandboxTransformer;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecEnvPolicy;
@@ -84,6 +85,7 @@ enum ProcessEntry {
 struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    sandbox: Option<ProcessSandboxTransformer>,
 }
 
 #[derive(Clone)]
@@ -113,6 +115,20 @@ impl LocalProcess {
             inner: Arc::new(Inner {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 processes: Mutex::new(HashMap::new()),
+                sandbox: None,
+            }),
+        }
+    }
+
+    pub(crate) fn with_runtime_paths(
+        notifications: RpcNotificationSender,
+        runtime_paths: crate::ExecServerRuntimePaths,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                notifications: std::sync::RwLock::new(Some(notifications)),
+                processes: Mutex::new(HashMap::new()),
+                sandbox: Some(ProcessSandboxTransformer::new(runtime_paths)),
             }),
         }
     }
@@ -146,6 +162,21 @@ impl LocalProcess {
         &self,
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
+        let materialized = match (&self.inner.sandbox, &params.launch) {
+            (Some(sandbox), _) => sandbox.materialize(params)?,
+            (None, crate::protocol::ExecLaunch::Materialized) => {
+                crate::process_sandbox::MaterializedProcess {
+                    params,
+                    sandbox: None,
+                }
+            }
+            (None, crate::protocol::ExecLaunch::SandboxIntent { .. }) => {
+                return Err(crate::rpc::invalid_request(
+                    "sandbox intent requires exec-server runtime paths".to_string(),
+                ));
+            }
+        };
+        let params = materialized.params;
         let process_id = params.process_id.clone();
         let (program, args) = params
             .argv
@@ -259,7 +290,14 @@ impl LocalProcess {
             output_notify,
         ));
 
-        Ok((ExecResponse { process_id }, wake_tx, events))
+        Ok((
+            ExecResponse {
+                process_id,
+                sandbox: materialized.sandbox,
+            },
+            wake_tx,
+            events,
+        ))
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
@@ -406,7 +444,7 @@ impl LocalProcess {
     }
 }
 
-fn child_env(params: &ExecParams) -> HashMap<String, String> {
+pub(crate) fn child_env(params: &ExecParams) -> HashMap<String, String> {
     let Some(env_policy) = &params.env_policy else {
         return params.env.clone();
     };
@@ -444,6 +482,7 @@ impl ExecBackend for LocalProcess {
             .await
             .map_err(map_handler_error)?;
         Ok(StartedExecProcess {
+            sandbox: response.sandbox,
             process: Arc::new(LocalExecProcess {
                 process_id: response.process_id,
                 backend: self.clone(),
@@ -706,6 +745,7 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ExecLaunch;
     use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
     use codex_utils_pty::ProcessDriver;
     use pretty_assertions::assert_eq;
@@ -722,6 +762,7 @@ mod tests {
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         }
     }
 

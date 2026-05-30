@@ -7,6 +7,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::ExecServerRuntimePaths;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::invalid_request;
 use crate::server::process_handler::ProcessHandler;
@@ -18,6 +19,7 @@ const DETACHED_SESSION_TTL: Duration = Duration::from_secs(10);
 
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<String, Arc<SessionEntry>>>,
+    runtime_paths: ExecServerRuntimePaths,
 }
 
 struct SessionEntry {
@@ -49,9 +51,10 @@ pub(crate) struct SessionHandle {
 }
 
 impl SessionRegistry {
-    pub(crate) fn new() -> Arc<Self> {
+    pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
+            runtime_paths,
         })
     }
 
@@ -94,7 +97,7 @@ impl SessionRegistry {
                 let session_id = Uuid::new_v4().to_string();
                 let entry = Arc::new(SessionEntry::new(
                     session_id.clone(),
-                    ProcessHandler::new(notifications),
+                    ProcessHandler::new(notifications, self.runtime_paths.clone()),
                     connection_id,
                 ));
                 sessions.insert(session_id, Arc::clone(&entry));
@@ -132,14 +135,6 @@ impl SessionRegistry {
 
         if let Some(entry) = removed {
             entry.process.shutdown().await;
-        }
-    }
-}
-
-impl Default for SessionRegistry {
-    fn default() -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
         }
     }
 }

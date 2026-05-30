@@ -37,12 +37,16 @@ impl ExecBackend for RemoteProcess {
         let process_id = params.process_id.clone();
         let client = self.client.get().await?;
         let session = client.register_session(&process_id).await?;
-        if let Err(err) = client.exec(params).await {
-            session.unregister().await;
-            return Err(err);
-        }
+        let response = match client.exec(params).await {
+            Ok(response) => response,
+            Err(err) => {
+                session.unregister().await;
+                return Err(err);
+            }
+        };
 
         Ok(StartedExecProcess {
+            sandbox: response.sandbox,
             process: Arc::new(RemoteExecProcess { session }),
         })
     }

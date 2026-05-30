@@ -26,7 +26,7 @@ pub(crate) struct ConnectionProcessor {
 impl ConnectionProcessor {
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            session_registry: SessionRegistry::new(),
+            session_registry: SessionRegistry::new(runtime_paths.clone()),
             runtime_paths,
         }
     }
@@ -213,6 +213,7 @@ mod tests {
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
     use crate::protocol::EXEC_TERMINATE_METHOD;
+    use crate::protocol::ExecLaunch;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
     use crate::protocol::INITIALIZE_METHOD;
@@ -226,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
-        let registry = SessionRegistry::new();
+        let registry = SessionRegistry::new(test_runtime_paths());
         let (mut first_writer, mut first_lines, first_task) =
             spawn_test_connection(Arc::clone(&registry), "first");
 
@@ -402,6 +403,7 @@ mod tests {
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         }
     }
 

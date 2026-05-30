@@ -4,6 +4,10 @@ use std::path::PathBuf;
 use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::PermissionProfile;
+use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -59,6 +63,50 @@ pub struct InitializeParams {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub session_id: String,
+    #[serde(default)]
+    pub capabilities: Vec<ExecServerCapability>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecServerCapability {
+    ProcessStartSandboxIntent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecSandboxMode {
+    None,
+    Platform,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecSandboxIntent {
+    pub sandbox: ExecSandboxMode,
+    pub permissions: PermissionProfile,
+    pub sandbox_policy_cwd: AbsolutePathBuf,
+    pub use_legacy_landlock: bool,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ExecLaunch {
+    #[default]
+    Materialized,
+    SandboxIntent {
+        intent: ExecSandboxIntent,
+    },
+}
+
+impl ExecLaunch {
+    fn is_materialized(&self) -> bool {
+        matches!(self, Self::Materialized)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +125,8 @@ pub struct ExecParams {
     #[serde(default)]
     pub pipe_stdin: bool,
     pub arg0: Option<String>,
+    #[serde(default, skip_serializing_if = "ExecLaunch::is_materialized")]
+    pub launch: ExecLaunch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +143,8 @@ pub struct ExecEnvPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub process_id: ProcessId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -398,8 +450,53 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use super::ExecLaunch;
+    use super::ExecParams;
+    use super::ExecResponse;
     use super::HttpRequestParams;
+    use super::InitializeResponse;
+    use crate::ProcessId;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn initialize_response_defaults_missing_capabilities() {
+        let response: InitializeResponse =
+            serde_json::from_value(serde_json::json!({ "sessionId": "session-1" }))
+                .expect("initialize response should deserialize");
+
+        assert_eq!(response.capabilities, Vec::new());
+    }
+
+    #[test]
+    fn materialized_exec_params_omit_launch() {
+        let params = ExecParams {
+            process_id: ProcessId::from("proc-1"),
+            argv: vec!["true".to_string()],
+            cwd: std::env::current_dir().expect("cwd"),
+            env_policy: None,
+            env: HashMap::new(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            launch: ExecLaunch::Materialized,
+        };
+
+        let value = serde_json::to_value(params).expect("exec params should serialize");
+
+        assert_eq!(value.get("launch"), None);
+    }
+
+    #[test]
+    fn exec_response_defaults_missing_sandbox() {
+        let response: ExecResponse = serde_json::from_value(serde_json::json!({
+            "processId": "proc-1",
+        }))
+        .expect("legacy exec response should deserialize");
+
+        assert_eq!(response.sandbox, None);
+    }
 
     #[test]
     fn http_request_timeout_treats_omitted_and_null_as_no_timeout() {

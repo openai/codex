@@ -123,6 +123,55 @@ fn exec_server_params_use_env_policy_overlay_contract() {
             ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
         ])
     );
+    assert_eq!(params.launch, codex_exec_server::ExecLaunch::Materialized);
+}
+
+#[test]
+fn exec_server_sandbox_intent_params_keep_pre_transform_command() {
+    let cwd: codex_utils_absolute_path::AbsolutePathBuf = std::env::current_dir()
+        .expect("current dir")
+        .try_into()
+        .expect("absolute path");
+    let command = codex_sandboxing::SandboxCommand {
+        program: "bash".into(),
+        args: vec!["-lc".to_string(), "true".to_string()],
+        cwd: cwd.clone(),
+        env: HashMap::from([("PATH".to_string(), "/sandbox-path".to_string())]),
+        additional_permissions: None,
+    };
+    let intent = codex_exec_server::ExecSandboxIntent {
+        sandbox: codex_exec_server::ExecSandboxMode::None,
+        permissions: codex_protocol::models::PermissionProfile::Disabled,
+        sandbox_policy_cwd: cwd,
+        use_legacy_landlock: false,
+        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        additional_permissions: None,
+    };
+
+    let params = exec_server_params_for_sandbox_intent(
+        /*process_id*/ 123,
+        command,
+        intent.clone(),
+        /*exec_server_env_config*/ None,
+        /*tty*/ true,
+    )
+    .expect("sandbox intent params");
+
+    assert_eq!(
+        params,
+        codex_exec_server::ExecParams {
+            process_id: "123".into(),
+            argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
+            cwd: std::env::current_dir().expect("current dir"),
+            env_policy: None,
+            env: HashMap::from([("PATH".to_string(), "/sandbox-path".to_string())]),
+            tty: true,
+            pipe_stdin: false,
+            arg0: None,
+            launch: codex_exec_server::ExecLaunch::SandboxIntent { intent },
+        }
+    );
 }
 
 #[test]
