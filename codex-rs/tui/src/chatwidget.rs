@@ -870,6 +870,7 @@ fn request_permissions_from_params(
         reason: params.reason,
         permissions: params.permissions.into(),
         cwd: Some(params.cwd),
+        workspace_mutation: params.workspace_mutation.map(Into::into),
     }
 }
 
