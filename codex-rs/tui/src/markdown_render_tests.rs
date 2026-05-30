@@ -568,11 +568,13 @@ fn loose_list_item_multiple_paragraphs() {
 
 #[test]
 fn tight_item_with_soft_break() {
-    let md = "- item line1\n  item line2\n";
+    let md = "- item line1\n  item line2\n- next item\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
         Line::from_iter(["- ", "item line1"]),
         Line::from_iter(["  ", "item line2"]),
+        Line::default(),
+        Line::from_iter(["- ", "next item"]),
     ]);
     assert_eq!(text, expected);
 }
@@ -1207,7 +1209,7 @@ fn multiline_finding_items_are_separated_snapshot() {
 }
 
 #[test]
-fn wrapped_list_item_is_separated_from_next_sibling() {
+fn wrapped_list_item_stays_compact_before_next_sibling() {
     let md = "1. This item wraps onto another visible rendered line\n2. Next item\n";
     let text = render_markdown_text_with_width(md, Some(/*width*/ 24));
     assert_eq!(
@@ -1216,10 +1218,10 @@ fn wrapped_list_item_is_separated_from_next_sibling() {
             "1. This item wraps onto",
             "   another visible",
             "   rendered line",
-            "",
             "2. Next item",
         ]
     );
+    assert_snapshot!(plain_lines(&text).join("\n"));
 }
 
 #[test]

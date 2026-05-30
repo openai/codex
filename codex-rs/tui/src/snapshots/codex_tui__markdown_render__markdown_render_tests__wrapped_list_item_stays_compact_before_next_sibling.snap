@@ -1,0 +1,8 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: "plain_lines(&text).join(\"\\n\")"
+---
+1. This item wraps onto
+   another visible
+   rendered line
+2. Next item

@@ -376,7 +376,7 @@ where
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
     list_needs_blank_before_next_item: Vec<bool>,
-    list_item_start_line_counts: Vec<usize>,
+    list_item_has_multiline_content: Vec<bool>,
     link: Option<LinkState>,
     needs_newline: bool,
     pending_marker_line: bool,
@@ -410,7 +410,7 @@ where
             indent_stack: Vec::new(),
             list_indices: Vec::new(),
             list_needs_blank_before_next_item: Vec::new(),
-            list_item_start_line_counts: Vec::new(),
+            list_item_has_multiline_content: Vec::new(),
             link: None,
             needs_newline: false,
             pending_marker_line: false,
@@ -448,6 +448,7 @@ where
             Event::SoftBreak => self.soft_break(),
             Event::HardBreak => self.hard_break(),
             Event::Rule => {
+                self.mark_open_list_items_multiline();
                 self.flush_current_line();
                 if !self.text.is_empty() {
                     self.push_blank_line();
@@ -476,6 +477,7 @@ where
         }
 
         self.pending_local_link_soft_break = false;
+        self.mark_open_list_items_multiline();
         self.push_line(Line::default());
     }
 
@@ -520,9 +522,10 @@ where
             TagEnd::CodeBlock => self.end_codeblock(),
             TagEnd::List(_) => self.end_list(),
             TagEnd::Item => {
-                self.flush_current_line();
-                let start_line_count = self.list_item_start_line_counts.pop().unwrap_or_default();
-                if self.text.len().saturating_sub(start_line_count) > 1
+                if self
+                    .list_item_has_multiline_content
+                    .pop()
+                    .unwrap_or(/*default*/ false)
                     && let Some(needs_blank) = self.list_needs_blank_before_next_item.last_mut()
                 {
                     *needs_blank = true;
@@ -548,6 +551,7 @@ where
             return;
         }
         if self.needs_newline {
+            self.mark_open_list_items_multiline();
             self.push_blank_line();
         }
         self.push_line(Line::default());
@@ -568,6 +572,7 @@ where
         if self.in_table_cell() {
             return;
         }
+        self.mark_open_list_items_multiline();
         if self.needs_newline {
             self.push_line(Line::default());
             self.needs_newline = false;
@@ -598,6 +603,7 @@ where
         if self.in_table_cell() {
             return;
         }
+        self.mark_open_list_items_multiline();
         if self.needs_newline {
             self.push_blank_line();
             self.needs_newline = false;
@@ -707,6 +713,9 @@ where
             }
             return;
         }
+        if !inline || html.lines().count() > 1 {
+            self.mark_open_list_items_multiline();
+        }
         self.pending_marker_line = false;
         for (i, line) in html.lines().enumerate() {
             if self.needs_newline {
@@ -731,6 +740,7 @@ where
             self.push_table_cell_hard_break();
             return;
         }
+        self.mark_open_list_items_multiline();
         self.push_line(Line::default());
     }
 
@@ -749,10 +759,12 @@ where
             return;
         }
         self.line_ends_with_local_link_target = false;
+        self.mark_open_list_items_multiline();
         self.push_line(Line::default());
     }
 
     fn start_list(&mut self, index: Option<u64>) {
+        self.mark_open_list_items_multiline();
         if self.list_indices.is_empty() && self.needs_newline {
             self.push_line(Line::default());
         }
@@ -776,7 +788,7 @@ where
             self.push_blank_line();
         }
         self.flush_current_line();
-        self.list_item_start_line_counts.push(self.text.len());
+        self.list_item_has_multiline_content.push(/*value*/ false);
         self.pending_marker_line = true;
         let depth = self.list_indices.len();
         let is_ordered = self
@@ -817,6 +829,7 @@ where
     }
 
     fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
+        self.mark_open_list_items_multiline();
         self.flush_current_line();
         if !self.text.is_empty() {
             self.push_blank_line();
@@ -864,6 +877,7 @@ where
     }
 
     fn start_table(&mut self, alignments: Vec<Alignment>) {
+        self.mark_open_list_items_multiline();
         self.flush_current_line();
         if self.needs_newline {
             self.push_blank_line();
@@ -1947,6 +1961,12 @@ where
         } else {
             self.push_line(Line::default());
             self.flush_current_line();
+        }
+    }
+
+    fn mark_open_list_items_multiline(&mut self) {
+        for has_multiline_content in &mut self.list_item_has_multiline_content {
+            *has_multiline_content = true;
         }
     }
 
