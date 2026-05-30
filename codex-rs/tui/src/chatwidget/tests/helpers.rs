@@ -65,7 +65,8 @@ pub(super) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
 
 /// Normalizes platform-specific test paths without collapsing box alignment.
 pub(super) fn normalize_box_snapshot_paths(text: &str) -> String {
-    text.lines()
+    let mut normalized = text
+        .lines()
         .map(|rendered| {
             let normalized = normalize_snapshot_paths(rendered);
             let padding = rendered
@@ -79,7 +80,11 @@ pub(super) fn normalize_box_snapshot_paths(text: &str) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if text.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
 }
 
 pub(super) fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> String {
@@ -90,7 +95,7 @@ pub(super) fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> St
         return rendered;
     }
 
-    rendered
+    let mut normalized = rendered
         .lines()
         .map(|line| {
             if let Some(content) = line
@@ -105,7 +110,11 @@ pub(super) fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> St
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if rendered.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
 }
 
 pub(super) fn invalid_value(
