@@ -10,7 +10,11 @@ directory: /tmp/project
 gpt-5.5 default · /tmp/project
 
 committed history:
->_ OpenAI Codex (v0.0.0)
-model:     configured-model   /model to change
-directory: /tmp/project
-Tip: This is a test announcement
+╭────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)                       │
+│                                                │
+│ model:     configured-model   /model to change │
+│ directory: /tmp/project                        │
+╰────────────────────────────────────────────────╯
+
+  Tip: This is a test announcement
