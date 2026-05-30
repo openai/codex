@@ -93,8 +93,8 @@ def test_root_fmt_recipe_formats_rust_python_sdk_and_scripts() -> None:
             "cargo fmt -- --config imports_granularity=Item {stderr-null}",
             "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
             "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python",
-            "# Root scripts are outside the Python SDK project, so use standalone Ruff.",
-            "uvx ruff format ../scripts",
+            "# Root scripts have their own locked Ruff environment.",
+            "uv run --frozen --project ../scripts ruff format ../scripts",
         ],
     }
 
