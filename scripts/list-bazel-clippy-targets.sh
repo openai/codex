@@ -21,7 +21,7 @@ done
 
 # Resolve the dynamic targets before printing anything so callers do not
 # continue with a partial list if `bazel query` fails. Target discovery is
-# local on all platforms; `windows_cross_compile` only filters its output.
+# local on all platforms.
 manual_rust_test_targets="$(
   ./.github/scripts/run-bazel-query-ci.sh \
     --output=label \

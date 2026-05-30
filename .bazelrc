@@ -73,6 +73,10 @@ common:buildbuddy-openai-rbe --remote_executor=grpcs://openai.buildbuddy.io
 # memory in exchange for higher download concurrency.
 common --jobs=30
 
+# Shared remote execution policy. The endpoint-bearing `buildbuddy-*-rbe`
+# configurations include this group; CI configs override TestRunner below
+# when tests must remain local on their runner.
+common:remote --strategy=remote
 common:remote --extra_execution_platforms=//:rbe
 common:remote --jobs=800
 # TODO(team): Evaluate if this actually helps, zbarsky is not sure, everything seems bottlenecked on `core` either way.
@@ -164,13 +168,11 @@ common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
 # Linux crossbuilds don't work until we untangle the libc constraint mess.
 common:ci-linux --config=ci-bazel
 common:ci-linux --build_metadata=TAG_os=linux
-common:ci-linux --strategy=remote
 common:ci-linux --platforms=//:rbe
 
 # On mac, we can run all the build actions remotely but test actions locally.
 common:ci-macos --config=ci-bazel
 common:ci-macos --build_metadata=TAG_os=macos
-common:ci-macos --strategy=remote
 common:ci-macos --strategy=TestRunner=darwin-sandbox,local
 
 # On Windows, use Linux remote execution for build actions but keep test actions
@@ -179,7 +181,6 @@ common:ci-macos --strategy=TestRunner=darwin-sandbox,local
 common:ci-windows-cross --config=ci-windows
 common:ci-windows-cross --build_metadata=TAG_windows_cross_compile=true
 common:ci-windows-cross --host_platform=//:rbe
-common:ci-windows-cross --strategy=remote
 common:ci-windows-cross --strategy=TestRunner=local
 common:ci-windows-cross --local_test_jobs=4
 common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
@@ -195,7 +196,6 @@ common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host
 common:ci-v8 --config=ci
 common:ci-v8 --build_metadata=TAG_workflow=v8
 common:ci-v8 --build_metadata=TAG_os=linux
-common:ci-v8 --strategy=remote
 
 # Source-built Bazel V8 artifacts use the in-process sandbox by default. This
 # does not affect Cargo's default prebuilt rusty_v8 path.
