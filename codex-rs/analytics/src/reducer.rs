@@ -5,8 +5,8 @@ use crate::accepted_lines::accepted_line_repo_hash_for_cwd;
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
+use crate::events::CodexAppServerEventRequest;
 use crate::events::CodexAppServerStartedEventParams;
-use crate::events::CodexAppServerStartedEventRequest;
 use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCollabAgentToolCallEventParams;
 use crate::events::CodexCollabAgentToolCallEventRequest;
@@ -495,8 +495,7 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         out.push(TrackEventRequest::AppServerStarted(
-            CodexAppServerStartedEventRequest {
-                event_type: "codex_app_server_started",
+            CodexAppServerEventRequest::Started {
                 event_params: CodexAppServerStartedEventParams {
                     runtime: input.runtime,
                     rpc_transport: input.rpc_transport,

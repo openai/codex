@@ -56,7 +56,7 @@ pub(crate) struct TrackEventsRequest {
 #[serde(untagged)]
 pub(crate) enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
-    AppServerStarted(CodexAppServerStartedEventRequest),
+    AppServerStarted(CodexAppServerEventRequest),
     ThreadInitialized(ThreadInitializedEvent),
     GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
@@ -156,11 +156,14 @@ pub(crate) struct CodexAppServerStartedEventParams {
     pub(crate) created_at: u64,
 }
 
-/// Analytics track-event envelope for an app-server startup event.
+/// Analytics events emitted for app-server lifecycle changes.
 #[derive(Serialize)]
-pub(crate) struct CodexAppServerStartedEventRequest {
-    pub(crate) event_type: &'static str,
-    pub(crate) event_params: CodexAppServerStartedEventParams,
+#[serde(tag = "event_type")]
+pub(crate) enum CodexAppServerEventRequest {
+    #[serde(rename = "codex_app_server_started")]
+    Started {
+        event_params: CodexAppServerStartedEventParams,
+    },
 }
 
 #[derive(Serialize)]
