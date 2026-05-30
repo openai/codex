@@ -238,7 +238,9 @@ impl App {
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
-                    self.transcript_reflow.clear();
+                    if !self.transcript_reflow.history_cell_refresh_requested() {
+                        self.transcript_reflow.clear();
+                    }
                     return Ok(AppRunControl::Continue);
                 }
                 let end = self.transcript_cells.len();
@@ -687,6 +689,9 @@ impl App {
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }
+            AppEvent::RefreshTokenActivity { request_id } => {
+                self.refresh_token_activity(app_server, request_id);
+            }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
             }
@@ -743,6 +748,17 @@ impl App {
                     }
                 }
             },
+            AppEvent::TokenActivityLoaded { request_id, result } => {
+                if let Err(err) = &result {
+                    tracing::warn!("account/tokenUsage/read failed during TUI refresh: {err}");
+                }
+                if self
+                    .chat_widget
+                    .finish_token_activity_refresh(request_id, result)
+                {
+                    self.refresh_updated_history_cell(tui)?;
+                }
+            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -2003,6 +2019,7 @@ impl App {
                         }
                         self.sync_tui_theme_selection(name);
                         self.refresh_status_line();
+                        tui.frame_requester().schedule_frame();
                     }
                     Err(err) => {
                         self.restore_runtime_theme_from_config();
@@ -2015,6 +2032,7 @@ impl App {
             }
             AppEvent::SyntaxThemePreviewed => {
                 self.refresh_status_line();
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenKeymapActionMenu { context, action } => {
                 self.chat_widget

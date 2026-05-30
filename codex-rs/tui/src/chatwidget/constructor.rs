@@ -124,6 +124,8 @@ impl ChatWidget {
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
+            refreshing_token_activity_outputs: Vec::new(),
+            next_token_activity_request_id: 0,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -263,6 +265,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
+        widget
+            .bottom_pane
+            .set_token_activity_command_enabled(widget.has_chatgpt_account);
         widget.refresh_status_surfaces();
 
         widget

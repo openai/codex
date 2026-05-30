@@ -4100,6 +4100,32 @@ async fn height_shrink_schedules_resize_reflow() {
     assert!(app.transcript_reflow.has_pending_reflow());
 }
 
+#[tokio::test]
+async fn disabled_resize_reflow_preserves_pending_history_cell_refresh() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    let frame_requester = crate::tui::FrameRequester::test_dummy();
+    app.config
+        .features
+        .set_enabled(Feature::TerminalResizeReflow, /*enabled*/ false)
+        .expect("feature should be configurable");
+    assert!(!app.should_handle_draw_pre_render());
+    app.transcript_reflow.schedule_history_cell_refresh();
+    assert!(app.should_handle_draw_pre_render());
+
+    assert!(!app.handle_draw_size_change(
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        &frame_requester,
+    ));
+    assert!(app.handle_draw_size_change(
+        ratatui::layout::Size::new(/*width*/ 119, /*height*/ 35),
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        &frame_requester,
+    ));
+
+    assert!(app.transcript_reflow.history_cell_refresh_requested());
+}
+
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: turn_id.to_string(),
