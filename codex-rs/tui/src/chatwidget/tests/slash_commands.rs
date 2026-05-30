@@ -1299,6 +1299,36 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
 }
 
 #[tokio::test]
+async fn completed_token_activity_refresh_waits_for_active_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Tokens);
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected token activity refresh request, got {other:?}"),
+    };
+    chat.transcript.active_cell = Some(Box::new(PlainHistoryCell::new(vec![Line::from(
+        "active tool",
+    )])));
+    assert!(
+        chat.finish_token_activity_refresh(
+            request_id,
+            Err("token activity unavailable".to_string()),
+        )
+    );
+    assert!(chat.token_activity_history_insertion_blocked());
+
+    chat.flush_active_cell();
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CommitCompletedTokenActivityOutput)
+    );
+}
+
+#[tokio::test]
 async fn completed_token_activity_refresh_retries_after_plan_item_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
@@ -1327,6 +1357,40 @@ async fn completed_token_activity_refresh_retries_after_plan_item_completion() {
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
             .any(|event| matches!(event, AppEvent::CommitCompletedTokenActivityOutput))
+    );
+}
+
+#[tokio::test]
+async fn pending_token_activity_refresh_keeps_composer_visible_in_short_viewport() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.transcript.active_cell = Some(Box::new(PlainHistoryCell::new(
+        std::iter::repeat_n(Line::from("active output"), /*n*/ 20).collect(),
+    )));
+
+    chat.dispatch_command(SlashCommand::Tokens);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::RefreshTokenActivity { .. }),
+        "expected token activity refresh request"
+    );
+
+    let width: u16 = 80;
+    let height: u16 = 8;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(Rect::new(/*x*/ 0, /*y*/ 0, width, height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+
+    assert!(
+        term.backend()
+            .vt100()
+            .screen()
+            .contents()
+            .contains("Ask Codex to do anything")
     );
 }
 

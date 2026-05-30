@@ -23,11 +23,11 @@ impl ChatWidget {
             }
             _ => RenderableItem::Owned(Box::new(())),
         };
-        let mut flex = FlexRenderable::new();
-        flex.push(/*flex*/ 1, active_cell_renderable);
-        flex.push(/*flex*/ 0, active_hook_cell_renderable);
+        let mut content = FlexRenderable::new();
+        content.push(/*flex*/ 0, active_cell_renderable);
+        content.push(/*flex*/ 0, active_hook_cell_renderable);
         if let Some(cell) = self.pending_token_activity_output() {
-            flex.push(
+            content.push(
                 /*flex*/ 1,
                 RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
                     child: cell,
@@ -36,6 +36,8 @@ impl ChatWidget {
                 })),
             );
         }
+        let mut flex = FlexRenderable::new();
+        flex.push(/*flex*/ 1, RenderableItem::Owned(Box::new(content)));
         flex.push(
             /*flex*/ 0,
             RenderableItem::Owned(Box::new(BottomPaneComposerReserveRenderable {
