@@ -294,15 +294,6 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    /// Rebuild history after an existing cell's render output changes.
-    ///
-    /// Use the resize-reflow lifecycle so overlays defer the replay and active streams receive the
-    /// same post-consolidation repair as resize-triggered rebuilds.
-    pub(super) fn refresh_updated_history_cell(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.schedule_immediate_history_cell_refresh(tui);
-        self.maybe_run_resize_reflow(tui)
-    }
-
     fn schedule_immediate_history_cell_refresh(&mut self, tui: &mut tui::Tui) {
         self.transcript_reflow.schedule_history_cell_refresh();
         tui.frame_requester().schedule_frame();
