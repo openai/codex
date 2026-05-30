@@ -258,6 +258,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
         build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
             .await?;
     wait_for_mcp_server(&codex, "sample").await?;
+    wait_for_mcp_server(&codex, "codex_apps").await?;
 
     codex
         .submit(Op::UserInput {

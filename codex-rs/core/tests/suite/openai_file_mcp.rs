@@ -23,6 +23,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -155,6 +156,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "codex_apps").await?;
     tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
 
     test.submit_turn_with_approval_and_permission_profile(

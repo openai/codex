@@ -253,6 +253,7 @@ async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> R
 
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "codex_apps").await?;
     test.submit_turn_with_approval_and_permission_profile(
         "Try to call the app-only calendar tool.",
         AskForApproval::Never,
@@ -358,6 +359,7 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "codex_apps").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
