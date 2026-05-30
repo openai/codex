@@ -8,7 +8,8 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginsManager;
-use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST;
+use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST as TOOL_SUGGEST_DISCOVERABLE_PLUGIN_FALLBACK_ALLOWLIST;
+use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_features::Feature;
 use codex_tools::DiscoverablePluginInfo;
 
@@ -19,6 +20,7 @@ const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
 
 pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
+    loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     if !config.features.enabled(Feature::Plugins) {
         return Ok(Vec::new());
@@ -44,18 +46,30 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .list_marketplaces_for_config(&plugins_input, &[])
         .context("failed to list plugin marketplaces for tool suggestions")?
         .marketplaces;
+    let mut installed_app_connector_ids = plugins_manager
+        .plugins_for_config(&plugins_input)
+        .await
+        .capability_summaries()
+        .iter()
+        .flat_map(|plugin| plugin.app_connector_ids.iter())
+        .map(|connector_id| connector_id.0.clone())
+        .collect::<HashSet<_>>();
+    installed_app_connector_ids.extend(loaded_plugin_app_connector_ids.iter().cloned());
+
     let mut discoverable_plugins = Vec::<DiscoverablePluginInfo>::new();
     for marketplace in marketplaces {
         let marketplace_name = marketplace.name;
-        if !TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST.contains(&marketplace_name.as_str()) {
-            continue;
-        }
+        let is_allowlisted_marketplace =
+            TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST.contains(&marketplace_name.as_str());
 
         for plugin in marketplace.plugins {
+            let is_configured_plugin = configured_plugin_ids.contains(plugin.id.as_str());
+            let is_fallback_plugin =
+                TOOL_SUGGEST_DISCOVERABLE_PLUGIN_FALLBACK_ALLOWLIST.contains(&plugin.id.as_str());
             if plugin.installed
+                || plugin.policy.installation == MarketplacePluginInstallPolicy::NotAvailable
                 || disabled_plugin_ids.contains(plugin.id.as_str())
-                || (!TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.id.as_str())
-                    && !configured_plugin_ids.contains(plugin.id.as_str()))
+                || (!is_allowlisted_marketplace && !is_configured_plugin)
             {
                 continue;
             }
@@ -72,6 +86,14 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             {
                 Ok(plugin) => {
                     let plugin: PluginCapabilitySummary = plugin.into();
+                    let matches_installed_app =
+                        plugin.app_connector_ids.iter().any(|connector_id| {
+                            installed_app_connector_ids.contains(connector_id.0.as_str())
+                        });
+                    if !is_configured_plugin && !is_fallback_plugin && !matches_installed_app {
+                        continue;
+                    }
+
                     discoverable_plugins.push(DiscoverablePluginInfo {
                         id: plugin.config_name,
                         name: plugin.display_name,

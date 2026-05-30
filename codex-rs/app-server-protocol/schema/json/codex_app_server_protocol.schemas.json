@@ -7809,6 +7809,15 @@
               "null"
             ]
           },
+          "allowedWindowsSandboxImplementations": {
+            "items": {
+              "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "computerUse": {
             "anyOf": [
               {

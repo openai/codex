@@ -29,6 +29,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -460,6 +461,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
             .expect("test mcp servers should accept any configuration");
     });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, server_name).await?;
     let db = test.codex.state_db().expect("state db enabled");
     let thread_id = test.session_configured.thread_id;
     let cwd = test.cwd_path().to_path_buf();

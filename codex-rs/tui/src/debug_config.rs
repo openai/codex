@@ -718,6 +718,7 @@ mod tests {
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
             computer_use: None,
+            windows: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
@@ -936,6 +937,7 @@ approval_policy = "never"
             allow_managed_hooks_only: None,
             allow_appshots: None,
             computer_use: None,
+            windows: None,
             guardian_policy_config: None,
             feature_requirements: None,
             hooks: None,

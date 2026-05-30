@@ -121,6 +121,15 @@
             "null"
           ]
         },
+        "allowedWindowsSandboxImplementations": {
+          "items": {
+            "$ref": "#/definitions/WindowsSandboxSetupMode"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "computerUse": {
           "anyOf": [
             {
@@ -483,6 +492,13 @@
         "disabled",
         "cached",
         "live"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupMode": {
+      "enum": [
+        "elevated",
+        "unelevated"
       ],
       "type": "string"
     }
