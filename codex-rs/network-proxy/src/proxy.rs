@@ -581,7 +581,7 @@ fn apply_proxy_env_overrides(
                         && mitm_ca_trust_bundle.startup_env_values.get(key) != Some(value)
                 })
             {
-                // TODO(viyatb): Fold readable command-scoped CA overrides into a managed MITM
+                // TODO(winston): Fold readable command-scoped CA overrides into a managed MITM
                 // bundle. For now preserve them, which can make intercepted TLS fail.
                 continue;
             }
