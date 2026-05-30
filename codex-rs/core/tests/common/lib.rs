@@ -246,34 +246,12 @@ where
 
 /// Waits for a configured MCP server to finish startup and requires it to be ready.
 pub async fn wait_for_mcp_server(codex: &CodexThread, server_name: &str) -> anyhow::Result<()> {
-    use codex_protocol::protocol::EventMsg;
-
-    // Wait for the startup summary regardless of outcome, then interpret the
-    // requested server's ready, failed, or cancelled entry below.
-    let summary = loop {
-        let event = codex
-            .next_event()
-            .await
-            .expect("stream ended unexpectedly while waiting for MCP startup");
-        if let EventMsg::McpStartupComplete(summary) = event.msg {
-            break summary;
-        }
-    };
-    if let Some(failure) = summary
-        .failed
-        .iter()
-        .find(|failure| failure.server == server_name)
-    {
+    let server_names = vec![server_name.to_string()];
+    let failures = codex.wait_for_mcp_servers_ready(&server_names).await;
+    if let Some(failure) = failures.first() {
         let error = &failure.error;
         anyhow::bail!("MCP server {server_name} failed to start: {error}");
     }
-    if summary.cancelled.iter().any(|server| server == server_name) {
-        anyhow::bail!("MCP server {server_name} startup was cancelled");
-    }
-    assert!(
-        summary.ready.iter().any(|server| server == server_name),
-        "expected MCP server {server_name} to be ready; startup summary: {summary:?}"
-    );
     Ok(())
 }
 

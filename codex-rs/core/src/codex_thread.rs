@@ -24,6 +24,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -140,6 +141,24 @@ impl CodexThread {
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
+    }
+
+    #[doc(hidden)]
+    pub async fn wait_for_mcp_servers_ready(
+        &self,
+        server_names: &[String],
+    ) -> Vec<McpStartupFailure> {
+        let readiness = {
+            let manager = self
+                .codex
+                .session
+                .services
+                .mcp_connection_manager
+                .read()
+                .await;
+            manager.wait_for_servers_ready(server_names)
+        };
+        readiness.await
     }
 
     /// Wait until the underlying session loop has terminated.

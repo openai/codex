@@ -67,6 +67,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -1276,6 +1277,9 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
         .await
         .expect("create new conversation")
         .codex;
+    wait_for_mcp_server(&codex, "codex_apps")
+        .await
+        .expect("wait for apps MCP startup");
 
     codex
         .submit(Op::UserInput {
