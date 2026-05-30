@@ -2380,7 +2380,8 @@ impl ThreadRequestProcessor {
         thread_id: ThreadId,
         connection_ids: Vec<ConnectionId>,
     ) {
-        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+        let raw_events_enabled = if let Ok(thread) = self.thread_manager.get_thread(thread_id).await
+        {
             let config_snapshot = thread.config_snapshot().await;
             let loaded_thread = build_thread_from_snapshot(
                 thread_id,
@@ -2389,16 +2390,24 @@ impl ThreadRequestProcessor {
                 thread.rollout_path(),
             );
             self.thread_watch_manager.upsert_thread(loaded_thread).await;
-        }
+            if let Some(parent_thread_id) = config_snapshot.session_source.parent_thread_id() {
+                self.thread_state_manager
+                    .thread_state(parent_thread_id)
+                    .await
+                    .lock()
+                    .await
+                    .experimental_raw_events
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
         for connection_id in connection_ids {
             log_listener_attach_result(
-                self.ensure_conversation_listener(
-                    thread_id,
-                    connection_id,
-                    /*raw_events_enabled*/ false,
-                )
-                .await,
+                self.ensure_conversation_listener(thread_id, connection_id, raw_events_enabled)
+                    .await,
                 thread_id,
                 connection_id,
                 "thread",
