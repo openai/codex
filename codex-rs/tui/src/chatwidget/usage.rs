@@ -6,7 +6,9 @@ use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::plain_lines;
+use crate::render::highlight::foreground_style_for_scopes;
 use crate::style::accent_style;
+use crate::style::table_separator_style;
 use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
 use crate::wrapping::RtOptions;
@@ -266,7 +268,7 @@ fn usage_header_lines(report: &UsageReport, inner_width: usize) -> Vec<Line<'sta
             Line::from(USAGE_SUBTITLE.dim()),
             vec![
                 "(".dim(),
-                Span::styled("/usage week", accent_style()),
+                Span::styled("/usage week", usage_accent_style()),
                 " for weekly)".dim(),
             ]
             .into(),
@@ -359,7 +361,7 @@ fn push_section(
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         format!(" {label}"),
-        accent_style(),
+        usage_accent_style(),
     )));
     for (index, entry) in entries.iter().enumerate() {
         let is_last = index + 1 == entries.len();
@@ -403,7 +405,7 @@ fn usage_entry_line(
     };
 
     let mut spans = vec![
-        Span::from(prefix).dim(),
+        Span::styled(prefix, table_separator_style()),
         Span::from(label),
         Span::from(" ".repeat(spacer_width)).dim(),
     ];
@@ -439,29 +441,17 @@ fn usage_bar_empty_span(content: String) -> Span<'static> {
 }
 
 fn usage_bar_filled_style() -> Style {
-    usage_bar_filled_style_for(default_bg())
+    usage_accent_style()
 }
 
 fn usage_bar_empty_style() -> Style {
     usage_bar_empty_style_for(default_bg())
 }
 
-fn usage_bar_filled_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
-    let Some(bg) = terminal_bg else {
-        return Style::default().fg(Color::Cyan).bold();
-    };
-    if is_light(bg) {
-        Style::default()
-            .fg(usage_best_color(/*target*/ (0, 110, 125), Color::Cyan))
-            .bold()
-    } else {
-        Style::default()
-            .fg(usage_best_color(
-                /*target*/ (170, 210, 218),
-                Color::Cyan,
-            ))
-            .bold()
-    }
+fn usage_accent_style() -> Style {
+    foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
+        .unwrap_or_else(accent_style)
+        .bold()
 }
 
 fn usage_bar_empty_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
