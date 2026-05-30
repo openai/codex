@@ -107,6 +107,8 @@ struct StatusHistoryCell {
     model_name: String,
     model_details: Vec<String>,
     directory: PathBuf,
+    workspace_roots: Vec<AbsolutePathBuf>,
+    workspace_state_stale: bool,
     permissions: String,
     agents_summary: Arc<RwLock<String>>,
     collaboration_mode: Option<String>,
@@ -192,6 +194,7 @@ pub(crate) fn new_status_output_with_rate_limits(
         collaboration_mode,
         reasoning_effort_override,
         "<none>".to_string(),
+        /*workspace_state_stale*/ false,
         refreshing_rate_limits,
     )
     .0
@@ -215,6 +218,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
     agents_summary: String,
+    workspace_state_stale: bool,
     refreshing_rate_limits: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
@@ -235,6 +239,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         collaboration_mode,
         reasoning_effort_override,
         agents_summary,
+        workspace_state_stale,
         refreshing_rate_limits,
     );
 
@@ -263,6 +268,7 @@ impl StatusHistoryCell {
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
         agents_summary: String,
+        workspace_state_stale: bool,
         refreshing_rate_limits: bool,
     ) -> (Self, StatusHistoryHandle) {
         let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
@@ -308,7 +314,6 @@ impl StatusHistoryCell {
         let active_permission_profile = config.permissions.active_permission_profile();
         let sandbox =
             status_permission_summary(&permission_profile, &config.cwd, workspace_roots.as_slice());
-        let workspace_root_suffix = workspace_root_suffix(workspace_roots.as_slice(), &config.cwd);
         let approval = status_approval_label(approval_policy, config.approvals_reviewer, &approval);
         let permissions = status_permissions_label(
             active_permission_profile.as_ref(),
@@ -316,7 +321,6 @@ impl StatusHistoryCell {
             approval_policy,
             &sandbox,
             &approval,
-            workspace_root_suffix.as_deref(),
         );
         let model_provider = format_model_provider(config, runtime_model_provider_base_url);
         let show_chatgpt_usage_link = config.model_provider.requires_openai_auth;
@@ -356,6 +360,8 @@ impl StatusHistoryCell {
                 model_name,
                 model_details,
                 directory: config.cwd.to_path_buf(),
+                workspace_roots: config.workspace_roots.clone(),
+                workspace_state_stale,
                 permissions,
                 collaboration_mode: collaboration_mode.map(ToString::to_string),
                 model_provider,
@@ -600,29 +606,12 @@ fn status_permission_summary(
     summary
 }
 
-fn workspace_root_suffix(
-    workspace_roots: &[AbsolutePathBuf],
-    cwd: &AbsolutePathBuf,
-) -> Option<String> {
-    let extra_roots = workspace_roots
-        .iter()
-        .filter(|root| *root != cwd)
-        .map(|root| root.to_string_lossy().to_string())
-        .collect::<Vec<_>>();
-    if extra_roots.is_empty() {
-        None
-    } else {
-        Some(format!(" [{}]", extra_roots.join(", ")))
-    }
-}
-
 fn status_permissions_label(
     active_permission_profile: Option<&ActivePermissionProfile>,
     permission_profile: &PermissionProfile,
     approval_policy: AskForApproval,
     sandbox: &str,
     approval: &str,
-    workspace_root_suffix: Option<&str>,
 ) -> String {
     let active_id = active_permission_profile.map(|active| active.id.as_str());
     match active_id {
@@ -635,17 +624,9 @@ fn status_permissions_label(
             return format!("{label} ({approval})");
         }
         Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE) => match sandbox {
-            "workspace" => {
-                return format!(
-                    "Workspace{} ({approval})",
-                    workspace_root_suffix.unwrap_or("")
-                );
-            }
+            "workspace" => return format!("Workspace ({approval})"),
             "workspace with network access" => {
-                return format!(
-                    "Workspace with network access{} ({approval})",
-                    workspace_root_suffix.unwrap_or("")
-                );
+                return format!("Workspace with network access ({approval})");
             }
             _ => {}
         },
@@ -659,7 +640,6 @@ fn status_permissions_label(
             };
         }
         Some(id) => {
-            let sandbox = decorate_workspace_sandbox_label(sandbox, workspace_root_suffix);
             return format!("Profile {id} ({sandbox}, {approval})");
         }
         None => {}
@@ -669,25 +649,14 @@ fn status_permissions_label(
         return format!("Read Only ({approval})");
     }
     if approval_policy == AskForApproval::OnRequest && sandbox == "workspace" {
-        return format!(
-            "Workspace{} ({approval})",
-            workspace_root_suffix.unwrap_or("")
-        );
+        return format!("Workspace ({approval})");
     }
     if approval_policy == AskForApproval::Never
         && permission_profile == &PermissionProfile::Disabled
     {
         return "Full Access".to_string();
     }
-    let sandbox = decorate_workspace_sandbox_label(sandbox, workspace_root_suffix);
     format!("Custom ({sandbox}, {approval})")
-}
-
-fn decorate_workspace_sandbox_label(sandbox: &str, workspace_root_suffix: Option<&str>) -> String {
-    match workspace_root_suffix {
-        Some(suffix) if sandbox.starts_with("workspace") => format!("{sandbox}{suffix}"),
-        _ => sandbox.to_string(),
-    }
 }
 
 fn status_approval_label(
@@ -732,10 +701,16 @@ impl HistoryCell for StatusHistoryCell {
             }
         });
 
-        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let mut labels: Vec<String> = vec![
+            "Model",
+            "Directory",
+            "Workspace roots",
+            "Permissions",
+            "Agents.md",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
         #[expect(clippy::expect_used)]
@@ -767,6 +742,9 @@ impl HistoryCell for StatusHistoryCell {
         }
         if self.collaboration_mode.is_some() {
             push_label(&mut labels, &mut seen, "Collaboration mode");
+        }
+        if self.workspace_state_stale {
+            push_label(&mut labels, &mut seen, "Warning");
         }
         push_label(&mut labels, &mut seen, "Token usage");
         if self.token_usage.context_window.is_some() {
@@ -829,8 +807,26 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
+        let mut workspace_roots = self.workspace_roots.iter();
+        let first_root = workspace_roots
+            .next()
+            .map(|root| format_directory_display(root.as_path(), Some(value_width)))
+            .unwrap_or_else(|| "(none)".to_string());
+        lines.push(formatter.line("Workspace roots", vec![Span::from(first_root)]));
+        lines.extend(workspace_roots.map(|root| {
+            formatter.continuation(vec![Span::from(format_directory_display(
+                root.as_path(),
+                Some(value_width),
+            ))])
+        }));
         lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(agents_summary)]));
+        if self.workspace_state_stale {
+            lines.push(formatter.line(
+                "Warning",
+                vec![Span::from("workspace state may be stale").dim()],
+            ));
+        }
 
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));

@@ -458,6 +458,27 @@ impl App {
                         .add_error_message(format!("Failed to read workspace: {err}")),
                 }
             }
+            AppEvent::ReadThreadWorkspaceForStatus {
+                refreshing_rate_limits,
+                request_id,
+            } => {
+                let workspace = match self.active_thread_id {
+                    Some(thread_id) => match app_server.thread_workspace_read(thread_id).await {
+                        Ok(response) => Some(response),
+                        Err(err) => {
+                            tracing::warn!("failed to read workspace for /status: {err}");
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                self.chat_widget.add_status_output_with_workspace(
+                    refreshing_rate_limits,
+                    request_id,
+                    workspace.as_ref(),
+                    /*workspace_state_stale*/ workspace.is_none(),
+                );
+            }
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
                 self.append_message_history_entry(thread_id, text);
             }

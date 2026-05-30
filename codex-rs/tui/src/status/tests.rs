@@ -178,26 +178,27 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
         .map(|line| {
-            if let (Some(frame_width), Some(dir_pos), Some(pipe_idx)) =
-                (frame_width, line.find("Directory: "), line.rfind('│'))
-            {
-                let prefix = &line[..dir_pos + "Directory: ".len()];
-                let suffix = &line[pipe_idx..];
-                let replacement = "[[workspace]]";
-                let content_width = frame_width.saturating_sub(
-                    UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(suffix),
-                );
-                let mut rebuilt = prefix.to_string();
-                rebuilt.push_str(replacement);
-                let replacement_width = UnicodeWidthStr::width(replacement);
-                if content_width > replacement_width {
-                    rebuilt.push_str(&" ".repeat(content_width - replacement_width));
+            for label in ["Directory: ", "Workspace roots: "] {
+                if let (Some(frame_width), Some(label_pos), Some(pipe_idx)) =
+                    (frame_width, line.find(label), line.rfind('│'))
+                {
+                    let prefix = &line[..label_pos + label.len()];
+                    let suffix = &line[pipe_idx..];
+                    let replacement = "[[workspace]]";
+                    let content_width = frame_width.saturating_sub(
+                        UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(suffix),
+                    );
+                    let mut rebuilt = prefix.to_string();
+                    rebuilt.push_str(replacement);
+                    let replacement_width = UnicodeWidthStr::width(replacement);
+                    if content_width > replacement_width {
+                        rebuilt.push_str(&" ".repeat(content_width - replacement_width));
+                    }
+                    rebuilt.push_str(suffix);
+                    return rebuilt;
                 }
-                rebuilt.push_str(suffix);
-                rebuilt
-            } else {
-                line
             }
+            line
         })
         .collect()
 }
@@ -211,7 +212,10 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
 fn permissions_text_for(config: &Config) -> Option<String> {
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
-        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .with_ymd_and_hms(
+            /*year*/ 2024, /*month*/ 1, /*day*/ 2, /*hour*/ 3, /*min*/ 4,
+            /*sec*/ 5,
+        )
         .single()
         .expect("timestamp");
     let model_slug = get_model_offline_for_tests(config.model.as_deref());
@@ -220,11 +224,11 @@ fn permissions_text_for(config: &Config) -> Option<String> {
         test_status_account_display().as_ref(),
         /*token_info*/ None,
         &usage,
-        &None,
+        /*session_id*/ &None,
         /*thread_name*/ None,
         /*forked_from*/ None,
         /*rate_limits*/ None,
-        None,
+        /*_plan_type*/ None,
         captured_at,
         &model_slug,
         /*collaboration_mode*/ None,
@@ -241,6 +245,34 @@ fn permissions_text_for(config: &Config) -> Option<String> {
                 .map(str::trim)
                 .map(ToString::to_string)
         })
+}
+
+fn rendered_status_for(config: &Config) -> String {
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(
+            /*year*/ 2024, /*month*/ 1, /*day*/ 2, /*hour*/ 3, /*min*/ 4,
+            /*sec*/ 5,
+        )
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let composite = new_status_output(
+        config,
+        test_status_account_display().as_ref(),
+        /*token_info*/ None,
+        &usage,
+        /*session_id*/ &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        /*_plan_type*/ None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    render_lines(&composite.display_lines(/*width*/ 120)).join("\n")
 }
 
 #[tokio::test]
@@ -473,7 +505,7 @@ async fn status_permissions_named_profile_shows_additional_writable_roots() {
 }
 
 #[tokio::test]
-async fn status_permissions_workspace_roots_show_additional_directories() {
+async fn status_permissions_workspace_roots_do_not_repeat_additional_directories() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
@@ -483,7 +515,7 @@ async fn status_permissions_workspace_roots_show_additional_directories() {
         .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     let extra_root = test_path_buf("/workspace/extra").abs();
-    config.workspace_roots = vec![config.cwd.clone(), extra_root.clone()];
+    config.workspace_roots = vec![config.cwd.clone(), extra_root];
     config
         .permissions
         .set_workspace_roots(config.workspace_roots.clone());
@@ -505,7 +537,42 @@ async fn status_permissions_workspace_roots_show_additional_directories() {
 }
 
 #[tokio::test]
-async fn status_permissions_workspace_roots_include_profile_defined_directories() {
+async fn status_workspace_roots_list_all_runtime_directories() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
+    let extra_root = test_path_buf("/workspace/extra").abs();
+    config.workspace_roots.push(extra_root);
+    config
+        .permissions
+        .set_workspace_roots(config.workspace_roots.clone());
+
+    let rendered = rendered_status_for(&config);
+
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("Workspace roots:") && line.contains("/workspace/tests"))
+    );
+    assert!(rendered.contains("/workspace/extra"));
+}
+
+#[tokio::test]
+async fn status_workspace_roots_show_none_when_runtime_list_is_empty() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.workspace_roots.clear();
+    config.permissions.set_workspace_roots(Vec::new());
+
+    assert!(
+        rendered_status_for(&config)
+            .lines()
+            .any(|line| line.contains("Workspace roots:") && line.contains("(none)"))
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_workspace_roots_do_not_repeat_profile_defined_directories() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
@@ -537,6 +604,9 @@ async fn status_permissions_workspace_roots_include_profile_defined_directories(
             "Workspace [{}] (Ask for approval)",
             profile_root.display()
         ))
+    );
+    assert!(
+        !rendered_status_for(&config).contains(profile_root.as_path().to_string_lossy().as_ref())
     );
 }
 
@@ -670,6 +740,7 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
         "<none>".to_string(),
+        /*workspace_state_stale*/ false,
         /*refreshing_rate_limits*/ false,
     );
     let rendered = render_lines(&composite.display_lines(/*width*/ 120)).join("\n");
@@ -711,6 +782,7 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
         "<none>".to_string(),
+        /*workspace_state_stale*/ false,
         /*refreshing_rate_limits*/ false,
     );
     let rendered = render_lines(&composite.display_lines(/*width*/ 120)).join("\n");
@@ -1501,6 +1573,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ Some(Some(ReasoningEffort::Medium)),
         "<none>".to_string(),
+        /*workspace_state_stale*/ false,
         /*refreshing_rate_limits*/ false,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 80));

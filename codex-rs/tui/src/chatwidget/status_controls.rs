@@ -188,11 +188,35 @@ impl ChatWidget {
         self.refresh_status_surfaces();
     }
 
+    #[cfg(test)]
     pub(crate) fn add_status_output(
         &mut self,
         refreshing_rate_limits: bool,
         request_id: Option<u64>,
     ) {
+        self.add_status_output_with_workspace(
+            refreshing_rate_limits,
+            request_id,
+            /*workspace*/ None,
+            /*workspace_state_stale*/ false,
+        );
+    }
+
+    pub(crate) fn add_status_output_with_workspace(
+        &mut self,
+        refreshing_rate_limits: bool,
+        request_id: Option<u64>,
+        workspace: Option<&ThreadWorkspaceReadResponse>,
+        workspace_state_stale: bool,
+    ) {
+        let mut config = self.config.clone();
+        if let Some(workspace) = workspace {
+            config.cwd = workspace.cwd.clone();
+            config.workspace_roots = workspace.runtime_workspace_roots.clone();
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+        }
         let default_usage = TokenUsage::default();
         let token_info = self.token_info.as_ref();
         let total_usage = token_info
@@ -221,9 +245,9 @@ impl ChatWidget {
             .cloned()
             .collect();
         let agents_summary =
-            crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
+            crate::status::compose_agents_summary(&config, &self.instruction_source_paths);
         let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle(
-            &self.config,
+            &config,
             self.runtime_model_provider_base_url.as_deref(),
             self.remote_connection.as_ref(),
             self.status_account_display.as_ref(),
@@ -239,6 +263,7 @@ impl ChatWidget {
             collaboration_mode,
             reasoning_effort_override,
             agents_summary,
+            workspace_state_stale,
             refreshing_rate_limits,
         );
         if let Some(request_id) = request_id {

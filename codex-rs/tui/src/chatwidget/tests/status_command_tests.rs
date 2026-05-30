@@ -1,30 +1,50 @@
 use super::*;
 use assert_matches::assert_matches;
 
+fn render_requested_status(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> (String, Option<u64>) {
+    let (refreshing_rate_limits, request_id) = match rx.try_recv() {
+        Ok(AppEvent::ReadThreadWorkspaceForStatus {
+            refreshing_rate_limits,
+            request_id,
+        }) => (refreshing_rate_limits, request_id),
+        other => panic!("expected workspace read request for /status, got {other:?}"),
+    };
+    if let Some(request_id) = request_id {
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::RefreshRateLimits {
+                origin: RateLimitRefreshOrigin::StatusCommand {
+                    request_id: event_request_id,
+                },
+            }) if event_request_id == request_id
+        );
+    }
+    chat.add_status_output(refreshing_rate_limits, request_id);
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.display_lines(/*width*/ 80))
+        }
+        other => panic!("expected status output after workspace read, got {other:?}"),
+    };
+    (rendered, request_id)
+}
+
 #[tokio::test]
-async fn status_command_renders_immediately_and_refreshes_rate_limits_for_chatgpt_auth() {
+async fn status_command_reads_workspace_and_refreshes_rate_limits_for_chatgpt_auth() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
     chat.dispatch_command(SlashCommand::Status);
 
-    let rendered = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            lines_to_single_string(&cell.display_lines(/*width*/ 80))
-        }
-        other => panic!("expected status output before refresh request, got {other:?}"),
-    };
+    let (rendered, request_id) = render_requested_status(&mut chat, &mut rx);
     assert!(
         !rendered.contains("refreshing limits"),
         "expected /status to avoid transient refresh text in terminal history, got: {rendered}"
     );
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshRateLimits {
-            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
-        }) => request_id,
-        other => panic!("expected rate-limit refresh request, got {other:?}"),
-    };
-    pretty_assertions::assert_eq!(request_id, 0);
+    pretty_assertions::assert_eq!(request_id, Some(0));
 }
 
 #[tokio::test]
@@ -34,28 +54,15 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
 
     chat.dispatch_command(SlashCommand::Status);
 
-    match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(_)) => {}
-        other => panic!("expected status output before refresh request, got {other:?}"),
-    }
-    let first_request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshRateLimits {
-            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
-        }) => request_id,
-        other => panic!("expected rate-limit refresh request, got {other:?}"),
-    };
+    let (_, first_request_id) = render_requested_status(&mut chat, &mut rx);
+    let first_request_id = first_request_id.expect("ChatGPT status should refresh limits");
 
     chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
     chat.finish_status_rate_limit_refresh(first_request_id);
     drain_insert_history(&mut rx);
 
     chat.dispatch_command(SlashCommand::Status);
-    let refreshed = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            lines_to_single_string(&cell.display_lines(/*width*/ 80))
-        }
-        other => panic!("expected refreshed status output, got {other:?}"),
-    };
+    let (refreshed, _) = render_requested_status(&mut chat, &mut rx);
     assert!(
         refreshed.contains("8% left"),
         "expected a future /status output to use refreshed cached limits, got: {refreshed}"
@@ -63,12 +70,13 @@ async fn status_command_refresh_updates_cached_limits_for_future_status_outputs(
 }
 
 #[tokio::test]
-async fn status_command_renders_immediately_without_rate_limit_refresh() {
+async fn status_command_reads_workspace_without_rate_limit_refresh() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Status);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    let (_, request_id) = render_requested_status(&mut chat, &mut rx);
+    pretty_assertions::assert_eq!(request_id, None);
     assert!(
         !std::iter::from_fn(|| rx.try_recv().ok())
             .any(|event| matches!(event, AppEvent::RefreshRateLimits { .. })),
@@ -83,12 +91,7 @@ async fn status_command_uses_catalog_default_reasoning_when_config_empty() {
 
     chat.dispatch_command(SlashCommand::Status);
 
-    let rendered = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            lines_to_single_string(&cell.display_lines(/*width*/ 80))
-        }
-        other => panic!("expected status output, got {other:?}"),
-    };
+    let (rendered, _) = render_requested_status(&mut chat, &mut rx);
     assert!(
         rendered.contains("gpt-5.4 (reasoning medium, summaries auto)"),
         "expected /status to render the catalog default reasoning effort, got: {rendered}"
@@ -102,12 +105,7 @@ async fn status_command_renders_instruction_sources_from_thread_session() {
 
     chat.dispatch_command(SlashCommand::Status);
 
-    let rendered = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            lines_to_single_string(&cell.display_lines(/*width*/ 80))
-        }
-        other => panic!("expected status output, got {other:?}"),
-    };
+    let (rendered, _) = render_requested_status(&mut chat, &mut rx);
     assert!(
         rendered.contains("Agents.md"),
         "expected /status to render app-server instruction sources, got: {rendered}"
@@ -124,30 +122,12 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
     set_chatgpt_auth(&mut chat);
 
     chat.dispatch_command(SlashCommand::Status);
-    match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(_)) => {}
-        other => panic!("expected first status output, got {other:?}"),
-    }
-    let first_request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshRateLimits {
-            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
-        }) => request_id,
-        other => panic!("expected first refresh request, got {other:?}"),
-    };
+    let (_, first_request_id) = render_requested_status(&mut chat, &mut rx);
+    let first_request_id = first_request_id.expect("ChatGPT status should refresh limits");
 
     chat.dispatch_command(SlashCommand::Status);
-    let second_rendered = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => {
-            lines_to_single_string(&cell.display_lines(/*width*/ 80))
-        }
-        other => panic!("expected second status output, got {other:?}"),
-    };
-    let second_request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshRateLimits {
-            origin: RateLimitRefreshOrigin::StatusCommand { request_id },
-        }) => request_id,
-        other => panic!("expected second refresh request, got {other:?}"),
-    };
+    let (second_rendered, second_request_id) = render_requested_status(&mut chat, &mut rx);
+    let second_request_id = second_request_id.expect("ChatGPT status should refresh limits");
 
     assert_ne!(first_request_id, second_request_id);
     assert!(
@@ -161,4 +141,54 @@ async fn status_command_overlapping_refreshes_update_matching_cells_only() {
     chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
     chat.finish_status_rate_limit_refresh(second_request_id);
     assert!(chat.refreshing_status_outputs.is_empty());
+}
+
+#[tokio::test]
+async fn status_output_uses_authoritative_runtime_workspace() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = test_path_buf("/workspace/runtime").abs();
+    let extra_root = test_path_buf("/workspace/shared").abs();
+    chat.instruction_source_paths = vec![cwd.join("AGENTS.md")];
+
+    chat.add_status_output_with_workspace(
+        /*refreshing_rate_limits*/ false,
+        /*request_id*/ None,
+        Some(&codex_app_server_protocol::ThreadWorkspaceReadResponse {
+            cwd: cwd.clone(),
+            runtime_workspace_roots: vec![cwd, extra_root],
+        }),
+        /*workspace_state_stale*/ false,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.display_lines(/*width*/ 120))
+        }
+        other => panic!("expected status output, got {other:?}"),
+    };
+    assert!(rendered.contains("Directory:"));
+    assert!(rendered.contains("Workspace roots:"));
+    assert!(rendered.contains("/workspace/runtime"));
+    assert!(rendered.contains("/workspace/shared"));
+    assert!(rendered.contains("Agents.md:"));
+    assert!(rendered.contains("AGENTS.md"));
+}
+
+#[tokio::test]
+async fn status_output_warns_when_workspace_state_may_be_stale() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.add_status_output_with_workspace(
+        /*refreshing_rate_limits*/ false, /*request_id*/ None, /*workspace*/ None,
+        /*workspace_state_stale*/ true,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.display_lines(/*width*/ 120))
+        }
+        other => panic!("expected status output, got {other:?}"),
+    };
+    assert!(rendered.contains("Warning:"));
+    assert!(rendered.contains("workspace state may be stale"));
 }

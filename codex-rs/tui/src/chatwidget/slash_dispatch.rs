@@ -439,18 +439,23 @@ impl ChatWidget {
                 self.add_hooks_output();
             }
             SlashCommand::Status => {
-                if self.should_prefetch_rate_limits() {
+                let (refreshing_rate_limits, request_id) = if self.should_prefetch_rate_limits() {
                     let request_id = self.next_status_refresh_request_id;
                     self.next_status_refresh_request_id =
                         self.next_status_refresh_request_id.wrapping_add(1);
-                    self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
+                    (true, Some(request_id))
+                } else {
+                    (false, None)
+                };
+                self.app_event_tx
+                    .send(AppEvent::ReadThreadWorkspaceForStatus {
+                        refreshing_rate_limits,
+                        request_id,
+                    });
+                if let Some(request_id) = request_id {
                     self.app_event_tx.send(AppEvent::RefreshRateLimits {
                         origin: RateLimitRefreshOrigin::StatusCommand { request_id },
                     });
-                } else {
-                    self.add_status_output(
-                        /*refreshing_rate_limits*/ false, /*request_id*/ None,
-                    );
                 }
             }
             SlashCommand::Ide => {
