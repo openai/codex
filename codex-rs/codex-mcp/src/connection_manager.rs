@@ -518,8 +518,7 @@ impl McpConnectionManager {
     pub async fn list_ready_or_cached_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for (server_name, managed_client) in &self.clients {
-            let has_cached_tool_info_snapshot =
-                managed_client.cached_tool_info_snapshot.is_some();
+            let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
             let startup_complete = managed_client
                 .startup_complete
                 .load(std::sync::atomic::Ordering::Acquire);
