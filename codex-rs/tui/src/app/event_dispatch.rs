@@ -197,27 +197,7 @@ impl App {
                 self.begin_thread_switch_history_replay_buffer();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                if self.initial_history_replay_buffer.as_ref().is_some() {
-                    self.insert_history_cell_lines_with_initial_replay_buffer(
-                        tui,
-                        cell.as_ref(),
-                        self.chat_widget
-                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
-                    );
-                } else {
-                    self.insert_history_cell_lines(
-                        tui,
-                        cell.as_ref(),
-                        self.chat_widget
-                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
-                    );
-                }
+                self.insert_history_cell(tui, cell);
             }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
@@ -752,8 +732,12 @@ impl App {
                 if let Err(err) = &result {
                     tracing::warn!("account/tokenUsage/read failed during TUI refresh: {err}");
                 }
-                self.chat_widget
-                    .finish_token_activity_refresh(request_id, result);
+                if let Some(cell) = self
+                    .chat_widget
+                    .finish_token_activity_refresh(request_id, result)
+                {
+                    self.insert_history_cell(tui, Box::new(cell));
+                }
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);

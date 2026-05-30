@@ -642,20 +642,19 @@ impl ChatWidget {
         self.next_token_activity_request_id =
             self.next_token_activity_request_id.wrapping_add(/*rhs*/ 1);
         let (cell, handle) = new_token_activity_output(view);
-        self.refreshing_token_activity_outputs
-            .push(PendingTokenActivityOutput {
-                request_id,
-                cell,
-                handle,
-            });
+        self.refreshing_token_activity_output = Some(PendingTokenActivityOutput {
+            request_id,
+            cell,
+            handle,
+        });
         self.request_redraw();
         self.app_event_tx
             .send(AppEvent::RefreshTokenActivity { request_id });
     }
 
-    pub(super) fn pending_token_activity_outputs(&self) -> impl Iterator<Item = &dyn HistoryCell> {
-        self.refreshing_token_activity_outputs
-            .iter()
+    pub(super) fn pending_token_activity_output(&self) -> Option<&dyn HistoryCell> {
+        self.refreshing_token_activity_output
+            .as_ref()
             .map(|output| &output.cell as &dyn HistoryCell)
     }
 
@@ -663,24 +662,23 @@ impl ChatWidget {
         &mut self,
         request_id: u64,
         result: Result<GetAccountTokenUsageResponse, String>,
-    ) -> bool {
-        let Some(index) = self
-            .refreshing_token_activity_outputs
-            .iter()
-            .position(|output| output.request_id == request_id)
-        else {
-            return false;
+    ) -> Option<CompositeHistoryCell> {
+        let Some(output) = self.refreshing_token_activity_output.take() else {
+            return None;
         };
-        let output = self.refreshing_token_activity_outputs.remove(index);
+        if output.request_id != request_id {
+            self.refreshing_token_activity_output = Some(output);
+            return None;
+        }
         output.handle.finish(result);
-        self.add_to_history(output.cell);
         self.request_redraw();
-        true
+        Some(output.cell)
     }
 
     pub(crate) fn clear_pending_token_activity_refreshes(&mut self) {
-        self.refreshing_token_activity_outputs.clear();
-        self.request_redraw();
+        if self.refreshing_token_activity_output.take().is_some() {
+            self.request_redraw();
+        }
     }
 }
 

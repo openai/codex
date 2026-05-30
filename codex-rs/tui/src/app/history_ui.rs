@@ -6,6 +6,30 @@
 use super::*;
 
 impl App {
+    pub(super) fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Box<dyn HistoryCell>) {
+        let cell: Arc<dyn HistoryCell> = cell.into();
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        if self.initial_history_replay_buffer.as_ref().is_some() {
+            self.insert_history_cell_lines_with_initial_replay_buffer(
+                tui,
+                cell.as_ref(),
+                self.chat_widget
+                    .history_wrap_width(tui.terminal.last_known_screen_size.width),
+            );
+        } else {
+            self.insert_history_cell_lines(
+                tui,
+                cell.as_ref(),
+                self.chat_widget
+                    .history_wrap_width(tui.terminal.last_known_screen_size.width),
+            );
+        }
+    }
+
     pub(super) fn open_url_in_browser(&mut self, url: String) {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget

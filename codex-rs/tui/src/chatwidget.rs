@@ -550,7 +550,7 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
-    refreshing_token_activity_outputs: Vec<tokens::PendingTokenActivityOutput>,
+    refreshing_token_activity_output: Option<tokens::PendingTokenActivityOutput>,
     next_token_activity_request_id: u64,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,

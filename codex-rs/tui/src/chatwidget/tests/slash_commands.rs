@@ -1186,24 +1186,24 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
         other => panic!("expected token activity refresh request, got {other:?}"),
     };
     assert_eq!(
-        chat.pending_token_activity_outputs()
-            .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX)))
-            .collect::<Vec<_>>(),
-        vec!["/tokens daily\n\n Token activity\n   Loading...\n".to_string()],
+        chat.pending_token_activity_output()
+            .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
+        Some("/tokens daily\n\n Token activity\n   Loading...\n".to_string()),
     );
 
     chat.clear_pending_token_activity_refreshes();
 
     assert!(
-        !chat.finish_token_activity_refresh(
+        chat.finish_token_activity_refresh(
             request_id,
             Err("stale token activity result".to_string()),
         )
+        .is_none()
     );
 }
 
 #[tokio::test]
-async fn completed_token_activity_refresh_commits_one_history_cell() {
+async fn completed_token_activity_refresh_returns_one_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
@@ -1213,23 +1213,54 @@ async fn completed_token_activity_refresh_commits_one_history_cell() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected token activity refresh request, got {other:?}"),
     };
-    assert_eq!(chat.pending_token_activity_outputs().count(), 1);
+    assert!(chat.pending_token_activity_output().is_some());
 
-    assert!(
-        chat.finish_token_activity_refresh(
-            request_id,
-            Err("token activity unavailable".to_string()),
-        )
-    );
+    let cell = chat
+        .finish_token_activity_refresh(request_id, Err("token activity unavailable".to_string()))
+        .expect("completed token activity cell");
 
-    assert_eq!(chat.pending_token_activity_outputs().count(), 0);
-    let cell = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected completed token activity history cell, got {other:?}"),
-    };
+    assert!(chat.pending_token_activity_output().is_none());
     assert_eq!(
         lines_to_single_string(&cell.display_lines(u16::MAX)),
         "/tokens daily\n\n Token activity\n   Token activity unavailable\n",
+    );
+}
+
+#[tokio::test]
+async fn repeated_token_activity_refreshes_keep_only_latest_card() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Tokens);
+    let first_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected first token activity refresh request, got {other:?}"),
+    };
+
+    chat.dispatch_command_with_args(SlashCommand::Tokens, "weekly".to_string(), Vec::new());
+    let second_request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected second token activity refresh request, got {other:?}"),
+    };
+
+    assert_eq!(
+        chat.pending_token_activity_output()
+            .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
+        Some("/tokens weekly\n\n Token activity\n   Loading...\n".to_string()),
+    );
+    assert!(
+        chat.finish_token_activity_refresh(
+            first_request_id,
+            Err("stale token activity result".to_string()),
+        )
+        .is_none()
+    );
+    assert!(
+        chat.finish_token_activity_refresh(
+            second_request_id,
+            Err("token activity unavailable".to_string()),
+        )
+        .is_some()
     );
 }
 
