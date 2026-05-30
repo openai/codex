@@ -522,6 +522,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "codex_apps").await?;
     test.codex
         .submit(Op::UserInput {
             environments: None,
