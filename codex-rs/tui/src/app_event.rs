@@ -602,8 +602,12 @@ pub(crate) enum AppEvent {
     /// end of the transcript with a single source-backed `ProposedPlanCell`.
     ///
     /// Emitted by `ChatWidget::on_plan_item_completed` after plan stream
-    /// finalization.
-    ConsolidateProposedPlan(String),
+    /// finalization. `scrollback_reflow` lets table-tail finalization and
+    /// authoritative plan corrections refresh already-emitted scrollback.
+    ConsolidateProposedPlan {
+        source: String,
+        scrollback_reflow: ConsolidationScrollbackReflow,
+    },
 
     /// Apply rollback semantics to local transcript cells.
     ///

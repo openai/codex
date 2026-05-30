@@ -4,6 +4,7 @@
 //! cells, commit ticks, and interrupt deferral.
 
 use super::*;
+use crate::app_event::ConsolidationScrollbackReflow;
 
 impl ChatWidget {
     pub(super) fn restore_reasoning_status_header(&mut self) {
@@ -19,7 +20,7 @@ impl ChatWidget {
     pub(super) fn flush_answer_stream_with_separator(&mut self) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
-            let scrollback_reflow = if controller.has_live_tail()
+            let scrollback_reflow = if controller.requires_forced_reflow_on_finalize()
                 && self.config.features.enabled(Feature::TerminalResizeReflow)
             {
                 crate::app_event::ConsolidationScrollbackReflow::Required
@@ -140,10 +141,11 @@ impl ChatWidget {
 
     pub(super) fn on_plan_item_completed(&mut self, text: String) {
         let streamed_plan = self.transcript.plan_delta_buffer.trim().to_string();
-        let plan_text = if text.trim().is_empty() {
-            streamed_plan
-        } else {
+        let has_authoritative_plan_text = !text.trim().is_empty();
+        let plan_text = if has_authoritative_plan_text {
             text
+        } else {
+            streamed_plan
         };
         if !plan_text.trim().is_empty() {
             self.record_agent_markdown(&plan_text);
@@ -155,32 +157,49 @@ impl ChatWidget {
         self.transcript.plan_delta_buffer.clear();
         self.transcript.plan_item_active = false;
         self.transcript.saw_plan_item_this_turn = true;
-        let (finalized_streamed_cell, consolidated_plan_source) =
+        let (finalized_streamed_cell, consolidated_plan_source, scrollback_reflow) =
             if let Some(mut controller) = self.plan_stream_controller.take() {
-                let had_live_tail = controller.has_live_tail();
+                let requires_forced_reflow = controller.requires_forced_reflow_on_finalize()
+                    && self.config.features.enabled(Feature::TerminalResizeReflow);
                 self.clear_active_stream_tail();
                 let (cell, source) = controller.finalize();
-                if had_live_tail {
-                    (None, source)
+                let requires_authoritative_refresh = source
+                    .as_ref()
+                    .is_some_and(|source| has_authoritative_plan_text && source != &plan_text)
+                    && self.config.features.enabled(Feature::TerminalResizeReflow);
+                let scrollback_reflow = if requires_forced_reflow || requires_authoritative_refresh
+                {
+                    ConsolidationScrollbackReflow::Required
                 } else {
-                    (cell, source)
+                    ConsolidationScrollbackReflow::IfResizeReflowRan
+                };
+                let source = source.map(|source| {
+                    if has_authoritative_plan_text {
+                        plan_text.clone()
+                    } else {
+                        source
+                    }
+                });
+                let hold_live_tail_for_reflow =
+                    scrollback_reflow == ConsolidationScrollbackReflow::Required;
+                if hold_live_tail_for_reflow {
+                    (None, source, scrollback_reflow)
+                } else {
+                    (cell, source, scrollback_reflow)
                 }
             } else {
-                (None, None)
+                (None, None, ConsolidationScrollbackReflow::IfResizeReflowRan)
             };
         if let Some(cell) = finalized_streamed_cell {
             self.add_boxed_history(cell);
-            // TODO: Replace streamed output with the final plan item text if plan streaming is
-            // removed or if we need to reconcile mismatches between streamed and final content.
-            if let Some(source) = consolidated_plan_source {
-                self.app_event_tx
-                    .send(AppEvent::ConsolidateProposedPlan(source));
-            }
+        }
+        if let Some(source) = consolidated_plan_source {
+            self.app_event_tx.send(AppEvent::ConsolidateProposedPlan {
+                source,
+                scrollback_reflow,
+            });
         } else if !plan_text.is_empty() {
             self.add_to_history(history_cell::new_proposed_plan(plan_text, &self.config.cwd));
-        } else if let Some(source) = consolidated_plan_source {
-            self.app_event_tx
-                .send(AppEvent::ConsolidateProposedPlan(source));
         }
         if should_restore_after_stream {
             self.status_state.pending_status_indicator_restore = true;

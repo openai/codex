@@ -4,6 +4,7 @@
 //! and final-message separator handling.
 
 use super::*;
+use crate::app_event::ConsolidationScrollbackReflow;
 
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -117,15 +118,25 @@ impl ChatWidget {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take() {
-            let had_live_tail = controller.has_live_tail();
+            let scrollback_reflow = if controller.requires_forced_reflow_on_finalize()
+                && self.config.features.enabled(Feature::TerminalResizeReflow)
+            {
+                ConsolidationScrollbackReflow::Required
+            } else {
+                ConsolidationScrollbackReflow::IfResizeReflowRan
+            };
+            let hold_live_tail_for_reflow =
+                scrollback_reflow == ConsolidationScrollbackReflow::Required;
             self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
-            if !had_live_tail && let Some(cell) = cell {
+            if !hold_live_tail_for_reflow && let Some(cell) = cell {
                 self.add_boxed_history(cell);
             }
             if let Some(source) = source {
-                self.app_event_tx
-                    .send(AppEvent::ConsolidateProposedPlan(source));
+                self.app_event_tx.send(AppEvent::ConsolidateProposedPlan {
+                    source,
+                    scrollback_reflow,
+                });
             }
         }
         self.flush_unified_exec_wait_streak();

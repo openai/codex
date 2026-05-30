@@ -5,6 +5,7 @@
 
 use super::resize_reflow::trailing_run_start;
 use super::*;
+use crate::app_event::ConsolidationScrollbackReflow;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
@@ -234,11 +235,10 @@ impl App {
                     deferred_history_cell,
                 )?;
             }
-            AppEvent::ConsolidateProposedPlan(source) => {
-                if !self.terminal_resize_reflow_enabled() {
-                    self.transcript_reflow.clear();
-                    return Ok(AppRunControl::Continue);
-                }
+            AppEvent::ConsolidateProposedPlan {
+                source,
+                scrollback_reflow,
+            } => {
                 let end = self.transcript_cells.len();
                 let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(
                     &self.transcript_cells,
@@ -255,7 +255,22 @@ impl App {
                         tui.frame_requester().schedule_frame();
                     }
 
-                    self.finish_required_stream_reflow(tui)?;
+                    match scrollback_reflow {
+                        ConsolidationScrollbackReflow::IfResizeReflowRan => {
+                            self.maybe_finish_stream_reflow(tui)?;
+                        }
+                        ConsolidationScrollbackReflow::Required
+                            if self.terminal_resize_reflow_enabled() =>
+                        {
+                            self.finish_required_stream_reflow(tui)?;
+                        }
+                        ConsolidationScrollbackReflow::Required => {
+                            // The already-emitted stream prefix cannot be removed without reflow.
+                            // Keep terminal scrollback as-is instead of appending a duplicate full
+                            // plan if the feature was disabled before this queued event arrived.
+                            self.maybe_finish_stream_reflow(tui)?;
+                        }
+                    }
                 } else {
                     self.transcript_cells.push(consolidated.clone());
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {

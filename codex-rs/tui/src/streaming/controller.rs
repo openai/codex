@@ -221,6 +221,10 @@ impl StreamCore {
         self.enqueued_stable_len < self.rendered_lines.len()
     }
 
+    fn requires_forced_reflow_on_finalize(&self) -> bool {
+        self.has_tail() && !matches!(self.holdback_scanner.state(), TableHoldbackState::None)
+    }
+
     /// Update rendering width and rebuild queued stable lines for the new layout.
     ///
     /// Re-renders once at the new width and rebuilds queue state from the
@@ -542,9 +546,15 @@ impl StreamController {
         !self.header_emitted && self.core.enqueued_stable_len == 0
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn has_live_tail(&self) -> bool {
         self.core.has_tail()
+    }
+
+    #[inline]
+    pub(crate) fn requires_forced_reflow_on_finalize(&self) -> bool {
+        self.core.requires_forced_reflow_on_finalize()
     }
 
     pub(crate) fn clear_queue(&mut self) {
@@ -645,9 +655,15 @@ impl PlanStreamController {
         self.core.queued_lines()
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn has_live_tail(&self) -> bool {
         self.core.has_tail()
+    }
+
+    #[inline]
+    pub(crate) fn requires_forced_reflow_on_finalize(&self) -> bool {
+        self.core.requires_forced_reflow_on_finalize()
     }
 
     #[inline]

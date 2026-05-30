@@ -408,7 +408,60 @@ async fn flush_answer_stream_inserts_live_list_tail_when_resize_reflow_disabled(
 }
 
 #[tokio::test]
-async fn completed_plan_table_tail_skips_provisional_history_insert() {
+async fn flush_answer_stream_inserts_live_list_tail_without_forced_reflow() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::StreamController::new(
+        Some(/*width*/ 80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("- first\n");
+    controller.push("- second\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected trailing list holdback to leave a live tail for this regression",
+    );
+    chat.stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_consolidate = false;
+    let mut saw_insert_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
+            AppEvent::ConsolidateAgentMessage {
+                scrollback_reflow,
+                deferred_history_cell,
+                ..
+            } => {
+                saw_consolidate = true;
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                );
+                assert!(deferred_history_cell.is_none());
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "expected stream finalization to consolidate"
+    );
+    assert!(
+        saw_insert_history,
+        "live list tail should insert history directly without forced reflow"
+    );
+}
+
+#[tokio::test]
+async fn completed_plan_table_tail_uses_consolidation_without_provisional_history_insert() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.to_path_buf();
 
@@ -432,27 +485,241 @@ async fn completed_plan_table_tail_skips_provisional_history_insert() {
 
     chat.on_plan_item_completed(String::new());
 
-    let mut saw_source_backed_plan = false;
+    let mut saw_consolidate = false;
     let mut saw_stream_plan = false;
-    let mut rendered_plan = String::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::ConsolidateProposedPlan {
+                source,
+                scrollback_reflow,
+            } => {
+                saw_consolidate = true;
+                assert!(source.contains("| Verify | Codex |"));
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::Required
+                );
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                saw_stream_plan |= cell.as_any().is::<history_cell::ProposedPlanStreamCell>();
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_consolidate, "expected source-backed plan consolidation");
+    assert!(
+        !saw_stream_plan,
+        "live plan table tail should not be inserted provisionally"
+    );
+}
+
+#[tokio::test]
+async fn completed_plan_list_tail_consolidates_emitted_prefix() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    let completed_plan = "Plan intro.\n\n- Revised first step\n- Revised second step\n";
+
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        Some(/*width*/ 80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("Plan intro.\n\n");
+    let (prefix, _) = controller.on_commit_tick_batch(usize::MAX);
+    chat.add_boxed_history(prefix.expect("expected emitted plan prefix"));
+    controller.push("- First step\n");
+    controller.push("- Second step\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected trailing list holdback to leave a live tail",
+    );
+    chat.plan_stream_controller = Some(controller);
+    chat.transcript.plan_delta_buffer = "Plan intro.\n\n- First step\n- Second step\n".to_string();
+
+    while rx.try_recv().is_ok() {}
+
+    chat.on_plan_item_completed(completed_plan.to_string());
+
+    let mut saw_consolidate = false;
+    let mut saw_direct_plan_insert = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::ConsolidateProposedPlan {
+                source,
+                scrollback_reflow,
+            } => {
+                saw_consolidate = true;
+                assert_eq!(source, completed_plan);
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::Required
+                );
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                saw_direct_plan_insert |= cell.as_any().is::<history_cell::ProposedPlanCell>();
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_consolidate, "expected emitted prefix consolidation");
+    assert!(
+        !saw_direct_plan_insert,
+        "held list should consolidate instead of duplicating the emitted prefix",
+    );
+}
+
+#[tokio::test]
+async fn completed_plan_list_tail_inserts_stream_tail_without_forced_reflow() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        Some(/*width*/ 80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("- First step\n");
+    controller.push("- Second step\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected trailing list holdback to leave a live tail",
+    );
+    chat.plan_stream_controller = Some(controller);
+    chat.transcript.plan_delta_buffer = "- First step\n- Second step\n".to_string();
+
+    while rx.try_recv().is_ok() {}
+
+    chat.on_plan_item_completed(String::new());
+
+    let mut saw_consolidate = false;
+    let mut saw_stream_plan = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::ConsolidateProposedPlan {
+                source,
+                scrollback_reflow,
+            } => {
+                saw_consolidate = true;
+                assert_eq!(source, "- First step\n- Second step\n");
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                );
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                saw_stream_plan |= cell.as_any().is::<history_cell::ProposedPlanStreamCell>();
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_consolidate, "expected source-backed plan consolidation");
+    assert!(
+        saw_stream_plan,
+        "live plan list tail should insert history directly without forced reflow",
+    );
+}
+
+#[tokio::test]
+async fn completed_plan_list_tail_inserts_stream_tail_when_resize_reflow_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    let completed_plan = "Plan intro.\n\n- Revised first step\n- Revised second step\n";
+    chat.set_feature_enabled(Feature::TerminalResizeReflow, /*enabled*/ false);
+
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        Some(/*width*/ 80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("Plan intro.\n\n");
+    let (prefix, _) = controller.on_commit_tick_batch(usize::MAX);
+    chat.add_boxed_history(prefix.expect("expected emitted plan prefix"));
+    controller.push("- First step\n");
+    controller.push("- Second step\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected trailing list holdback to leave a live tail",
+    );
+    chat.plan_stream_controller = Some(controller);
+    chat.transcript.plan_delta_buffer = "Plan intro.\n\n- First step\n- Second step\n".to_string();
+
+    while rx.try_recv().is_ok() {}
+
+    chat.on_plan_item_completed(completed_plan.to_string());
+
+    let mut saw_consolidate = false;
+    let mut saw_stream_plan = false;
+    let mut saw_direct_plan_insert = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::ConsolidateProposedPlan {
+                source,
+                scrollback_reflow,
+            } => {
+                saw_consolidate = true;
+                assert_eq!(source, completed_plan);
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                );
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                saw_stream_plan |= cell.as_any().is::<history_cell::ProposedPlanStreamCell>();
+                saw_direct_plan_insert |= cell.as_any().is::<history_cell::ProposedPlanCell>();
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_consolidate, "expected source-backed plan consolidation");
+    assert!(
+        saw_stream_plan,
+        "authoritative correction should finish the streamed plan when resize reflow is disabled",
+    );
+    assert!(
+        !saw_direct_plan_insert,
+        "held list should not duplicate the emitted prefix with a full plan insert",
+    );
+}
+
+#[tokio::test]
+async fn task_completion_inserts_live_plan_list_tail_when_resize_reflow_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.set_feature_enabled(Feature::TerminalResizeReflow, /*enabled*/ false);
+
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        Some(/*width*/ 80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("- First step\n");
+    controller.push("- Second step\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected trailing list holdback to leave a live tail",
+    );
+    chat.plan_stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
+
+    let mut saw_stream_plan = false;
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {
-            if cell.as_any().is::<history_cell::ProposedPlanCell>() {
-                saw_source_backed_plan = true;
-                rendered_plan = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            }
             saw_stream_plan |= cell.as_any().is::<history_cell::ProposedPlanStreamCell>();
         }
     }
 
-    assert!(saw_source_backed_plan, "expected source-backed plan insert");
     assert!(
-        rendered_plan.contains('━'),
-        "expected completed plan table to render with separators, got: {rendered_plan:?}"
-    );
-    assert!(
-        !saw_stream_plan,
-        "live plan table tail should not be inserted provisionally"
+        saw_stream_plan,
+        "live plan list tail should insert history directly without resize reflow",
     );
 }
 
