@@ -568,6 +568,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
     sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
         .await;
     sess.recompute_token_usage(turn_context.as_ref()).await;
+    sess.services.model_client.advance_window_generation();
 
     sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
         .await;

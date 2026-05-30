@@ -16,6 +16,25 @@ use codex_protocol::protocol::TurnEnvironmentSelections;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
 
+// This is a request-cache invalidation epoch, not a hash of logical context. A rollback must use a
+// new generation even when it reconstructs a previously seen prefix, because the remote window
+// with the old ID may already include requests from the rolled-back suffix.
+fn window_generation_from_history_invalidations(items: &[RolloutItem]) -> u64 {
+    u64::try_from(
+        items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    RolloutItem::Compacted(_)
+                        | RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))
+                )
+            })
+            .count(),
+    )
+    .unwrap_or(u64::MAX)
+}
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
@@ -518,15 +537,13 @@ impl Session {
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
         let window_generation = match &initial_history {
-            InitialHistory::Resumed(resumed_history) => u64::try_from(
-                resumed_history
-                    .history
-                    .iter()
-                    .filter(|item| matches!(item, RolloutItem::Compacted(_)))
-                    .count(),
-            )
-            .unwrap_or(u64::MAX),
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
+            InitialHistory::Resumed(resumed_history) => {
+                window_generation_from_history_invalidations(&resumed_history.history)
+            }
+            InitialHistory::Forked(history) => {
+                window_generation_from_history_invalidations(history)
+            }
+            InitialHistory::New | InitialHistory::Cleared => 0,
         };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //

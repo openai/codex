@@ -172,6 +172,8 @@ pub(crate) struct CompactConversationRequestSettings {
 struct ModelClientState {
     session_id: SessionId,
     thread_id: ThreadId,
+    // Monotonic context epoch used to avoid reusing remotely cached state after history rewrites.
+    // Forks may inherit a nonzero epoch when their initial history already contains rewrites.
     window_generation: AtomicU64,
     installation_id: String,
     provider: SharedModelProvider,
