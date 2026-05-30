@@ -281,11 +281,13 @@ pub struct ThreadSettingsUpdateParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadSettingsUpdateResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadSettings {
     pub cwd: AbsolutePathBuf,
+    #[experimental("thread/settings/updated.runtimeWorkspaceRoots")]
+    pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,

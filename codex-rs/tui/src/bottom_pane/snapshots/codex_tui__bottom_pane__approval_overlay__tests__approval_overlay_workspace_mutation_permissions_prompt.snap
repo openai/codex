@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/approval_overlay.rs
+expression: "normalize_snapshot_paths(render_overlay_lines(&view, 120))"
+---
+
+  Would you like to add a directory to this session's workspace?
+
+  Directory: /tmp/out.txt
+
+  This grants write access to the directory for the rest of the session.
+
+  Permission rule: network; read `/tmp/readme.txt`; write `/tmp/out.txt`
+
+› 1. Yes, update this session's workspace (y)
+  2. No, keep the current workspace (d)
+
+  Press enter to confirm or esc to cancel

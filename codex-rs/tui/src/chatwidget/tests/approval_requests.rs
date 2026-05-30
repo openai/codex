@@ -296,7 +296,13 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
                 entries: None,
             }),
         },
-        workspace_mutation: None,
+        workspace_mutation: Some(
+            codex_app_server_protocol::WorkspaceMutationApprovalRequest {
+                operation: codex_app_server_protocol::WorkspaceMutationOperation::AddWorkspaceRoot,
+                target: write_path.clone(),
+                resulting_workspace_roots: vec![cwd.clone(), write_path.clone()],
+            },
+        ),
     });
 
     assert_eq!(
@@ -307,12 +313,23 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
             }),
             file_system: Some(FileSystemPermissions::from_read_write_roots(
                 Some(vec![read_path]),
-                Some(vec![write_path]),
+                Some(vec![write_path.clone()]),
             )),
         }
     );
-    assert_eq!(request.cwd, Some(cwd));
+    assert_eq!(request.cwd, Some(cwd.clone()));
     assert_eq!(request.environment_id.as_deref(), Some("remote"));
+    assert_eq!(
+        request.workspace_mutation,
+        Some(
+            codex_protocol::request_permissions::WorkspaceMutationApprovalRequest {
+                operation:
+                    codex_protocol::request_permissions::WorkspaceMutationOperation::AddWorkspaceRoot,
+                target: write_path.clone(),
+                resulting_workspace_roots: vec![cwd, write_path],
+            }
+        )
+    );
 }
 
 #[tokio::test]

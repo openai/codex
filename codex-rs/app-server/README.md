@@ -148,7 +148,7 @@ Example with notification opt-out:
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
-- `thread/settings/updated` — experimental notification emitted to subscribed clients when a loaded thread’s effective next-turn settings change; includes `threadId` and the full `threadSettings`.
+- `thread/settings/updated` — experimental notification emitted to subscribed clients when a loaded thread’s effective next-turn settings change; includes `threadId` and the full `threadSettings`. Experimental clients also receive `threadSettings.runtimeWorkspaceRoots`, including roots added by model workspace mutations.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
 - `thread/delete` — hard-delete an active or archived thread and any spawned descendant threads; returns `{}` on success and emits `thread/deleted` for each deleted thread.
@@ -1438,6 +1438,10 @@ the client can offer session-scoped and/or persistent approval choices.
 
 The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the command-execution `additionalPermissions` shape: it can request network access and additional filesystem access. The `environmentId` and `cwd` fields identify the environment and directory used to resolve project-root permissions and relative deny globs.
 
+The model-facing `set_working_directory` and `add_workspace_root` tools use the same request when a mutation would widen persistent filesystem access. These requests include `workspaceMutation` with the operation, canonical target, and resulting workspace roots. Clients must grant workspace-mutation requests with `scope: "session"`; a turn-scoped grant is rejected because the mutation changes persistent thread state.
+
+A workspace-mutation request looks like:
+
 ```json
 {
   "method": "item/permissions/requestApproval",
@@ -1453,6 +1457,11 @@ The built-in `request_permissions` tool sends an `item/permissions/requestApprov
       "fileSystem": {
         "write": ["/Users/me/project", "/Users/me/shared"]
       }
+    },
+    "workspaceMutation": {
+      "operation": "addWorkspaceRoot",
+      "target": "/Users/me/shared",
+      "resultingWorkspaceRoots": ["/Users/me/project", "/Users/me/shared"]
     }
   }
 }

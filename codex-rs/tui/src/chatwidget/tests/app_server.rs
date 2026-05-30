@@ -9,6 +9,7 @@ fn thread_settings_for_test(
         thread_id: thread_id.to_string(),
         thread_settings: codex_app_server_protocol::ThreadSettings {
             cwd: test_path_buf("/tmp/thread-settings").abs(),
+            runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs()],
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
             sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {

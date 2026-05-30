@@ -3340,6 +3340,7 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 thread_settings: v2::ThreadSettings {
                     cwd: absolute_path("/tmp/repo"),
+                    runtime_workspace_roots: vec![absolute_path("/tmp/repo")],
                     approval_policy: v2::AskForApproval::Never,
                     approvals_reviewer: v2::ApprovalsReviewer::User,
                     sandbox_policy: v2::SandboxPolicy::DangerFullAccess,

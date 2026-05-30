@@ -290,6 +290,7 @@ use codex_core::CodexThreadSettingsOverrides;
 use codex_core::ForkSnapshot;
 use codex_core::McpManager;
 use codex_core::NewThread;
+use codex_core::RuntimeWorkspaceReplayOverrides;
 #[cfg(test)]
 use codex_core::SessionMeta;
 use codex_core::StartThreadOptions;

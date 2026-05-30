@@ -313,6 +313,7 @@ impl App {
                     environment_id: params.environment_id.clone(),
                     reason: params.reason.clone(),
                     permissions: params.permissions.clone().into(),
+                    workspace_mutation: params.workspace_mutation.clone().map(Into::into),
                 }),
             ),
             _ => None,

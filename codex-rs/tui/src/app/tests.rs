@@ -2651,13 +2651,24 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
                     entries: None,
                 }),
             },
-            workspace_mutation: None,
+            workspace_mutation: Some(
+                codex_app_server_protocol::WorkspaceMutationApprovalRequest {
+                    operation:
+                        codex_app_server_protocol::WorkspaceMutationOperation::AddWorkspaceRoot,
+                    target: test_absolute_path("/tmp/write"),
+                    resulting_workspace_roots: vec![
+                        test_absolute_path("/tmp"),
+                        test_absolute_path("/tmp/write"),
+                    ],
+                },
+            ),
         },
     };
 
     let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
         environment_id,
         permissions,
+        workspace_mutation,
         ..
     })) = app
         .interactive_request_for_thread_request(thread_id, &request)
@@ -2678,6 +2689,20 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
                 Some(vec![test_absolute_path("/tmp/write")]),
             )),
         }
+    );
+    assert_eq!(
+        workspace_mutation,
+        Some(
+            codex_protocol::request_permissions::WorkspaceMutationApprovalRequest {
+                operation:
+                    codex_protocol::request_permissions::WorkspaceMutationOperation::AddWorkspaceRoot,
+                target: test_absolute_path("/tmp/write"),
+                resulting_workspace_roots: vec![
+                    test_absolute_path("/tmp"),
+                    test_absolute_path("/tmp/write"),
+                ],
+            }
+        )
     );
 }
 
@@ -5840,6 +5865,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
         thread_id: inactive_thread_id.to_string(),
         thread_settings: ThreadSettings {
             cwd: test_absolute_path("/tmp/thread-settings"),
+            runtime_workspace_roots: vec![test_absolute_path("/tmp/thread-settings")],
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
             sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
