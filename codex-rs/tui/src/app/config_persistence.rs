@@ -1132,7 +1132,7 @@ mod tests {
     -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
-        let required_policy = AskForApproval::Never;
+        let required_policy = codex_protocol::protocol::AskForApproval::Never;
         let cloud_requirements = CloudRequirementsLoader::new(async move {
             Ok(Some(codex_config::ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![required_policy]),
