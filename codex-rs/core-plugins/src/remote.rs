@@ -692,7 +692,7 @@ pub(crate) async fn fetch_remote_installed_plugins(
     let (global, workspace) = tokio::join!(global, workspace);
 
     let mut installed_plugins = Vec::new();
-    let mut first_error = None;
+    let mut error_if_all_failed = None;
     let mut any_scope_succeeded = false;
     for (scope, result) in [
         (RemotePluginScope::Global, global),
@@ -714,13 +714,13 @@ pub(crate) async fn fetch_remote_installed_plugins(
                     error = %err,
                     "failed to fetch remote installed plugins for scope"
                 );
-                if first_error.is_none() {
-                    first_error = Some(err);
+                if error_if_all_failed.is_none() {
+                    error_if_all_failed = Some(err);
                 }
             }
         }
     }
-    if !any_scope_succeeded && let Some(err) = first_error {
+    if !any_scope_succeeded && let Some(err) = error_if_all_failed {
         return Err(err);
     }
 
