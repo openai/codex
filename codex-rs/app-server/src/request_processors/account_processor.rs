@@ -802,9 +802,50 @@ impl AccountRequestProcessor {
                 return Err(internal_error(format!("logout failed: {err}")));
             }
         }
-        delete_amazon_bedrock_auth(&self.config.codex_home).map_err(|err| {
-            internal_error(format!("failed to remove Amazon Bedrock auth: {err}"))
-        })?;
+        let removed_bedrock_auth =
+            delete_amazon_bedrock_auth(&self.config.codex_home).map_err(|err| {
+                internal_error(format!("failed to remove Amazon Bedrock auth: {err}"))
+            })?;
+        if removed_bedrock_auth {
+            let current_config = self
+                .config_manager
+                .load_latest_config(/*fallback_cwd*/ None)
+                .await
+                .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+            if current_config.model_provider_id == AMAZON_BEDROCK_PROVIDER_ID {
+                self.config_manager
+                    .batch_write(ConfigBatchWriteParams {
+                        edits: vec![ConfigWriteEdit {
+                            key_path: "model_provider".to_string(),
+                            value: serde_json::Value::Null,
+                            merge_strategy: MergeStrategy::Replace,
+                        }],
+                        file_path: None,
+                        expected_version: None,
+                        reload_user_config: false,
+                    })
+                    .await
+                    .map_err(|err| {
+                        internal_error(format!("failed to update Amazon Bedrock config: {err}"))
+                    })?;
+
+                let next_config = self
+                    .config_manager
+                    .load_latest_config(/*fallback_cwd*/ None)
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                for thread_id in self.thread_manager.list_thread_ids().await {
+                    let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                        continue;
+                    };
+                    thread.refresh_runtime_config(next_config.clone()).await;
+                }
+                Self::spawn_effective_plugins_changed_task(
+                    Arc::clone(&self.thread_manager),
+                    self.config_manager.clone(),
+                );
+            }
+        }
 
         Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
             &self.config_manager,

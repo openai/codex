@@ -18,7 +18,6 @@ use crate::BearerAuthProvider;
 
 use super::mantle::aws_auth_config;
 use super::mantle::region_from_config;
-use super::provider_auth::AmazonBedrockAuth;
 use super::provider_auth::StoredAmazonBedrockAuth;
 
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
@@ -174,6 +173,7 @@ mod tests {
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
 
+    use super::super::provider_auth::AmazonBedrockAuth;
     use super::*;
 
     fn missing_env_var(_: &'static str) -> std::result::Result<String, std::env::VarError> {

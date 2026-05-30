@@ -35,6 +35,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::login_with_api_key;
+use codex_model_provider::save_amazon_bedrock_auth;
 use codex_protocol::account::PlanType as AccountPlanType;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -245,6 +246,96 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     .await??;
     let account: GetAccountResponse = to_response(get_resp)?;
     assert_eq!(account.account, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn logout_account_removes_bedrock_model_provider_after_managed_auth_removed() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            model_provider_id: Some("amazon-bedrock".to_string()),
+            extra_provider_config: Some(
+                r#"[model_providers.amazon-bedrock.aws]
+region = "us-west-2"
+"#
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+    save_amazon_bedrock_auth(codex_home.path(), "bedrock-key", "us-west-2")?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let id = mcp.send_logout_account_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(id)),
+    )
+    .await??;
+    let _ok: LogoutAccountResponse = to_response(resp)?;
+
+    assert!(
+        !codex_home
+            .path()
+            .join("model-providers")
+            .join("amazon-bedrock")
+            .join("auth.json")
+            .exists(),
+        "managed Amazon Bedrock auth should be deleted"
+    );
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(
+        !config.contains("model_provider = \"amazon-bedrock\""),
+        "active Bedrock model provider should be removed after managed Bedrock logout"
+    );
+    assert!(
+        config.contains("[model_providers.amazon-bedrock.aws]"),
+        "Bedrock provider config should be preserved"
+    );
+    assert!(
+        config.contains("region = \"us-west-2\""),
+        "Bedrock region should be preserved"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn logout_account_keeps_bedrock_model_provider_without_managed_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            model_provider_id: Some("amazon-bedrock".to_string()),
+            extra_provider_config: Some(
+                r#"[model_providers.amazon-bedrock.aws]
+region = "us-west-2"
+"#
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let id = mcp.send_logout_account_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(id)),
+    )
+    .await??;
+    let _ok: LogoutAccountResponse = to_response(resp)?;
+
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(
+        config.contains("model_provider = \"amazon-bedrock\""),
+        "unmanaged Bedrock logout should not change the active provider"
+    );
     Ok(())
 }
 
