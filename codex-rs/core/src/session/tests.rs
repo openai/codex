@@ -5882,6 +5882,80 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
 }
 
 #[tokio::test]
+async fn workspace_mutation_permission_response_forces_session_scope() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    #[allow(deprecated)]
+    let cwd = turn_context.cwd.clone();
+    let requested_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![cwd.clone()]),
+        )),
+        ..Default::default()
+    };
+
+    let handle = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        let cwd = cwd.clone();
+        let requested_permissions = requested_permissions.clone();
+        async move {
+            session
+                .request_workspace_permissions_for_cwd(
+                    &turn_context,
+                    "workspace-mutation".to_string(),
+                    codex_protocol::request_permissions::RequestPermissionsArgs {
+                        reason: Some("persist workspace mutation".to_string()),
+                        permissions: requested_permissions,
+                    },
+                    cwd.clone(),
+                    codex_protocol::request_permissions::WorkspaceMutationApprovalRequest {
+                        operation:
+                            codex_protocol::request_permissions::WorkspaceMutationOperation::SetWorkingDirectory,
+                        target: cwd.clone(),
+                        resulting_workspace_roots: vec![cwd],
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+        }
+    });
+
+    let request_event = tokio::time::timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("request_permissions event timed out")
+        .expect("request_permissions event missing");
+    let EventMsg::RequestPermissions(request) = request_event.msg else {
+        panic!("expected request_permissions event");
+    };
+    session
+        .notify_request_permissions_response(
+            &request.call_id,
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: request.permissions,
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            },
+        )
+        .await;
+
+    let response = tokio::time::timeout(StdDuration::from_secs(1), handle)
+        .await
+        .expect("workspace mutation request timed out")
+        .expect("workspace mutation request join error")
+        .expect("workspace mutation response");
+    assert_eq!(response.scope, PermissionGrantScope::Session);
+    assert_eq!(
+        session.granted_session_permissions().await,
+        Some(requested_permissions.into())
+    );
+    assert_eq!(session.granted_turn_permissions().await, None);
+}
+
+#[tokio::test]
 async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_requests() {
     let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());

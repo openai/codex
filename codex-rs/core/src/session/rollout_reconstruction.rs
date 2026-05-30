@@ -293,7 +293,7 @@ pub(crate) fn runtime_workspace_baseline_from_initial_history(
         reconstruct_rollout_metadata(rollout_items).reference_context_item?;
     Some(RuntimeWorkspaceBaseline {
         cwd: AbsolutePathBuf::try_from(reference_context_item.cwd).ok()?,
-        workspace_roots: reference_context_item.workspace_roots?,
+        workspace_roots: reference_context_item.workspace_roots.unwrap_or_default(),
     })
 }
 

@@ -175,6 +175,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         cwd: turn.cwd.clone(),
         #[allow(deprecated)]
         sandbox_cwd: turn.cwd.clone(),
+        permission_profile: turn.permission_profile(),
         environment: turn
             .environments
             .primary_environment()

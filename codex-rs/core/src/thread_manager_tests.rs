@@ -206,6 +206,30 @@ async fn hydrate_runtime_workspace_from_history_restores_persisted_baseline() {
 }
 
 #[tokio::test]
+async fn hydrate_runtime_workspace_from_history_restores_cwd_with_empty_roots() {
+    let (_session, turn_context) = make_session_and_context().await;
+    let persisted_cwd = PathBuf::from("/workspace/updated").abs();
+    let mut context_item = turn_context.to_turn_context_item();
+    context_item.cwd = persisted_cwd.to_path_buf();
+    context_item.workspace_roots = None;
+    let history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("mutate workspace")),
+        RolloutItem::TurnContext(context_item),
+    ]);
+    let mut config = test_config().await;
+
+    hydrate_runtime_workspace_from_history(
+        &mut config,
+        &history,
+        RuntimeWorkspaceReplayOverrides::default(),
+    );
+
+    assert_eq!(config.cwd, persisted_cwd);
+    assert_eq!(config.workspace_roots, Vec::new());
+    assert_eq!(config.permissions.workspace_roots(), Vec::new());
+}
+
+#[tokio::test]
 async fn hydrate_runtime_workspace_from_history_preserves_explicit_replacements() {
     let (_session, turn_context) = make_session_and_context().await;
     let mut context_item = turn_context.to_turn_context_item();

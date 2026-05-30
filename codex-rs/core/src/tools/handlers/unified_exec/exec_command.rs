@@ -283,7 +283,12 @@ impl ExecCommandHandler {
                     yield_time_ms,
                     max_output_tokens,
                     cwd,
-                    sandbox_cwd: turn_environment.cwd.clone(),
+                    sandbox_cwd: if turn.environments.turn_environments.len() == 1 {
+                        runtime_workspace.cwd
+                    } else {
+                        turn_environment.cwd.clone()
+                    },
+                    permission_profile: runtime_workspace.permission_profile,
                     environment,
                     shell_mode,
                     network: context.turn.network.clone(),

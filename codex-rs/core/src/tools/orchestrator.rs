@@ -148,7 +148,10 @@ impl ToolOrchestrator {
         // 1) Approval
         let mut already_approved = false;
 
-        let file_system_sandbox_policy = turn_ctx.file_system_sandbox_policy();
+        let runtime_workspace = turn_ctx.runtime_workspace.snapshot().await;
+        let file_system_sandbox_policy = runtime_workspace
+            .permission_profile
+            .file_system_sandbox_policy();
         let network_sandbox_policy = turn_ctx.network_sandbox_policy();
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
@@ -238,11 +241,11 @@ impl ToolOrchestrator {
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
         #[allow(deprecated)]
-        let sandbox_cwd = tool.sandbox_cwd(req).unwrap_or(&turn_ctx.cwd);
-        let workspace_roots = turn_ctx.config.effective_workspace_roots();
+        let sandbox_cwd = tool.sandbox_cwd(req).unwrap_or(&runtime_workspace.cwd);
+        let workspace_roots = runtime_workspace.workspace_roots;
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
-            permissions: &turn_ctx.permission_profile,
+            permissions: &runtime_workspace.permission_profile,
             enforce_managed_network: managed_network_active,
             manager: &self.sandbox,
             sandbox_cwd,
@@ -415,7 +418,7 @@ impl ToolOrchestrator {
                 };
                 let retry_attempt = SandboxAttempt {
                     sandbox: retry_sandbox,
-                    permissions: &turn_ctx.permission_profile,
+                    permissions: &runtime_workspace.permission_profile,
                     enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,
                     sandbox_cwd,

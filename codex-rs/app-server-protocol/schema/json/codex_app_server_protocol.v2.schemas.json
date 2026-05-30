@@ -6508,6 +6508,16 @@
               ],
               "title": "RequestPermissionsGuardianApprovalReviewActionType",
               "type": "string"
+            },
+            "workspaceMutation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WorkspaceMutationApprovalRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -17514,6 +17524,35 @@
       ],
       "title": "WindowsWorldWritableWarningNotification",
       "type": "object"
+    },
+    "WorkspaceMutationApprovalRequest": {
+      "properties": {
+        "operation": {
+          "$ref": "#/definitions/WorkspaceMutationOperation"
+        },
+        "resultingWorkspaceRoots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "required": [
+        "operation",
+        "resultingWorkspaceRoots",
+        "target"
+      ],
+      "type": "object"
+    },
+    "WorkspaceMutationOperation": {
+      "enum": [
+        "setWorkingDirectory",
+        "addWorkspaceRoot"
+      ],
+      "type": "string"
     },
     "WriteStatus": {
       "enum": [

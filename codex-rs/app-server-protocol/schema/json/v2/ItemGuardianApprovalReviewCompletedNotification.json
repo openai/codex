@@ -484,6 +484,16 @@
               ],
               "title": "RequestPermissionsGuardianApprovalReviewActionType",
               "type": "string"
+            },
+            "workspaceMutation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WorkspaceMutationApprovalRequest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -567,6 +577,35 @@
         }
       },
       "type": "object"
+    },
+    "WorkspaceMutationApprovalRequest": {
+      "properties": {
+        "operation": {
+          "$ref": "#/definitions/WorkspaceMutationOperation"
+        },
+        "resultingWorkspaceRoots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "required": [
+        "operation",
+        "resultingWorkspaceRoots",
+        "target"
+      ],
+      "type": "object"
+    },
+    "WorkspaceMutationOperation": {
+      "enum": [
+        "setWorkingDirectory",
+        "addWorkspaceRoot"
+      ],
+      "type": "string"
     }
   },
   "description": "[UNSTABLE] Temporary notification payload for approval auto-review. This shape is expected to change soon.",
