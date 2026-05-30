@@ -20,6 +20,7 @@ Image: alt text
 - Unordered list item 2 with strikethrough
 
 1. Ordered item one
+
 2. Ordered item two with sublist:
     1. Alt-numbered subitem
 

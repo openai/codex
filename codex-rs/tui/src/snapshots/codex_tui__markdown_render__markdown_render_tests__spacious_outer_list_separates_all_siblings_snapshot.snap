@@ -1,0 +1,11 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: "plain_lines(&text).join(\"\\n\")"
+---
+1. Parent item contains nested details:
+    - first nested detail
+    - second nested detail
+
+2. Next outer item should be visually separated.
+
+3. Final outer item stays compact.

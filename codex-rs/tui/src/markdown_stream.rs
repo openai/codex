@@ -133,7 +133,20 @@ impl MarkdownStreamCollector {
         let source = self.buffer[..commit_end].to_string();
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, Some(self.cwd.as_path()), &mut rendered);
-        let mut complete_line_count = rendered.len();
+        let mut complete_line_count = if let Some(list_start) =
+            crate::markdown_render::trailing_list_holdback_start(&source)
+        {
+            let mut stable_prefix = Vec::new();
+            markdown::append_markdown(
+                &source[..list_start],
+                self.width,
+                Some(self.cwd.as_path()),
+                &mut stable_prefix,
+            );
+            stable_prefix.len()
+        } else {
+            rendered.len()
+        };
         if complete_line_count > 0
             && crate::render::line_utils::is_blank_line_spaces_only(
                 &rendered[complete_line_count - 1],
@@ -785,7 +798,9 @@ mod tests {
             "Loose vs. tight list items:".to_string(),
             "".to_string(),
             "1. Tight item".to_string(),
+            "".to_string(),
             "2. Another tight item".to_string(),
+            "".to_string(),
             "3. Loose item with its own paragraph.".to_string(),
             "".to_string(),
             "   This paragraph belongs to the same list item.".to_string(),

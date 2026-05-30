@@ -376,26 +376,36 @@ impl StreamCore {
     /// table region is held as tail because adding a row can reshape table
     /// column widths. For `PendingHeader`, only content from the speculative
     /// header line onward is kept mutable so earlier prose can continue
-    /// streaming. When no table is detected, everything flows directly to
-    /// stable. This is the core decision point for the holdback mechanism.
+    /// streaming. A trailing list is also held because a later multiline item
+    /// can make all of its siblings spacious. This is the core decision point
+    /// for the holdback mechanism.
     fn active_tail_budget_lines(&mut self) -> usize {
         if self.render_mode == HistoryRenderMode::Raw {
             return 0;
         }
         let scan_start = Instant::now();
         let holdback_state = self.holdback_scanner.state();
-        let tail_budget = match holdback_state {
+        let table_holdback_start = match holdback_state {
             TableHoldbackState::Confirmed { table_start: start }
             | TableHoldbackState::PendingHeader {
                 header_start: start,
-            } => self.tail_budget_from_source_start(start),
-            TableHoldbackState::None => 0,
+            } => Some(start),
+            TableHoldbackState::None => None,
         };
+        let list_holdback_start =
+            crate::markdown_render::trailing_list_holdback_start(&self.raw_source);
+        let tail_budget = table_holdback_start
+            .into_iter()
+            .chain(list_holdback_start)
+            .min()
+            .map(|start| self.tail_budget_from_source_start(start))
+            .unwrap_or(/*default*/ 0);
         tracing::trace!(
             state = ?holdback_state,
+            list_holdback_start,
             tail_budget,
             elapsed_us = scan_start.elapsed().as_micros(),
-            "table holdback decision",
+            "markdown holdback decision",
         );
         tail_budget
     }
@@ -1189,7 +1199,9 @@ mod tests {
             "Loose vs. tight list items:".to_string(),
             "".to_string(),
             "1. Tight item".to_string(),
+            "".to_string(),
             "2. Another tight item".to_string(),
+            "".to_string(),
             "3. Loose item with its own paragraph.".to_string(),
             "".to_string(),
             "   This paragraph belongs to the same list item.".to_string(),

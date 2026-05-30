@@ -580,6 +580,18 @@ fn tight_item_with_soft_break() {
 }
 
 #[test]
+fn spacious_outer_list_separates_all_siblings_snapshot() {
+    let md = r#"1. Parent item contains nested details:
+   - first nested detail
+   - second nested detail
+2. Next outer item should be visually separated.
+3. Final outer item stays compact.
+"#;
+    let text = render_markdown_text(md);
+    assert_snapshot!(plain_lines(&text).join("\n"));
+}
+
+#[test]
 fn deeply_nested_mixed_three_levels() {
     let md = "1. A\n    - B\n        1. C\n2. D\n";
     let text = render_markdown_text(md);
@@ -1320,6 +1332,7 @@ fn ordered_item_with_code_block_and_nested_bullet() {
         lines,
         vec![
             "1. item 1".to_string(),
+            String::new(),
             "2. item 2".to_string(),
             String::new(),
             "   code".to_string(),

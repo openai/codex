@@ -319,13 +319,177 @@ pub(crate) fn render_markdown_lines_with_width_and_cwd(
     width: Option<usize>,
     cwd: Option<&Path>,
 ) -> Vec<HyperlinkLine> {
+    let options = markdown_options();
+    let list_spacing = analyze_list_spacing(input, options);
+    let parser = Parser::new_ext(input, options).into_offset_iter();
+    let mut w = Writer::new(input, parser, list_spacing, width, cwd);
+    w.run();
+    w.text
+}
+
+fn markdown_options() -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(input, options).into_offset_iter();
-    let mut w = Writer::new(input, parser, width, cwd);
-    w.run();
-    w.text
+    options
+}
+
+#[derive(Default)]
+struct ListSpacingAnalysis {
+    list_spacing: Vec<bool>,
+    active_lists: Vec<usize>,
+    open_items: Vec<OpenListItem>,
+    active_links: Vec<bool>,
+    line_ends_with_local_link_target: bool,
+    pending_local_link_soft_break: bool,
+}
+
+struct OpenListItem {
+    list_index: usize,
+    paragraph_count: usize,
+}
+
+impl ListSpacingAnalysis {
+    fn analyze<'a>(events: impl Iterator<Item = Event<'a>>) -> Vec<bool> {
+        let mut analysis = Self::default();
+        for event in events {
+            analysis.prepare_for_event(&event);
+            analysis.handle_event(event);
+        }
+        analysis.finish_pending_soft_break();
+        analysis.list_spacing
+    }
+
+    fn prepare_for_event(&mut self, event: &Event<'_>) {
+        if !self.pending_local_link_soft_break {
+            return;
+        }
+
+        self.pending_local_link_soft_break = false;
+        if !matches!(event, Event::Text(text) if text.trim_start().starts_with(':')) {
+            self.mark_open_list_items_multiline();
+        }
+    }
+
+    fn handle_event(&mut self, event: Event<'_>) {
+        match event {
+            Event::Start(Tag::List(_)) => {
+                self.mark_open_list_items_multiline();
+                self.active_lists.push(self.list_spacing.len());
+                self.list_spacing.push(/*value*/ false);
+            }
+            Event::Start(Tag::Item) => {
+                if let Some(&list_index) = self.active_lists.last() {
+                    self.open_items.push(OpenListItem {
+                        list_index,
+                        paragraph_count: 0,
+                    });
+                }
+            }
+            Event::Start(Tag::Paragraph) => {
+                if self
+                    .open_items
+                    .last()
+                    .is_some_and(|item| item.paragraph_count > 0)
+                {
+                    self.mark_open_list_items_multiline();
+                }
+                if let Some(item) = self.open_items.last_mut() {
+                    item.paragraph_count += 1;
+                }
+            }
+            Event::Start(Tag::Heading { .. })
+            | Event::Start(Tag::BlockQuote)
+            | Event::Start(Tag::CodeBlock(_))
+            | Event::Start(Tag::Table(_))
+            | Event::Rule
+            | Event::HardBreak => {
+                self.line_ends_with_local_link_target = false;
+                self.mark_open_list_items_multiline();
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                self.active_links
+                    .push(is_local_path_like_link(dest_url.as_ref()));
+            }
+            Event::End(TagEnd::Link) => {
+                self.line_ends_with_local_link_target =
+                    self.active_links.pop().unwrap_or(/*default*/ false);
+            }
+            Event::End(TagEnd::Item) => {
+                self.open_items.pop();
+            }
+            Event::End(TagEnd::List(_)) => {
+                self.active_lists.pop();
+            }
+            Event::SoftBreak => {
+                if self.line_ends_with_local_link_target {
+                    self.pending_local_link_soft_break = true;
+                } else {
+                    self.mark_open_list_items_multiline();
+                }
+                self.line_ends_with_local_link_target = false;
+            }
+            Event::Html(_) => {
+                self.line_ends_with_local_link_target = false;
+                self.mark_open_list_items_multiline();
+            }
+            Event::InlineHtml(html) => {
+                self.line_ends_with_local_link_target = false;
+                if html.lines().count() > 1 {
+                    self.mark_open_list_items_multiline();
+                }
+            }
+            Event::Text(_) | Event::Code(_) => {
+                self.line_ends_with_local_link_target = false;
+            }
+            Event::Start(_)
+            | Event::End(_)
+            | Event::FootnoteReference(_)
+            | Event::TaskListMarker(_) => {}
+        }
+    }
+
+    fn finish_pending_soft_break(&mut self) {
+        if self.pending_local_link_soft_break {
+            self.mark_open_list_items_multiline();
+        }
+    }
+
+    fn mark_open_list_items_multiline(&mut self) {
+        for item in &self.open_items {
+            self.list_spacing[item.list_index] = true;
+        }
+    }
+}
+
+fn analyze_list_spacing(input: &str, options: Options) -> Vec<bool> {
+    ListSpacingAnalysis::analyze(Parser::new_ext(input, options))
+}
+
+pub(crate) fn trailing_list_holdback_start(input: &str) -> Option<usize> {
+    let mut list_starts = Vec::new();
+    let mut trailing_list_start = None;
+
+    for (event, range) in Parser::new_ext(input, markdown_options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::List(_)) => list_starts.push(range.start),
+            Event::End(TagEnd::List(_)) => {
+                if let Some(list_start) = list_starts.pop()
+                    && input[range.end..].trim().is_empty()
+                {
+                    trailing_list_start = Some(list_start);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    trailing_list_start
+}
+
+struct ActiveListSpacing {
+    spacious: bool,
+    started_item: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -375,8 +539,8 @@ where
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
-    list_needs_blank_before_next_item: Vec<bool>,
-    list_item_has_multiline_content: Vec<bool>,
+    list_spacing: std::vec::IntoIter<bool>,
+    active_list_spacing: Vec<ActiveListSpacing>,
     link: Option<LinkState>,
     needs_newline: bool,
     pending_marker_line: bool,
@@ -400,7 +564,13 @@ impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
-    fn new(input: &'a str, iter: I, wrap_width: Option<usize>, cwd: Option<&Path>) -> Self {
+    fn new(
+        input: &'a str,
+        iter: I,
+        list_spacing: Vec<bool>,
+        wrap_width: Option<usize>,
+        cwd: Option<&Path>,
+    ) -> Self {
         Self {
             input,
             iter,
@@ -409,8 +579,8 @@ where
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
             list_indices: Vec::new(),
-            list_needs_blank_before_next_item: Vec::new(),
-            list_item_has_multiline_content: Vec::new(),
+            list_spacing: list_spacing.into_iter(),
+            active_list_spacing: Vec::new(),
             link: None,
             needs_newline: false,
             pending_marker_line: false,
@@ -448,7 +618,6 @@ where
             Event::SoftBreak => self.soft_break(),
             Event::HardBreak => self.hard_break(),
             Event::Rule => {
-                self.mark_open_list_items_multiline();
                 self.flush_current_line();
                 if !self.text.is_empty() {
                     self.push_blank_line();
@@ -477,7 +646,6 @@ where
         }
 
         self.pending_local_link_soft_break = false;
-        self.mark_open_list_items_multiline();
         self.push_line(Line::default());
     }
 
@@ -522,14 +690,6 @@ where
             TagEnd::CodeBlock => self.end_codeblock(),
             TagEnd::List(_) => self.end_list(),
             TagEnd::Item => {
-                if self
-                    .list_item_has_multiline_content
-                    .pop()
-                    .unwrap_or(/*default*/ false)
-                    && let Some(needs_blank) = self.list_needs_blank_before_next_item.last_mut()
-                {
-                    *needs_blank = true;
-                }
                 self.indent_stack.pop();
                 self.pending_marker_line = false;
             }
@@ -551,7 +711,6 @@ where
             return;
         }
         if self.needs_newline {
-            self.mark_open_list_items_multiline();
             self.push_blank_line();
         }
         self.push_line(Line::default());
@@ -572,7 +731,6 @@ where
         if self.in_table_cell() {
             return;
         }
-        self.mark_open_list_items_multiline();
         if self.needs_newline {
             self.push_line(Line::default());
             self.needs_newline = false;
@@ -603,7 +761,6 @@ where
         if self.in_table_cell() {
             return;
         }
-        self.mark_open_list_items_multiline();
         if self.needs_newline {
             self.push_blank_line();
             self.needs_newline = false;
@@ -713,9 +870,6 @@ where
             }
             return;
         }
-        if !inline || html.lines().count() > 1 {
-            self.mark_open_list_items_multiline();
-        }
         self.pending_marker_line = false;
         for (i, line) in html.lines().enumerate() {
             if self.needs_newline {
@@ -740,7 +894,6 @@ where
             self.push_table_cell_hard_break();
             return;
         }
-        self.mark_open_list_items_multiline();
         self.push_line(Line::default());
     }
 
@@ -759,36 +912,40 @@ where
             return;
         }
         self.line_ends_with_local_link_target = false;
-        self.mark_open_list_items_multiline();
         self.push_line(Line::default());
     }
 
     fn start_list(&mut self, index: Option<u64>) {
-        self.mark_open_list_items_multiline();
         if self.list_indices.is_empty() && self.needs_newline {
             self.push_line(Line::default());
         }
         self.list_indices.push(index);
-        self.list_needs_blank_before_next_item.push(false);
+        self.active_list_spacing.push(ActiveListSpacing {
+            spacious: self.list_spacing.next().unwrap_or(/*default*/ false),
+            started_item: false,
+        });
     }
 
     fn end_list(&mut self) {
         self.list_indices.pop();
-        self.list_needs_blank_before_next_item.pop();
+        self.active_list_spacing.pop();
         self.needs_newline = true;
     }
 
     fn start_item(&mut self) {
-        if self
-            .list_needs_blank_before_next_item
+        let needs_blank = self
+            .active_list_spacing
             .last_mut()
-            .map(std::mem::take)
-            .unwrap_or(false)
-        {
+            .map(|spacing| {
+                let needs_blank = spacing.spacious && spacing.started_item;
+                spacing.started_item = true;
+                needs_blank
+            })
+            .unwrap_or(/*default*/ false);
+        if needs_blank {
             self.push_blank_line();
         }
         self.flush_current_line();
-        self.list_item_has_multiline_content.push(/*value*/ false);
         self.pending_marker_line = true;
         let depth = self.list_indices.len();
         let is_ordered = self
@@ -829,7 +986,6 @@ where
     }
 
     fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
-        self.mark_open_list_items_multiline();
         self.flush_current_line();
         if !self.text.is_empty() {
             self.push_blank_line();
@@ -877,7 +1033,6 @@ where
     }
 
     fn start_table(&mut self, alignments: Vec<Alignment>) {
-        self.mark_open_list_items_multiline();
         self.flush_current_line();
         if self.needs_newline {
             self.push_blank_line();
@@ -1964,12 +2119,6 @@ where
         }
     }
 
-    fn mark_open_list_items_multiline(&mut self) {
-        for has_multiline_content in &mut self.list_item_has_multiline_content {
-            *has_multiline_content = true;
-        }
-    }
-
     fn push_output_line(&mut self, line: HyperlinkLine) {
         self.text.push(line);
     }
@@ -2423,7 +2572,13 @@ mod tests {
         cell.hard_break();
         cell.push_span("second line".into());
 
-        let writer = W::new("", std::iter::empty(), Some(80), /*cwd*/ None);
+        let writer = W::new(
+            "",
+            std::iter::empty(),
+            Vec::new(),
+            Some(/*wrap_width*/ 80),
+            /*cwd*/ None,
+        );
         let wrapped = writer.wrap_cell(&cell, /*width*/ 40);
         let rendered = wrapped
             .iter()
