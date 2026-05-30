@@ -51,6 +51,9 @@ impl ChatWidget {
         if had_stream_controller && self.stream_controllers_idle() {
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
+        if had_stream_controller {
+            self.request_completed_token_activity_output_insertion();
+        }
     }
 
     pub(super) fn stream_controllers_idle(&self) -> bool {

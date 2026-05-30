@@ -307,6 +307,9 @@ pub(crate) enum AppEvent {
         result: Result<GetAccountTokenUsageResponse, String>,
     },
 
+    /// Commit a settled token activity card after a stream shutdown barrier.
+    CommitCompletedTokenActivityOutput,
+
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
         credit_type: AddCreditsNudgeCreditType,

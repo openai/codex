@@ -215,14 +215,14 @@ impl App {
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
-                self.insert_completed_token_activity_output_if_ready(tui);
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
                     if !self.transcript_reflow.history_cell_refresh_requested() {
                         self.transcript_reflow.clear();
                     }
-                    self.insert_completed_token_activity_output(tui);
+                    self.insert_completed_token_activity_output_after_stream_shutdown(tui);
                     return Ok(AppRunControl::Continue);
                 }
                 let end = self.transcript_cells.len();
@@ -257,7 +257,7 @@ impl App {
 
                     self.maybe_finish_stream_reflow(tui)?;
                 }
-                self.insert_completed_token_activity_output_if_ready(tui);
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -746,6 +746,9 @@ impl App {
                     // provisional transcript cells have been consolidated.
                     self.insert_completed_token_activity_output_if_ready(tui);
                 }
+            }
+            AppEvent::CommitCompletedTokenActivityOutput => {
+                self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
