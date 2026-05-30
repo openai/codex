@@ -166,7 +166,7 @@ common:ci-windows-cross --config=remote
 common:ci-windows-cross --host_platform=//:rbe
 common:ci-windows-cross --strategy=remote
 common:ci-windows-cross --strategy=TestRunner=local
-common:ci-windows-cross --local_test_jobs=4
+common:ci-windows-cross --local_test_jobs=8
 common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
 # Native Windows CI still covers the PowerShell tests. The cross-built gnullvm
 # binaries currently hang in PowerShell AST parser tests when those binaries are

@@ -6,5 +6,5 @@ mod suite;
 
 #[test]
 fn windows_bazel_concurrency_experiment_cache_bust_marker() {
-    println!("windows Bazel concurrency experiment: baseline_jobs4_threads1");
+    println!("windows Bazel concurrency experiment: jobs8_threads1");
 }
