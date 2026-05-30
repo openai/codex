@@ -551,7 +551,7 @@ async fn build_skills_and_plugins(
         explicitly_requested_mcp_servers,
     )
     .await?;
-    let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
+    let mut mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
@@ -571,7 +571,7 @@ async fn build_skills_and_plugins(
     } else {
         Vec::new()
     };
-    let available_connectors = if turn_context.apps_enabled() {
+    let mut available_connectors = if turn_context.apps_enabled() {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
             loaded_plugins
                 .effective_apps()
@@ -614,6 +614,30 @@ async fn build_skills_and_plugins(
             skill_dependency_servers,
         )
         .await?;
+        mcp_tools = match sess
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_ready_or_cached_tools()
+            .or_cancel(cancellation_token)
+            .await
+        {
+            Ok(mcp_tools) => mcp_tools,
+            Err(_) if turn_context.apps_enabled() => return None,
+            Err(_) => Vec::new(),
+        };
+        if turn_context.apps_enabled() {
+            let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+                loaded_plugins
+                    .effective_apps()
+                    .into_iter()
+                    .map(|connector_id| connector_id.0),
+                connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            );
+            available_connectors =
+                connectors::with_app_enabled_state(connectors, &turn_context.config);
+        }
     }
 
     let structured_skill_paths = structured_mentioned_skills
