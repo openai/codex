@@ -10,6 +10,7 @@ use crate::app_server_session::AppServerSession;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
+use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListParams;
@@ -23,6 +24,7 @@ use codex_exec_server::ExecServerRuntimePaths;
 use codex_protocol::ThreadId;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_home_dir::find_codex_home;
+use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -265,18 +267,32 @@ async fn start_app_server_for_archive_command(
     )
     .await;
 
+    let model_provider = if cli.oss {
+        resolve_oss_provider(cli.oss_provider.as_deref(), &config_toml)
+    } else {
+        None
+    };
+    let model = cli.model.clone().or_else(|| {
+        model_provider
+            .as_deref()
+            .and_then(get_default_model_for_oss_provider)
+            .map(ToOwned::to_owned)
+    });
     let cwd = cli.cwd.clone();
     let config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
         .harness_overrides(ConfigOverrides {
+            model,
             cwd: if app_server_target.uses_remote_workspace() {
                 None
             } else {
                 cwd
             },
+            model_provider,
             codex_self_exe: arg0_paths.codex_self_exe.clone(),
             codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
+            show_raw_agent_reasoning: cli.oss.then_some(true),
             bypass_hook_trust: cli.bypass_hook_trust.then_some(true),
             ..Default::default()
         })
