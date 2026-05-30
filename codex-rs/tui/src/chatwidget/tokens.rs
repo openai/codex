@@ -687,7 +687,18 @@ impl ChatWidget {
     pub(crate) fn token_activity_history_insertion_blocked(&self) -> bool {
         self.stream_controller.is_some()
             || self.plan_stream_controller.is_some()
+            || self.pending_stream_consolidations > 0
             || self.transcript.active_cell.is_some()
+    }
+
+    pub(crate) fn note_stream_consolidation_queued(&mut self) {
+        self.pending_stream_consolidations =
+            self.pending_stream_consolidations.saturating_add(/*rhs*/ 1);
+    }
+
+    pub(crate) fn note_stream_consolidation_completed(&mut self) {
+        self.pending_stream_consolidations =
+            self.pending_stream_consolidations.saturating_sub(/*rhs*/ 1);
     }
 
     pub(crate) fn take_completed_token_activity_output(&mut self) -> Option<CompositeHistoryCell> {

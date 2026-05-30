@@ -215,6 +215,7 @@ impl App {
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
+                self.chat_widget.note_stream_consolidation_completed();
                 self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
@@ -222,6 +223,7 @@ impl App {
                     if !self.transcript_reflow.history_cell_refresh_requested() {
                         self.transcript_reflow.clear();
                     }
+                    self.chat_widget.note_stream_consolidation_completed();
                     self.insert_completed_token_activity_output_after_stream_shutdown(tui);
                     return Ok(AppRunControl::Continue);
                 }
@@ -257,6 +259,7 @@ impl App {
 
                     self.maybe_finish_stream_reflow(tui)?;
                 }
+                self.chat_widget.note_stream_consolidation_completed();
                 self.insert_completed_token_activity_output_after_stream_shutdown(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
