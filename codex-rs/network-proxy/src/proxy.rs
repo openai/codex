@@ -581,8 +581,10 @@ fn apply_proxy_env_overrides(
                         && mitm_ca_trust_bundle.startup_env_values.get(key) != Some(value)
                 })
             {
-                // TODO(winston): Fold readable command-scoped CA overrides into a managed MITM
-                // bundle. For now preserve them, which can make intercepted TLS fail.
+                // TODO(winston): Materialize policy-checked per-child bundles for readable
+                // startup and command-scoped CA overrides. For now startup overrides are
+                // replaced with the default bundle and later command-scoped overrides are
+                // preserved, either of which can make intercepted TLS fail.
                 continue;
             }
             env.insert(key.to_string(), managed_path.clone());
