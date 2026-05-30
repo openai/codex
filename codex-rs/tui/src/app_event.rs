@@ -26,6 +26,7 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::WorkspaceMutationOperation;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -257,6 +258,12 @@ pub(crate) enum AppEvent {
 
     /// Restore an output-free interrupted turn into the composer and roll it back.
     RestoreCancelledTurn(UserMessage),
+
+    /// Apply an explicit user-requested runtime workspace mutation.
+    UpdateThreadWorkspace {
+        operation: WorkspaceMutationOperation,
+        path: String,
+    },
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {

@@ -7,6 +7,7 @@ use super::resize_reflow::trailing_run_start;
 use super::*;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
+use codex_app_server_protocol::WorkspaceMutationOperation;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
@@ -359,6 +360,46 @@ impl App {
             }
             AppEvent::RestoreCancelledTurn(prompt) => {
                 self.apply_cancelled_turn_edit(prompt);
+            }
+            AppEvent::UpdateThreadWorkspace { operation, path } => {
+                let Some(thread_id) = self.active_thread_id else {
+                    self.chat_widget.add_error_message(
+                        "Workspace commands are unavailable before the session starts.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                match app_server
+                    .thread_workspace_update(thread_id, operation, path)
+                    .await
+                {
+                    Ok(response) => {
+                        let message = match (operation, response.changed) {
+                            (
+                                WorkspaceMutationOperation::SetWorkingDirectory,
+                                /*changed*/ true,
+                            ) => {
+                                format!("Working directory: {}", response.cwd.as_path().display())
+                            }
+                            (
+                                WorkspaceMutationOperation::AddWorkspaceRoot,
+                                /*changed*/ true,
+                            ) => match response.runtime_workspace_roots.last() {
+                                Some(root) => {
+                                    format!("Added workspace root: {}", root.as_path().display())
+                                }
+                                None => "Workspace roots updated.".to_string(),
+                            },
+                            (_, /*changed*/ false) => format!(
+                                "Workspace unchanged. Working directory: {}",
+                                response.cwd.as_path().display()
+                            ),
+                        };
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Failed to update workspace: {err}")),
+                }
             }
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
                 self.append_message_history_entry(thread_id, text);

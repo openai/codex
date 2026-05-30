@@ -256,6 +256,8 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::ThreadWorkspaceUpdateParams;
+use codex_app_server_protocol::ThreadWorkspaceUpdateResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnError;

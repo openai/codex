@@ -546,6 +546,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadSettingsUpdateResponse,
     },
+    #[experimental("thread/workspace/update")]
+    ThreadWorkspaceUpdate => "thread/workspace/update" {
+        params: v2::ThreadWorkspaceUpdateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkspaceUpdateResponse,
+    },
     #[experimental("thread/memoryMode/set")]
     ThreadMemoryModeSet => "thread/memoryMode/set" {
         params: v2::ThreadMemoryModeSetParams,

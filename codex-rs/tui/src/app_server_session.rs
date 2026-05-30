@@ -107,6 +107,8 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadWorkspaceUpdateParams;
+use codex_app_server_protocol::ThreadWorkspaceUpdateResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -115,6 +117,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_app_server_protocol::WorkspaceMutationOperation;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -721,6 +724,26 @@ impl AppServerSession {
             }
             Err(err) => Err(err).wrap_err("thread/settings/update failed in TUI"),
         }
+    }
+
+    pub(crate) async fn thread_workspace_update(
+        &mut self,
+        thread_id: ThreadId,
+        operation: WorkspaceMutationOperation,
+        path: String,
+    ) -> Result<ThreadWorkspaceUpdateResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadWorkspaceUpdate {
+                request_id,
+                params: ThreadWorkspaceUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    operation,
+                    path,
+                },
+            })
+            .await
+            .wrap_err("thread/workspace/update failed in TUI")
     }
 
     pub(crate) async fn thread_inject_items(

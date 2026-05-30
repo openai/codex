@@ -34,6 +34,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const ADD_DIR_USAGE: &str = "Usage: /add-dir <path>";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -297,6 +298,15 @@ impl ChatWidget {
                         Some(GOAL_USAGE_HINT.to_string()),
                     );
                 }
+            }
+            SlashCommand::Cwd => {
+                self.add_info_message(
+                    format!("Working directory: {}", self.config.cwd.display()),
+                    /*hint*/ None,
+                );
+            }
+            SlashCommand::AddDir => {
+                self.add_error_message(ADD_DIR_USAGE.to_string());
             }
             SlashCommand::Side | SlashCommand::Btw => {
                 self.request_empty_side_conversation(cmd);
@@ -829,6 +839,20 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
+            SlashCommand::Cwd if !trimmed.is_empty() => {
+                self.app_event_tx.send(AppEvent::UpdateThreadWorkspace {
+                    operation:
+                        codex_app_server_protocol::WorkspaceMutationOperation::SetWorkingDirectory,
+                    path: args,
+                });
+            }
+            SlashCommand::AddDir if !trimmed.is_empty() => {
+                self.app_event_tx.send(AppEvent::UpdateThreadWorkspace {
+                    operation:
+                        codex_app_server_protocol::WorkspaceMutationOperation::AddWorkspaceRoot,
+                    path: args,
+                });
+            }
             SlashCommand::Pets
                 if matches!(
                     args.trim().to_ascii_lowercase().as_str(),
@@ -976,6 +1000,8 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Cwd
+            | SlashCommand::AddDir
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

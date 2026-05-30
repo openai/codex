@@ -4416,6 +4416,13 @@
         "mode"
       ],
       "type": "object"
+    },
+    "WorkspaceMutationOperation": {
+      "enum": [
+        "setWorkingDirectory",
+        "addWorkspaceRoot"
+      ],
+      "type": "string"
     }
   },
   "description": "Request from the client to the server.",

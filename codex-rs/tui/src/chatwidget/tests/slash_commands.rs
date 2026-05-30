@@ -88,6 +88,36 @@ fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEv
 }
 
 #[tokio::test]
+async fn slash_cwd_with_path_requests_working_directory_update() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Cwd, "../stack-layer".to_string(), Vec::new());
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateThreadWorkspace {
+            operation: codex_app_server_protocol::WorkspaceMutationOperation::SetWorkingDirectory,
+            path,
+        }) if path == "../stack-layer"
+    );
+}
+
+#[tokio::test]
+async fn slash_add_dir_with_path_requests_workspace_root_update() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+
+    chat.dispatch_command_with_args(SlashCommand::AddDir, "../shared".to_string(), Vec::new());
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateThreadWorkspace {
+            operation: codex_app_server_protocol::WorkspaceMutationOperation::AddWorkspaceRoot,
+            path,
+        }) if path == "../shared"
+    );
+}
+
+#[tokio::test]
 async fn service_tier_commands_lowercase_catalog_names() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     let mut preset = get_available_model(&chat, "gpt-5.4");

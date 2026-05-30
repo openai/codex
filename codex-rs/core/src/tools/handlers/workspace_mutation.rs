@@ -61,10 +61,10 @@ struct WorkspaceMutationArgs {
     path: String,
 }
 
-struct WorkspaceMutationPlan {
-    changed: bool,
-    cwd: AbsolutePathBuf,
-    workspace_roots: Vec<AbsolutePathBuf>,
+pub(crate) struct WorkspaceMutationPlan {
+    pub(crate) changed: bool,
+    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) workspace_roots: Vec<AbsolutePathBuf>,
 }
 
 struct WorkspacePermissionRequest {
@@ -87,13 +87,76 @@ struct WorkspaceMutationResult {
 }
 
 #[derive(Serialize)]
-struct WorkspaceMutationError {
-    code: &'static str,
-    message: String,
-    cwd: AbsolutePathBuf,
-    workspace_roots: Vec<AbsolutePathBuf>,
+pub(crate) struct WorkspaceMutationError {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) workspace_roots: Vec<AbsolutePathBuf>,
     #[serde(skip_serializing_if = "is_zero")]
     omitted_workspace_roots: usize,
+}
+
+pub(crate) async fn plan_workspace_mutation(
+    session: &Session,
+    turn: &TurnContext,
+    operation: WorkspaceMutationOperation,
+    path: String,
+) -> Result<WorkspaceMutationPlan, WorkspaceMutationError> {
+    let current = session.runtime_workspace_snapshot().await;
+    let Some(environment) = turn
+        .environments
+        .primary()
+        .filter(|_| turn.environments.turn_environments.len() == 1)
+    else {
+        return Err(WorkspaceMutationError {
+            code: "unsupported_environment_count",
+            message: "workspace mutation requires exactly one execution environment".to_string(),
+            cwd: current.cwd,
+            workspace_roots: current.workspace_roots,
+            omitted_workspace_roots: 0,
+        });
+    };
+    let requested = current.cwd.join(path);
+    let fs = environment.environment.get_filesystem();
+    let canonical = fs
+        .canonicalize(&requested, /*sandbox*/ None)
+        .await
+        .map_err(|err| WorkspaceMutationError {
+            code: io_error_code(&err),
+            message: err.to_string(),
+            cwd: current.cwd.clone(),
+            workspace_roots: current.workspace_roots.clone(),
+            omitted_workspace_roots: 0,
+        })?;
+    let metadata = fs
+        .get_metadata(&canonical, /*sandbox*/ None)
+        .await
+        .map_err(|err| WorkspaceMutationError {
+            code: io_error_code(&err),
+            message: err.to_string(),
+            cwd: current.cwd.clone(),
+            workspace_roots: current.workspace_roots.clone(),
+            omitted_workspace_roots: 0,
+        })?;
+    if !metadata.is_directory {
+        return Err(WorkspaceMutationError {
+            code: "not_a_directory",
+            message: format!(
+                "workspace mutation target is not a directory: {}",
+                canonical.as_path().display()
+            ),
+            cwd: current.cwd,
+            workspace_roots: current.workspace_roots,
+            omitted_workspace_roots: 0,
+        });
+    }
+
+    Ok(workspace_mutation_plan(
+        operation,
+        &current.cwd,
+        &current.workspace_roots,
+        canonical,
+    ))
 }
 
 impl ToolExecutor<ToolInvocation> for WorkspaceMutationHandler {

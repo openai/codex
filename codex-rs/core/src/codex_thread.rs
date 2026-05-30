@@ -167,6 +167,13 @@ pub struct BackgroundTerminalInfo {
     pub cwd: AbsolutePathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserWorkspaceMutationResult {
+    pub changed: bool,
+    pub cwd: AbsolutePathBuf,
+    pub workspace_roots: Vec<AbsolutePathBuf>,
+}
+
 /// Conduit for the bidirectional stream of messages that compose a thread
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
@@ -187,6 +194,52 @@ impl CodexThread {
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
+    }
+
+    pub async fn update_runtime_workspace(
+        &self,
+        operation: codex_protocol::request_permissions::WorkspaceMutationOperation,
+        path: String,
+    ) -> anyhow::Result<UserWorkspaceMutationResult> {
+        if self.codex.session.active_turn.lock().await.is_some() {
+            anyhow::bail!("workspace mutation is unavailable while a task is in progress");
+        }
+        let turn = self.codex.session.new_default_turn().await;
+        let plan = crate::tools::handlers::workspace_mutation::plan_workspace_mutation(
+            self.codex.session.as_ref(),
+            &turn,
+            operation.clone(),
+            path,
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("{}: {}", err.code, err.message))?;
+        if plan.changed {
+            self.codex
+                .session
+                .update_runtime_workspace(
+                    turn.as_ref(),
+                    matches!(
+                        operation,
+                        codex_protocol::request_permissions::WorkspaceMutationOperation::SetWorkingDirectory
+                    )
+                    .then_some(plan.cwd.clone()),
+                    plan.workspace_roots.clone(),
+                )
+                .await?;
+            self.codex
+                .session
+                .send_event(
+                    turn.as_ref(),
+                    crate::session::thread_settings_applied_event(self.codex.session.as_ref())
+                        .await,
+                )
+                .await;
+        }
+        Ok(UserWorkspaceMutationResult {
+            changed: plan.changed,
+            cwd: plan.cwd,
+            workspace_roots: plan.workspace_roots,
+        })
     }
 
     /// Returns the session telemetry handle for thread-scoped production instrumentation.

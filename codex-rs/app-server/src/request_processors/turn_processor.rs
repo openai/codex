@@ -131,6 +131,15 @@ impl TurnRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_workspace_update(
+        &self,
+        params: ThreadWorkspaceUpdateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_workspace_update_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn turn_steer(
         &self,
         request_id: &ConnectionRequestId,
@@ -732,6 +741,22 @@ impl TurnRequestProcessor {
         }
 
         Ok(ThreadSettingsUpdateResponse {})
+    }
+
+    async fn thread_workspace_update_inner(
+        &self,
+        params: ThreadWorkspaceUpdateParams,
+    ) -> Result<ThreadWorkspaceUpdateResponse, JSONRPCErrorError> {
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let response = thread
+            .update_runtime_workspace(params.operation.to_core(), params.path)
+            .await
+            .map_err(|err| invalid_request(format!("failed to update thread workspace: {err}")))?;
+        Ok(ThreadWorkspaceUpdateResponse {
+            changed: response.changed,
+            cwd: response.cwd,
+            runtime_workspace_roots: response.workspace_roots,
+        })
     }
 
     async fn thread_inject_items_response_inner(

@@ -33,7 +33,7 @@ pub(crate) mod tool_search_spec;
 pub(crate) mod unified_exec;
 mod view_image;
 pub(crate) mod view_image_spec;
-mod workspace_mutation;
+pub(crate) mod workspace_mutation;
 pub(crate) mod workspace_mutation_spec;
 
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;

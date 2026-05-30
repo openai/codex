@@ -9,6 +9,7 @@ use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
 use super::TurnItemsView;
+use super::WorkspaceMutationOperation;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
 pub use codex_protocol::capabilities::CapabilityRootLocation;
@@ -280,6 +281,24 @@ pub struct ThreadSettingsUpdateParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadSettingsUpdateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadWorkspaceUpdateParams {
+    pub thread_id: String,
+    pub operation: WorkspaceMutationOperation,
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadWorkspaceUpdateResponse {
+    pub changed: bool,
+    pub cwd: AbsolutePathBuf,
+    pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
