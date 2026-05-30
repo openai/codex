@@ -1,8 +1,8 @@
-use super::RequirementsLayerEntry;
-use super::hooks::HookDirectoryField;
-use super::stack::RequirementsCompositionError;
-use super::stack::compose_requirements_for_hostname;
-use super::stack::compose_requirements_for_hostname_and_hook_directory;
+use super::super::RequirementsLayerEntry;
+use super::super::hooks::HookDirectoryField;
+use super::RequirementsCompositionError;
+use super::compose_requirements_for_hostname;
+use super::compose_requirements_for_hostname_and_hook_directory;
 use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
