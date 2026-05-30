@@ -752,12 +752,8 @@ impl App {
                 if let Err(err) = &result {
                     tracing::warn!("account/tokenUsage/read failed during TUI refresh: {err}");
                 }
-                if self
-                    .chat_widget
-                    .finish_token_activity_refresh(request_id, result)
-                {
-                    self.refresh_updated_history_cell(tui)?;
-                }
+                self.chat_widget
+                    .finish_token_activity_refresh(request_id, result);
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);

@@ -1181,11 +1181,16 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
 
     chat.dispatch_command(SlashCommand::Tokens);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
     let request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected token activity refresh request, got {other:?}"),
     };
+    assert_eq!(
+        chat.pending_token_activity_outputs()
+            .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX)))
+            .collect::<Vec<_>>(),
+        vec!["/tokens daily\n\n Token activity\n   Loading...\n".to_string()],
+    );
 
     chat.clear_pending_token_activity_refreshes();
 
@@ -1194,6 +1199,37 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
             request_id,
             Err("stale token activity result".to_string()),
         )
+    );
+}
+
+#[tokio::test]
+async fn completed_token_activity_refresh_commits_one_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Tokens);
+
+    let request_id = match rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected token activity refresh request, got {other:?}"),
+    };
+    assert_eq!(chat.pending_token_activity_outputs().count(), 1);
+
+    assert!(
+        chat.finish_token_activity_refresh(
+            request_id,
+            Err("token activity unavailable".to_string()),
+        )
+    );
+
+    assert_eq!(chat.pending_token_activity_outputs().count(), 0);
+    let cell = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected completed token activity history cell, got {other:?}"),
+    };
+    assert_eq!(
+        lines_to_single_string(&cell.display_lines(u16::MAX)),
+        "/tokens daily\n\n Token activity\n   Token activity unavailable\n",
     );
 }
 

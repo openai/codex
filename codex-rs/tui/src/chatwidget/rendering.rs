@@ -26,6 +26,16 @@ impl ChatWidget {
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
         flex.push(/*flex*/ 0, active_hook_cell_renderable);
+        for cell in self.pending_token_activity_outputs() {
+            flex.push(
+                /*flex*/ 0,
+                RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    child: cell,
+                    top: 1,
+                    right: active_cell_right_reserve,
+                })),
+            );
+        }
         flex.push(
             /*flex*/ 0,
             RenderableItem::Owned(Box::new(BottomPaneComposerReserveRenderable {
