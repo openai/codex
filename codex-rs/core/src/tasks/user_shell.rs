@@ -130,10 +130,7 @@ pub(crate) async fn execute_user_shell_command(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
-    session.apply_shell_env_exports(
-        &mut exec_env_map,
-        &turn_context.shell_environment_policy.r#set,
-    );
+    session.apply_shell_env_exports(&mut exec_env_map, &turn_context.shell_environment_policy);
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
         for key in PROXY_ENV_KEYS {
             exec_env_map.remove(*key);
@@ -148,12 +145,18 @@ pub(crate) async fn execute_user_shell_command(
             exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
         }
     }
+    let mut snapshot_overrides = turn_context.shell_environment_policy.r#set.clone();
+    session.extend_shell_env_snapshot_overrides(
+        &mut snapshot_overrides,
+        &exec_env_map,
+        &turn_context.shell_environment_policy,
+    );
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
         #[allow(deprecated)]
         &turn_context.cwd,
-        &turn_context.shell_environment_policy.r#set,
+        &snapshot_overrides,
         &exec_env_map,
     );
 

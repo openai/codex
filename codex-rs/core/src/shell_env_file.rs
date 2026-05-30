@@ -7,6 +7,8 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::EnvironmentVariablePattern;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::exec_output::bytes_to_string_smart;
 use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
@@ -109,12 +111,12 @@ impl ShellEnvFile {
     pub(crate) fn apply_exports(
         &self,
         env: &mut HashMap<String, String>,
-        explicit_env_overrides: &HashMap<String, String>,
+        policy: &ShellEnvironmentPolicy,
     ) {
         let thread_id = get_env_var(env, CODEX_THREAD_ID_ENV_VAR).cloned();
         if let Ok(exports) = self.exports.lock() {
             for (key, value) in exports.iter() {
-                if ignored_capture_key(key) {
+                if !should_apply_captured_export(key, policy) {
                     continue;
                 }
                 match value {
@@ -127,7 +129,7 @@ impl ShellEnvFile {
                 }
             }
         }
-        for (key, value) in explicit_env_overrides {
+        for (key, value) in &policy.r#set {
             insert_env_var(env, key.clone(), value.clone());
         }
         if let Some(thread_id) = thread_id {
@@ -135,6 +137,26 @@ impl ShellEnvFile {
         }
         remove_env_var(env, CODEX_ENV_FILE_ENV_VAR);
         remove_env_var(env, CLAUDE_ENV_FILE_ENV_VAR);
+    }
+
+    pub(crate) fn extend_snapshot_overrides(
+        &self,
+        overrides: &mut HashMap<String, String>,
+        env: &HashMap<String, String>,
+        policy: &ShellEnvironmentPolicy,
+    ) {
+        if let Ok(exports) = self.exports.lock() {
+            for key in exports.keys() {
+                if !should_apply_captured_export(key, policy) {
+                    continue;
+                }
+                if get_env_var(overrides, key).is_some() {
+                    continue;
+                }
+                let value = get_env_var(env, key).cloned().unwrap_or_default();
+                overrides.insert(key.clone(), value);
+            }
+        }
     }
 }
 
@@ -218,22 +240,22 @@ impl ShellEnvCapture {
     }
 }
 
-const POSIX_DUMP_ENV_SCRIPT: &str = r#"if [ -x /usr/bin/env ]; then
-  /usr/bin/env -0
-else
-  env -0
-fi"#;
+const POSIX_DUMP_ENV_SCRIPT: &str = r#"awk 'BEGIN {
+  for (key in ENVIRON) {
+    printf "%s=%s%c", key, ENVIRON[key], 0
+  }
+}'"#;
 
 const POSIX_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = r#"if [ -n "${CODEX_ENV_FILE:-}" ] && [ -f "$CODEX_ENV_FILE" ]; then
   if . "$CODEX_ENV_FILE" >/dev/null 2>&1; then
     :
   fi
 fi
-if [ -x /usr/bin/env ]; then
-  /usr/bin/env -0
-else
-  env -0
-fi"#;
+awk 'BEGIN {
+  for (key in ENVIRON) {
+    printf "%s=%s%c", key, ENVIRON[key], 0
+  }
+}'"#;
 
 const POWERSHELL_DUMP_ENV_SCRIPT: &str = r#"$items = [ordered]@{}
 Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
@@ -334,6 +356,33 @@ fn ignored_capture_key(key: &str) -> bool {
     ]
     .iter()
     .any(|ignored| env_key_eq(key, ignored))
+}
+
+fn should_apply_captured_export(key: &str, policy: &ShellEnvironmentPolicy) -> bool {
+    !ignored_capture_key(key) && captured_export_allowed_by_policy(key, policy)
+}
+
+fn captured_export_allowed_by_policy(key: &str, policy: &ShellEnvironmentPolicy) -> bool {
+    if !policy.ignore_default_excludes {
+        let default_excludes = [
+            EnvironmentVariablePattern::new_case_insensitive("*KEY*"),
+            EnvironmentVariablePattern::new_case_insensitive("*SECRET*"),
+            EnvironmentVariablePattern::new_case_insensitive("*TOKEN*"),
+        ];
+        if matches_any_pattern(key, &default_excludes) {
+            return false;
+        }
+    }
+
+    if matches_any_pattern(key, &policy.exclude) {
+        return false;
+    }
+
+    policy.include_only.is_empty() || matches_any_pattern(key, &policy.include_only)
+}
+
+fn matches_any_pattern(key: &str, patterns: &[EnvironmentVariablePattern]) -> bool {
+    patterns.iter().any(|pattern| pattern.matches(key))
 }
 
 fn get_env_var<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a String> {

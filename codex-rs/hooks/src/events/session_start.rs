@@ -631,9 +631,12 @@ printf 'export FIRST=1\n' >> "$CODEX_ENV_FILE""#
             ]),
         };
         let mut hook = handler();
-        hook.command = r#"[ "$CODEX_ENV_FILE" = "$CLAUDE_ENV_FILE" ] || exit 9
+        hook.command =
+            r#"mode=$(stat -f %Lp "$CODEX_ENV_FILE" 2>/dev/null || stat -c %a "$CODEX_ENV_FILE")
+[ "$mode" = 600 ] || exit 8
+[ "$CODEX_ENV_FILE" = "$CLAUDE_ENV_FILE" ] || exit 9
 printf 'export ALIAS_OK=1\n' >> "$CLAUDE_ENV_FILE""#
-            .to_string();
+                .to_string();
         let cwd = tempdir().expect("create cwd");
 
         let outcome = run(
@@ -664,6 +667,77 @@ printf 'export ALIAS_OK=1\n' >> "$CLAUDE_ENV_FILE""#
         assert_eq!(
             fs::read_to_string(env_file.path()).expect("read env file"),
             "export ALIAS_OK=1\n"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn session_start_hooks_merge_only_successful_env_files_with_separator() {
+        use std::collections::HashMap;
+        use std::fs;
+
+        use codex_protocol::ThreadId;
+        use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
+        use tempfile::NamedTempFile;
+        use tempfile::tempdir;
+
+        use super::SessionStartRequest;
+        use super::SessionStartSource;
+        use super::StartHookTarget;
+        use super::run;
+        use crate::engine::CommandShell;
+
+        let env_file = NamedTempFile::new().expect("create env file");
+        let shell = CommandShell {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string()],
+            session_start_env: HashMap::from([(
+                CODEX_ENV_FILE_ENV_VAR.to_string(),
+                env_file.path().display().to_string(),
+            )]),
+        };
+        let mut first = handler();
+        first.command = r#"printf 'export FIRST=1' >> "$CODEX_ENV_FILE""#.to_string();
+        let mut failed = handler();
+        failed.command = r#"printf 'export FAILED=1\n' >> "$CODEX_ENV_FILE"; exit 3"#.to_string();
+        failed.display_order = 1;
+        let mut third = handler();
+        third.command = r#"printf 'export THIRD=1\n' >> "$CODEX_ENV_FILE""#.to_string();
+        third.display_order = 2;
+        let cwd = tempdir().expect("create cwd");
+
+        let outcome = run(
+            &[first, failed, third],
+            &shell,
+            SessionStartRequest {
+                session_id: ThreadId::new(),
+                cwd: cwd.path().to_path_buf().abs(),
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                target: StartHookTarget::SessionStart {
+                    source: SessionStartSource::Startup,
+                },
+            },
+            /*turn_id*/ None,
+        )
+        .await;
+
+        assert_eq!(
+            outcome
+                .hook_events
+                .iter()
+                .map(|event| event.run.status)
+                .collect::<Vec<_>>(),
+            vec![
+                HookRunStatus::Completed,
+                HookRunStatus::Failed,
+                HookRunStatus::Completed
+            ]
+        );
+        assert_eq!(
+            fs::read_to_string(env_file.path()).expect("read env file"),
+            "export FIRST=1\nexport THIRD=1\n"
         );
     }
 

@@ -1,5 +1,7 @@
 use anyhow::Result;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::EnvironmentVariablePattern;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -61,10 +63,12 @@ export EXPLICIT_OVERRIDE='from-hook'
         CLAUDE_ENV_FILE_ENV_VAR.to_string(),
         env_file.path().display().to_string(),
     );
-    let explicit_env_overrides =
-        HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]);
+    let policy = ShellEnvironmentPolicy {
+        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
+        ..Default::default()
+    };
 
-    env_file.apply_exports(&mut env, &explicit_env_overrides);
+    env_file.apply_exports(&mut env, &policy);
 
     assert_eq!(
         env,
@@ -84,6 +88,96 @@ export EXPLICIT_OVERRIDE='from-hook'
                 "real-thread".to_string(),
             ),
             ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
+        ])
+    );
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shell_env_file_filters_captured_exports_before_applying() -> Result<()> {
+    let env_file = ShellEnvFile::new(ThreadId::new(), ShellEnvCapture::Posix)?;
+    let base_env = HashMap::from([("PATH".to_string(), "/usr/bin".to_string())]);
+    std::fs::write(
+        env_file.path(),
+        "\
+export PATH=\"/plugin/bin:$PATH\"
+export ALLOWED_VALUE='allowed'
+export OPENAI_API_KEY='secret'
+export BLOCKED_VALUE='blocked'
+export NOT_INCLUDED='not-included'
+export EXPLICIT_OVERRIDE='from-hook'
+",
+    )?;
+    let cwd = std::env::current_dir()?;
+    env_file
+        .capture_exports(&test_shell(), cwd.as_path(), &base_env)
+        .await?;
+
+    let mut env = base_env;
+    let policy = ShellEnvironmentPolicy {
+        ignore_default_excludes: false,
+        exclude: vec![EnvironmentVariablePattern::new_case_insensitive(
+            "BLOCKED_*",
+        )],
+        include_only: vec![
+            EnvironmentVariablePattern::new_case_insensitive("PATH"),
+            EnvironmentVariablePattern::new_case_insensitive("ALLOWED_*"),
+            EnvironmentVariablePattern::new_case_insensitive("EXPLICIT_*"),
+        ],
+        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
+        ..Default::default()
+    };
+
+    env_file.apply_exports(&mut env, &policy);
+
+    assert_eq!(
+        env,
+        HashMap::from([
+            ("PATH".to_string(), "/plugin/bin:/usr/bin".to_string()),
+            ("ALLOWED_VALUE".to_string(), "allowed".to_string()),
+            ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
+        ])
+    );
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shell_env_file_snapshot_overrides_include_captured_export_keys() -> Result<()> {
+    let env_file = ShellEnvFile::new(ThreadId::new(), ShellEnvCapture::Posix)?;
+    let base_env = HashMap::from([
+        ("PATH".to_string(), "/usr/bin".to_string()),
+        ("REMOVED_BY_HOOK".to_string(), "remove-me".to_string()),
+    ]);
+    std::fs::write(
+        env_file.path(),
+        "\
+export PATH=\"/plugin/bin:$PATH\"
+export HOOK_ONLY='from-hook'
+unset REMOVED_BY_HOOK
+",
+    )?;
+    let cwd = std::env::current_dir()?;
+    env_file
+        .capture_exports(&test_shell(), cwd.as_path(), &base_env)
+        .await?;
+
+    let mut env = base_env;
+    let policy = ShellEnvironmentPolicy::default();
+    env_file.apply_exports(&mut env, &policy);
+
+    let mut overrides = HashMap::new();
+    env_file.extend_snapshot_overrides(&mut overrides, &env, &policy);
+
+    assert_eq!(
+        overrides,
+        HashMap::from([
+            ("PATH".to_string(), "/plugin/bin:/usr/bin".to_string()),
+            ("HOOK_ONLY".to_string(), "from-hook".to_string()),
+            ("REMOVED_BY_HOOK".to_string(), String::new()),
         ])
     );
 
@@ -191,10 +285,12 @@ Remove-Item Env:REMOVED_BY_HOOK -ErrorAction SilentlyContinue
         CLAUDE_ENV_FILE_ENV_VAR.to_string(),
         env_file.path().display().to_string(),
     );
-    let explicit_env_overrides =
-        HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]);
+    let policy = ShellEnvironmentPolicy {
+        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
+        ..Default::default()
+    };
 
-    env_file.apply_exports(&mut env, &explicit_env_overrides);
+    env_file.apply_exports(&mut env, &policy);
 
     assert_eq!(
         env,
@@ -254,10 +350,12 @@ set REMOVED_BY_HOOK=\r
         CLAUDE_ENV_FILE_ENV_VAR.to_string(),
         env_file.path().display().to_string(),
     );
-    let explicit_env_overrides =
-        HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]);
+    let policy = ShellEnvironmentPolicy {
+        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
+        ..Default::default()
+    };
 
-    env_file.apply_exports(&mut env, &explicit_env_overrides);
+    env_file.apply_exports(&mut env, &policy);
 
     assert_eq!(
         env,

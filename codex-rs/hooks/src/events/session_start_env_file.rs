@@ -1,4 +1,6 @@
 use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -60,17 +62,16 @@ pub(super) async fn execute_handlers<T>(
             Uuid::new_v4()
         ));
         let scratch_result = async {
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&scratch_path)
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to create SessionStart scratch env file {}",
-                        scratch_path.display()
-                    )
-                })?;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            options.open(&scratch_path).with_context(|| {
+                format!(
+                    "failed to create SessionStart scratch env file {}",
+                    scratch_path.display()
+                )
+            })?;
 
             let mut scratch_shell = shell.clone();
             let scratch_path_env = scratch_path.to_string_lossy().to_string();
@@ -132,13 +133,30 @@ pub(super) async fn execute_handlers<T>(
     }
     completed.sort_by_key(|execution| execution.configured_order);
 
-    // Merge each handler's isolated file in configured order. The core session
-    // layer will source this single canonical file after hooks finish.
+    let mut env_file_ends_with_newline = match fs::read(&env_file_path).await {
+        Ok(contents) => contents.last().is_none_or(|byte| *byte == b'\n'),
+        Err(error) if error.kind() == ErrorKind::NotFound => true,
+        Err(error) => {
+            tracing::warn!(
+                "failed to read SessionStart env file {} before merge: {error}",
+                env_file_path.display()
+            );
+            true
+        }
+    };
+
+    // Merge each successful handler's isolated file in configured order. The
+    // core session layer will source this single canonical file after hooks
+    // finish.
     for execution in &mut completed {
         let Some(scratch_path) = execution.scratch_path.take() else {
             continue;
         };
-        let result: Result<()> = async {
+        let result: Result<bool> = async {
+            if execution.run_result.error.is_some() || execution.run_result.exit_code != Some(0) {
+                return Ok(env_file_ends_with_newline);
+            }
+
             let contents = fs::read(&scratch_path).await.with_context(|| {
                 format!(
                     "failed to read SessionStart scratch env file {}",
@@ -146,7 +164,7 @@ pub(super) async fn execute_handlers<T>(
                 )
             })?;
             if contents.is_empty() {
-                return Ok(());
+                return Ok(env_file_ends_with_newline);
             }
 
             let mut file = fs::OpenOptions::new()
@@ -155,13 +173,18 @@ pub(super) async fn execute_handlers<T>(
                 .open(&env_file_path)
                 .await
                 .with_context(|| format!("failed to open {}", env_file_path.display()))?;
+            if !env_file_ends_with_newline && contents.first() != Some(&b'\n') {
+                file.write_all(b"\n")
+                    .await
+                    .with_context(|| format!("failed to append to {}", env_file_path.display()))?;
+            }
             file.write_all(&contents)
                 .await
                 .with_context(|| format!("failed to append to {}", env_file_path.display()))?;
             file.flush()
                 .await
                 .with_context(|| format!("failed to flush {}", env_file_path.display()))?;
-            Ok(())
+            Ok(contents.last() == Some(&b'\n'))
         }
         .await;
 
@@ -174,8 +197,13 @@ pub(super) async fn execute_handlers<T>(
                 scratch_path.display()
             );
         }
-        if let Err(error) = result {
-            execution.run_result = error_result(error);
+        match result {
+            Ok(ends_with_newline) => {
+                env_file_ends_with_newline = ends_with_newline;
+            }
+            Err(error) => {
+                execution.run_result = error_result(error);
+            }
         }
     }
 

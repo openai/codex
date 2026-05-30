@@ -96,7 +96,7 @@ impl ShellCommandHandler {
         let cwd = turn_context.resolve_path(params.workdir.clone());
 
         let mut env = create_env(&turn_context.shell_environment_policy, Some(thread_id));
-        session.apply_shell_env_exports(&mut env, &turn_context.shell_environment_policy.r#set);
+        session.apply_shell_env_exports(&mut env, &turn_context.shell_environment_policy);
 
         Ok(ExecParams {
             command,

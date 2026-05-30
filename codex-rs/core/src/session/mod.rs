@@ -3240,10 +3240,21 @@ impl Session {
     pub(crate) fn apply_shell_env_exports(
         &self,
         env: &mut HashMap<String, String>,
-        explicit_env_overrides: &HashMap<String, String>,
+        policy: &ShellEnvironmentPolicy,
     ) {
         if let Some(shell_env_file) = self.services.shell_env_file.as_ref() {
-            shell_env_file.apply_exports(env, explicit_env_overrides);
+            shell_env_file.apply_exports(env, policy);
+        }
+    }
+
+    pub(crate) fn extend_shell_env_snapshot_overrides(
+        &self,
+        overrides: &mut HashMap<String, String>,
+        env: &HashMap<String, String>,
+        policy: &ShellEnvironmentPolicy,
+    ) {
+        if let Some(shell_env_file) = self.services.shell_env_file.as_ref() {
+            shell_env_file.extend_snapshot_overrides(overrides, env, policy);
         }
     }
 
