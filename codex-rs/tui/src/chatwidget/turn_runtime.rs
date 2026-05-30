@@ -126,6 +126,7 @@ impl ChatWidget {
                 self.add_boxed_history(cell);
             }
             if let Some(source) = source {
+                self.note_stream_consolidation_queued();
                 self.app_event_tx
                     .send(AppEvent::ConsolidateProposedPlan(source));
             }

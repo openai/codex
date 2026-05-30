@@ -39,6 +39,7 @@ impl ChatWidget {
             // that can re-render from source on resize.
             if let Some(source) = source {
                 let source = parse_assistant_markdown(&source).visible_markdown;
+                self.note_stream_consolidation_queued();
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
                     source,
                     cwd: self.config.cwd.to_path_buf(),
@@ -177,12 +178,14 @@ impl ChatWidget {
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
             if let Some(source) = consolidated_plan_source {
+                self.note_stream_consolidation_queued();
                 self.app_event_tx
                     .send(AppEvent::ConsolidateProposedPlan(source));
             }
         } else if !plan_text.is_empty() {
             self.add_to_history(history_cell::new_proposed_plan(plan_text, &self.config.cwd));
         } else if let Some(source) = consolidated_plan_source {
+            self.note_stream_consolidation_queued();
             self.app_event_tx
                 .send(AppEvent::ConsolidateProposedPlan(source));
         }
