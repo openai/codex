@@ -207,8 +207,7 @@ Payload:
 <payload text>
 ```
 They may be addressed as to=/root
-
-You can use maximum concurrency 4."#;
+"#;
 const DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT: &str = r#"You are an agent in a team of agents collaborating to complete a task.
 
 You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
@@ -227,8 +226,7 @@ Payload:
 <payload text>
 ```
 You may also see them addressed as to=/root/..., which indicates your identity is /root/...
-
-You can use maximum concurrency 4."#;
+"#;
 pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
     DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
@@ -2283,14 +2281,14 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         .and_then(|config| config.usage_hint_text.as_ref())
         .cloned()
         .or(default.usage_hint_text);
-    let root_agent_usage_hint_text = base
-        .and_then(|config| config.root_agent_usage_hint_text.as_ref())
-        .cloned()
-        .or(default.root_agent_usage_hint_text);
-    let subagent_usage_hint_text = base
-        .and_then(|config| config.subagent_usage_hint_text.as_ref())
-        .cloned()
-        .or(default.subagent_usage_hint_text);
+    let root_agent_usage_hint_text = resolve_optional_prompt_text(
+        base.map(|config| &config.root_agent_usage_hint_text),
+        default.root_agent_usage_hint_text,
+    );
+    let subagent_usage_hint_text = resolve_optional_prompt_text(
+        base.map(|config| &config.subagent_usage_hint_text),
+        default.subagent_usage_hint_text,
+    );
     let tool_namespace = base
         .and_then(|config| config.tool_namespace.as_ref())
         .cloned()
@@ -2328,6 +2326,17 @@ fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalRe
             Some(rows) => TerminalResizeReflowMaxRows::Limit(rows),
             None => TerminalResizeReflowMaxRows::Auto,
         },
+    }
+}
+
+fn resolve_optional_prompt_text(
+    configured: Option<&Option<String>>,
+    default: Option<String>,
+) -> Option<String> {
+    match configured {
+        Some(Some(value)) if value.is_empty() => None,
+        Some(Some(value)) => Some(value.clone()),
+        Some(None) | None => default,
     }
 }
 
