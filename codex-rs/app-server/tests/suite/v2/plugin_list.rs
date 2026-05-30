@@ -1712,6 +1712,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         .respond_with(ResponseTemplate::new(200).set_body_string(global_directory_body))
         .mount(&server)
         .await;
+    mount_openai_curated_remote_collection_plugin_list(&server, empty_page_body).await;
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/list"))
         .and(query_param("scope", "WORKSPACE"))
@@ -1801,7 +1802,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     );
     assert_eq!(response.featured_plugin_ids, Vec::<String>::new());
     assert!(
-        !server
+        server
             .received_requests()
             .await
             .expect("wiremock should record requests")

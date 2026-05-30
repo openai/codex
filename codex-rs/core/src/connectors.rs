@@ -114,6 +114,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     auth: Option<&CodexAuth>,
     accessible_connectors: &[AppInfo],
     loaded_plugin_app_connector_ids: &[String],
+    plugins_manager: &PluginsManager,
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
     let connector_ids = tool_suggest_connector_ids(config, loaded_plugin_app_connector_ids);
     let directory_connectors = codex_connectors::merge::merge_plugin_connectors(
@@ -129,11 +130,15 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
         )
         .into_iter()
         .map(DiscoverableTool::from);
-    let discoverable_plugins =
-        list_tool_suggest_discoverable_plugins(config, loaded_plugin_app_connector_ids)
-            .await?
-            .into_iter()
-            .map(DiscoverableTool::from);
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(
+        config,
+        auth,
+        plugins_manager,
+        loaded_plugin_app_connector_ids,
+    )
+    .await?
+    .into_iter()
+    .map(DiscoverableTool::from);
     Ok(discoverable_connectors
         .chain(discoverable_plugins)
         .collect())

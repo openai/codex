@@ -8,6 +8,7 @@ use crate::plugins::test_support::write_plugins_feature_config;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
+use codex_login::CodexAuth;
 use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -16,6 +17,12 @@ use tempfile::tempdir;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_test::internal::MockWriter;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+use wiremock::matchers::query_param;
 
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_returns_fallback_plugins_without_installed_apps() {
@@ -25,9 +32,7 @@ async fn list_tool_suggest_discoverable_plugins_returns_fallback_plugins_without
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(
         discoverable_plugins
@@ -42,6 +47,83 @@ async fn list_tool_suggest_discoverable_plugins_returns_fallback_plugins_without
 }
 
 #[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_includes_remote_vertical_plugins() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    write_plugins_feature_config(codex_home.path());
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/list"))
+        .and(query_param("scope", "GLOBAL"))
+        .and(query_param("limit", "200"))
+        .and(query_param("collection", "vertical"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{
+  "plugins": [{
+    "id": "plugins~Plugin_data_analytics",
+    "name": "data-analytics",
+    "scope": "GLOBAL",
+    "installation_policy": "AVAILABLE",
+    "authentication_policy": "ON_USE",
+    "status": "ENABLED",
+    "release": {
+      "display_name": "Data Analytics",
+      "description": "Analyze product and business metrics",
+      "app_ids": ["asdk_app_databricks_workspace"],
+      "interface": {},
+      "skills": [{
+        "name": "build-report",
+        "description": "Build an analytics report",
+        "plugin_release_skill_id": "skill-1",
+        "interface": {}
+      }]
+    }
+  }],
+  "pagination": { "next_page_token": null }
+}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"plugins": [], "pagination": {"next_page_token": null}}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut config = load_plugins_config(codex_home.path()).await;
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let discoverable_plugins =
+        list_tool_suggest_discoverable_plugins(&config, Some(&auth), &plugins_manager, &[])
+            .await
+            .expect("remote discoverable plugins should load");
+    let cached_discoverable_plugins =
+        list_tool_suggest_discoverable_plugins(&config, Some(&auth), &plugins_manager, &[])
+            .await
+            .expect("cached remote discoverable plugins should load");
+
+    assert_eq!(
+        discoverable_plugins,
+        vec![DiscoverablePluginInfo {
+            id: "data-analytics@openai-curated-remote".to_string(),
+            name: "Data Analytics".to_string(),
+            description: Some("Analyze product and business metrics".to_string()),
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: vec!["asdk_app_databricks_workspace".to_string()],
+        }]
+    );
+    assert_eq!(cached_discoverable_plugins, discoverable_plugins);
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_filters_non_fallback_by_installed_apps() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = curated_plugins_repo_path(codex_home.path());
@@ -51,9 +133,7 @@ async fn list_tool_suggest_discoverable_plugins_filters_non_fallback_by_installe
     install_marketplace_plugin(codex_home.path(), curated_root.as_path(), "slack").await;
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(
         discoverable_plugins
@@ -77,7 +157,7 @@ async fn list_tool_suggest_discoverable_plugins_filters_by_loaded_plugin_apps() 
 
     let config = load_plugins_config(codex_home.path()).await;
     let discoverable_plugins =
-        list_tool_suggest_discoverable_plugins(&config, &[hubspot_app_id.to_string()])
+        list_local_discoverable_plugins(&config, &[hubspot_app_id.to_string()])
             .await
             .unwrap();
 
@@ -102,9 +182,7 @@ async fn list_tool_suggest_discoverable_plugins_filters_microsoft_by_installed_a
     install_marketplace_plugin(codex_home.path(), curated_root.as_path(), "teams").await;
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(
         discoverable_plugins
@@ -179,9 +257,7 @@ source = "/tmp/{sales_marketplace_name}"
     install_marketplace_plugin(codex_home.path(), sales_marketplace_root.as_path(), "sales").await;
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(
         discoverable_plugins
@@ -234,9 +310,7 @@ discoverables = [{{ type = "plugin", id = "{plugin_id}" }}]
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(discoverable_plugins.len(), 1);
     assert_eq!(discoverable_plugins[0].id, plugin_id.as_str());
@@ -278,9 +352,7 @@ source = "/tmp/{marketplace_name}"
     install_marketplace_plugin(codex_home.path(), curated_root.as_path(), "installed").await;
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(discoverable_plugins.len(), 1);
     assert_eq!(discoverable_plugins[0].id, "slack@openai-curated");
@@ -299,9 +371,7 @@ plugins = false
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
@@ -322,9 +392,7 @@ async fn list_tool_suggest_discoverable_plugins_normalizes_description() {
     install_marketplace_plugin(codex_home.path(), curated_root.as_path(), "installed").await;
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -359,7 +427,7 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
         .expect("plugin should install");
 
     let refreshed_config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&refreshed_config, &[])
+    let discoverable_plugins = list_local_discoverable_plugins(&refreshed_config, &[])
         .await
         .unwrap();
 
@@ -384,9 +452,7 @@ disabled_tools = [
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
@@ -435,9 +501,7 @@ async fn list_tool_suggest_discoverable_plugins_omits_not_available_curated_plug
     install_marketplace_plugin(codex_home.path(), curated_root.as_path(), "installed").await;
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(
         discoverable_plugins
@@ -464,9 +528,7 @@ discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -519,9 +581,7 @@ async fn list_tool_suggest_discoverable_plugins_does_not_reload_marketplace_per_
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config, &[])
-        .await
-        .unwrap();
+    let discoverable_plugins = list_local_discoverable_plugins(&config, &[]).await.unwrap();
 
     assert_eq!(
         discoverable_plugins
@@ -578,4 +638,18 @@ fn write_plugin_app(root: &Path, plugin_name: &str, app_name: &str, app_id: &str
 "#
         ),
     );
+}
+
+async fn list_local_discoverable_plugins(
+    config: &crate::config::Config,
+    loaded_plugin_app_connector_ids: &[String],
+) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
+    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
+    list_tool_suggest_discoverable_plugins(
+        config,
+        /*auth*/ None,
+        &plugins_manager,
+        loaded_plugin_app_connector_ids,
+    )
+    .await
 }

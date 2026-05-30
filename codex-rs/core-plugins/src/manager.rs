@@ -37,9 +37,11 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::RemoteInstalledPlugin;
+use crate::remote::RemoteMarketplace;
 use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
+use crate::remote::fetch_openai_curated_remote_collection_marketplace;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
 use crate::startup_sync::curated_plugins_repo_path;
@@ -122,6 +124,12 @@ struct CachedFeaturedPluginIds {
     key: FeaturedPluginIdsCacheKey,
     expires_at: Instant,
     featured_plugin_ids: Vec<String>,
+}
+
+#[derive(Clone)]
+struct CachedRemoteToolSuggestMarketplace {
+    key: FeaturedPluginIdsCacheKey,
+    marketplace: Option<RemoteMarketplace>,
 }
 
 struct RemoteInstalledPluginsCacheRefreshRequest {
@@ -402,6 +410,7 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<CachedPluginLoadOutcome>>,
+    remote_tool_suggest_marketplace_cache: RwLock<Option<CachedRemoteToolSuggestMarketplace>>,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_sync_lock: Semaphore,
@@ -440,6 +449,7 @@ impl PluginsManager {
             ),
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             cached_enabled_outcome: RwLock::new(None),
+            remote_tool_suggest_marketplace_cache: RwLock::new(None),
             remote_installed_plugins_cache: RwLock::new(None),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
@@ -513,6 +523,12 @@ impl PluginsManager {
             Err(err) => err.into_inner(),
         };
         *featured_plugin_ids_cache = None;
+        let mut remote_tool_suggest_marketplace_cache =
+            match self.remote_tool_suggest_marketplace_cache.write() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+        *remote_tool_suggest_marketplace_cache = None;
     }
 
     fn clear_enabled_outcome_cache(&self) {
@@ -588,6 +604,38 @@ impl PluginsManager {
         };
         let plugins = cache.as_ref()?;
         Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins, visible_scopes))
+    }
+
+    pub async fn remote_tool_suggest_marketplace_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+    ) -> Result<Option<RemoteMarketplace>, RemotePluginCatalogError> {
+        let key = featured_plugin_ids_cache_key(config, auth);
+        {
+            let cache = match self.remote_tool_suggest_marketplace_cache.read() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            if let Some(cached) = cache.as_ref().filter(|cached| cached.key == key) {
+                return Ok(cached.marketplace.clone());
+            }
+        }
+
+        let marketplace = fetch_openai_curated_remote_collection_marketplace(
+            &remote_plugin_service_config(config),
+            auth,
+        )
+        .await?;
+        let mut cache = match self.remote_tool_suggest_marketplace_cache.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        *cache = Some(CachedRemoteToolSuggestMarketplace {
+            key,
+            marketplace: marketplace.clone(),
+        });
+        Ok(marketplace)
     }
 
     pub async fn build_and_cache_remote_installed_plugin_marketplaces(

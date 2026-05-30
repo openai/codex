@@ -565,35 +565,6 @@ impl PluginRequestProcessor {
             (Vec::new(), Vec::new())
         };
 
-        // TODO(remote plugins): Remove this once remote plugins are ready and vertical plugins are
-        // served directly from the normal remote catalog.
-        if include_vertical && !config.features.enabled(Feature::RemotePlugin) {
-            let remote_plugin_service_config = RemotePluginServiceConfig {
-                chatgpt_base_url: config.chatgpt_base_url.clone(),
-            };
-            match codex_core_plugins::remote::fetch_openai_curated_remote_collection_marketplace(
-                &remote_plugin_service_config,
-                auth.as_ref(),
-            )
-            .await
-            {
-                Ok(Some(remote_marketplace)) => {
-                    data.push(remote_marketplace_to_info(remote_marketplace));
-                }
-                Ok(None) => {}
-                Err(
-                    RemotePluginCatalogError::AuthRequired
-                    | RemotePluginCatalogError::UnsupportedAuthMode,
-                ) => {}
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "plugin/list openai-curated-remote collection fetch failed; returning local marketplaces only"
-                    );
-                }
-            }
-        }
-
         let mut remote_sources = Vec::new();
         if !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin) {
             remote_sources.push(RemoteMarketplaceSource::Global);
@@ -606,6 +577,44 @@ impl PluginRequestProcessor {
         {
             remote_sources.push(RemoteMarketplaceSource::SharedWithMe);
         }
+        // Tool suggestions stay limited to the server-selected vertical collection, even when
+        // the full remote marketplace is available in the plugin browser. Cache that collection
+        // while plugin/list is loading remote catalog data so turn construction is network-free.
+        let remote_plugin_enabled = config.features.enabled(Feature::RemotePlugin);
+        let should_cache_remote_tool_suggest_marketplace = (include_vertical
+            && !remote_plugin_enabled)
+            || (!explicit_marketplace_kinds && remote_plugin_enabled);
+        let remote_tool_suggest_marketplace = if should_cache_remote_tool_suggest_marketplace {
+            match plugins_manager
+                .remote_tool_suggest_marketplace_for_config(&plugins_input, auth.as_ref())
+                .await
+            {
+                Ok(remote_marketplace) => remote_marketplace,
+                Err(
+                    RemotePluginCatalogError::AuthRequired
+                    | RemotePluginCatalogError::UnsupportedAuthMode,
+                ) => None,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "plugin/list remote plugin suggestion catalog fetch failed; returning other marketplaces only"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // TODO(remote plugins): Remove this compatibility response once clients no longer request
+        // the vertical marketplace explicitly. The same result remains cached for suggestions.
+        if include_vertical
+            && !remote_plugin_enabled
+            && let Some(remote_marketplace) = remote_tool_suggest_marketplace
+        {
+            data.push(remote_marketplace_to_info(remote_marketplace));
+        }
+
         if !remote_sources.is_empty() {
             let remote_plugin_service_config = RemotePluginServiceConfig {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),

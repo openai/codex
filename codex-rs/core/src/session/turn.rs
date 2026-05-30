@@ -1083,6 +1083,7 @@ pub(crate) async fn built_tools(
                 auth.as_ref(),
                 accessible_connectors.as_slice(),
                 &loaded_plugin_app_connector_ids,
+                sess.services.plugins_manager.as_ref(),
             )
             .await
             .map(|discoverable_tools| {

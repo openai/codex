@@ -426,6 +426,72 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
 }
 
 #[tokio::test]
+async fn remote_tool_suggest_marketplace_for_config_caches_vertical_collection() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/list"))
+        .and(query_param("scope", "GLOBAL"))
+        .and(query_param("limit", "200"))
+        .and(query_param("collection", "vertical"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{
+  "plugins": [{
+    "id": "plugins~Plugin_data_analytics",
+    "name": "data-analytics",
+    "scope": "GLOBAL",
+    "installation_policy": "AVAILABLE",
+    "authentication_policy": "ON_USE",
+    "status": "ENABLED",
+    "release": {
+      "display_name": "Data Analytics",
+      "description": "Analyze metrics",
+      "app_ids": ["asdk_app_databricks_workspace"],
+      "interface": {},
+      "skills": []
+    }
+  }],
+  "pagination": { "next_page_token": null }
+}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"plugins": [], "pagination": {"next_page_token": null}}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut config = load_config(codex_home.path(), codex_home.path()).await;
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let first = manager
+        .remote_tool_suggest_marketplace_for_config(&config, Some(&auth))
+        .await
+        .expect("first suggestion marketplace fetch should succeed");
+    let second = manager
+        .remote_tool_suggest_marketplace_for_config(&config, Some(&auth))
+        .await
+        .expect("cached suggestion marketplace fetch should succeed");
+
+    assert_eq!(second, first);
+}
+
+#[tokio::test]
 async fn load_plugins_resolves_disabled_skill_names_against_loaded_plugin_skills() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home

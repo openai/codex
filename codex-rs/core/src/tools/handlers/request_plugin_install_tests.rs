@@ -12,6 +12,7 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
+use codex_login::CodexAuth;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -20,6 +21,12 @@ use pretty_assertions::assert_eq;
 use rmcp::model::ElicitationAction;
 use serde_json::json;
 use tempfile::tempdir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+use wiremock::matchers::query_param;
 
 #[tokio::test]
 async fn verified_plugin_install_completed_requires_installed_plugin() {
@@ -32,11 +39,15 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
     let config = load_plugins_config(codex_home.path()).await;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
-    assert!(!verified_plugin_install_completed(
-        "sample@openai-curated",
-        &config,
-        &plugins_manager,
-    ));
+    assert!(
+        !verified_plugin_install_completed(
+            "sample@openai-curated",
+            &config,
+            &plugins_manager,
+            None,
+        )
+        .await
+    );
 
     plugins_manager
         .install_plugin(PluginInstallRequest {
@@ -50,11 +61,72 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
         .expect("plugin should install");
 
     let refreshed_config = load_plugins_config(codex_home.path()).await;
-    assert!(verified_plugin_install_completed(
-        "sample@openai-curated",
-        &refreshed_config,
-        &plugins_manager,
-    ));
+    assert!(
+        verified_plugin_install_completed(
+            "sample@openai-curated",
+            &refreshed_config,
+            &plugins_manager,
+            None,
+        )
+        .await
+    );
+}
+
+#[tokio::test]
+async fn verified_plugin_install_completed_checks_remote_installed_state() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{
+  "plugins": [{
+    "id": "plugins~Plugin_data_analytics",
+    "name": "data-analytics",
+    "scope": "GLOBAL",
+    "installation_policy": "AVAILABLE",
+    "authentication_policy": "ON_USE",
+    "status": "ENABLED",
+    "release": {
+      "display_name": "Data Analytics",
+      "description": "Analyze metrics",
+      "interface": {},
+      "skills": []
+    },
+    "enabled": true,
+    "disabled_skill_names": []
+  }],
+  "pagination": { "next_page_token": null }
+}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "WORKSPACE"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"plugins": [], "pagination": {"next_page_token": null}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let codex_home = tempdir().expect("tempdir should succeed");
+    write_plugins_feature_config(codex_home.path());
+    let mut config = load_plugins_config(codex_home.path()).await;
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    assert!(
+        verified_plugin_install_completed(
+            "data-analytics@openai-curated-remote",
+            &config,
+            &plugins_manager,
+            Some(&auth),
+        )
+        .await
+    );
 }
 
 #[test]

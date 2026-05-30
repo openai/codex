@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use codex_app_server_protocol::AppInfo;
 use codex_config::types::ToolSuggestDisabledTool;
+use codex_core_plugins::remote::RemotePluginScope;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
@@ -279,7 +280,9 @@ async fn verify_request_plugin_install_completed(
                 plugin.id.as_str(),
                 config.as_ref(),
                 session.services.plugins_manager.as_ref(),
-            );
+                auth,
+            )
+            .await;
             let _ = refresh_missing_requested_connectors(
                 session,
                 turn,
@@ -340,18 +343,36 @@ async fn refresh_missing_requested_connectors(
     }
 }
 
-fn verified_plugin_install_completed(
+async fn verified_plugin_install_completed(
     tool_id: &str,
     config: &crate::config::Config,
     plugins_manager: &codex_core_plugins::PluginsManager,
+    auth: Option<&codex_login::CodexAuth>,
 ) -> bool {
     let plugins_input = config.plugins_config_input();
-    plugins_manager
+    let is_locally_installed = plugins_manager
         .list_marketplaces_for_config(&plugins_input, &[])
         .ok()
         .into_iter()
         .flat_map(|outcome| outcome.marketplaces)
         .flat_map(|marketplace| marketplace.plugins.into_iter())
+        .any(|plugin| plugin.id == tool_id && plugin.installed);
+    if is_locally_installed {
+        return true;
+    }
+
+    plugins_manager
+        .build_and_cache_remote_installed_plugin_marketplaces(
+            &plugins_input,
+            auth,
+            &[RemotePluginScope::Global, RemotePluginScope::Workspace],
+            /*on_effective_plugins_changed*/ None,
+        )
+        .await
+        .ok()
+        .into_iter()
+        .flatten()
+        .flat_map(|marketplace| marketplace.plugins)
         .any(|plugin| plugin.id == tool_id && plugin.installed)
 }
 
