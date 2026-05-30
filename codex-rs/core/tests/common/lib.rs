@@ -246,9 +246,14 @@ where
 
 /// Waits for a configured MCP server to finish startup and requires it to be ready.
 pub async fn wait_for_mcp_server(codex: &CodexThread, server_name: &str) -> anyhow::Result<()> {
-    let server_names = vec![server_name.to_string()];
-    let failures = codex.wait_for_mcp_servers_ready(&server_names).await;
-    if let Some(failure) = failures.first() {
+    let (server_names, failures) = codex.wait_for_mcp_startup().await;
+    if !server_names.iter().any(|name| name == server_name) {
+        anyhow::bail!("MCP server {server_name} was not initialized");
+    }
+    if let Some(failure) = failures
+        .iter()
+        .find(|failure| failure.server == server_name)
+    {
         let error = &failure.error;
         anyhow::bail!("MCP server {server_name} failed to start: {error}");
     }

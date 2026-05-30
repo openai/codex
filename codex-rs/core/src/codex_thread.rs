@@ -144,10 +144,7 @@ impl CodexThread {
     }
 
     #[doc(hidden)]
-    pub async fn wait_for_mcp_servers_ready(
-        &self,
-        server_names: &[String],
-    ) -> Vec<McpStartupFailure> {
+    pub async fn wait_for_mcp_startup(&self) -> (Vec<String>, Vec<McpStartupFailure>) {
         let readiness = {
             let manager = self
                 .codex
@@ -156,7 +153,7 @@ impl CodexThread {
                 .mcp_connection_manager
                 .read()
                 .await;
-            manager.wait_for_servers_ready(server_names)
+            manager.wait_for_all_servers_ready()
         };
         readiness.await
     }
