@@ -180,6 +180,7 @@ async fn probe_with(
         ToolRouterParams {
             mcp_tools: inputs.mcp_tools,
             deferred_mcp_tools: inputs.deferred_mcp_tools,
+            lazy_mcp_tools: None,
             discoverable_tools: inputs.discoverable_tools,
             extension_tool_executors: inputs.extension_tool_executors,
             dynamic_tools: inputs.dynamic_tools.as_slice(),

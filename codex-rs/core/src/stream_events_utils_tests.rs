@@ -270,6 +270,7 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
+            lazy_mcp_tools: None,
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

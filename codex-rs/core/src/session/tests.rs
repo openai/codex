@@ -574,6 +574,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
+            lazy_mcp_tools: None,
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -9736,6 +9737,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         &turn_context,
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
+            lazy_mcp_tools: None,
             mcp_tools: Some(tools),
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),

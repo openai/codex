@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -327,16 +329,104 @@ impl CoreToolRuntime for ExposureOverride {
     }
 }
 
+#[derive(Default)]
+struct LazyToolRegistryState {
+    tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>,
+    static_tool_names: HashSet<ToolName>,
+    equivalent_static_mcp_tool_names: HashSet<ToolName>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct LazyToolRegistry {
+    state: Arc<RwLock<LazyToolRegistryState>>,
+}
+
+impl LazyToolRegistry {
+    pub(crate) fn allow_equivalent_static_mcp_tool(&self, tool_name: ToolName) {
+        self.state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .equivalent_static_mcp_tool_names
+            .insert(tool_name);
+    }
+
+    fn reserve_static_tool_names(&self, tool_names: impl IntoIterator<Item = ToolName>) {
+        self.state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .static_tool_names
+            .extend(tool_names);
+    }
+
+    pub(crate) fn can_register(&self, tool_name: &ToolName) -> bool {
+        let state = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        !state.static_tool_names.contains(tool_name)
+            || state.equivalent_static_mcp_tool_names.contains(tool_name)
+    }
+
+    pub(crate) fn register(&self, tool: Arc<dyn CoreToolRuntime>) -> bool {
+        let tool_name = tool.tool_name();
+        if !self.can_register(&tool_name) {
+            return false;
+        }
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.tools.entry(tool_name).or_insert(tool);
+        true
+    }
+
+    fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tools
+            .get(name)
+            .map(Arc::clone)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_names_for_test(&self) -> Vec<ToolName> {
+        let mut names = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tools
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+}
+
 pub struct ToolRegistry {
     tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>,
+    lazy_tools: LazyToolRegistry,
 }
 
 impl ToolRegistry {
+    #[cfg(test)]
     fn new(tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>) -> Self {
-        Self { tools }
+        Self {
+            tools,
+            lazy_tools: LazyToolRegistry::default(),
+        }
     }
 
+    #[cfg(test)]
     pub(crate) fn from_tools(tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>) -> Self {
+        Self::from_tools_with_lazy_registry(tools, LazyToolRegistry::default())
+    }
+
+    pub(crate) fn from_tools_with_lazy_registry(
+        tools: impl IntoIterator<Item = Arc<dyn CoreToolRuntime>>,
+        lazy_tools: LazyToolRegistry,
+    ) -> Self {
         let mut tools_by_name = HashMap::new();
         for tool in tools {
             let name = tool.tool_name();
@@ -346,7 +436,11 @@ impl ToolRegistry {
             }
             tools_by_name.insert(name, tool);
         }
-        Self::new(tools_by_name)
+        lazy_tools.reserve_static_tool_names(tools_by_name.keys().cloned());
+        Self {
+            tools: tools_by_name,
+            lazy_tools,
+        }
     }
 
     #[cfg(test)]
@@ -364,19 +458,24 @@ impl ToolRegistry {
     }
 
     fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools.get(name).map(Arc::clone)
+        self.tools
+            .get(name)
+            .map(Arc::clone)
+            .or_else(|| self.lazy_tools.tool(name))
     }
 
     #[cfg(test)]
     pub(crate) fn tool_names_for_test(&self) -> Vec<ToolName> {
         let mut names = self.tools.keys().cloned().collect::<Vec<_>>();
+        names.extend(self.lazy_tools.tool_names_for_test());
         names.sort();
+        names.dedup();
         names
     }
 
     #[cfg(test)]
     pub(crate) fn tool_exposure(&self, name: &ToolName) -> Option<ToolExposure> {
-        self.tools.get(name).map(|tool| tool.exposure())
+        self.tool(name).map(|tool| tool.exposure())
     }
 
     pub(crate) fn create_diff_consumer(

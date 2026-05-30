@@ -9,6 +9,7 @@ use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetGoalHandler;
+use crate::tools::handlers::LazyMcpToolSearchLoaders;
 use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
@@ -49,6 +50,7 @@ use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::LazyToolRegistry;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::registry::override_tool_exposure;
@@ -138,6 +140,7 @@ struct CoreToolPlanContext<'a> {
     turn_context: &'a TurnContext,
     mcp_tools: Option<&'a [ToolInfo]>,
     deferred_mcp_tools: Option<&'a [ToolInfo]>,
+    lazy_mcp_tools: Option<&'a LazyMcpToolSearchLoaders>,
     discoverable_tools: Option<&'a [DiscoverableTool]>,
     extension_tool_executors: &'a [Arc<dyn ToolExecutor<ExtensionToolCall>>],
     dynamic_tools: &'a [DynamicToolSpec],
@@ -160,6 +163,7 @@ fn build_tool_specs_and_registry(
     let ToolRouterParams {
         mcp_tools,
         deferred_mcp_tools,
+        lazy_mcp_tools,
         discoverable_tools,
         extension_tool_executors,
         dynamic_tools,
@@ -170,6 +174,7 @@ fn build_tool_specs_and_registry(
         turn_context,
         mcp_tools: mcp_tools.as_deref(),
         deferred_mcp_tools: deferred_mcp_tools.as_deref(),
+        lazy_mcp_tools: lazy_mcp_tools.as_ref(),
         discoverable_tools: discoverable_tools.as_deref(),
         extension_tool_executors: &extension_tool_executors,
         dynamic_tools,
@@ -177,15 +182,17 @@ fn build_tool_specs_and_registry(
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
     };
     let mut planned_tools = PlannedTools::default();
+    let lazy_tool_registry = LazyToolRegistry::default();
     add_tool_sources(&context, &mut planned_tools);
-    append_tool_search_executor(&context, &mut planned_tools);
+    append_tool_search_executor(&context, &mut planned_tools, lazy_tool_registry.clone());
     prepend_code_mode_executors(&context, &mut planned_tools);
-    build_model_visible_specs_and_registry(turn_context, planned_tools)
+    build_model_visible_specs_and_registry(turn_context, planned_tools, lazy_tool_registry)
 }
 
 fn build_model_visible_specs_and_registry(
     turn_context: &TurnContext,
     planned_tools: PlannedTools,
+    lazy_tool_registry: LazyToolRegistry,
 ) -> (Vec<ToolSpec>, ToolRegistry) {
     let PlannedTools {
         runtimes,
@@ -215,7 +222,7 @@ fn build_model_visible_specs_and_registry(
         }
     }
 
-    let registry = ToolRegistry::from_tools(runtimes);
+    let registry = ToolRegistry::from_tools_with_lazy_registry(runtimes, lazy_tool_registry);
     let model_visible_specs = merge_into_namespaces(specs)
         .into_iter()
         .filter(|spec| {
@@ -789,6 +796,7 @@ fn add_extension_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Pl
     append_extension_tool_executors(
         context.turn_context,
         context.extension_tool_executors,
+        context.lazy_mcp_tools.is_some(),
         planned_tools,
     );
 }
@@ -796,23 +804,67 @@ fn add_extension_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Pl
 fn append_tool_search_executor(
     context: &CoreToolPlanContext<'_>,
     planned_tools: &mut PlannedTools,
+    lazy_tool_registry: LazyToolRegistry,
 ) {
     let turn_context = context.turn_context;
     if !(search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context)) {
         return;
     }
 
+    let lazily_reloaded_mcp_tool_names = if context.lazy_mcp_tools.is_some() {
+        context
+            .mcp_tools
+            .unwrap_or_default()
+            .iter()
+            .chain(context.deferred_mcp_tools.unwrap_or_default())
+            .map(ToolInfo::canonical_tool_name)
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+    for tool_name in &lazily_reloaded_mcp_tool_names {
+        lazy_tool_registry.allow_equivalent_static_mcp_tool(tool_name.clone());
+    }
+    let deferred_lazily_reloaded_mcp_tool_names = if context.lazy_mcp_tools.is_some() {
+        context
+            .deferred_mcp_tools
+            .unwrap_or_default()
+            .iter()
+            .map(ToolInfo::canonical_tool_name)
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+    let mut reloaded_mcp_search_infos = Vec::new();
     let search_infos = planned_tools
         .runtimes()
         .iter()
         .filter(|executor| executor.exposure() == ToolExposure::Deferred)
-        .filter_map(|executor| executor.search_info())
+        .filter_map(|executor| {
+            let search_info = executor.search_info()?;
+            if deferred_lazily_reloaded_mcp_tool_names.contains(&executor.tool_name()) {
+                // Keep the initial source guidance while the lazy loader rebuilds
+                // these MCP entries from one current normalized inventory.
+                reloaded_mcp_search_infos.push(search_info);
+                None
+            } else {
+                Some(search_info)
+            }
+        })
         .collect::<Vec<_>>();
-    if search_infos.is_empty() {
+    if search_infos.is_empty()
+        && reloaded_mcp_search_infos.is_empty()
+        && context.lazy_mcp_tools.is_none()
+    {
         return;
     }
 
-    planned_tools.add(ToolSearchHandler::new(search_infos));
+    planned_tools.add(ToolSearchHandler::new_with_lazy_mcp_tools(
+        search_infos,
+        reloaded_mcp_search_infos,
+        context.lazy_mcp_tools.cloned(),
+        lazy_tool_registry,
+    ));
 }
 
 fn prepend_code_mode_executors(
@@ -821,10 +873,11 @@ fn prepend_code_mode_executors(
 ) {
     let turn_context = context.turn_context;
     let deferred_tools_available = search_tool_enabled(turn_context)
-        && planned_tools
-            .runtimes()
-            .iter()
-            .any(|executor| executor.exposure() == ToolExposure::Deferred);
+        && (context.lazy_mcp_tools.is_some()
+            || planned_tools
+                .runtimes()
+                .iter()
+                .any(|executor| executor.exposure() == ToolExposure::Deferred));
     let code_mode_executors = build_code_mode_executors(
         turn_context,
         planned_tools.runtimes(),
@@ -836,6 +889,7 @@ fn prepend_code_mode_executors(
 fn append_extension_tool_executors(
     turn_context: &TurnContext,
     executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
+    has_lazy_mcp_tools: bool,
     planned_tools: &mut PlannedTools,
 ) {
     if executors.is_empty() {
@@ -856,10 +910,11 @@ fn append_extension_tool_executors(
     }
     if search_tool_enabled(turn_context)
         && namespace_tools_enabled(turn_context)
-        && planned_tools
-            .runtimes()
-            .iter()
-            .any(|executor| executor.exposure() == ToolExposure::Deferred)
+        && (has_lazy_mcp_tools
+            || planned_tools
+                .runtimes()
+                .iter()
+                .any(|executor| executor.exposure() == ToolExposure::Deferred))
     {
         reserved_tool_names.insert(ToolName::plain(TOOL_SEARCH_TOOL_NAME));
     }
