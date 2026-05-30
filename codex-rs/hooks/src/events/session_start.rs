@@ -7,15 +7,13 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
-use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
-use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
+use super::session_start_env_file;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
-use crate::engine::command_runner::run_command;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::NullableString;
@@ -181,21 +179,16 @@ pub(crate) async fn run(
         }
     };
 
-    let results = if event_name == HookEventName::SessionStart
-        && (shell.session_start_env.contains_key(CODEX_ENV_FILE_ENV_VAR)
-            || shell
-                .session_start_env
-                .contains_key(CLAUDE_ENV_FILE_ENV_VAR))
-    {
-        // Serialize hooks that share the session env file to preserve configured order.
-        let mut results = Vec::with_capacity(matched.len());
-        for (completion_order, handler) in matched.into_iter().enumerate() {
-            let result = run_command(shell, &handler, &input_json, request.cwd.as_path()).await;
-            let mut parsed = parse_completed(&handler, result, turn_id.clone());
-            parsed.completion_order = completion_order;
-            results.push(parsed);
-        }
-        results
+    let results = if event_name == HookEventName::SessionStart {
+        session_start_env_file::execute_handlers(
+            shell,
+            matched,
+            input_json,
+            request.cwd.as_path(),
+            turn_id,
+            parse_completed,
+        )
+        .await
     } else {
         dispatcher::execute_handlers(
             shell,
@@ -528,14 +521,15 @@ mod tests {
 
     #[cfg(not(windows))]
     #[tokio::test]
-    async fn session_start_hooks_write_env_file_in_configured_order() {
+    async fn session_start_hooks_merge_env_file_in_configured_order_after_parallel_runs() {
         use std::collections::HashMap;
         use std::fs;
 
         use codex_protocol::ThreadId;
+        use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
         use tempfile::NamedTempFile;
+        use tempfile::tempdir;
 
-        use super::CODEX_ENV_FILE_ENV_VAR;
         use super::SessionStartRequest;
         use super::SessionStartSource;
         use super::StartHookTarget;
@@ -551,10 +545,25 @@ mod tests {
                 env_file.path().display().to_string(),
             )]),
         };
+        let cwd = tempdir().expect("create cwd");
+        let marker = cwd.path().join("second-started");
         let mut first = handler();
-        first.command = r#"sleep 1; printf 'export FIRST=1\n' >> "$CODEX_ENV_FILE""#.to_string();
+        first
+            .env
+            .insert("MARKER".to_string(), marker.display().to_string());
+        first.command = r#"for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  [ -f "$MARKER" ] && break
+  sleep 0.1
+done
+[ -f "$MARKER" ] || exit 7
+printf 'export FIRST=1\n' >> "$CODEX_ENV_FILE""#
+            .to_string();
         let mut second = handler();
-        second.command = r#"grep -q 'export FIRST=1' "$CODEX_ENV_FILE" && printf 'export SECOND=1\n' >> "$CODEX_ENV_FILE""#.to_string();
+        second
+            .env
+            .insert("MARKER".to_string(), marker.display().to_string());
+        second.command =
+            r#"printf 'export SECOND=1\n' >> "$CODEX_ENV_FILE"; touch "$MARKER""#.to_string();
         second.display_order = 1;
 
         let outcome = run(
@@ -562,7 +571,7 @@ mod tests {
             &shell,
             SessionStartRequest {
                 session_id: ThreadId::new(),
-                cwd: test_path_buf("/tmp").abs(),
+                cwd: cwd.path().to_path_buf().abs(),
                 transcript_path: None,
                 model: "gpt-test".to_string(),
                 permission_mode: "default".to_string(),
@@ -585,6 +594,76 @@ mod tests {
         assert_eq!(
             fs::read_to_string(env_file.path()).expect("read env file"),
             "export FIRST=1\nexport SECOND=1\n"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn session_start_hooks_receive_matching_codex_and_claude_scratch_paths() {
+        use std::collections::HashMap;
+        use std::fs;
+
+        use codex_protocol::ThreadId;
+        use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
+        use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
+        use tempfile::NamedTempFile;
+        use tempfile::tempdir;
+
+        use super::SessionStartRequest;
+        use super::SessionStartSource;
+        use super::StartHookTarget;
+        use super::run;
+        use crate::engine::CommandShell;
+
+        let env_file = NamedTempFile::new().expect("create env file");
+        let shell = CommandShell {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string()],
+            session_start_env: HashMap::from([
+                (
+                    CODEX_ENV_FILE_ENV_VAR.to_string(),
+                    env_file.path().display().to_string(),
+                ),
+                (
+                    CLAUDE_ENV_FILE_ENV_VAR.to_string(),
+                    env_file.path().display().to_string(),
+                ),
+            ]),
+        };
+        let mut hook = handler();
+        hook.command = r#"[ "$CODEX_ENV_FILE" = "$CLAUDE_ENV_FILE" ] || exit 9
+printf 'export ALIAS_OK=1\n' >> "$CLAUDE_ENV_FILE""#
+            .to_string();
+        let cwd = tempdir().expect("create cwd");
+
+        let outcome = run(
+            &[hook],
+            &shell,
+            SessionStartRequest {
+                session_id: ThreadId::new(),
+                cwd: cwd.path().to_path_buf().abs(),
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                target: StartHookTarget::SessionStart {
+                    source: SessionStartSource::Startup,
+                },
+            },
+            /*turn_id*/ None,
+        )
+        .await;
+
+        assert_eq!(
+            outcome
+                .hook_events
+                .iter()
+                .map(|event| event.run.status)
+                .collect::<Vec<_>>(),
+            vec![HookRunStatus::Completed]
+        );
+        assert_eq!(
+            fs::read_to_string(env_file.path()).expect("read env file"),
+            "export ALIAS_OK=1\n"
         );
     }
 
