@@ -31,8 +31,8 @@ pub(super) enum BedrockAuthMethod {
 pub(super) async fn resolve_auth_method(
     aws: &ModelProviderAwsAuthInfo,
 ) -> Result<BedrockAuthMethod> {
-    if let Some(token) = non_empty_env_var(AWS_BEARER_TOKEN_BEDROCK_ENV_VAR) {
-        let region = bearer_token_region(aws)?;
+    if let Some(token) = non_empty_env_var_from(AWS_BEARER_TOKEN_BEDROCK_ENV_VAR, std::env::var) {
+        let region = bearer_token_region(aws, std::env::var)?;
         return Ok(BedrockAuthMethod::EnvBearerToken { token, region });
     }
 
@@ -58,17 +58,23 @@ pub(super) async fn resolve_provider_auth(
     }
 }
 
-fn non_empty_env_var(name: &str) -> Option<String> {
-    std::env::var(name)
+fn non_empty_env_var_from(
+    name: &'static str,
+    env_var: impl Fn(&'static str) -> std::result::Result<String, std::env::VarError>,
+) -> Option<String> {
+    env_var(name)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
-fn bearer_token_region(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
+fn bearer_token_region(
+    aws: &ModelProviderAwsAuthInfo,
+    env_var: impl Fn(&'static str) -> std::result::Result<String, std::env::VarError> + Copy,
+) -> Result<String> {
     region_from_config(aws)
-        .or_else(|| non_empty_env_var(AWS_REGION_ENV_VAR))
-        .or_else(|| non_empty_env_var(AWS_DEFAULT_REGION_ENV_VAR))
+        .or_else(|| non_empty_env_var_from(AWS_REGION_ENV_VAR, env_var))
+        .or_else(|| non_empty_env_var_from(AWS_DEFAULT_REGION_ENV_VAR, env_var))
         .ok_or_else(|| {
             CodexErr::Fatal(
                 "Amazon Bedrock bearer token auth requires \
@@ -146,81 +152,29 @@ impl AuthProvider for BedrockMantleSigV4AuthProvider {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-    use std::sync::MutexGuard;
-
     use codex_api::AuthProvider;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
 
     use super::*;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct EnvVarGuard<'a> {
-        _lock: MutexGuard<'a, ()>,
-        saved: Vec<(&'static str, Option<String>)>,
-    }
-
-    impl<'a> EnvVarGuard<'a> {
-        fn new(vars: Vec<(&'static str, Option<&str>)>) -> Self {
-            let lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
-            let saved = vars
-                .iter()
-                .map(|(name, _)| (*name, std::env::var(name).ok()))
-                .collect::<Vec<_>>();
-            for (name, value) in vars {
-                match value {
-                    Some(value) => {
-                        // SAFETY: Tests using this guard hold ENV_LOCK while
-                        // mutating the process environment and restore the
-                        // prior values on drop.
-                        unsafe { std::env::set_var(name, value) };
-                    }
-                    None => {
-                        // SAFETY: Tests using this guard hold ENV_LOCK while
-                        // mutating the process environment and restore the
-                        // prior values on drop.
-                        unsafe { std::env::remove_var(name) };
-                    }
-                }
-            }
-            Self { _lock: lock, saved }
-        }
-    }
-
-    impl Drop for EnvVarGuard<'_> {
-        fn drop(&mut self) {
-            for (name, value) in &self.saved {
-                match value {
-                    Some(value) => {
-                        // SAFETY: Tests using this guard hold ENV_LOCK while
-                        // mutating the process environment and restore the
-                        // prior values on drop.
-                        unsafe { std::env::set_var(name, value) };
-                    }
-                    None => {
-                        // SAFETY: Tests using this guard hold ENV_LOCK while
-                        // mutating the process environment and restore the
-                        // prior values on drop.
-                        unsafe { std::env::remove_var(name) };
-                    }
-                }
-            }
-        }
+    fn missing_env_var(_: &'static str) -> std::result::Result<String, std::env::VarError> {
+        Err(std::env::VarError::NotPresent)
     }
 
     #[test]
     fn bedrock_bearer_auth_prefers_configured_region_and_uses_header() {
-        let _env = EnvVarGuard::new(vec![
-            (AWS_REGION_ENV_VAR, Some("eu-west-1")),
-            (AWS_DEFAULT_REGION_ENV_VAR, /*value*/ None),
-        ]);
         let token = "bedrock-api-key-test".to_string();
-        let region = bearer_token_region(&ModelProviderAwsAuthInfo {
-            profile: None,
-            region: Some(" us-west-2 ".to_string()),
-        })
+        let region = bearer_token_region(
+            &ModelProviderAwsAuthInfo {
+                profile: None,
+                region: Some(" us-west-2 ".to_string()),
+            },
+            |name| match name {
+                AWS_REGION_ENV_VAR => Ok("eu-west-1".to_string()),
+                _ => Err(std::env::VarError::NotPresent),
+            },
+        )
         .expect("configured region should resolve");
         let provider = BearerAuthProvider {
             token: Some(token),
@@ -242,14 +196,16 @@ mod tests {
 
     #[test]
     fn bedrock_bearer_auth_uses_aws_region_env() {
-        let _env = EnvVarGuard::new(vec![
-            (AWS_REGION_ENV_VAR, Some(" eu-central-1 ")),
-            (AWS_DEFAULT_REGION_ENV_VAR, /*value*/ None),
-        ]);
-        let region = bearer_token_region(&ModelProviderAwsAuthInfo {
-            profile: None,
-            region: None,
-        })
+        let region = bearer_token_region(
+            &ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+            },
+            |name| match name {
+                AWS_REGION_ENV_VAR => Ok(" eu-central-1 ".to_string()),
+                _ => Err(std::env::VarError::NotPresent),
+            },
+        )
         .expect("AWS_REGION should resolve");
 
         assert_eq!(region, "eu-central-1");
@@ -257,14 +213,16 @@ mod tests {
 
     #[test]
     fn bedrock_bearer_auth_uses_aws_default_region_env() {
-        let _env = EnvVarGuard::new(vec![
-            (AWS_REGION_ENV_VAR, /*value*/ None),
-            (AWS_DEFAULT_REGION_ENV_VAR, Some("ap-northeast-1")),
-        ]);
-        let region = bearer_token_region(&ModelProviderAwsAuthInfo {
-            profile: None,
-            region: None,
-        })
+        let region = bearer_token_region(
+            &ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+            },
+            |name| match name {
+                AWS_DEFAULT_REGION_ENV_VAR => Ok("ap-northeast-1".to_string()),
+                _ => Err(std::env::VarError::NotPresent),
+            },
+        )
         .expect("AWS_DEFAULT_REGION should resolve");
 
         assert_eq!(region, "ap-northeast-1");
@@ -272,14 +230,13 @@ mod tests {
 
     #[test]
     fn bedrock_bearer_auth_rejects_missing_configured_region() {
-        let _env = EnvVarGuard::new(vec![
-            (AWS_REGION_ENV_VAR, /*value*/ None),
-            (AWS_DEFAULT_REGION_ENV_VAR, /*value*/ None),
-        ]);
-        let err = bearer_token_region(&ModelProviderAwsAuthInfo {
-            profile: None,
-            region: None,
-        })
+        let err = bearer_token_region(
+            &ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+            },
+            missing_env_var,
+        )
         .expect_err("missing region should fail");
 
         assert_eq!(
