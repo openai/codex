@@ -11,6 +11,7 @@ use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
 use codex_api::ApiError;
+use codex_api::Compression;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
@@ -61,13 +62,20 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
+    test_model_client_with_installation_id(session_source, "11111111-1111-4111-8111-111111111111")
+}
+
+fn test_model_client_with_installation_id(
+    session_source: SessionSource,
+    installation_id: &str,
+) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let thread_id = ThreadId::new();
     ModelClient::new(
         /*auth_manager*/ None,
         thread_id.into(),
         thread_id,
-        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        /*installation_id*/ installation_id.to_string(),
         provider,
         session_source,
         /*model_verbosity*/ None,
@@ -312,6 +320,61 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
 }
 
 #[tokio::test]
+async fn responses_options_include_installation_id_header() {
+    let client = test_model_client(SessionSource::Cli);
+    let client_session = client.new_session();
+
+    let options = client_session
+        .build_responses_options(/*turn_metadata_header*/ None, Compression::None)
+        .await;
+
+    assert_eq!(
+        options
+            .extra_headers
+            .get(X_CODEX_INSTALLATION_ID_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("11111111-1111-4111-8111-111111111111"),
+    );
+}
+
+#[tokio::test]
+async fn websocket_headers_include_installation_id_header() {
+    let client = test_model_client(SessionSource::Cli);
+
+    let headers = client
+        .build_websocket_headers(/*turn_state*/ None, /*turn_metadata_header*/ None)
+        .await;
+
+    assert_eq!(
+        headers
+            .get(X_CODEX_INSTALLATION_ID_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("11111111-1111-4111-8111-111111111111"),
+    );
+}
+
+#[tokio::test]
+async fn absent_installation_ids_do_not_add_headers() {
+    for installation_id in ["", "None", "null"] {
+        let client = test_model_client_with_installation_id(SessionSource::Cli, installation_id);
+        let client_session = client.new_session();
+
+        let options = client_session
+            .build_responses_options(/*turn_metadata_header*/ None, Compression::None)
+            .await;
+        assert_eq!(
+            options.extra_headers.get(X_CODEX_INSTALLATION_ID_HEADER),
+            None,
+        );
+
+        let headers = client
+            .build_websocket_headers(/*turn_state*/ None, /*turn_metadata_header*/ None)
+            .await;
+        assert_eq!(headers.get(X_CODEX_INSTALLATION_ID_HEADER), None);
+    }
+}
+
+#[tokio::test]
 async fn summarize_memories_returns_empty_for_empty_input() {
     let client = test_model_client(SessionSource::Cli);
     let model_info = test_model_info();
@@ -545,6 +608,12 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
             .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
             .and_then(|value| value.to_str().ok()),
         Some("v1.header-1"),
+    );
+    assert_eq!(
+        headers
+            .get(X_CODEX_INSTALLATION_ID_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("11111111-1111-4111-8111-111111111111"),
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
 }

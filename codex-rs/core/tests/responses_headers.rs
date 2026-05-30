@@ -152,6 +152,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
         request.header("x-codex-window-id").as_deref(),
         Some(expected_window_id.as_str())
     );
+    assert_eq!(
+        request.header("x-codex-installation-id").as_deref(),
+        Some(TEST_INSTALLATION_ID)
+    );
     assert_eq!(request.header("x-codex-parent-thread-id"), None);
     assert_eq!(
         request.body_json()["client_metadata"]["x-codex-installation-id"].as_str(),

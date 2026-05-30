@@ -507,7 +507,7 @@ impl ModelClient {
         };
 
         let mut extra_headers = ApiHeaderMap::new();
-        if let Ok(header_value) = HeaderValue::from_str(&self.state.installation_id) {
+        if let Some(header_value) = installation_id_header_value(&self.state.installation_id) {
             extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
         }
         extra_headers.extend(build_responses_headers(
@@ -637,6 +637,9 @@ impl ModelClient {
 
     fn build_responses_identity_headers(&self) -> ApiHeaderMap {
         let mut extra_headers = self.build_subagent_headers();
+        if let Some(header_value) = installation_id_header_value(&self.state.installation_id) {
+            extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
+        }
         if let Some(parent_thread_id) = parent_thread_id_header_value(&self.state.session_source)
             && let Ok(val) = HeaderValue::from_str(&parent_thread_id)
         {
@@ -1662,6 +1665,17 @@ impl ModelClientSession {
 /// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
+}
+
+fn installation_id_header_value(installation_id: &str) -> Option<HeaderValue> {
+    let installation_id = installation_id.trim();
+    if installation_id.is_empty()
+        || installation_id.eq_ignore_ascii_case("none")
+        || installation_id.eq_ignore_ascii_case("null")
+    {
+        return None;
+    }
+    HeaderValue::from_str(installation_id).ok()
 }
 
 /// Stamp a ResponsesWsRequest with the current time.
