@@ -517,11 +517,11 @@ async fn selected_skill_rewaits_for_app_after_installing_mcp_dependency() -> Res
     .expect("write plugin app skill");
     let skill_agents_dir = skill_path.parent().expect("skill dir").join("agents");
     std::fs::create_dir_all(&skill_agents_dir).expect("create skill agents dir");
-    let dependency_command = stdio_server_bin()?;
+    let dependency_url = format!("{}/api/codex/apps", server.uri());
     std::fs::write(
         skill_agents_dir.join("openai.yaml"),
         format!(
-            "dependencies:\n  tools:\n    - type: \"mcp\"\n      value: \"dependency\"\n      transport: \"stdio\"\n      command: \"{dependency_command}\"\n"
+            "dependencies:\n  tools:\n    - type: \"mcp\"\n      value: \"dependency\"\n      transport: \"streamable_http\"\n      url: \"{dependency_url}\"\n"
         ),
     )
     .expect("write plugin skill dependencies");
@@ -556,7 +556,9 @@ async fn selected_skill_rewaits_for_app_after_installing_mcp_dependency() -> Res
         "expected app referenced by selected skill after dependency installation refresh"
     );
     assert!(
-        request.tool_by_name("mcp__dependency", "echo").is_some(),
+        request
+            .tool_by_name("mcp__dependency", "calendar_list_events")
+            .is_some(),
         "expected newly installed MCP dependency on the first turn"
     );
 
