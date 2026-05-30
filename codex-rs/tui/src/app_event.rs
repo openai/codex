@@ -234,6 +234,9 @@ pub(crate) enum AppEvent {
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
 
+    /// Restore an output-free interrupted turn into the composer and roll it back.
+    RestoreCancelledTurn(UserMessage),
+
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {
         thread_id: ThreadId,

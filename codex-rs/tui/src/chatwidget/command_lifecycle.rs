@@ -240,6 +240,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_command_execution_started_now(&mut self, item: ThreadItem) {
+        self.record_visible_turn_activity();
         let ThreadItem::CommandExecution {
             id,
             command,
