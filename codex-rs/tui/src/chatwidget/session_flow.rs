@@ -111,7 +111,7 @@ impl ChatWidget {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status = self
                 .should_show_fast_status(&model_for_header, self.effective_service_tier.as_deref());
-            let session_info_cell = history_cell::new_session_info(
+            let mut session_info_cell = history_cell::new_session_info(
                 &self.config,
                 &model_for_header,
                 &session,
@@ -120,6 +120,9 @@ impl ChatWidget {
                 self.plan_type,
                 show_fast_status,
             );
+            if let Some(animation) = self.startup_logo_animation {
+                session_info_cell = session_info_cell.with_startup_logo_animation(animation);
+            }
             self.apply_session_info_cell(session_info_cell);
         } else if self
             .transcript

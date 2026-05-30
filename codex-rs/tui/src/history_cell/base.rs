@@ -162,4 +162,16 @@ impl HistoryCell for CompositeHistoryCell {
         }
         out
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        self.parts
+            .iter()
+            .find_map(|part| part.transcript_animation_tick())
+    }
+
+    fn finalize_for_history(&mut self) {
+        for part in &mut self.parts {
+            part.finalize_for_history();
+        }
+    }
 }

@@ -61,7 +61,11 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let startup_logo_animation = config.animations.then(codex_logo::startup_animation);
+        let active_cell = Some(Self::placeholder_session_header_cell(
+            &config,
+            startup_logo_animation,
+        ));
 
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = crate::service_tier_resolution::effective_service_tier(
@@ -181,6 +185,7 @@ impl ChatWidget {
             side_placeholder_text: side_placeholder,
             forked_from: None,
             interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
+            startup_logo_animation,
             input_queue: InputQueueState::default(),
             chat_keymap,
             queued_message_edit_hint_binding,

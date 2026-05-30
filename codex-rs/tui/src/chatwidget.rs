@@ -56,6 +56,7 @@ use crate::bottom_pane::StatusSurfacePreviewData;
 use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
+use crate::codex_logo;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
@@ -632,6 +633,7 @@ pub(crate) struct ChatWidget {
     forked_from: Option<ThreadId>,
     interrupted_turn_notice_mode: InterruptedTurnNoticeMode,
     frame_requester: FrameRequester,
+    startup_logo_animation: Option<codex_logo::StartupAnimation>,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
     // One-shot tooltip override for the primary startup session.
@@ -1157,6 +1159,29 @@ impl ChatWidget {
         if let Some(pet) = self.ambient_pet.as_ref() {
             pet.schedule_next_frame();
         }
+        if self.startup_logo_animation.is_some() {
+            if self
+                .transcript
+                .active_cell
+                .as_ref()
+                .and_then(|cell| cell.transcript_animation_tick())
+                .is_some()
+            {
+                self.frame_requester
+                    .schedule_frame_in(codex_logo::animation_frame_interval());
+            } else {
+                self.startup_logo_animation = None;
+                if self
+                    .transcript
+                    .active_cell
+                    .as_ref()
+                    .is_some_and(|cell| cell.as_any().is::<history_cell::SessionInfoCell>())
+                {
+                    self.flush_active_cell();
+                }
+                self.request_redraw();
+            }
+        }
         self.refresh_plan_mode_nudge();
         self.refresh_goal_status_indicator_for_time_tick();
         if self.terminal_title_shows_action_required() != self.last_terminal_title_requires_action {
@@ -1170,7 +1195,8 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
-        if let Some(active) = self.transcript.active_cell.take() {
+        if let Some(mut active) = self.transcript.active_cell.take() {
+            active.finalize_for_history();
             self.transcript.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -1449,19 +1475,24 @@ impl ChatWidget {
     }
 
     /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
+    fn placeholder_session_header_cell(
+        config: &Config,
+        startup_logo_animation: Option<codex_logo::StartupAnimation>,
+    ) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-        Box::new(
-            history_cell::SessionHeaderHistoryCell::new_with_style(
-                DEFAULT_MODEL_DISPLAY_NAME.to_string(),
-                placeholder_style,
-                /*reasoning_effort*/ None,
-                /*show_fast_status*/ false,
-                config.cwd.to_path_buf(),
-                CODEX_CLI_VERSION,
-            )
-            .with_yolo_mode(history_cell::is_yolo_mode(config)),
+        let mut header = history_cell::SessionHeaderHistoryCell::new_with_style(
+            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+            placeholder_style,
+            /*reasoning_effort*/ None,
+            /*show_fast_status*/ false,
+            config.cwd.to_path_buf(),
+            CODEX_CLI_VERSION,
         )
+        .with_yolo_mode(history_cell::is_yolo_mode(config));
+        if let Some(animation) = startup_logo_animation {
+            header = header.with_startup_logo_animation(animation);
+        }
+        Box::new(header)
     }
 
     /// Merge the real session info cell with any placeholder header to avoid double boxes.
@@ -1485,6 +1516,21 @@ impl ChatWidget {
             false
         };
 
+        if self.startup_logo_animation.is_some()
+            && self
+                .transcript
+                .active_cell
+                .as_ref()
+                .and_then(|cell| cell.transcript_animation_tick())
+                .is_some()
+        {
+            self.frame_requester
+                .schedule_frame_in(codex_logo::animation_frame_interval());
+            self.request_redraw();
+            return;
+        }
+
+        self.startup_logo_animation = None;
         self.flush_active_cell();
 
         if !merged_header && let Some(cell) = session_info_cell {

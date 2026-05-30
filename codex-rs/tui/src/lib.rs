@@ -116,6 +116,8 @@ mod chatwidget;
 mod cli;
 mod clipboard_copy;
 mod clipboard_paste;
+mod codex_logo;
+mod codex_logo_frames;
 mod collaboration_modes;
 mod color;
 mod config_update;

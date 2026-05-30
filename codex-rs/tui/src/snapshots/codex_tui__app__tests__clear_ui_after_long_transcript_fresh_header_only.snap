@@ -1,10 +1,12 @@
 ---
-source: tui/src/app.rs
+source: tui/src/app/tests.rs
 expression: rendered
 ---
-╭─────────────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)                │
-│                                             │
-│ model:     gpt-test high   /model to change │
-│ directory: /tmp/project                     │
-╰─────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────────────────────╮
+│    ⢀⣴⣶⣶⣶⣤⣤⣄⡀                                                            │
+│  ⢀⣴⣾⣿⣿⣿⣿⣿⣿⣿⣿⡆  >_ OpenAI Codex (v<VERSION>)                             │
+│  ⣿⣿⣿⣇⠙⣿⣿⣿⣿⣿⣿⣷⡀                                                          │
+│  ⢹⣿⣿⡏⣠⣿⣟⠛⠛⣿⣿⣿⡇ model:     gpt-test high   /model to change              │
+│   ⢿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠋  directory: /tmp/project                                  │
+│    ⠉⠛⠛⠻⠿⠿⠟⠋                                                             │
+╰─────────────────────────────────────────────────────────────────────────╯

@@ -295,6 +295,9 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn transcript_animation_tick(&self) -> Option<u64> {
         None
     }
+
+    /// Settles transient visuals before an active cell is committed to transcript history.
+    fn finalize_for_history(&mut self) {}
 }
 
 impl Renderable for Box<dyn HistoryCell> {

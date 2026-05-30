@@ -450,6 +450,19 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
 }
 
 #[tokio::test]
+async fn placeholder_session_header_animates_while_session_is_configuring() {
+    let mut cfg = test_config().await;
+    cfg.animations = true;
+
+    let cell = ChatWidget::placeholder_session_header_cell(
+        &cfg,
+        /*startup_logo_animation*/ Some(codex_logo::startup_animation()),
+    );
+
+    assert!(cell.transcript_animation_tick().is_some());
+}
+
+#[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

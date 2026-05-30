@@ -1,6 +1,7 @@
 //! Coverage for history-cell rendering, wrapping, and transcript behavior.
 
 use super::*;
+use crate::codex_logo;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCall;
 use crate::exec_cell::ExecCell;
@@ -1473,6 +1474,7 @@ fn session_header_includes_reasoning_level_when_present() {
 
     assert!(model_line.contains("gpt-4o high   fast"));
     assert!(model_line.contains("/model to change"));
+    assert!(lines.iter().any(|line| line.contains("⣿")));
 }
 
 #[test]
@@ -1493,6 +1495,46 @@ fn session_header_hides_fast_status_when_disabled() {
 
     assert!(model_line.contains("gpt-4o high"));
     assert!(!model_line.contains("fast"));
+}
+
+#[test]
+fn session_header_hides_logo_when_text_would_not_fit() {
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-4o".to_string(),
+        Some(ReasoningEffortConfig::High),
+        /*show_fast_status*/ true,
+        std::env::temp_dir(),
+        "test",
+    );
+
+    let rendered = render_lines(&cell.display_lines(/*width*/ 48)).join("\n");
+
+    assert!(rendered.contains("OpenAI Codex"));
+    assert!(!rendered.contains("⣿"));
+}
+
+#[tokio::test]
+async fn session_info_logo_animation_is_independent_from_welcome_banner() {
+    let mut config = test_config().await;
+    config.animations = true;
+    let mut cell = new_session_info(
+        &config,
+        "gpt-5",
+        &session_configured_event("gpt-5"),
+        /*is_first_event*/ false,
+        /*tooltip_override*/ None,
+        /*auth_plan*/ None,
+        /*show_fast_status*/ false,
+    )
+    .with_startup_logo_animation(codex_logo::startup_animation());
+
+    assert!(cell.transcript_animation_tick().is_some());
+    let rendered = render_transcript(&cell).join("\n");
+    assert!(rendered.contains("⣿"));
+    assert!(!rendered.contains("To get started"));
+
+    cell.finalize_for_history();
+    assert!(cell.transcript_animation_tick().is_none());
 }
 
 #[test]

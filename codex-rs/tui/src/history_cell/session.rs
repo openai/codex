@@ -1,8 +1,12 @@
 //! Session headers, onboarding guidance, and transcript cards.
 
 use super::*;
+use crate::codex_logo;
+use crate::terminal_palette;
 
-pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
+const SESSION_HEADER_TEXT_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
+pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize =
+    codex_logo::WIDTH + codex_logo::GAP_WIDTH + SESSION_HEADER_TEXT_MAX_INNER_WIDTH;
 
 pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
     if width < 4 {
@@ -119,6 +123,23 @@ impl HistoryCell for TooltipHistoryCell {
 #[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
+impl SessionInfoCell {
+    pub(crate) fn with_startup_logo_animation(
+        mut self,
+        animation: codex_logo::StartupAnimation,
+    ) -> Self {
+        if let Some(header) = self
+            .0
+            .parts
+            .iter_mut()
+            .find_map(|part| part.as_any_mut().downcast_mut::<SessionHeaderHistoryCell>())
+        {
+            header.logo_animation = Some(animation);
+        }
+        self
+    }
+}
+
 impl HistoryCell for SessionInfoCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.0.display_lines(width)
@@ -134,6 +155,14 @@ impl HistoryCell for SessionInfoCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         self.0.raw_lines()
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        self.0.transcript_animation_tick()
+    }
+
+    fn finalize_for_history(&mut self) {
+        self.0.finalize_for_history();
     }
 }
 
@@ -246,6 +275,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     show_fast_status: bool,
     directory: PathBuf,
     yolo_mode: bool,
+    logo_animation: Option<codex_logo::StartupAnimation>,
 }
 
 impl SessionHeaderHistoryCell {
@@ -282,12 +312,30 @@ impl SessionHeaderHistoryCell {
             show_fast_status,
             directory,
             yolo_mode: false,
+            logo_animation: None,
         }
     }
 
     pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
         self.yolo_mode = yolo_mode;
         self
+    }
+
+    pub(crate) fn with_startup_logo_animation(
+        mut self,
+        animation: codex_logo::StartupAnimation,
+    ) -> Self {
+        self.logo_animation = Some(animation);
+        self
+    }
+
+    fn finalize_logo_animation(&mut self) {
+        self.logo_animation = None;
+    }
+
+    fn logo_animation_tick(&self) -> Option<(codex_logo::StartupAnimation, u64)> {
+        let animation = self.logo_animation?;
+        codex_logo::animation_tick(animation).map(|tick| (animation, tick))
     }
 
     fn format_directory(&self, max_width: Option<usize>) -> String {
@@ -333,6 +381,12 @@ impl HistoryCell for SessionHeaderHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
             return Vec::new();
+        };
+        let show_logo = inner_width > codex_logo::WIDTH + codex_logo::GAP_WIDTH;
+        let text_width = if show_logo {
+            inner_width.saturating_sub(codex_logo::WIDTH + codex_logo::GAP_WIDTH)
+        } else {
+            inner_width
         };
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
@@ -383,11 +437,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!("{dir_label} ");
         let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
-        let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
+        let dir_max_width = text_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
-        let mut lines = vec![
+        let mut text_lines = vec![
             make_row(title_spans),
             make_row(Vec::new()),
             make_row(model_spans),
@@ -396,13 +450,50 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         if self.yolo_mode {
             let permissions_label = format!("{PERMISSIONS_LABEL:<label_width$}");
-            lines.push(make_row(vec![
+            text_lines.push(make_row(vec![
                 Span::from(format!("{permissions_label} ")).dim(),
                 "YOLO mode".magenta().bold(),
             ]));
         }
 
-        with_border(lines)
+        if !show_logo || text_lines.iter().any(|line| line_width(line) > text_width) {
+            return with_border(text_lines);
+        }
+
+        let logo_animation_tick = self.logo_animation_tick();
+        let frame = logo_animation_tick
+            .map(|(animation, tick)| codex_logo::frame_for_tick(animation, tick))
+            .unwrap_or(&codex_logo::STATIC_FRAME);
+        let terminal_bg = terminal_palette::default_bg();
+        let gradient = logo_animation_tick
+            .map(|(_, tick)| codex_logo::gradient_for_animation_tick(terminal_bg, tick))
+            .unwrap_or_else(|| codex_logo::gradient_for_bg(terminal_bg));
+        let text_top_padding = (codex_logo::HEIGHT - text_lines.len()) / 2;
+        let mut lines = Vec::with_capacity(codex_logo::HEIGHT);
+
+        let mut push_logo_row = |row: usize, logo_line: &str, style: Style| {
+            let mut spans = vec![
+                Span::styled(padded_logo_line(logo_line), style),
+                Span::from(" ".repeat(codex_logo::GAP_WIDTH)),
+            ];
+            if let Some(text_line) = row
+                .checked_sub(text_top_padding)
+                .and_then(|text_row| text_lines.get(text_row))
+            {
+                spans.extend(text_line.spans.clone());
+            }
+            lines.push(Line::from(spans));
+        };
+
+        for (row, color) in gradient.into_iter().enumerate() {
+            push_logo_row(
+                row,
+                frame[row],
+                Style::default().fg(terminal_palette::best_color(color)),
+            );
+        }
+
+        with_border_with_inner_width(lines, inner_width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -425,4 +516,26 @@ impl HistoryCell for SessionHeaderHistoryCell {
         }
         lines
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        self.logo_animation_tick().map(|(_, tick)| tick)
+    }
+
+    fn finalize_for_history(&mut self) {
+        self.finalize_logo_animation();
+    }
+}
+
+fn line_width(line: &Line<'_>) -> usize {
+    line.iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn padded_logo_line(line: &str) -> String {
+    let width = UnicodeWidthStr::width(line);
+    format!(
+        "{line}{}",
+        " ".repeat(codex_logo::WIDTH.saturating_sub(width))
+    )
 }
