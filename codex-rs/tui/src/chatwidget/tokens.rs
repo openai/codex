@@ -647,6 +647,7 @@ impl ChatWidget {
             cell,
             handle,
         });
+        self.bump_active_cell_revision();
         self.request_redraw();
         self.app_event_tx
             .send(AppEvent::RefreshTokenActivity { request_id });
@@ -663,20 +664,20 @@ impl ChatWidget {
         request_id: u64,
         result: Result<GetAccountTokenUsageResponse, String>,
     ) -> Option<CompositeHistoryCell> {
-        let Some(output) = self.refreshing_token_activity_output.take() else {
-            return None;
-        };
+        let output = self.refreshing_token_activity_output.take()?;
         if output.request_id != request_id {
             self.refreshing_token_activity_output = Some(output);
             return None;
         }
         output.handle.finish(result);
+        self.bump_active_cell_revision();
         self.request_redraw();
         Some(output.cell)
     }
 
     pub(crate) fn clear_pending_token_activity_refreshes(&mut self) {
         if self.refreshing_token_activity_output.take().is_some() {
+            self.bump_active_cell_revision();
             self.request_redraw();
         }
     }

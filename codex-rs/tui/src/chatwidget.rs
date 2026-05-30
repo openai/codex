@@ -1888,12 +1888,12 @@ impl ChatWidget {
         self.current_rollout_path.clone()
     }
 
-    /// Returns a cache key describing the current in-flight active cell for the transcript overlay.
+    /// Returns a cache key describing the current in-flight cells for the transcript overlay.
     ///
     /// `Ctrl+T` renders committed transcript cells plus a render-only live tail derived from the
-    /// current active cell, and the overlay caches that tail; this key is what it uses to decide
-    /// whether it must recompute. When there is no active cell, this returns `None` so the overlay
-    /// can drop the tail entirely.
+    /// current active, hook, and token activity cells, and the overlay caches that tail; this key is
+    /// what it uses to decide whether it must recompute. When there are no live cells, this returns
+    /// `None` so the overlay can drop the tail entirely.
     ///
     /// If callers mutate the active cell's transcript output without bumping the revision (or
     /// providing an appropriate animation tick), the overlay will keep showing a stale tail while
@@ -1901,7 +1901,8 @@ impl ChatWidget {
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
         let hook_cell = self.active_hook_cell.as_ref();
-        if cell.is_none() && hook_cell.is_none() {
+        let token_activity_cell = self.pending_token_activity_output();
+        if cell.is_none() && hook_cell.is_none() && token_activity_cell.is_none() {
             return None;
         }
         Some(ActiveCellTranscriptKey {
@@ -1938,6 +1939,13 @@ impl ChatWidget {
                 lines.push(HyperlinkLine::from(""));
             }
             lines.extend(hook_lines);
+        }
+        if let Some(token_activity_cell) = self.pending_token_activity_output() {
+            let token_activity_lines = token_activity_cell.transcript_hyperlink_lines(width);
+            if !token_activity_lines.is_empty() && !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(token_activity_lines);
         }
         (!lines.is_empty()).then_some(lines)
     }

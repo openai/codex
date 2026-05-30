@@ -1190,6 +1190,11 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
             .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
         Some("/tokens daily\n\n Token activity\n   Loading...\n".to_string()),
     );
+    assert_eq!(
+        chat.active_cell_transcript_lines(u16::MAX)
+            .map(|lines| lines_to_single_string(&lines)),
+        Some("/tokens daily\n\n Token activity\n   Loading...\n".to_string()),
+    );
 
     chat.clear_pending_token_activity_refreshes();
 
