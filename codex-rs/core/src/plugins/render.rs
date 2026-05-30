@@ -48,6 +48,18 @@ pub(crate) fn render_explicit_plugin_instructions(
         ));
     }
 
+    if !plugin.app_connector_ids.is_empty() {
+        lines.push(format!(
+            "- App IDs declared by this plugin, including templates: {}.",
+            plugin
+                .app_connector_ids
+                .iter()
+                .map(|connector_id| format!("`{}`", connector_id.0))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
     if lines.len() == 1 {
         return None;
     }
