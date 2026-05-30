@@ -45,6 +45,14 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    fn execution_barrier(&self) -> bool {
+        false
+    }
+
+    fn cancel_suffix_on_failure(&self) -> bool {
+        false
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(
             payload,
@@ -277,6 +285,14 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
 }
 
 impl CoreToolRuntime for ExposureOverride {
+    fn execution_barrier(&self) -> bool {
+        self.handler.execution_barrier()
+    }
+
+    fn cancel_suffix_on_failure(&self) -> bool {
+        self.handler.cancel_suffix_on_failure()
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         self.handler.matches_kind(payload)
     }
@@ -385,6 +401,16 @@ impl ToolRegistry {
     pub(crate) fn waits_for_runtime_cancellation(&self, name: &ToolName) -> Option<bool> {
         let tool = self.tool(name)?;
         Some(tool.waits_for_runtime_cancellation())
+    }
+
+    pub(crate) fn execution_barrier(&self, name: &ToolName) -> Option<bool> {
+        let tool = self.tool(name)?;
+        Some(tool.execution_barrier())
+    }
+
+    pub(crate) fn cancel_suffix_on_failure(&self, name: &ToolName) -> Option<bool> {
+        let tool = self.tool(name)?;
+        Some(tool.cancel_suffix_on_failure())
     }
 
     #[allow(dead_code)]

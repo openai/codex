@@ -92,6 +92,18 @@ impl ToolRouter {
             .unwrap_or(false)
     }
 
+    pub fn tool_is_execution_barrier(&self, call: &ToolCall) -> bool {
+        self.registry
+            .execution_barrier(&call.tool_name)
+            .unwrap_or(/*default*/ false)
+    }
+
+    pub fn tool_cancels_suffix_on_failure(&self, call: &ToolCall) -> bool {
+        self.registry
+            .cancel_suffix_on_failure(&call.tool_name)
+            .unwrap_or(/*default*/ false)
+    }
+
     #[instrument(level = "trace", skip_all, err)]
     pub fn build_tool_call(item: ResponseItem) -> Result<Option<ToolCall>, FunctionCallError> {
         match item {

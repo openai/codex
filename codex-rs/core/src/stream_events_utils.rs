@@ -311,6 +311,7 @@ pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
+    pub tool_is_execution_barrier: bool,
 }
 
 pub(crate) struct HandleOutputCtx {
@@ -432,6 +433,7 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
 
+            output.tool_is_execution_barrier = ctx.tool_runtime.tool_is_execution_barrier(&call);
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(
                 ctx.tool_runtime
