@@ -177,6 +177,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         apps_server.chatgpt_base_url,
     )
     .await?;
+    wait_for_mcp_server(&codex, "codex_apps").await?;
 
     codex
         .submit(Op::UserInput {
