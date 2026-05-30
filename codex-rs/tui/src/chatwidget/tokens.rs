@@ -694,6 +694,13 @@ impl ChatWidget {
         Some(output)
     }
 
+    pub(crate) fn request_completed_token_activity_output_insertion(&self) {
+        if self.completed_token_activity_output.is_some() {
+            self.app_event_tx
+                .send(AppEvent::CommitCompletedTokenActivityOutput);
+        }
+    }
+
     pub(crate) fn clear_pending_token_activity_refreshes(&mut self) {
         let cleared_refresh = self.refreshing_token_activity_output.take().is_some();
         let cleared_completed = self.completed_token_activity_output.take().is_some();

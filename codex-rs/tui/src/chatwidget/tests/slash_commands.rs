@@ -1289,8 +1289,12 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
         Some("/tokens daily\n\n Token activity\n   Token activity unavailable\n".to_string()),
     );
 
-    chat.stream_controller = None;
+    chat.finalize_turn();
     assert!(!chat.token_activity_history_insertion_blocked());
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CommitCompletedTokenActivityOutput))
+    );
     assert!(chat.take_completed_token_activity_output().is_some());
 }
 

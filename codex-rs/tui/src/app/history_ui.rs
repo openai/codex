@@ -48,6 +48,16 @@ impl App {
         }
     }
 
+    pub(super) fn insert_completed_token_activity_output_after_stream_shutdown(
+        &mut self,
+        tui: &mut tui::Tui,
+    ) {
+        if self.chat_widget.token_activity_history_insertion_blocked() {
+            return;
+        }
+        self.insert_completed_token_activity_output(tui);
+    }
+
     pub(super) fn open_url_in_browser(&mut self, url: String) {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget
