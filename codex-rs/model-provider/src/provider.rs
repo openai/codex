@@ -520,7 +520,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn amazon_bedrock_provider_strips_service_tiers_from_configured_static_catalog() {
+    async fn configured_bedrock_catalog_only_allows_default_service_tier() {
         let configured_model = codex_models_manager::bundled_models_response()
             .expect("bundled models should parse")
             .models
