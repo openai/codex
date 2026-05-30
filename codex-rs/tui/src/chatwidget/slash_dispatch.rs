@@ -300,10 +300,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Cwd => {
-                self.add_info_message(
-                    format!("Working directory: {}", self.config.cwd.display()),
-                    /*hint*/ None,
-                );
+                self.app_event_tx.send(AppEvent::ReadThreadWorkspace);
             }
             SlashCommand::AddDir => {
                 self.add_error_message(ADD_DIR_USAGE.to_string());

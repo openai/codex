@@ -150,6 +150,7 @@ Example with notification opt-out:
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/settings/updated` — experimental notification emitted to subscribed clients when a loaded thread’s effective next-turn settings change; includes `threadId` and the full `threadSettings`. Experimental clients also receive `threadSettings.runtimeWorkspaceRoots`, including roots added by model workspace mutations.
 - `thread/workspace/update` — experimental direct user workspace mutation; accepts `threadId`, `operation` (`setWorkingDirectory` or `addWorkspaceRoot`), and an absolute or cwd-relative `path`, then returns the authoritative runtime cwd and workspace roots. This method supports exactly one selected execution environment and does not request an additional approval because invoking it is an explicit user action.
+- `thread/workspace/read` — experimental read-only lookup for the authoritative runtime cwd and workspace roots of a loaded thread.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
 - `thread/delete` — hard-delete an active or archived thread and any spawned descendant threads; returns `{}` on success and emits `thread/deleted` for each deleted thread.

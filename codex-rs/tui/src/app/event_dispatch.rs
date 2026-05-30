@@ -7,11 +7,29 @@ use super::resize_reflow::trailing_run_start;
 use super::*;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
+use codex_app_server_protocol::ThreadWorkspaceReadResponse;
 use codex_app_server_protocol::WorkspaceMutationOperation;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
+
+fn format_thread_workspace(response: &ThreadWorkspaceReadResponse) -> String {
+    let workspace_roots = if response.runtime_workspace_roots.is_empty() {
+        "  (none)".to_string()
+    } else {
+        response
+            .runtime_workspace_roots
+            .iter()
+            .map(|root| format!("  {}", root.as_path().display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "Working directory:\n  {}\n\nWorkspace roots:\n{workspace_roots}",
+        response.cwd.as_path().display()
+    )
+}
 
 impl App {
     pub(super) async fn handle_event(
@@ -399,6 +417,22 @@ impl App {
                     Err(err) => self
                         .chat_widget
                         .add_error_message(format!("Failed to update workspace: {err}")),
+                }
+            }
+            AppEvent::ReadThreadWorkspace => {
+                let Some(thread_id) = self.active_thread_id else {
+                    self.chat_widget.add_error_message(
+                        "Workspace commands are unavailable before the session starts.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                match app_server.thread_workspace_read(thread_id).await {
+                    Ok(response) => self
+                        .chat_widget
+                        .add_info_message(format_thread_workspace(&response), /*hint*/ None),
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Failed to read workspace: {err}")),
                 }
             }
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
@@ -2339,5 +2373,32 @@ impl App {
                 AppRunControl::Continue
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
+
+    #[test]
+    fn format_thread_workspace_lists_cwd_and_roots_snapshot() {
+        let response = ThreadWorkspaceReadResponse {
+            cwd: test_path_buf("/tmp/current").abs(),
+            runtime_workspace_roots: vec![
+                test_path_buf("/tmp/current").abs(),
+                test_path_buf("/tmp/shared").abs(),
+            ],
+        };
+
+        insta::assert_snapshot!(format_thread_workspace(&response), @r"
+        Working directory:
+          /tmp/current
+
+        Workspace roots:
+          /tmp/current
+          /tmp/shared
+        ");
     }
 }

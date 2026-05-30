@@ -107,6 +107,8 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadWorkspaceReadParams;
+use codex_app_server_protocol::ThreadWorkspaceReadResponse;
 use codex_app_server_protocol::ThreadWorkspaceUpdateParams;
 use codex_app_server_protocol::ThreadWorkspaceUpdateResponse;
 use codex_app_server_protocol::Turn;
@@ -744,6 +746,22 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/workspace/update failed in TUI")
+    }
+
+    pub(crate) async fn thread_workspace_read(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadWorkspaceReadResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadWorkspaceRead {
+                request_id,
+                params: ThreadWorkspaceReadParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/workspace/read failed in TUI")
     }
 
     pub(crate) async fn thread_inject_items(

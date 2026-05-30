@@ -1134,6 +1134,9 @@ impl MessageProcessor {
             ClientRequest::ThreadWorkspaceUpdate { params, .. } => {
                 self.turn_processor.thread_workspace_update(params).await
             }
+            ClientRequest::ThreadWorkspaceRead { params, .. } => {
+                self.turn_processor.thread_workspace_read(params).await
+            }
             ClientRequest::ThreadMemoryModeSet { params, .. } => {
                 self.thread_processor.thread_memory_mode_set(params).await
             }

@@ -88,6 +88,15 @@ fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEv
 }
 
 #[tokio::test]
+async fn slash_cwd_without_path_requests_workspace_read() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+
+    chat.dispatch_command(SlashCommand::Cwd);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ReadThreadWorkspace));
+}
+
+#[tokio::test]
 async fn slash_cwd_with_path_requests_working_directory_update() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
 
