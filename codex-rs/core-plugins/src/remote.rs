@@ -698,15 +698,23 @@ pub(crate) async fn fetch_remote_installed_plugins(
         (RemotePluginScope::Global, global),
         (RemotePluginScope::Workspace, workspace),
     ] {
-        match result.and_then(|(_scope, plugins)| {
-            plugins
-                .into_iter()
-                .map(|plugin| remote_installed_plugin_to_cache_entry(&plugin))
-                .collect::<Result<Vec<_>, _>>()
-        }) {
-            Ok(scope_plugins) => {
+        match result {
+            Ok((_scope, plugins)) => {
                 any_scope_succeeded = true;
-                installed_plugins.extend(scope_plugins);
+                for plugin in plugins {
+                    match remote_installed_plugin_to_cache_entry(&plugin) {
+                        Ok(plugin) => installed_plugins.push(plugin),
+                        Err(err) => {
+                            tracing::warn!(
+                                scope = scope.api_value(),
+                                plugin_id = %plugin.plugin.id,
+                                plugin_name = %plugin.plugin.name,
+                                error = %err,
+                                "skipping malformed remote installed plugin"
+                            );
+                        }
+                    }
+                }
             }
             Err(err) => {
                 tracing::warn!(
