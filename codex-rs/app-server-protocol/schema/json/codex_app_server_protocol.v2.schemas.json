@@ -104,6 +104,62 @@
       "title": "AccountRateLimitsUpdatedNotification",
       "type": "object"
     },
+    "AccountTokenUsageDailyBucket": {
+      "properties": {
+        "startDate": {
+          "type": "string"
+        },
+        "tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "startDate",
+        "tokens"
+      ],
+      "type": "object"
+    },
+    "AccountTokenUsageSummary": {
+      "properties": {
+        "currentStreakDays": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lifetimeTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "longestRunningTurnSec": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "longestStreakDays": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "peakDailyTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "AccountUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2590,6 +2646,29 @@
             "method"
           ],
           "title": "Account/rateLimits/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/tokenUsage/read"
+              ],
+              "title": "Account/tokenUsage/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/tokenUsage/readRequest",
           "type": "object"
         },
         {
@@ -5990,6 +6069,28 @@
         "requiresOpenaiAuth"
       ],
       "title": "GetAccountResponse",
+      "type": "object"
+    },
+    "GetAccountTokenUsageResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "dailyUsageBuckets": {
+          "items": {
+            "$ref": "#/definitions/AccountTokenUsageDailyBucket"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "summary": {
+          "$ref": "#/definitions/AccountTokenUsageSummary"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "title": "GetAccountTokenUsageResponse",
       "type": "object"
     },
     "GitInfo": {
