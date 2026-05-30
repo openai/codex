@@ -652,7 +652,7 @@ async fn install_suggestion_tools_stay_visible_without_tool_search() {
 }
 
 #[tokio::test]
-async fn request_plugin_install_description_defers_inventory_to_list_tool() {
+async fn request_plugin_install_description_accepts_list_or_active_plugin_guidance() {
     let plan = probe_with(
         |turn| {
             set_features(
@@ -686,7 +686,10 @@ async fn request_plugin_install_description_defers_inventory_to_list_tool() {
         panic!("expected request_plugin_install function spec");
     };
     assert!(request_description.contains(
-        "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request."
+        "- `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request."
+    ));
+    assert!(request_description.contains(
+        "- An active plugin's invocation guidance provides an exact concrete app ID for a connector required by the user's explicit request."
     ));
     assert!(!request_description.contains("github"));
 }

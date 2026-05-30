@@ -32,7 +32,7 @@ pub(crate) fn create_request_plugin_install_tool() -> ToolSpec {
     ]);
 
     let description = format!(
-        "# Request plugin/connector install\n\nUse this tool only after `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns a plugin or connector that exactly matches the user's explicit request.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass the returned `tool_type` through directly, and pass the returned `id` as `tool_id`.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
+        "# Request plugin/connector install\n\nUse this tool only when either:\n- `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns a plugin or connector that exactly matches the user's explicit request.\n- An active plugin's invocation guidance provides an exact concrete app ID for a connector required by the user's explicit request.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. When using a list result, pass the returned `tool_type` through directly and pass the returned `id` as `tool_id`. When using an active plugin's invocation guidance, use `connector` as `tool_type` and pass the concrete app ID as `tool_id`. Do not pass template IDs such as `templated_apps_*`.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -65,8 +65,10 @@ mod tests {
     fn create_request_plugin_install_tool_uses_expected_wire_shape() {
         let expected_description = concat!(
             "# Request plugin/connector install\n\n",
-            "Use this tool only after `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request.\n\n",
-            "Do not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Pass the returned `tool_type` through directly, and pass the returned `id` as `tool_id`.\n\n",
+            "Use this tool only when either:\n",
+            "- `list_available_plugins_to_install` returns a plugin or connector that exactly matches the user's explicit request.\n",
+            "- An active plugin's invocation guidance provides an exact concrete app ID for a connector required by the user's explicit request.\n\n",
+            "Do not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. When using a list result, pass the returned `tool_type` through directly and pass the returned `id` as `tool_id`. When using an active plugin's invocation guidance, use `connector` as `tool_type` and pass the concrete app ID as `tool_id`. Do not pass template IDs such as `templated_apps_*`.\n\n",
             "IMPORTANT: DO NOT call this tool in parallel with other tools.",
         );
 
