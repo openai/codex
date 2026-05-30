@@ -1148,6 +1148,16 @@ mod tests {
             .await?;
         app.config = config;
         app.cloud_requirements = cloud_requirements;
+        let app_id = "unit_test_cloud_requirements_reload_marker";
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            format!(
+                r#"
+[apps.{app_id}]
+enabled = false
+"#
+            ),
+        )?;
 
         let assert_cloud_requirements = |app: &App| {
             let config = app.fresh_session_config();
@@ -1163,19 +1173,17 @@ mod tests {
         };
 
         assert_cloud_requirements(&app);
+        assert_eq!(app_enabled_in_effective_config(&app.config, app_id), None);
 
-        // These are the config-refresh paths used by `/new`, `/clear`, `/fork`,
-        // side conversations, and leaving the session picker.
-        for action in [
-            "starting a new thread",
-            "forking the thread",
-            "starting a side conversation",
-            "closing the session picker",
-        ] {
-            app.refresh_in_memory_config_from_disk_best_effort(action)
-                .await;
-            assert_cloud_requirements(&app);
-        }
+        // This is the fallible reload that the best-effort `/new`, `/clear`,
+        // `/fork`, side-conversation, and session-picker paths wrap.
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(
+            app_enabled_in_effective_config(&app.config, app_id),
+            Some(false)
+        );
+        assert_cloud_requirements(&app);
         Ok(())
     }
 
