@@ -3,7 +3,6 @@ use crate::session::tests::make_session_configuration_for_tests;
 use crate::state::AutoCompactWindowSnapshot;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
-use codex_protocol::protocol::SpendControlLimitSnapshot;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -126,7 +125,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
 }
 
 #[tokio::test]
-async fn set_rate_limits_keeps_individual_limit_on_codex_bucket() {
+async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);
 
@@ -144,12 +143,7 @@ async fn set_rate_limits_keeps_individual_limit_on_codex_bucket() {
             unlimited: false,
             balance: Some("50".to_string()),
         }),
-        individual_limit: Some(Some(SpendControlLimitSnapshot {
-            limit: "25000".to_string(),
-            used: "8000".to_string(),
-            remaining_percent: 68,
-            resets_at: 300,
-        })),
+        individual_limit: None,
         plan_type: Some(codex_protocol::account::PlanType::Plus),
         rate_limit_reached_type: None,
     });
@@ -189,45 +183,5 @@ async fn set_rate_limits_keeps_individual_limit_on_codex_bucket() {
             plan_type: Some(codex_protocol::account::PlanType::Plus),
             rate_limit_reached_type: None,
         })
-    );
-}
-
-#[tokio::test]
-async fn set_rate_limits_replaces_cached_individual_limit_when_explicitly_cleared() {
-    let session_configuration = make_session_configuration_for_tests().await;
-    let mut state = SessionState::new(session_configuration);
-
-    state.set_rate_limits(RateLimitSnapshot {
-        limit_id: Some("codex".to_string()),
-        limit_name: None,
-        primary: None,
-        secondary: None,
-        credits: None,
-        individual_limit: Some(Some(SpendControlLimitSnapshot {
-            limit: "25000".to_string(),
-            used: "8000".to_string(),
-            remaining_percent: 68,
-            resets_at: 300,
-        })),
-        plan_type: None,
-        rate_limit_reached_type: None,
-    });
-    state.set_rate_limits(RateLimitSnapshot {
-        limit_id: Some("codex".to_string()),
-        limit_name: None,
-        primary: None,
-        secondary: None,
-        credits: None,
-        individual_limit: Some(None),
-        plan_type: None,
-        rate_limit_reached_type: None,
-    });
-
-    assert_eq!(
-        state
-            .latest_rate_limits
-            .as_ref()
-            .and_then(|snapshot| snapshot.individual_limit.as_ref()),
-        Some(&None)
     );
 }

@@ -2986,34 +2986,6 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_account_rate_limits_updated_notification_without_individual_limit_update()
-    -> Result<()> {
-        let notification = serde_json::from_value::<ServerNotification>(json!({
-            "method": "account/rateLimits/updated",
-            "params": {
-                "rateLimits": {
-                    "limitId": "codex",
-                    "limitName": null,
-                    "primary": null,
-                    "secondary": null,
-                    "credits": null,
-                    "planType": null,
-                    "rateLimitReachedType": null
-                }
-            }
-        }))?;
-
-        let ServerNotification::AccountRateLimitsUpdated(notification) = notification else {
-            panic!("expected account/rateLimits/updated notification");
-        };
-        assert_eq!(
-            notification.individual_limit_update(),
-            v2::SpendControlLimitUpdate::Unchanged
-        );
-        Ok(())
-    }
-
-    #[test]
     fn serialize_thread_realtime_output_audio_delta_notification() -> Result<()> {
         let notification = ServerNotification::ThreadRealtimeOutputAudioDelta(
             v2::ThreadRealtimeOutputAudioDeltaNotification {

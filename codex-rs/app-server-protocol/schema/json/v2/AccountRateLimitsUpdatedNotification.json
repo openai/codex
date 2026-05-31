@@ -69,8 +69,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "limitId": {
           "type": [
@@ -177,76 +176,9 @@
         "used"
       ],
       "type": "object"
-    },
-    "SpendControlLimitUpdate": {
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "unchanged"
-              ],
-              "title": "UnchangedSpendControlLimitUpdateType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "UnchangedSpendControlLimitUpdate",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "cleared"
-              ],
-              "title": "ClearedSpendControlLimitUpdateType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "ClearedSpendControlLimitUpdate",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "limit": {
-              "$ref": "#/definitions/SpendControlLimitSnapshot"
-            },
-            "type": {
-              "enum": [
-                "updated"
-              ],
-              "title": "UpdatedSpendControlLimitUpdateType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "limit",
-            "type"
-          ],
-          "title": "UpdatedSpendControlLimitUpdate",
-          "type": "object"
-        }
-      ]
     }
   },
   "properties": {
-    "individualLimitUpdate": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/SpendControlLimitUpdate"
-        }
-      ],
-      "default": {
-        "type": "unchanged"
-      },
-      "description": "Sparse spend-control update carried alongside the backward-compatible snapshot.\n\n`unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata learned from `account/rateLimits/read`."
-    },
     "rateLimits": {
       "$ref": "#/definitions/RateLimitSnapshot"
     }

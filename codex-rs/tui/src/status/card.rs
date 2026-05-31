@@ -471,6 +471,7 @@ impl StatusHistoryCell {
                 StatusRateLimitValue::Window {
                     percent_used,
                     resets_at,
+                    details,
                 } => {
                     let percent_remaining = (100.0 - percent_used).clamp(0.0, 100.0);
                     let summary = format_status_limit_summary(percent_remaining);
@@ -522,60 +523,9 @@ impl StatusHistoryCell {
                     } else {
                         lines.push(base_line);
                     }
-                }
-                StatusRateLimitValue::MonthlyCreditLimit {
-                    percent_remaining,
-                    used,
-                    limit,
-                    resets_at,
-                } => {
-                    let summary = format_status_limit_summary(*percent_remaining);
-                    let full_value_spans = vec![
-                        Span::from(render_status_limit_progress_bar(*percent_remaining)),
-                        Span::from(" "),
-                        Span::from(summary.clone()),
-                    ];
-                    let value_spans = if line_display_width(&Line::from(full_value_spans.clone()))
-                        <= formatter.value_width(available_inner_width)
-                    {
-                        full_value_spans
-                    } else {
-                        vec![Span::from(summary)]
-                    };
-                    let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
-                    let base_line = Line::from(base_spans.clone());
-
-                    if let Some(resets_at) = resets_at.as_ref() {
-                        let resets_span = Span::from(format!("(resets {resets_at})")).dim();
-                        let mut inline_spans = base_spans;
-                        inline_spans.push(Span::from(" ").dim());
-                        inline_spans.push(resets_span);
-                        if line_display_width(&Line::from(inline_spans.clone()))
-                            <= available_inner_width
-                        {
-                            lines.push(Line::from(inline_spans));
-                        } else {
-                            lines.push(base_line);
-                            let reset_text = format!("(resets {resets_at})");
-                            let reset_width = formatter.value_width(available_inner_width).max(1);
-                            let wrap_options =
-                                textwrap::Options::new(reset_width).break_words(false);
-                            lines.extend(
-                                textwrap::wrap(reset_text.as_str(), wrap_options)
-                                    .into_iter()
-                                    .map(|wrapped| {
-                                        formatter.continuation(vec![
-                                            Span::from(wrapped.into_owned()).dim(),
-                                        ])
-                                    }),
-                            );
-                        }
-                    } else {
-                        lines.push(base_line);
+                    if let Some(details) = details {
+                        lines.push(formatter.continuation(vec![Span::from(details.clone()).dim()]));
                     }
-                    lines.push(formatter.continuation(vec![
-                        Span::from(format!("{used} of {limit} credits used")).dim(),
-                    ]));
                 }
                 StatusRateLimitValue::Text(text) => {
                     let label = row.label.clone();

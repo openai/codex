@@ -152,18 +152,6 @@ pub(super) fn is_app_server_cyber_policy_error(info: &AppServerCodexErrorInfo) -
 
 impl ChatWidget {
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        self.merge_rate_limit_snapshot(snapshot, /*preserve_missing_individual_limit*/ true);
-    }
-
-    pub(crate) fn replace_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        self.merge_rate_limit_snapshot(snapshot, /*preserve_missing_individual_limit*/ false);
-    }
-
-    fn merge_rate_limit_snapshot(
-        &mut self,
-        snapshot: Option<RateLimitSnapshot>,
-        preserve_missing_individual_limit: bool,
-    ) {
         if let Some(mut snapshot) = snapshot {
             let limit_id = snapshot
                 .limit_id
@@ -184,16 +172,6 @@ impl ChatWidget {
                         balance: credits.balance.clone(),
                     });
             }
-            let preserved_individual_limit =
-                if preserve_missing_individual_limit && snapshot.individual_limit.is_none() {
-                    self.rate_limit_snapshots_by_limit_id
-                        .get(&limit_id)
-                        .and_then(|display| display.individual_limit.as_ref())
-                        .cloned()
-                } else {
-                    None
-                };
-
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
             let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
@@ -255,13 +233,8 @@ impl ChatWidget {
                 self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
             }
 
-            let captured_at = Local::now();
-            let mut display =
-                rate_limit_snapshot_display_for_limit(&snapshot, limit_label, captured_at);
-            if display.individual_limit.is_none() {
-                display.individual_limit = preserved_individual_limit
-                    .map(|limit| limit.with_reset_text_for_capture(captured_at));
-            }
+            let display =
+                rate_limit_snapshot_display_for_limit(&snapshot, limit_label, Local::now());
             self.rate_limit_snapshots_by_limit_id
                 .insert(limit_id, display);
 

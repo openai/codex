@@ -1856,7 +1856,7 @@ Field notes:
 ```json
 { "method": "account/rateLimits/read", "id": 7 }
 { "id": 7, "result": { "rateLimits": { "primary": { "usedPercent": 25, "windowDurationMins": 15, "resetsAt": 1730947200 }, "secondary": null, "rateLimitReachedType": null } } }
-{ "method": "account/rateLimits/updated", "params": { "rateLimits": { … }, "individualLimitUpdate": { "type": "unchanged" } } }
+{ "method": "account/rateLimits/updated", "params": { "rateLimits": { … } } }
 ```
 
 Field notes:
@@ -1866,7 +1866,6 @@ Field notes:
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
 - `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
 - `individualLimit` describes the effective monthly credit limit when available. It is `null` when no monthly limit is available.
-- `individualLimitUpdate` describes the effective monthly credit-limit change carried by a notification: `unchanged` preserves cached metadata, `cleared` removes it, and `updated` replaces it with a `limit`. New app-server versions always send this field. Deserializers treat omission from older app-server versions as `unchanged`.
 
 ### 8) Notify a workspace owner about a limit
 

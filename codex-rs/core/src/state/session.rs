@@ -245,8 +245,8 @@ impl SessionState {
     }
 }
 
-// Sometimes new snapshots don't include usage metadata populated by the account endpoint.
-// Preserve that metadata from the previous snapshot when missing. For `limit_id`, treat
+// Sometimes new snapshots don't include credits or plan information.
+// Preserve those from the previous snapshot when missing. For `limit_id`, treat
 // missing values as the default `"codex"` bucket.
 fn merge_rate_limit_fields(
     previous: Option<&RateLimitSnapshot>,
@@ -257,11 +257,6 @@ fn merge_rate_limit_fields(
     }
     if snapshot.credits.is_none() {
         snapshot.credits = previous.and_then(|prior| prior.credits.clone());
-    }
-    if snapshot.individual_limit.is_none()
-        && previous.and_then(|prior| prior.limit_id.as_deref()) == snapshot.limit_id.as_deref()
-    {
-        snapshot.individual_limit = previous.and_then(|prior| prior.individual_limit.clone());
     }
     if snapshot.plan_type.is_none() {
         snapshot.plan_type = previous.and_then(|prior| prior.plan_type);

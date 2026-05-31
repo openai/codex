@@ -41,17 +41,8 @@ pub(crate) enum StatusRateLimitValue {
         percent_used: f64,
         /// Localized reset string, or `None` when unknown.
         resets_at: Option<String>,
-    },
-    /// Effective monthly credit cap with both remaining percentage and usage totals.
-    MonthlyCreditLimit {
-        /// Percent of the monthly credit cap that remains.
-        percent_remaining: f64,
-        /// Formatted credits consumed in the current period.
-        used: String,
-        /// Formatted effective monthly credit cap.
-        limit: String,
-        /// Localized reset string, or `None` when unknown.
-        resets_at: Option<String>,
+        /// Optional detail line rendered beneath the progress bar.
+        details: Option<String>,
     },
     /// Plain text value used for non-window rows.
     Text(String),
@@ -133,7 +124,6 @@ pub(crate) struct SpendControlLimitSnapshotDisplay {
     pub percent_remaining: f64,
     pub used: String,
     pub limit: String,
-    pub resets_at_timestamp: i64,
     pub resets_at: Option<String>,
 }
 
@@ -192,19 +182,9 @@ impl SpendControlLimitSnapshotDisplay {
             percent_remaining: f64::from(value.remaining_percent.clamp(0, 100)),
             used: format_credit_amount(&value.used)?,
             limit: format_credit_amount(&value.limit)?,
-            resets_at_timestamp: value.resets_at,
-            resets_at: Self::format_resets_at(value.resets_at, captured_at),
+            resets_at: DateTime::<Utc>::from_timestamp(value.resets_at, 0)
+                .map(|dt| format_reset_timestamp(dt.with_timezone(&Local), captured_at)),
         })
-    }
-
-    pub(crate) fn with_reset_text_for_capture(mut self, captured_at: DateTime<Local>) -> Self {
-        self.resets_at = Self::format_resets_at(self.resets_at_timestamp, captured_at);
-        self
-    }
-
-    fn format_resets_at(resets_at_timestamp: i64, captured_at: DateTime<Local>) -> Option<String> {
-        DateTime::<Utc>::from_timestamp(resets_at_timestamp, 0)
-            .map(|dt| format_reset_timestamp(dt.with_timezone(&Local), captured_at))
     }
 }
 
@@ -284,6 +264,7 @@ pub(crate) fn compose_rate_limit_data_many(
                 value: StatusRateLimitValue::Window {
                     percent_used: primary.used_percent,
                     resets_at: primary.resets_at.clone(),
+                    details: None,
                 },
             });
         }
@@ -310,6 +291,7 @@ pub(crate) fn compose_rate_limit_data_many(
                 value: StatusRateLimitValue::Window {
                     percent_used: secondary.used_percent,
                     resets_at: secondary.resets_at.clone(),
+                    details: None,
                 },
             });
         }
@@ -322,11 +304,13 @@ pub(crate) fn compose_rate_limit_data_many(
         if let Some(individual_limit) = snapshot.individual_limit.as_ref() {
             rows.push(StatusRateLimitRow {
                 label: "Monthly credit limit".to_string(),
-                value: StatusRateLimitValue::MonthlyCreditLimit {
-                    percent_remaining: individual_limit.percent_remaining,
-                    used: individual_limit.used.clone(),
-                    limit: individual_limit.limit.clone(),
+                value: StatusRateLimitValue::Window {
+                    percent_used: 100.0 - individual_limit.percent_remaining,
                     resets_at: individual_limit.resets_at.clone(),
+                    details: Some(format!(
+                        "{} of {} credits used",
+                        individual_limit.used, individual_limit.limit
+                    )),
                 },
             });
         }
@@ -419,13 +403,9 @@ mod tests {
     use super::CreditsSnapshotDisplay;
     use super::RateLimitSnapshotDisplay;
     use super::RateLimitWindowDisplay;
-    use super::SpendControlLimitSnapshotDisplay;
     use super::StatusRateLimitData;
     use super::compose_rate_limit_data_many;
-    use chrono::Duration as ChronoDuration;
     use chrono::Local;
-    use chrono::TimeZone;
-    use codex_app_server_protocol::SpendControlLimitSnapshot;
     use pretty_assertions::assert_eq;
 
     fn window(used_percent: f64) -> RateLimitWindowDisplay {
@@ -514,32 +494,6 @@ mod tests {
                 "Usage limit".to_string(),
                 "Secondary usage limit".to_string(),
             ]
-        );
-    }
-
-    #[test]
-    fn preserved_spend_control_limit_recomputes_reset_text_for_capture() {
-        let initial_capture = Local
-            .with_ymd_and_hms(2025, 1, 1, 10, 0, 0)
-            .single()
-            .expect("valid initial capture");
-        let later_capture = initial_capture + ChronoDuration::days(1);
-        let limit = SpendControlLimitSnapshot {
-            limit: "25000".to_string(),
-            used: "8000".to_string(),
-            remaining_percent: 68,
-            resets_at: (initial_capture + ChronoDuration::hours(29)).timestamp(),
-        };
-
-        let display = SpendControlLimitSnapshotDisplay::from_limit(&limit, initial_capture)
-            .expect("shape spend-control limit");
-        assert_eq!(display.resets_at.as_deref(), Some("15:00 on 2 Jan"));
-        assert_eq!(
-            display
-                .with_reset_text_for_capture(later_capture)
-                .resets_at
-                .as_deref(),
-            Some("15:00")
         );
     }
 }

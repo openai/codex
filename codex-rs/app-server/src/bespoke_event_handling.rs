@@ -1591,7 +1591,9 @@ async fn handle_token_count_event(
     if let Some(rate_limits) = rate_limits {
         outgoing
             .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
-                AccountRateLimitsUpdatedNotification::from_core(rate_limits),
+                AccountRateLimitsUpdatedNotification {
+                    rate_limits: rate_limits.into(),
+                },
             ))
             .await;
     }
@@ -2087,7 +2089,6 @@ mod tests {
     use codex_app_server_protocol::AutoReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
-    use codex_app_server_protocol::SpendControlLimitUpdate;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_login::CodexAuth;
     use codex_protocol::items::HookPromptFragment;
@@ -3586,10 +3587,6 @@ mod tests {
                 assert_eq!(payload.rate_limits.limit_name, None);
                 assert!(payload.rate_limits.primary.is_some());
                 assert!(payload.rate_limits.credits.is_some());
-                assert_eq!(
-                    payload.individual_limit_update,
-                    SpendControlLimitUpdate::Unchanged
-                );
             }
             other => bail!("unexpected notification: {other:?}"),
         }

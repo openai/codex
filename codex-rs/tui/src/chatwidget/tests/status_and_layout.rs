@@ -745,7 +745,7 @@ async fn status_line_secondary_only_non_weekly_limit_omits_primary_limit_item() 
 }
 
 #[tokio::test]
-async fn rate_limit_snapshot_keeps_account_metadata_when_missing_from_headers() {
+async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
@@ -758,12 +758,7 @@ async fn rate_limit_snapshot_keeps_account_metadata_when_missing_from_headers() 
             unlimited: false,
             balance: Some("17.5".to_string()),
         }),
-        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
-            limit: "25000".to_string(),
-            used: "8000".to_string(),
-            remaining_percent: 68,
-            resets_at: 300,
-        }),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -801,53 +796,8 @@ async fn rate_limit_snapshot_keeps_account_metadata_when_missing_from_headers() 
     assert_eq!(credits.balance.as_deref(), Some("17.5"));
     assert!(!credits.unlimited);
     assert_eq!(
-        display
-            .individual_limit
-            .as_ref()
-            .map(|limit| (limit.used.as_str(), limit.limit.as_str())),
-        Some(("8,000", "25,000"))
-    );
-    assert_eq!(
         display.primary.as_ref().map(|window| window.used_percent),
         Some(80.0)
-    );
-}
-
-#[tokio::test]
-async fn account_rate_limit_refresh_clears_removed_individual_limit() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
-        limit_id: None,
-        limit_name: None,
-        primary: None,
-        secondary: None,
-        credits: None,
-        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
-            limit: "25000".to_string(),
-            used: "8000".to_string(),
-            remaining_percent: 68,
-            resets_at: 300,
-        }),
-        plan_type: None,
-        rate_limit_reached_type: None,
-    }));
-    chat.replace_rate_limit_snapshot(Some(RateLimitSnapshot {
-        limit_id: None,
-        limit_name: None,
-        primary: None,
-        secondary: None,
-        credits: None,
-        individual_limit: None,
-        plan_type: None,
-        rate_limit_reached_type: None,
-    }));
-
-    assert!(
-        chat.rate_limit_snapshots_by_limit_id
-            .get("codex")
-            .and_then(|snapshot| snapshot.individual_limit.as_ref())
-            .is_none()
     );
 }
 

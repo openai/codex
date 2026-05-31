@@ -250,52 +250,6 @@ pub struct AccountUpdatedNotification {
 #[ts(export_to = "v2/")]
 pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
-    /// Sparse spend-control update carried alongside the backward-compatible snapshot.
-    ///
-    /// `unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata
-    /// learned from `account/rateLimits/read`.
-    #[serde(default)]
-    pub individual_limit_update: SpendControlLimitUpdate,
-}
-
-impl AccountRateLimitsUpdatedNotification {
-    pub fn from_core(rate_limits: CoreRateLimitSnapshot) -> Self {
-        let individual_limit_update =
-            SpendControlLimitUpdate::from_core(rate_limits.individual_limit.clone());
-        Self {
-            rate_limits: rate_limits.into(),
-            individual_limit_update,
-        }
-    }
-
-    pub fn individual_limit_update(&self) -> SpendControlLimitUpdate {
-        self.individual_limit_update.clone()
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum SpendControlLimitUpdate {
-    #[default]
-    Unchanged,
-    Cleared,
-    Updated {
-        limit: SpendControlLimitSnapshot,
-    },
-}
-
-impl SpendControlLimitUpdate {
-    fn from_core(value: Option<Option<CoreSpendControlLimitSnapshot>>) -> Self {
-        match value {
-            None => Self::Unchanged,
-            Some(None) => Self::Cleared,
-            Some(Some(limit)) => Self::Updated {
-                limit: limit.into(),
-            },
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -307,7 +261,6 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
-    #[serde(default)]
     pub individual_limit: Option<SpendControlLimitSnapshot>,
     pub plan_type: Option<PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
@@ -321,9 +274,7 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
-            individual_limit: value
-                .individual_limit
-                .and_then(|individual_limit| individual_limit.map(SpendControlLimitSnapshot::from)),
+            individual_limit: value.individual_limit.map(SpendControlLimitSnapshot::from),
             plan_type: value.plan_type,
             rate_limit_reached_type: value
                 .rate_limit_reached_type
