@@ -73,6 +73,7 @@ use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
+use codex_tools::UnifiedExecShellMode;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
@@ -564,6 +565,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
                 allow_login_shell,
                 exec_permission_approvals_enabled,
                 include_environment_id,
+                include_shell_parameter: unified_exec_should_include_shell_parameter(turn_context),
             }));
             planned_tools.add(WriteStdinHandler);
 
@@ -578,6 +580,17 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
             planned_tools.add(ShellCommandHandler::new(shell_command_options));
         }
     }
+}
+
+fn unified_exec_should_include_shell_parameter(turn_context: &TurnContext) -> bool {
+    !matches!(
+        &turn_context.unified_exec_shell_mode,
+        UnifiedExecShellMode::ZshFork(_)
+    ) || turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .any(|environment| environment.environment.is_remote())
 }
 
 fn add_mcp_resource_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {

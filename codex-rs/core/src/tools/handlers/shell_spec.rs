@@ -13,12 +13,15 @@ pub struct CommandToolOptions {
 
 #[cfg(test)]
 pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
-    create_exec_command_tool_with_environment_id(options, /*include_environment_id*/ false)
+    create_exec_command_tool_with_environment_id(
+        options, /*include_environment_id*/ false, /*include_shell_parameter*/ true,
+    )
 }
 
 pub(crate) fn create_exec_command_tool_with_environment_id(
     options: CommandToolOptions,
     include_environment_id: bool,
+    include_shell_parameter: bool,
 ) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
@@ -30,12 +33,6 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
             JsonSchema::string(Some(
                 "Working directory for the command. Defaults to the turn cwd."
                     .to_string(),
-            )),
-        ),
-        (
-            "shell".to_string(),
-            JsonSchema::string(Some(
-                "Shell binary to launch. Defaults to the user's default shell.".to_string(),
             )),
         ),
         (
@@ -58,6 +55,14 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
             )),
         ),
     ]);
+    if include_shell_parameter {
+        properties.insert(
+            "shell".to_string(),
+            JsonSchema::string(Some(
+                "Shell binary to launch. Defaults to the user's default shell.".to_string(),
+            )),
+        );
+    }
     if options.allow_login_shell {
         properties.insert(
             "login".to_string(),
