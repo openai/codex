@@ -888,17 +888,8 @@ impl Session {
                     ))
                     .await;
             session_configuration.thread_name = thread_name.clone();
-            validate_config_lock_if_configured(
-                &session_configuration,
-                initial_multi_agent_version,
-            )
-            .await?;
-            export_config_lock_if_configured(
-                &session_configuration,
-                thread_id,
-                initial_multi_agent_version,
-            )
-            .await?;
+            validate_config_lock_if_configured(&session_configuration).await?;
+            export_config_lock_if_configured(&session_configuration, thread_id).await?;
             let state = SessionState::new(session_configuration.clone());
             let managed_network_requirements_configured = config
                 .config_layer_stack
