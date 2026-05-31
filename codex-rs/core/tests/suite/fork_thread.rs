@@ -371,17 +371,17 @@ fn latest_multi_agent_version(
     std::fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("failed to read rollout file {}: {err}", path.display()))
         .lines()
+        .rev()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             serde_json::from_str::<RolloutLine>(line)
                 .unwrap_or_else(|err| panic!("failed to parse rollout line `{line}`: {err}"))
         })
-        .filter_map(|line| match line.item {
+        .find_map(|line| match line.item {
             RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == thread_id => {
                 Some(meta_line.meta.multi_agent_version)
             }
             _ => None,
         })
-        .last()
         .flatten()
 }

@@ -16,7 +16,13 @@ pub(super) async fn set_multi_agent_version_if_unset(
     store: &LocalThreadStore,
     params: SetMultiAgentVersionIfUnsetParams,
 ) -> ThreadStoreResult<MultiAgentVersion> {
-    let _guard = store.multi_agent_version_seed_lock.lock().await;
+    let _permit = store
+        .multi_agent_version_seed_semaphore
+        .acquire()
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to lock thread multi-agent version: {err}"),
+        })?;
     let has_live_writer = live_writer::rollout_path(store, params.thread_id)
         .await
         .is_ok();
