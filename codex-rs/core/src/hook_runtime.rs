@@ -61,24 +61,6 @@ struct ContextInjectingHookOutcome {
     outcome: HookRuntimeOutcome,
 }
 
-impl From<SessionStartOutcome> for ContextInjectingHookOutcome {
-    fn from(value: SessionStartOutcome) -> Self {
-        let SessionStartOutcome {
-            hook_events,
-            should_stop,
-            stop_reason: _,
-            additional_contexts,
-        } = value;
-        Self {
-            hook_events,
-            outcome: HookRuntimeOutcome {
-                should_stop,
-                additional_contexts,
-            },
-        }
-    }
-}
-
 impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
     fn from(value: UserPromptSubmitOutcome) -> Self {
         let UserPromptSubmitOutcome {
@@ -135,16 +117,22 @@ pub(crate) async fn run_pending_session_start_hooks(
         };
         let hooks = sess.hooks();
         let preview_runs = hooks.preview_session_start(&request);
-        if run_context_injecting_hook(
-            sess,
-            turn_context,
-            preview_runs,
-            hooks.run_session_start(request, Some(turn_context.sub_id.clone())),
-        )
-        .await
-        .record_additional_contexts(sess, turn_context)
-        .await
-        {
+        emit_hook_started_events(sess, turn_context, preview_runs).await;
+        let SessionStartOutcome {
+            hook_events,
+            should_stop,
+            stop_reason: _,
+            additional_contexts,
+            session_start_env,
+        } = hooks
+            .run_session_start(request, Some(turn_context.sub_id.clone()))
+            .await;
+        emit_hook_completed_events(sess, turn_context, hook_events).await;
+        if let Some(env) = session_start_env {
+            sess.replace_session_start_env(env);
+        }
+        record_additional_contexts(sess, turn_context, additional_contexts).await;
+        if should_stop {
             return true;
         }
     }
@@ -567,18 +555,6 @@ where
     let outcome = outcome_future.await.into();
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
     outcome.outcome
-}
-
-impl HookRuntimeOutcome {
-    async fn record_additional_contexts(
-        self,
-        sess: &Arc<Session>,
-        turn_context: &Arc<TurnContext>,
-    ) -> bool {
-        record_additional_contexts(sess, turn_context, self.additional_contexts).await;
-
-        self.should_stop
-    }
 }
 
 pub(crate) async fn record_additional_contexts(

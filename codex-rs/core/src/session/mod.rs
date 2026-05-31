@@ -3222,6 +3222,23 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
+    pub(crate) fn replace_session_start_env(&self, env: HashMap<String, String>) {
+        self.services.session_start_env.replace(env);
+    }
+
+    pub(crate) fn apply_session_start_env(&self, env: &mut HashMap<String, String>) {
+        self.services.session_start_env.apply(env);
+    }
+
+    pub(crate) fn extend_session_start_env_snapshot_overrides(
+        &self,
+        overrides: &mut HashMap<String, String>,
+    ) {
+        self.services
+            .session_start_env
+            .extend_snapshot_overrides(overrides);
+    }
+
     pub(crate) async fn current_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {
         let Some(live_thread) = self.live_thread() else {
             return Ok(None);

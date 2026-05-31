@@ -292,6 +292,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             explicit_env_overrides
         };
         let environment_is_remote = req.environment.is_remote();
+        let mut explicit_env_overrides = explicit_env_overrides;
+        if !environment_is_remote {
+            ctx.session
+                .extend_session_start_env_snapshot_overrides(&mut explicit_env_overrides);
+        }
         let command = if environment_is_remote {
             base_command.to_vec()
         } else {

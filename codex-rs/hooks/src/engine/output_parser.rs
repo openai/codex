@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(Debug, Clone)]
 pub(crate) struct UniversalOutput {
     pub continue_processing: bool,
@@ -10,6 +12,8 @@ pub(crate) struct UniversalOutput {
 pub(crate) struct SessionStartOutput {
     pub universal: UniversalOutput,
     pub additional_context: Option<String>,
+    pub env: HashMap<String, String>,
+    pub invalid_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,10 +96,16 @@ use crate::schema::UserPromptSubmitCommandOutputWire;
 
 pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     let wire: SessionStartCommandOutputWire = parse_json(stdout)?;
+    let (additional_context, env) = wire
+        .hook_specific_output
+        .map(|output| (output.additional_context, output.env))
+        .unwrap_or_default();
+    let invalid_reason = invalid_session_start_env_reason(&env);
     Some(session_start_output(
         wire.universal,
-        wire.hook_specific_output
-            .and_then(|output| output.additional_context),
+        additional_context,
+        env,
+        invalid_reason,
     ))
 }
 
@@ -105,17 +115,42 @@ pub(crate) fn parse_subagent_start(stdout: &str) -> Option<SessionStartOutput> {
         wire.universal,
         wire.hook_specific_output
             .and_then(|output| output.additional_context),
+        HashMap::new(),
+        None,
     ))
 }
 
 fn session_start_output(
     universal: HookUniversalOutputWire,
     additional_context: Option<String>,
+    env: HashMap<String, String>,
+    invalid_reason: Option<String>,
 ) -> SessionStartOutput {
     SessionStartOutput {
         universal: UniversalOutput::from(universal),
         additional_context,
+        env,
+        invalid_reason,
     }
+}
+
+fn invalid_session_start_env_reason(env: &HashMap<String, String>) -> Option<String> {
+    for (key, value) in env {
+        if key.is_empty() || key.contains('=') || key.contains('\0') {
+            return Some("SessionStart hook returned an invalid env variable name".to_string());
+        }
+        if key.eq_ignore_ascii_case("CODEX_THREAD_ID") {
+            return Some(
+                "SessionStart hook cannot set reserved env variable `CODEX_THREAD_ID`".to_string(),
+            );
+        }
+        if value.contains('\0') {
+            return Some(format!(
+                "SessionStart hook returned an env value containing NUL for `{key}`"
+            ));
+        }
+    }
+    None
 }
 
 pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {

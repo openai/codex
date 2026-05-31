@@ -94,13 +94,15 @@ impl ShellCommandHandler {
         let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
         #[allow(deprecated)]
         let cwd = turn_context.resolve_path(params.workdir.clone());
+        let mut env = create_env(&turn_context.shell_environment_policy, Some(thread_id));
+        session.apply_session_start_env(&mut env);
 
         Ok(ExecParams {
             command,
             cwd,
             expiration: params.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
-            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            env,
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,

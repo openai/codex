@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
@@ -82,6 +83,7 @@ pub struct SessionStartOutcome {
     pub should_stop: bool,
     pub stop_reason: Option<String>,
     pub additional_contexts: Vec<String>,
+    pub session_start_env: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -89,6 +91,7 @@ struct SessionStartHandlerData {
     should_stop: bool,
     stop_reason: Option<String>,
     additional_contexts_for_model: Vec<String>,
+    session_start_env: HashMap<String, String>,
 }
 
 pub(crate) fn preview(
@@ -111,17 +114,16 @@ pub(crate) async fn run(
     request: SessionStartRequest,
     turn_id: Option<String>,
 ) -> SessionStartOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        request.target.event_name(),
-        Some(request.target.matcher_input()),
-    );
+    let event_name = request.target.event_name();
+    let matched =
+        dispatcher::select_handlers(handlers, event_name, Some(request.target.matcher_input()));
     if matched.is_empty() {
         return SessionStartOutcome {
             hook_events: Vec::new(),
             should_stop: false,
             stop_reason: None,
             additional_contexts: Vec::new(),
+            session_start_env: session_start_env_for_event(event_name),
         };
     }
 
@@ -143,6 +145,7 @@ pub(crate) async fn run(
                             turn_id,
                             format!("failed to serialize session start hook input: {error}"),
                         ),
+                        event_name,
                     );
                 }
             };
@@ -173,6 +176,7 @@ pub(crate) async fn run(
                             Some(subagent_turn_id),
                             format!("failed to serialize subagent start hook input: {error}"),
                         ),
+                        event_name,
                     );
                 }
             };
@@ -199,12 +203,16 @@ pub(crate) async fn run(
             .iter()
             .map(|result| result.data.additional_contexts_for_model.as_slice()),
     );
+    let session_start_env = (event_name == HookEventName::SessionStart).then(|| {
+        merge_session_start_env(results.iter().map(|result| &result.data.session_start_env))
+    });
 
     SessionStartOutcome {
         hook_events: results.into_iter().map(|result| result.completed).collect(),
         should_stop,
         stop_reason,
         additional_contexts,
+        session_start_env,
     }
 }
 
@@ -224,6 +232,7 @@ fn parse_completed(
     let mut should_stop = false;
     let mut stop_reason = None;
     let mut additional_contexts_for_model = Vec::new();
+    let mut session_start_env = HashMap::new();
 
     match run_result.error.as_deref() {
         Some(error) => {
@@ -254,25 +263,34 @@ fn parse_completed(
                             text: system_message,
                         });
                     }
-                    if let Some(additional_context) = parsed.additional_context {
-                        common::append_additional_context(
-                            &mut entries,
-                            &mut additional_contexts_for_model,
-                            additional_context,
-                        );
-                    }
-                    let _ = parsed.universal.suppress_output;
-                    if handler.event_name == HookEventName::SessionStart
-                        && !parsed.universal.continue_processing
-                    {
-                        status = HookRunStatus::Stopped;
-                        should_stop = true;
-                        stop_reason = parsed.universal.stop_reason.clone();
-                        if let Some(stop_reason_text) = parsed.universal.stop_reason {
-                            entries.push(HookOutputEntry {
-                                kind: HookOutputEntryKind::Stop,
-                                text: stop_reason_text,
-                            });
+                    if let Some(invalid_reason) = parsed.invalid_reason {
+                        status = HookRunStatus::Failed;
+                        entries.push(HookOutputEntry {
+                            kind: HookOutputEntryKind::Error,
+                            text: invalid_reason,
+                        });
+                    } else {
+                        session_start_env = parsed.env;
+                        if let Some(additional_context) = parsed.additional_context {
+                            common::append_additional_context(
+                                &mut entries,
+                                &mut additional_contexts_for_model,
+                                additional_context,
+                            );
+                        }
+                        let _ = parsed.universal.suppress_output;
+                        if handler.event_name == HookEventName::SessionStart
+                            && !parsed.universal.continue_processing
+                        {
+                            status = HookRunStatus::Stopped;
+                            should_stop = true;
+                            stop_reason = parsed.universal.stop_reason.clone();
+                            if let Some(stop_reason_text) = parsed.universal.stop_reason {
+                                entries.push(HookOutputEntry {
+                                    kind: HookOutputEntryKind::Stop,
+                                    text: stop_reason_text,
+                                });
+                            }
                         }
                     }
                 } else if output_parser::looks_like_json(&run_result.stdout) {
@@ -329,22 +347,58 @@ fn parse_completed(
             should_stop,
             stop_reason,
             additional_contexts_for_model,
+            session_start_env,
         },
         completion_order: 0,
     }
 }
 
-fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> SessionStartOutcome {
+fn serialization_failure_outcome(
+    hook_events: Vec<HookCompletedEvent>,
+    event_name: HookEventName,
+) -> SessionStartOutcome {
     SessionStartOutcome {
         hook_events,
         should_stop: false,
         stop_reason: None,
         additional_contexts: Vec::new(),
+        session_start_env: session_start_env_for_event(event_name),
     }
+}
+
+fn session_start_env_for_event(event_name: HookEventName) -> Option<HashMap<String, String>> {
+    (event_name == HookEventName::SessionStart).then(HashMap::new)
+}
+
+fn merge_session_start_env<'a>(
+    envs: impl IntoIterator<Item = &'a HashMap<String, String>>,
+) -> HashMap<String, String> {
+    let mut merged = HashMap::new();
+    for env in envs {
+        for (key, value) in env {
+            insert_session_start_env(&mut merged, key.clone(), value.clone());
+        }
+    }
+    merged
+}
+
+fn insert_session_start_env(env: &mut HashMap<String, String>, key: String, value: String) {
+    #[cfg(windows)]
+    if let Some(existing) = env
+        .keys()
+        .find(|candidate| candidate.eq_ignore_ascii_case(&key))
+        .cloned()
+    {
+        env.remove(&existing);
+    }
+
+    env.insert(key, value);
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
@@ -354,6 +408,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::SessionStartHandlerData;
+    use super::merge_session_start_env;
     use super::parse_completed;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
@@ -372,6 +427,7 @@ mod tests {
                 should_stop: false,
                 stop_reason: None,
                 additional_contexts_for_model: vec!["hello from hook".to_string()],
+                session_start_env: HashMap::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
@@ -402,6 +458,7 @@ mod tests {
                 should_stop: true,
                 stop_reason: Some("pause".to_string()),
                 additional_contexts_for_model: vec!["do not inject".to_string()],
+                session_start_env: HashMap::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -438,6 +495,7 @@ mod tests {
                 should_stop: false,
                 stop_reason: None,
                 additional_contexts_for_model: Vec::new(),
+                session_start_env: HashMap::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -464,6 +522,7 @@ mod tests {
                 should_stop: false,
                 stop_reason: None,
                 additional_contexts_for_model: vec!["hello from subagent hook".to_string()],
+                session_start_env: HashMap::new(),
             }
         );
         assert_eq!(parsed.completed.turn_id.as_deref(), Some("turn-1"));
@@ -495,6 +554,7 @@ mod tests {
                 should_stop: false,
                 stop_reason: None,
                 additional_contexts_for_model: vec!["child context".to_string()],
+                session_start_env: HashMap::new(),
             }
         );
         assert_eq!(parsed.completed.turn_id.as_deref(), Some("turn-1"));
@@ -504,6 +564,69 @@ mod tests {
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Context,
                 text: "child context".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn session_start_env_is_parsed() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"hookSpecificOutput":{"hookEventName":"SessionStart","env":{"PATH":"/plugin/bin","PLUGIN_HOME":"/plugin"}}}"#,
+                "",
+            ),
+            /*turn_id*/ None,
+        );
+
+        assert_eq!(
+            parsed.data.session_start_env,
+            HashMap::from([
+                ("PATH".to_string(), "/plugin/bin".to_string()),
+                ("PLUGIN_HOME".to_string(), "/plugin".to_string()),
+            ])
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
+    }
+
+    #[test]
+    fn later_session_start_env_wins() {
+        let first = HashMap::from([
+            ("FIRST".to_string(), "1".to_string()),
+            ("PATH".to_string(), "/first".to_string()),
+        ]);
+        let second = HashMap::from([("PATH".to_string(), "/second".to_string())]);
+
+        assert_eq!(
+            merge_session_start_env([&first, &second]),
+            HashMap::from([
+                ("FIRST".to_string(), "1".to_string()),
+                ("PATH".to_string(), "/second".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn reserved_session_start_env_is_rejected() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"hookSpecificOutput":{"hookEventName":"SessionStart","env":{"CODEX_THREAD_ID":"hook-thread"}}}"#,
+                "",
+            ),
+            /*turn_id*/ None,
+        );
+
+        assert_eq!(parsed.data.session_start_env, HashMap::new());
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "SessionStart hook cannot set reserved env variable `CODEX_THREAD_ID`"
+                    .to_string(),
             }]
         );
     }

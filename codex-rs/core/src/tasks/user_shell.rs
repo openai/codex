@@ -15,6 +15,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
+use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::sandboxing::ExecRequest;
 use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
@@ -119,6 +120,11 @@ pub(crate) async fn execute_user_shell_command(
         });
         session.send_event(turn_context.as_ref(), event).await;
     }
+    if mode == UserShellCommandMode::StandaloneTurn
+        && run_pending_session_start_hooks(&session, &turn_context).await
+    {
+        return;
+    }
 
     // Execute the user's script under their default shell when known; this
     // allows commands that use shell features (pipes, &&, redirects, etc.).
@@ -130,6 +136,7 @@ pub(crate) async fn execute_user_shell_command(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
     );
+    session.apply_session_start_env(&mut exec_env_map);
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
         for key in PROXY_ENV_KEYS {
             exec_env_map.remove(*key);
@@ -144,12 +151,14 @@ pub(crate) async fn execute_user_shell_command(
             exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
         }
     }
+    let mut snapshot_overrides = turn_context.shell_environment_policy.r#set.clone();
+    session.extend_session_start_env_snapshot_overrides(&mut snapshot_overrides);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
         #[allow(deprecated)]
         &turn_context.cwd,
-        &turn_context.shell_environment_policy.r#set,
+        &snapshot_overrides,
         &exec_env_map,
     );
 

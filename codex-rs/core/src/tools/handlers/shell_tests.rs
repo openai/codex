@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -77,6 +78,10 @@ fn assert_safe(shell: &Shell, command: &str) {
 #[tokio::test]
 async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
     let (session, turn_context) = make_session_and_context().await;
+    session.replace_session_start_env(HashMap::from([(
+        "CODEX_SESSION_START_ENV_TEST".to_string(),
+        "from hook".to_string(),
+    )]));
 
     let command = "echo hello".to_string();
     let workdir = Some("subdir".to_string());
@@ -90,9 +95,13 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         .derive_exec_args(&command, /*use_login_shell*/ true);
     #[allow(deprecated)]
     let expected_cwd = turn_context.resolve_path(workdir.clone());
-    let expected_env = create_env(
+    let mut expected_env = create_env(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
+    );
+    expected_env.insert(
+        "CODEX_SESSION_START_ENV_TEST".to_string(),
+        "from hook".to_string(),
     );
 
     let params = ShellCommandToolCallParams {

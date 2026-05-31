@@ -9,6 +9,14 @@
           "default": null,
           "type": "string"
         },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Environment changes applied to subsequent local shell commands.\n\nMultiple matching `SessionStart` handlers merge in configured order. Later handlers win for duplicate keys.",
+          "type": "object"
+        },
         "hookEventName": {
           "const": "SessionStart",
           "type": "string"

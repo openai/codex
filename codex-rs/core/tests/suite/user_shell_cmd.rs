@@ -12,6 +12,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -28,10 +29,41 @@ use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use regex_lite::escape;
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
+
+fn write_session_start_hook_with_env(home: &Path) -> anyhow::Result<()> {
+    let script_path = home.join("session_start_env_hook.py");
+    let script = r#"import json
+
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "env": {
+            "CODEX_SESSION_START_ENV_TEST": "from-hook"
+        }
+    }
+}))
+"#;
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write session start env hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
@@ -96,6 +128,38 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         stdout = stdout.replace("\r\n", "\n");
     }
     assert_eq!(stdout, contents);
+}
+
+#[tokio::test]
+async fn user_shell_command_applies_pending_session_start_env() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_session_start_hook_with_env(home) {
+                panic!("failed to write session start env hook fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    #[cfg(windows)]
+    let command = r#"[System.Console]::Write($env:CODEX_SESSION_START_ENV_TEST)"#.to_string();
+    #[cfg(not(windows))]
+    let command = r#"printf '%s' "$CODEX_SESSION_START_ENV_TEST""#.to_string();
+
+    test.codex
+        .submit(Op::RunUserShellCommand { command })
+        .await?;
+
+    let end_event = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+    assert_eq!(end_event.stdout, "from-hook");
+
+    Ok(())
 }
 
 #[tokio::test]
