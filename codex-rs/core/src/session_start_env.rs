@@ -22,56 +22,21 @@ impl SessionStartEnvOverlay {
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
         {
-            if is_runtime_owned(key) {
+            if key == CODEX_THREAD_ID_ENV_VAR
+                || cfg!(windows) && key.eq_ignore_ascii_case(CODEX_THREAD_ID_ENV_VAR)
+            {
                 continue;
             }
-            insert_env_var(env, key.clone(), value.clone());
-        }
-    }
-
-    pub(crate) fn extend_snapshot_overrides(&self, overrides: &mut HashMap<String, String>) {
-        for (key, value) in self
-            .values
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-        {
-            if is_runtime_owned(key) {
-                continue;
+            #[cfg(windows)]
+            if let Some(existing) = env
+                .keys()
+                .find(|candidate| candidate.eq_ignore_ascii_case(key))
+                .cloned()
+            {
+                env.remove(&existing);
             }
-            insert_env_var(overrides, key.clone(), value.clone());
+            env.insert(key.clone(), value.clone());
         }
-    }
-}
-
-fn is_runtime_owned(key: &str) -> bool {
-    env_key_eq(key, CODEX_THREAD_ID_ENV_VAR)
-}
-
-fn insert_env_var(env: &mut HashMap<String, String>, key: String, value: String) {
-    remove_env_var(env, &key);
-    env.insert(key, value);
-}
-
-fn remove_env_var(env: &mut HashMap<String, String>, key: &str) {
-    if let Some(existing) = env
-        .keys()
-        .find(|candidate| env_key_eq(candidate, key))
-        .cloned()
-    {
-        env.remove(&existing);
-    }
-}
-
-fn env_key_eq(candidate: &str, key: &str) -> bool {
-    #[cfg(windows)]
-    {
-        candidate.eq_ignore_ascii_case(key)
-    }
-
-    #[cfg(not(windows))]
-    {
-        candidate == key
     }
 }
 
@@ -104,23 +69,6 @@ mod tests {
                 ("PATH".to_string(), "/hook/bin".to_string()),
                 ("SET_BY_POLICY".to_string(), "hook".to_string()),
             ])
-        );
-    }
-
-    #[test]
-    fn snapshot_overrides_include_hook_env() {
-        let overlay = SessionStartEnvOverlay::default();
-        overlay.replace(HashMap::from([(
-            "PLUGIN_HOME".to_string(),
-            "/plugin".to_string(),
-        )]));
-        let mut overrides = HashMap::new();
-
-        overlay.extend_snapshot_overrides(&mut overrides);
-
-        assert_eq!(
-            overrides,
-            HashMap::from([("PLUGIN_HOME".to_string(), "/plugin".to_string())])
         );
     }
 }

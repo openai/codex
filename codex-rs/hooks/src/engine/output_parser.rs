@@ -101,37 +101,24 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
         .map(|output| (output.additional_context, output.env))
         .unwrap_or_default();
     let invalid_reason = invalid_session_start_env_reason(&env);
-    Some(session_start_output(
-        wire.universal,
+    Some(SessionStartOutput {
+        universal: UniversalOutput::from(wire.universal),
         additional_context,
         env,
         invalid_reason,
-    ))
+    })
 }
 
 pub(crate) fn parse_subagent_start(stdout: &str) -> Option<SessionStartOutput> {
     let wire: SubagentStartCommandOutputWire = parse_json(stdout)?;
-    Some(session_start_output(
-        wire.universal,
-        wire.hook_specific_output
+    Some(SessionStartOutput {
+        universal: UniversalOutput::from(wire.universal),
+        additional_context: wire
+            .hook_specific_output
             .and_then(|output| output.additional_context),
-        HashMap::new(),
-        None,
-    ))
-}
-
-fn session_start_output(
-    universal: HookUniversalOutputWire,
-    additional_context: Option<String>,
-    env: HashMap<String, String>,
-    invalid_reason: Option<String>,
-) -> SessionStartOutput {
-    SessionStartOutput {
-        universal: UniversalOutput::from(universal),
-        additional_context,
-        env,
-        invalid_reason,
-    }
+        env: HashMap::new(),
+        invalid_reason: None,
+    })
 }
 
 fn invalid_session_start_env_reason(env: &HashMap<String, String>) -> Option<String> {

@@ -3230,15 +3230,6 @@ impl Session {
         self.services.session_start_env.apply(env);
     }
 
-    pub(crate) fn extend_session_start_env_snapshot_overrides(
-        &self,
-        overrides: &mut HashMap<String, String>,
-    ) {
-        self.services
-            .session_start_env
-            .extend_snapshot_overrides(overrides);
-    }
-
     pub(crate) async fn current_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {
         let Some(live_thread) = self.live_thread() else {
             return Ok(None);

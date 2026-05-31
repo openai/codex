@@ -261,7 +261,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         };
         let mut explicit_env_overrides = explicit_env_overrides;
         ctx.session
-            .extend_session_start_env_snapshot_overrides(&mut explicit_env_overrides);
+            .apply_session_start_env(&mut explicit_env_overrides);
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
             session_shell.as_ref(),

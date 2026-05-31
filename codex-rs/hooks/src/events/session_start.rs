@@ -376,23 +376,18 @@ fn merge_session_start_env<'a>(
     let mut merged = HashMap::new();
     for env in envs {
         for (key, value) in env {
-            insert_session_start_env(&mut merged, key.clone(), value.clone());
+            #[cfg(windows)]
+            if let Some(existing) = merged
+                .keys()
+                .find(|candidate| candidate.eq_ignore_ascii_case(key))
+                .cloned()
+            {
+                merged.remove(&existing);
+            }
+            merged.insert(key.clone(), value.clone());
         }
     }
     merged
-}
-
-fn insert_session_start_env(env: &mut HashMap<String, String>, key: String, value: String) {
-    #[cfg(windows)]
-    if let Some(existing) = env
-        .keys()
-        .find(|candidate| candidate.eq_ignore_ascii_case(&key))
-        .cloned()
-    {
-        env.remove(&existing);
-    }
-
-    env.insert(key, value);
 }
 
 #[cfg(test)]

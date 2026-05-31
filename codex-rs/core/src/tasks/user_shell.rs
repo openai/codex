@@ -152,7 +152,7 @@ pub(crate) async fn execute_user_shell_command(
         }
     }
     let mut snapshot_overrides = turn_context.shell_environment_policy.r#set.clone();
-    session.extend_session_start_env_snapshot_overrides(&mut snapshot_overrides);
+    session.apply_session_start_env(&mut snapshot_overrides);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
