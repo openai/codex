@@ -4,29 +4,35 @@ use tracing::warn;
 
 use super::PluginCapabilitySummary;
 use crate::config::Config;
+use codex_app_server_protocol::PluginAvailability;
+use codex_app_server_protocol::PluginInstallPolicy;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginsManager;
-use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST as TOOL_SUGGEST_DISCOVERABLE_PLUGIN_FALLBACK_ALLOWLIST;
+use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
+use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_tools::DiscoverablePluginInfo;
 
 const TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST: &[&str] = &[
     OPENAI_BUNDLED_MARKETPLACE_NAME,
     OPENAI_CURATED_MARKETPLACE_NAME,
+    REMOTE_GLOBAL_MARKETPLACE_NAME,
 ];
 
 pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
+    plugins_manager: &PluginsManager,
+    auth: Option<&CodexAuth>,
     loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     if !config.features.enabled(Feature::Plugins) {
         return Ok(Vec::new());
     }
 
-    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
     let plugins_input = config.plugins_config_input();
     let configured_plugin_ids = config
         .tool_suggest
@@ -65,7 +71,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         for plugin in marketplace.plugins {
             let is_configured_plugin = configured_plugin_ids.contains(plugin.id.as_str());
             let is_fallback_plugin =
-                TOOL_SUGGEST_DISCOVERABLE_PLUGIN_FALLBACK_ALLOWLIST.contains(&plugin.id.as_str());
+                TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.id.as_str());
             if plugin.installed
                 || plugin.policy.installation == MarketplacePluginInstallPolicy::NotAvailable
                 || disabled_plugin_ids.contains(plugin.id.as_str())
@@ -113,12 +119,68 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             }
         }
     }
+    append_cached_remote_discoverable_plugins(
+        plugins_manager,
+        &plugins_input,
+        auth,
+        &configured_plugin_ids,
+        &disabled_plugin_ids,
+        &installed_app_connector_ids,
+        &mut discoverable_plugins,
+    );
     discoverable_plugins.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(discoverable_plugins)
+}
+
+fn append_cached_remote_discoverable_plugins(
+    plugins_manager: &PluginsManager,
+    plugins_input: &codex_core_plugins::PluginsConfigInput,
+    auth: Option<&CodexAuth>,
+    configured_plugin_ids: &HashSet<&str>,
+    disabled_plugin_ids: &HashSet<&str>,
+    installed_app_connector_ids: &HashSet<String>,
+    discoverable_plugins: &mut Vec<DiscoverablePluginInfo>,
+) {
+    let Some(installed_remote_plugin_ids) =
+        plugins_manager.remote_installed_plugin_ids_from_cache()
+    else {
+        return;
+    };
+    for plugin in
+        plugins_manager.cached_global_remote_discoverable_plugins_for_config(plugins_input, auth)
+    {
+        let is_configured_plugin = configured_plugin_ids.contains(plugin.config_id.as_str())
+            || configured_plugin_ids.contains(plugin.remote_plugin_id.as_str());
+        let is_fallback_plugin =
+            TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.config_id.as_str());
+        let matches_installed_app = plugin
+            .app_ids
+            .iter()
+            .any(|app_id| installed_app_connector_ids.contains(app_id.as_str()));
+        let is_disabled = disabled_plugin_ids.contains(plugin.config_id.as_str())
+            || disabled_plugin_ids.contains(plugin.remote_plugin_id.as_str());
+        if installed_remote_plugin_ids.contains(&plugin.remote_plugin_id)
+            || plugin.install_policy == PluginInstallPolicy::NotAvailable
+            || plugin.availability == PluginAvailability::DisabledByAdmin
+            || is_disabled
+            || (!is_configured_plugin && !is_fallback_plugin && !matches_installed_app)
+        {
+            continue;
+        }
+
+        discoverable_plugins.push(DiscoverablePluginInfo {
+            id: plugin.config_id,
+            name: plugin.name,
+            description: plugin.description,
+            has_skills: plugin.has_skills,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: plugin.app_ids,
+        });
+    }
 }
 
 #[cfg(test)]

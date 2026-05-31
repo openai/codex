@@ -1236,11 +1236,17 @@ discoverables = [
         .await
         .expect("config should load");
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
 
-    let discoverable_tools =
-        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[], &[])
-            .await
-            .expect("discoverable tools should load");
+    let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
+        &config,
+        &plugins_manager,
+        Some(&auth),
+        &[],
+        &[],
+    )
+    .await
+    .expect("discoverable tools should load");
 
     assert_eq!(
         discoverable_tools,
@@ -1268,9 +1274,11 @@ apps = true
         .expect("config should load");
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let loaded_plugin_app_connector_ids = vec!["asdk_app_databricks_workspace".to_string()];
+    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
 
     let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
         &config,
+        &plugins_manager,
         Some(&auth),
         &[],
         &loaded_plugin_app_connector_ids,
