@@ -13,6 +13,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_tools::ResponsesApiNamespaceTool;
 use pretty_assertions::assert_eq;
 
@@ -208,6 +209,58 @@ fn edit_reuses_images_from_prior_standalone_imagegen_calls() {
 }
 
 #[test]
+fn edit_reuses_images_from_view_image_calls() {
+    let history = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: VIEW_IMAGE_TOOL_NAME.to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "view-image-1".to_string(),
+        },
+        image_function_output("view-image-1", "viewed"),
+    ];
+
+    assert_eq!(
+        edit_request("change the lighting", &history),
+        expected_edit_request("change the lighting", &["data:image/png;base64,viewed"])
+    );
+}
+
+#[test]
+fn edit_keeps_newest_view_image_outputs_when_over_limit() {
+    let history = (1..=6)
+        .flat_map(|index| {
+            let call_id = format!("view-image-{index}");
+            vec![
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: VIEW_IMAGE_TOOL_NAME.to_string(),
+                    namespace: None,
+                    arguments: "{}".to_string(),
+                    call_id: call_id.clone(),
+                },
+                image_function_output(&call_id, &index.to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        edit_request("change the lighting", &history),
+        expected_edit_request(
+            "change the lighting",
+            &[
+                "data:image/png;base64,2",
+                "data:image/png;base64,3",
+                "data:image/png;base64,4",
+                "data:image/png;base64,5",
+                "data:image/png;base64,6",
+            ]
+        )
+    );
+}
+
+#[test]
 fn edit_keeps_newest_standalone_generated_images_when_over_limit() {
     let history = (1..=6)
         .flat_map(|index| {
@@ -295,18 +348,32 @@ fn generated_item(result: &str) -> ResponseItem {
 }
 
 fn generated_function_output(call_id: &str, result: &str) -> ResponseItem {
+    image_function_output_with_text(call_id, result, Some("generated image save hint"))
+}
+
+fn image_function_output(call_id: &str, result: &str) -> ResponseItem {
+    image_function_output_with_text(call_id, result, /*text*/ None)
+}
+
+fn image_function_output_with_text(
+    call_id: &str,
+    result: &str,
+    text: Option<&str>,
+) -> ResponseItem {
+    let mut body = vec![FunctionCallOutputContentItem::InputImage {
+        image_url: format!("data:image/png;base64,{result}"),
+        detail: Some(DEFAULT_IMAGE_DETAIL),
+    }];
+    if let Some(text) = text {
+        body.push(FunctionCallOutputContentItem::InputText {
+            text: text.to_string(),
+        });
+    }
+
     ResponseItem::FunctionCallOutput {
         call_id: call_id.to_string(),
         output: FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::ContentItems(vec![
-                FunctionCallOutputContentItem::InputImage {
-                    image_url: format!("data:image/png;base64,{result}"),
-                    detail: Some(DEFAULT_IMAGE_DETAIL),
-                },
-                FunctionCallOutputContentItem::InputText {
-                    text: "generated image save hint".to_string(),
-                },
-            ]),
+            body: FunctionCallOutputBody::ContentItems(body),
             success: Some(true),
         },
     }

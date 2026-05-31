@@ -18,6 +18,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
@@ -148,7 +149,7 @@ fn request_for_action(
     }
 }
 
-/// Selects edit context using the hosted imagegen anchor and truncation behavior.
+/// Selects edit context using the latest user image anchor and truncation behavior.
 fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
     let latest_uploaded_images = history.iter().enumerate().rev().find_map(|(index, item)| {
         let ResponseItem::Message { role, content, .. } = item else {
@@ -170,11 +171,11 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
     });
     let (user_images, follow_up_start) = latest_uploaded_images
         .map_or_else(|| (Vec::new(), 0), |(index, images)| (images, index + 1));
-    let mut generated_images = Vec::new();
+    let mut follow_up_images = Vec::new();
     for item in &history[follow_up_start..] {
         match item {
             ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
-                generated_images.push(ImageUrl {
+                follow_up_images.push(ImageUrl {
                     image_url: format!("data:image/png;base64,{result}"),
                 });
             }
@@ -184,16 +185,17 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
                         item,
                         ResponseItem::FunctionCall {
                             name,
-                            namespace: Some(namespace),
+                            namespace,
                             call_id: function_call_id,
                             ..
                         } if function_call_id == call_id
-                            && name == IMAGEGEN_TOOL_NAME
-                            && namespace == IMAGE_GEN_NAMESPACE
+                            && ((name == IMAGEGEN_TOOL_NAME
+                                && namespace.as_deref() == Some(IMAGE_GEN_NAMESPACE))
+                                || (name == VIEW_IMAGE_TOOL_NAME && namespace.is_none()))
                     )
                 }) =>
             {
-                generated_images.extend(output.content_items().into_iter().flatten().filter_map(
+                follow_up_images.extend(output.content_items().into_iter().flatten().filter_map(
                     |item| match item {
                         FunctionCallOutputContentItem::InputImage { image_url, .. } => {
                             Some(ImageUrl {
@@ -222,24 +224,24 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
             | ResponseItem::Other => {}
         }
     }
-    truncate_images(user_images, generated_images)
+    truncate_images(user_images, follow_up_images)
 }
 
-/// Truncates edit inputs while preserving the newest generated image when possible.
+/// Truncates edit inputs while preserving the newest follow-up image when possible.
 fn truncate_images(
     mut user_images: Vec<ImageUrl>,
-    mut generated_images: Vec<ImageUrl>,
+    mut follow_up_images: Vec<ImageUrl>,
 ) -> Vec<ImageUrl> {
-    let mut excess = (user_images.len() + generated_images.len()).saturating_sub(MAX_EDIT_IMAGES);
-    let drop_generated = excess.min(generated_images.len().saturating_sub(1));
-    generated_images.drain(..drop_generated);
-    excess -= drop_generated;
+    let mut excess = (user_images.len() + follow_up_images.len()).saturating_sub(MAX_EDIT_IMAGES);
+    let drop_follow_up = excess.min(follow_up_images.len().saturating_sub(1));
+    follow_up_images.drain(..drop_follow_up);
+    excess -= drop_follow_up;
     let drop_user = excess.min(user_images.len());
     user_images.drain(..drop_user);
     excess -= drop_user;
-    generated_images.drain(..excess);
+    follow_up_images.drain(..excess);
 
-    user_images.extend(generated_images);
+    user_images.extend(follow_up_images);
     user_images
 }
 
