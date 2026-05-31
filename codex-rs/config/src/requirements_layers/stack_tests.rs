@@ -10,6 +10,7 @@ use crate::Sourced;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 
 fn layer(id: &str, name: &str, contents: &str) -> RequirementsLayerEntry {
     RequirementsLayerEntry::from_toml(
@@ -307,8 +308,13 @@ alpha = true
     .expect("requirements present");
 
     assert_eq!(
-        composed.feature_requirements.expect("features").source,
-        RequirementSource::composite([high_source, low_source])
+        composed.feature_requirements.expect("features"),
+        Sourced::new(
+            crate::FeatureRequirementsToml {
+                entries: BTreeMap::from([("alpha".to_string(), true), ("beta".to_string(), true),]),
+            },
+            RequirementSource::composite([high_source, low_source]),
+        )
     );
 }
 

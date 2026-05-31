@@ -280,9 +280,13 @@ fn fallback_managed_hooks_source_path(
         Some(RequirementSource::Composite { .. }) => {
             synthetic_layer_path("<requirements-composition>/requirements.toml")
         }
-        Some(RequirementSource::EnterpriseManaged { id, name }) => synthetic_layer_path(&format!(
-            "<enterprise-managed:{name}:{id}>/requirements.toml"
-        )),
+        Some(RequirementSource::EnterpriseManaged { id, name }) => {
+            let name = escape_xml_text(name);
+            let id = escape_xml_text(id);
+            synthetic_layer_path(&format!(
+                "<enterprise-managed:{name}:{id}>/requirements.toml"
+            ))
+        }
         Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
         }
@@ -384,6 +388,21 @@ fn synthetic_layer_path(path: &str) -> AbsolutePathBuf {
     {
         AbsolutePathBuf::resolve_path_against_base(path, "/")
     }
+}
+
+fn escape_xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn append_hook_events(
@@ -705,6 +724,21 @@ mod tests {
             super::hook_source_for_requirement_source(Some(&source)),
             HookSource::System
         );
+    }
+
+    #[test]
+    fn enterprise_managed_synthetic_path_escapes_display_fields() {
+        let source = RequirementSource::EnterpriseManaged {
+            id: "id<&>".to_string(),
+            name: "Name <Admin> & \"Ops\"".to_string(),
+        };
+
+        let source_path = super::fallback_managed_hooks_source_path(Some(&source));
+        let source_path = source_path.display().to_string();
+
+        assert!(source_path.contains("Name &lt;Admin&gt; &amp; &quot;Ops&quot;"));
+        assert!(source_path.contains("id&lt;&amp;&gt;"));
+        assert!(!source_path.contains("Name <Admin>"));
     }
 
     fn command_group(matcher: Option<&str>) -> MatcherGroup {
