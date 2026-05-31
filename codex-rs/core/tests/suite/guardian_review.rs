@@ -17,6 +17,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::set_legacy_sandbox_policy_for_config;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::test_codex;
@@ -60,8 +61,7 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
     let mut builder = test_codex().with_config(move |config| {
         config.notify = Some(vec![notify_script_str]);
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+        set_legacy_sandbox_policy_for_config(config, sandbox_policy_for_config)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
