@@ -115,27 +115,32 @@ fn guard_git_editors_after_shell_startup(
     shell_type: &ShellType,
 ) -> Vec<String> {
     let mut command = command.to_vec();
+    if matches!(shell_type, ShellType::PowerShell) {
+        return match command.as_mut_slice() {
+            [_, no_profile, ..] if no_profile.eq_ignore_ascii_case("-NoProfile") => command,
+            [_, flag, script, ..] if flag.eq_ignore_ascii_case("-Command") => {
+                // Keep leading declarations first when PowerShell parses the original script.
+                let escaped_script = script.replace('\'', "''");
+                *script = format!(
+                    "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\n\
+                    . ([scriptblock]::Create('{escaped_script}'))"
+                );
+                command
+            }
+            _ => command,
+        };
+    }
+
     let (script, guard) = match (shell_type, command.as_mut_slice()) {
         (ShellType::Zsh | ShellType::Bash | ShellType::Sh, [_, flag, script, ..])
             if flag == "-lc" || flag == "-c" =>
         {
             (script, "export GIT_EDITOR=: GIT_SEQUENCE_EDITOR=:;\n")
         }
-        (ShellType::PowerShell, [_, flag, script, ..]) if flag.eq_ignore_ascii_case("-Command") => {
-            (
-                script,
-                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\n",
-            )
-        }
-        (ShellType::PowerShell, [_, no_profile, flag, script, ..])
-            if no_profile.eq_ignore_ascii_case("-NoProfile")
-                && flag.eq_ignore_ascii_case("-Command") =>
-        {
-            (
-                script,
-                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\n",
-            )
-        }
+        (ShellType::Cmd, [_, flag, script, ..]) if flag.eq_ignore_ascii_case("/c") => (
+            script,
+            "set \"GIT_EDITOR=:\" && set \"GIT_SEQUENCE_EDITOR=:\" && ",
+        ),
         _ => return command,
     };
     *script = format!("{guard}{script}");
@@ -481,7 +486,8 @@ mod tests {
         let command = vec![
             "pwsh".to_string(),
             "-Command".to_string(),
-            "Write-Output ok".to_string(),
+            "using namespace System.Text; [Encoding]::UTF8.WebName".to_string(),
+            "arg0".to_string(),
         ];
 
         assert_eq!(
@@ -489,14 +495,14 @@ mod tests {
             vec![
                 "pwsh".to_string(),
                 "-Command".to_string(),
-                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\nWrite-Output ok"
-                    .to_string(),
+                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\n. ([scriptblock]::Create('using namespace System.Text; [Encoding]::UTF8.WebName'))".to_string(),
+                "arg0".to_string(),
             ]
         );
     }
 
     #[test]
-    fn guard_git_editors_after_shell_startup_prefixes_profile_free_powershell_script() {
+    fn guard_git_editors_after_shell_startup_leaves_profile_free_powershell_script_unchanged() {
         let command = vec![
             "pwsh".to_string(),
             "-NoProfile".to_string(),
@@ -506,12 +512,42 @@ mod tests {
 
         assert_eq!(
             guard_git_editors_after_shell_startup(&command, &ShellType::PowerShell),
+            command
+        );
+    }
+
+    #[test]
+    fn guard_git_editors_after_shell_startup_escapes_powershell_script_quotes() {
+        let command = vec![
+            "pwsh".to_string(),
+            "-Command".to_string(),
+            "Write-Output 'ok'".to_string(),
+        ];
+
+        assert_eq!(
+            guard_git_editors_after_shell_startup(&command, &ShellType::PowerShell),
             vec![
                 "pwsh".to_string(),
-                "-NoProfile".to_string(),
                 "-Command".to_string(),
-                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\nWrite-Output ok"
-                    .to_string(),
+                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\n. ([scriptblock]::Create('Write-Output ''ok'''))".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn guard_git_editors_after_shell_startup_prefixes_cmd_script() {
+        let command = vec![
+            "cmd.exe".to_string(),
+            "/c".to_string(),
+            "echo ok".to_string(),
+        ];
+
+        assert_eq!(
+            guard_git_editors_after_shell_startup(&command, &ShellType::Cmd),
+            vec![
+                "cmd.exe".to_string(),
+                "/c".to_string(),
+                "set \"GIT_EDITOR=:\" && set \"GIT_SEQUENCE_EDITOR=:\" && echo ok".to_string(),
             ]
         );
     }
