@@ -21,7 +21,6 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -565,53 +564,6 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
-}
-
-#[tokio::test]
-async fn spawn_agent_inherits_parent_multi_agent_version_over_child_feature_flags() {
-    let harness = AgentControlHarness::new().await;
-    let mut parent_config = harness.config.clone();
-    parent_config
-        .features
-        .enable(Feature::MultiAgentV2)
-        .expect("test config should allow feature update");
-    let parent = harness
-        .manager
-        .start_thread(parent_config)
-        .await
-        .expect("start parent thread");
-    let mut child_config = harness.config.clone();
-    child_config
-        .features
-        .disable(Feature::MultiAgentV2)
-        .expect("test config should allow feature update");
-    child_config
-        .features
-        .disable(Feature::Collab)
-        .expect("test config should allow feature update");
-
-    let child_thread_id = harness
-        .control
-        .spawn_agent(
-            child_config,
-            text_input("spawned"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: parent.thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            })),
-        )
-        .await
-        .expect("spawn_agent should succeed");
-    let child = harness
-        .manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should be registered");
-
-    assert_eq!(child.multi_agent_version(), Some(MultiAgentVersion::V2));
 }
 
 #[tokio::test]

@@ -1,9 +1,12 @@
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
+use codex_features::Feature;
+use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -15,11 +18,120 @@ use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_resume_seeds_multi_agent_version_for_later_forks() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let mut initial_builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .disable(Feature::Collab)
+            .expect("test config should allow feature update");
+    });
+    let initial = initial_builder
+        .build(&server)
+        .await
+        .expect("create legacy source thread");
+    assert_eq!(initial.codex.multi_agent_version(), None);
+    initial.codex.ensure_rollout_materialized().await;
+    initial
+        .codex
+        .flush_rollout()
+        .await
+        .expect("flush source rollout");
+    let source_thread_id = initial.session_configured.thread_id;
+    let rollout_path = initial.codex.rollout_path().expect("source rollout path");
+    initial
+        .codex
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread");
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        config
+            .features
+            .disable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+    });
+    let resumed = resume_builder
+        .resume(&server, initial.home.clone(), rollout_path.clone())
+        .await
+        .expect("resume legacy source thread");
+    assert_eq!(
+        resumed.codex.multi_agent_version(),
+        Some(MultiAgentVersion::V1)
+    );
+    resumed
+        .codex
+        .flush_rollout()
+        .await
+        .expect("flush resumed rollout");
+    assert_eq!(
+        latest_multi_agent_version(&rollout_path, source_thread_id),
+        Some(MultiAgentVersion::V1)
+    );
+    resumed
+        .codex
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown resumed thread");
+
+    let mut v2_config = resumed.config.clone();
+    v2_config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let forked = resumed
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            v2_config,
+            rollout_path,
+            /*thread_source*/ None,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork seeded source thread");
+    assert_eq!(
+        forked.thread.multi_agent_version(),
+        Some(MultiAgentVersion::V1)
+    );
+    forked.thread.ensure_rollout_materialized().await;
+    forked
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush forked rollout");
+    assert_eq!(
+        latest_multi_agent_version(
+            &forked.thread.rollout_path().expect("forked rollout path"),
+            forked.thread_id,
+        ),
+        Some(MultiAgentVersion::V1)
+    );
+    forked
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown forked thread");
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_thread_twice_drops_to_first_message() {
@@ -250,4 +362,26 @@ fn read_rollout_items(path: &std::path::Path) -> Vec<RolloutItem> {
         }
     }
     items
+}
+
+fn latest_multi_agent_version(
+    path: &std::path::Path,
+    thread_id: ThreadId,
+) -> Option<MultiAgentVersion> {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read rollout file {}: {err}", path.display()))
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<RolloutLine>(line)
+                .unwrap_or_else(|err| panic!("failed to parse rollout line `{line}`: {err}"))
+        })
+        .filter_map(|line| match line.item {
+            RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == thread_id => {
+                Some(meta_line.meta.multi_agent_version)
+            }
+            _ => None,
+        })
+        .last()
+        .flatten()
 }

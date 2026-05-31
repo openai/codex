@@ -104,7 +104,6 @@ fn stores_guard() -> MutexGuard<'static, HashMap<String, Arc<InMemoryThreadStore
 pub struct InMemoryThreadStoreCalls {
     pub create_thread: usize,
     pub resume_thread: usize,
-    pub set_multi_agent_version_if_unset: usize,
     pub append_items: usize,
     pub persist_thread: usize,
     pub flush_thread: usize,
@@ -214,7 +213,6 @@ impl ThreadStore for InMemoryThreadStore {
         params: SetMultiAgentVersionIfUnsetParams,
     ) -> ThreadStoreResult<MultiAgentVersion> {
         let mut state = self.state.lock().await;
-        state.calls.set_multi_agent_version_if_unset += 1;
         let history =
             state
                 .histories
