@@ -224,6 +224,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
         agent_max_threads: Some(6),
+        configured_agent_max_threads: Some(6),
         agent_job_max_runtime_seconds: None,
         agent_interrupt_message_enabled: false,
         agent_max_depth: 1,

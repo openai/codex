@@ -900,7 +900,7 @@ async fn legacy_resume_continues_when_multi_agent_version_seed_fails() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
         /*analytics_events_client*/ None,
-        thread_store,
+        Arc::clone(&thread_store),
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,

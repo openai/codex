@@ -1232,9 +1232,7 @@ impl ThreadManagerState {
 
         let multi_agent_version = inherited_multi_agent_version
             .unwrap_or_else(|| config.multi_agent_version_from_features());
-        let Some(multi_agent_version) = multi_agent_version else {
-            return None;
-        };
+        let multi_agent_version = multi_agent_version?;
         let source_thread_id = match initial_history {
             InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
             InitialHistory::Forked(_) => forked_from_thread_id,

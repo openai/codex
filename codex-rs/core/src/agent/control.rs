@@ -378,6 +378,7 @@ impl AgentControl {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_forked_thread(
         &self,
         state: &Arc<ThreadManagerState>,

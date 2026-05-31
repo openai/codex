@@ -827,7 +827,7 @@ pub struct Config {
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
     /// User-configured legacy thread limit before applying the locked multi-agent runtime.
-    pub(crate) configured_agent_max_threads: Option<usize>,
+    pub configured_agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
 
