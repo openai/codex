@@ -617,7 +617,7 @@ impl EscalationPolicy for CoreShellActionProvider {
         let decision_driven_by_policy =
             Self::decision_driven_by_policy(&evaluation.matched_rules, evaluation.decision);
         let needs_escalation =
-            self.sandbox_permissions.requires_escalated_permissions() || decision_driven_by_policy;
+            self.sandbox_permissions.requests_sandbox_override() || decision_driven_by_policy;
 
         let decision_source = if decision_driven_by_policy {
             DecisionSource::PrefixRule
@@ -844,7 +844,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
             EscalationExecution::Unsandboxed => PreparedExec {
                 command,
                 cwd: workdir.to_path_buf(),
-                env,
+                env: exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated),
                 arg0: Some(first_arg.clone()),
             },
             EscalationExecution::TurnDefault => {
