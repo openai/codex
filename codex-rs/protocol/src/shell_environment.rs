@@ -109,7 +109,12 @@ where
 pub fn inherited_env_var_allowed_by_policy(name: &str, policy: &ShellEnvironmentPolicy) -> bool {
     (policy.ignore_default_excludes || !matches_any_pattern(name, DEFAULT_EXCLUDES.as_slice()))
         && !matches_any_pattern(name, &policy.exclude)
-        && (policy.include_only.is_empty() || matches_any_pattern(name, &policy.include_only))
+        && env_var_allowed_by_include_only(name, policy)
+}
+
+/// Returns whether a variable is permitted by the policy's allowlist.
+pub fn env_var_allowed_by_include_only(name: &str, policy: &ShellEnvironmentPolicy) -> bool {
+    policy.include_only.is_empty() || matches_any_pattern(name, &policy.include_only)
 }
 
 fn matches_any_pattern(name: &str, patterns: &[EnvironmentVariablePattern]) -> bool {

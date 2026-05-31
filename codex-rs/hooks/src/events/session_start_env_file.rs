@@ -1,4 +1,3 @@
-use std::io::ErrorKind;
 use std::path::Path;
 
 use anyhow::Context;
@@ -38,6 +37,28 @@ pub(super) async fn execute_handlers<T>(
     };
     let env_file_path = Path::new(env_file_path);
     let scratch_dir = env_file_path.parent().unwrap_or_else(|| Path::new("."));
+    if let Err(error) = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(env_file_path)
+        .await
+        .with_context(|| format!("failed to reset {}", env_file_path.display()))
+    {
+        return handlers
+            .into_iter()
+            .enumerate()
+            .map(|(completion_order, handler)| {
+                let mut parsed = parse(
+                    &handler,
+                    error_result(anyhow::anyhow!("{error:#}")),
+                    turn_id.clone(),
+                );
+                parsed.completion_order = completion_order;
+                parsed
+            })
+            .collect();
+    }
 
     let mut pending = FuturesUnordered::new();
     for (configured_order, handler) in handlers.into_iter().enumerate() {
@@ -92,17 +113,7 @@ pub(super) async fn execute_handlers<T>(
     }
     completed.sort_by_key(|execution| execution.configured_order);
 
-    let mut env_file_ends_with_newline = match fs::read(env_file_path).await {
-        Ok(contents) => contents.last().is_none_or(|byte| *byte == b'\n'),
-        Err(error) if error.kind() == ErrorKind::NotFound => true,
-        Err(error) => {
-            tracing::warn!(
-                "failed to read SessionStart env file {} before merge: {error}",
-                env_file_path.display()
-            );
-            true
-        }
-    };
+    let mut env_file_ends_with_newline = true;
 
     // Merge each successful handler's isolated file in configured order. The
     // core session layer will source this single canonical file after hooks

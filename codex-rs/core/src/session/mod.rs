@@ -3237,6 +3237,13 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) fn reset_shell_env_exports(&self) -> anyhow::Result<()> {
+        if let Some(shell_env_file) = self.services.shell_env_file.as_ref() {
+            shell_env_file.reset_exports()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn apply_shell_env_exports(
         &self,
         env: &mut HashMap<String, String>,

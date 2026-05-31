@@ -615,6 +615,32 @@ printf 'export FIRST=1\n' >> "$CLAUDE_ENV_FILE""#
     }
 
     #[cfg(not(windows))]
+    #[tokio::test]
+    async fn session_start_hooks_replace_previous_env_file_generation() {
+        use std::fs;
+
+        use tempfile::tempdir;
+
+        let env_file = tempfile::NamedTempFile::new().expect("create env file");
+        fs::write(env_file.path(), "export STALE=1\n").expect("seed stale env file");
+        let mut hook = handler();
+        hook.command = r#"printf 'export FRESH=1\n' >> "$CODEX_ENV_FILE""#.to_string();
+        let cwd = tempdir().expect("create cwd");
+
+        run_session_start_env_file_hooks(&[hook.clone()], &env_file, cwd.path()).await;
+        assert_eq!(
+            fs::read_to_string(env_file.path()).expect("read env file"),
+            "export FRESH=1\n"
+        );
+
+        run_session_start_env_file_hooks(&[hook], &env_file, cwd.path()).await;
+        assert_eq!(
+            fs::read_to_string(env_file.path()).expect("read env file"),
+            "export FRESH=1\n"
+        );
+    }
+
+    #[cfg(not(windows))]
     async fn run_session_start_env_file_hooks(
         handlers: &[ConfiguredHandler],
         env_file: &tempfile::NamedTempFile,

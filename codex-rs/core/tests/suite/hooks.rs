@@ -2767,6 +2767,40 @@ async fn session_start_env_file_exports_reach_exec_command() -> Result<()> {
     assert_session_start_env_file_reaches_bash_surface(BashRewriteSurface::ExecCommand).await
 }
 
+#[tokio::test]
+async fn session_start_env_file_exports_reach_first_user_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_session_start_hook_exporting_env(home) {
+                panic!("failed to write session env hook fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::RunUserShellCommand {
+            command: "printf '%s|%s|%s' \"$CODEX_SESSION_START_TEST\" \"${CODEX_ENV_FILE:+configured}\" \"${CLAUDE_ENV_FILE:+configured}\"".to_string(),
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ExecCommandEnd(_))
+    })
+    .await;
+    let EventMsg::ExecCommandEnd(event) = event else {
+        unreachable!();
+    };
+    assert_eq!(event.exit_code, 0);
+    assert_eq!(event.stdout, "from-session-start||");
+
+    Ok(())
+}
+
 async fn assert_pre_tool_use_rewrites_bash_surface(surface: BashRewriteSurface) -> Result<()> {
     skip_if_no_network!(Ok(()));
 

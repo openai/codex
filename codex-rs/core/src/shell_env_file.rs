@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -14,10 +15,14 @@ use codex_protocol::shell_environment::CLAUDE_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_ENV_FILE_ENV_VAR;
 use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
 use tempfile::TempPath;
+use tokio::fs;
 use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::shell::Shell;
 use crate::shell::ShellType;
+
+const SHELL_ENV_CAPTURE_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 
 /// Session-owned script that hooks can populate with exported shell state.
 ///
@@ -57,6 +62,14 @@ impl ShellEnvFile {
         self.path.as_ref()
     }
 
+    pub(crate) fn reset_exports(&self) -> Result<()> {
+        self.exports
+            .lock()
+            .map_err(|_| anyhow!("shell env exports lock poisoned"))?
+            .clear();
+        Ok(())
+    }
+
     /// Sources the hook-writable env file once and stores the resulting
     /// environment diff.
     ///
@@ -66,6 +79,22 @@ impl ShellEnvFile {
     /// substitution behave naturally without keeping env-file path variables
     /// available after hook execution.
     pub(crate) async fn capture_exports(
+        &self,
+        shell: &Shell,
+        cwd: &Path,
+        base_env: &HashMap<String, String>,
+    ) -> Result<()> {
+        let result = self.capture_exports_inner(shell, cwd, base_env).await;
+        if let Err(error) = fs::write(self.path(), []).await {
+            tracing::warn!(
+                "failed to clear SessionStart shell env file {}: {error}",
+                self.path().display()
+            );
+        }
+        result
+    }
+
+    async fn capture_exports_inner(
         &self,
         shell: &Shell,
         cwd: &Path,
@@ -128,7 +157,9 @@ impl ShellEnvFile {
             }
         }
         for (key, value) in &policy.r#set {
-            insert_env_var(env, key.clone(), value.clone());
+            if shell_environment::env_var_allowed_by_include_only(key, policy) {
+                insert_env_var(env, key.clone(), value.clone());
+            }
         }
         if let Some(thread_id) = thread_id {
             insert_env_var(env, CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id);
@@ -195,13 +226,21 @@ impl ShellEnvCapture {
         script: &str,
         env: &HashMap<String, String>,
     ) -> Result<HashMap<String, String>> {
-        let output = Command::new(&shell.shell_path)
+        let mut command = Command::new(&shell.shell_path);
+        command
             .current_dir(cwd)
             .args(self.capture_args(script))
             .env_clear()
             .envs(env)
-            .output()
+            .kill_on_drop(true);
+        let output = timeout(SHELL_ENV_CAPTURE_TIMEOUT, command.output())
             .await
+            .with_context(|| {
+                format!(
+                    "timed out capturing shell environment with {}",
+                    shell.shell_path.display()
+                )
+            })?
             .with_context(|| format!("failed to run {}", shell.shell_path.display()))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -230,22 +269,14 @@ impl ShellEnvCapture {
     }
 }
 
-const POSIX_DUMP_ENV_SCRIPT: &str = r#"awk 'BEGIN {
-  for (key in ENVIRON) {
-    printf "%s=%s%c", key, ENVIRON[key], 0
-  }
-}'"#;
+const POSIX_DUMP_ENV_SCRIPT: &str = "/usr/bin/env -0";
 
 const POSIX_SOURCE_ENV_FILE_AND_DUMP_ENV_SCRIPT: &str = r#"if [ -n "${CODEX_ENV_FILE:-}" ] && [ -f "$CODEX_ENV_FILE" ]; then
   if . "$CODEX_ENV_FILE" >/dev/null 2>&1; then
     :
   fi
 fi
-awk 'BEGIN {
-  for (key in ENVIRON) {
-    printf "%s=%s%c", key, ENVIRON[key], 0
-  }
-}'"#;
+/usr/bin/env -0"#;
 
 const POWERSHELL_DUMP_ENV_SCRIPT: &str = r#"$items = [ordered]@{}
 Get-ChildItem Env: | Sort-Object Name | ForEach-Object {

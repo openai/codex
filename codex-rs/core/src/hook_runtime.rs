@@ -136,8 +136,14 @@ pub(crate) async fn run_pending_session_start_hooks(
         };
         let hooks = sess.hooks();
         let preview_runs = hooks.preview_session_start(&request);
-        let captures_shell_env = matches!(&request.target, StartHookTarget::SessionStart { .. })
-            && !preview_runs.is_empty();
+        let is_session_start = matches!(&request.target, StartHookTarget::SessionStart { .. });
+        let captures_shell_env = is_session_start && !preview_runs.is_empty();
+        if is_session_start
+            && !captures_shell_env
+            && let Err(error) = sess.reset_shell_env_exports()
+        {
+            tracing::warn!("failed to reset SessionStart shell environment: {error:#}");
+        }
         let outcome = run_context_injecting_hook(
             sess,
             turn_context,
@@ -157,6 +163,9 @@ pub(crate) async fn run_pending_session_start_hooks(
                 .unwrap_or_else(|| turn_context.config.cwd.as_path());
             if let Err(error) = sess.capture_shell_env_exports(cwd, &base_env).await {
                 tracing::warn!("failed to capture SessionStart shell environment: {error:#}");
+                if let Err(error) = sess.reset_shell_env_exports() {
+                    tracing::warn!("failed to reset SessionStart shell environment: {error:#}");
+                }
             }
         }
         if outcome.record_additional_contexts(sess, turn_context).await {

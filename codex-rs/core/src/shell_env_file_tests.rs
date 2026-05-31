@@ -55,6 +55,7 @@ unset REMOVED_BY_HOOK
     env_file
         .capture_exports(&test_shell(), cwd.as_path(), &base_env)
         .await?;
+    assert_eq!(std::fs::read(env_file.path())?, Vec::<u8>::new());
 
     let mut env = base_env;
     insert_env_file_paths(&env_file, &mut env);
@@ -138,7 +139,13 @@ export EXPLICIT_OVERRIDE='from-hook'
             EnvironmentVariablePattern::new_case_insensitive("ALLOWED_*"),
             EnvironmentVariablePattern::new_case_insensitive("EXPLICIT_*"),
         ],
-        r#set: HashMap::from([("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string())]),
+        r#set: HashMap::from([
+            ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
+            (
+                "NOT_INCLUDED_OVERRIDE".to_string(),
+                "not-included".to_string(),
+            ),
+        ]),
         ..Default::default()
     };
 
@@ -151,6 +158,55 @@ export EXPLICIT_OVERRIDE='from-hook'
             ("EXPLICIT_OVERRIDE".to_string(), "from-policy".to_string()),
         ])
     );
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shell_env_file_capture_does_not_require_tools_on_configured_path() -> Result<()> {
+    let env_file = ShellEnvFile::new(ThreadId::new(), ShellEnvCapture::Posix)?;
+    let base_env = HashMap::from([("PATH".to_string(), "/missing".to_string())]);
+    std::fs::write(
+        env_file.path(),
+        "export CAPTURED_WITH_RESTRICTED_PATH='yes'\n",
+    )?;
+    let cwd = std::env::current_dir()?;
+    env_file
+        .capture_exports(&test_shell(), cwd.as_path(), &base_env)
+        .await?;
+
+    let mut env = base_env;
+    env_file.apply_exports(&mut env, &ShellEnvironmentPolicy::default());
+    assert_eq!(
+        env,
+        HashMap::from([
+            ("PATH".to_string(), "/missing".to_string()),
+            (
+                "CAPTURED_WITH_RESTRICTED_PATH".to_string(),
+                "yes".to_string(),
+            ),
+        ])
+    );
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shell_env_file_reset_clears_previous_generation() -> Result<()> {
+    let env_file = ShellEnvFile::new(ThreadId::new(), ShellEnvCapture::Posix)?;
+    let base_env = HashMap::new();
+    std::fs::write(env_file.path(), "export PREVIOUS_GENERATION='stale'\n")?;
+    let cwd = std::env::current_dir()?;
+    env_file
+        .capture_exports(&test_shell(), cwd.as_path(), &base_env)
+        .await?;
+    env_file.reset_exports()?;
+
+    let mut env = base_env;
+    env_file.apply_exports(&mut env, &ShellEnvironmentPolicy::default());
+    assert_eq!(env, HashMap::new());
 
     Ok(())
 }
