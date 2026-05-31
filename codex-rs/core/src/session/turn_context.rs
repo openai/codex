@@ -732,7 +732,7 @@ impl Session {
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
             &session_configuration,
-            self.multi_agent_version().await,
+            self.multi_agent_version(),
             self.services.user_shell.as_ref(),
             self.services.shell_zsh_path.as_ref(),
             self.services.main_execve_wrapper_exe.as_ref(),

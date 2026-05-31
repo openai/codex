@@ -730,7 +730,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             }],
         }
     );
-    assert_eq!(codex.session.multi_agent_version().await, None);
+    assert_eq!(codex.session.multi_agent_version(), None);
 
     drop(codex);
 }

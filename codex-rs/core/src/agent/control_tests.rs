@@ -611,10 +611,7 @@ async fn spawn_agent_inherits_parent_multi_agent_version_over_child_feature_flag
         .await
         .expect("child thread should be registered");
 
-    assert_eq!(
-        child.multi_agent_version().await,
-        Some(MultiAgentVersion::V2)
-    );
+    assert_eq!(child.multi_agent_version(), Some(MultiAgentVersion::V2));
 }
 
 #[tokio::test]
@@ -721,7 +718,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             })),
             parent_thread
                 .multi_agent_version()
-                .await
                 .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
@@ -936,7 +932,6 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
             })),
             parent_thread
                 .multi_agent_version()
-                .await
                 .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
@@ -1010,7 +1005,6 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
             })),
             parent_thread
                 .multi_agent_version()
-                .await
                 .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
@@ -1131,7 +1125,6 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             })),
             parent_thread
                 .multi_agent_version()
-                .await
                 .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
@@ -1246,7 +1239,6 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
             })),
             parent_thread
                 .multi_agent_version()
-                .await
                 .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
@@ -1360,7 +1352,6 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
             })),
             parent_thread
                 .multi_agent_version()
-                .await
                 .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),

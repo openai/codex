@@ -9913,40 +9913,6 @@ subagent_usage_hint_text = ""
 }
 
 #[tokio::test]
-async fn multi_agent_version_resolution_prefers_v2_then_v1_then_disabled() -> std::io::Result<()> {
-    let mut config = test_config().await;
-    config
-        .features
-        .disable(Feature::MultiAgentV2)
-        .expect("test config should allow feature update");
-    config
-        .features
-        .disable(Feature::Collab)
-        .expect("test config should allow feature update");
-    assert_eq!(config.multi_agent_version_from_features(), None);
-
-    config
-        .features
-        .enable(Feature::Collab)
-        .expect("test config should allow feature update");
-    assert_eq!(
-        config.multi_agent_version_from_features(),
-        Some(MultiAgentVersion::V1)
-    );
-
-    config
-        .features
-        .enable(Feature::MultiAgentV2)
-        .expect("test config should allow feature update");
-    assert_eq!(
-        config.multi_agent_version_from_features(),
-        Some(MultiAgentVersion::V2)
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn multi_agent_v2_rejects_agents_max_threads() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(

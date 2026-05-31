@@ -201,7 +201,6 @@ impl AgentControl {
                     .get_thread(*parent_thread_id)
                     .await?
                     .multi_agent_version()
-                    .await
             } else {
                 config.multi_agent_version_from_features()
             }
@@ -374,7 +373,7 @@ impl AgentControl {
 
         self.send_input(new_thread.thread_id, initial_operation)
             .await?;
-        if new_thread.thread.multi_agent_version().await != Some(MultiAgentVersion::V2) {
+        if new_thread.thread.multi_agent_version() != Some(MultiAgentVersion::V2) {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -631,7 +630,7 @@ impl AgentControl {
             }) = &session_source
             {
                 match state.get_thread(*parent_thread_id).await {
-                    Ok(parent_thread) => parent_thread.multi_agent_version().await,
+                    Ok(parent_thread) => parent_thread.multi_agent_version(),
                     Err(_) => None,
                 }
             } else {
@@ -721,7 +720,7 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        if resumed_thread.thread.multi_agent_version().await != Some(MultiAgentVersion::V2) {
+        if resumed_thread.thread.multi_agent_version() != Some(MultiAgentVersion::V2) {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -1108,7 +1107,7 @@ impl AgentControl {
             let message = format_subagent_notification_message(child_reference.as_str(), &status);
             let child_uses_multi_agent_v2 = match child_thread.as_ref() {
                 Some(child_thread) => {
-                    child_thread.multi_agent_version().await == Some(MultiAgentVersion::V2)
+                    child_thread.multi_agent_version() == Some(MultiAgentVersion::V2)
                 }
                 None => true,
             };

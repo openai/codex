@@ -573,7 +573,6 @@ impl Codex {
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
-            multi_agent_version,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
@@ -629,6 +628,7 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
+            multi_agent_version,
         )
         .await
         .map_err(|e| {
@@ -2623,7 +2623,7 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
-    pub(crate) async fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
+    pub(crate) fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         self.multi_agent_version.get().copied()
     }
 

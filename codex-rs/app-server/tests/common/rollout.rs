@@ -2,7 +2,6 @@ use anyhow::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo;
-use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -195,7 +194,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
         base_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
-        multi_agent_version: Some(MultiAgentVersion::V1),
+        multi_agent_version: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
@@ -281,7 +280,7 @@ pub fn create_fake_rollout_with_text_elements(
         base_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
-        multi_agent_version: Some(MultiAgentVersion::V1),
+        multi_agent_version: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,

@@ -503,8 +503,8 @@ impl CodexThread {
         self.codex.session.get_config().await
     }
 
-    pub async fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
-        self.codex.session.multi_agent_version().await
+    pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
+        self.codex.session.multi_agent_version()
     }
 
     pub(crate) fn set_multi_agent_version_if_unset(

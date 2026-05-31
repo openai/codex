@@ -3080,7 +3080,6 @@ async fn set_rate_limits_retains_previous_credits() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -3187,7 +3186,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -3719,7 +3717,6 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4465,7 +4462,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4531,6 +4527,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        config.multi_agent_version_from_features(),
     )
     .await;
 
@@ -4577,7 +4574,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4731,7 +4727,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         &session_telemetry,
         session_configuration.provider.clone(),
         &session_configuration,
-        session_configuration.multi_agent_version,
+        config.multi_agent_version_from_features(),
         services.user_shell.as_ref(),
         services.shell_zsh_path.as_ref(),
         services.main_execve_wrapper_exe.as_ref(),
@@ -4755,8 +4751,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
-        multi_agent_version: session_configuration
-            .multi_agent_version
+        multi_agent_version: config
+            .multi_agent_version_from_features()
             .map(OnceLock::from)
             .unwrap_or_default(),
         pending_mcp_server_refresh_config: Mutex::new(None),
@@ -4820,7 +4816,6 @@ async fn make_session_with_config_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4887,6 +4882,7 @@ async fn make_session_with_config_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        config.multi_agent_version_from_features(),
     )
     .await?;
 
@@ -4926,7 +4922,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -5000,6 +4995,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        config.multi_agent_version_from_features(),
     )
     .await?;
 
@@ -6434,7 +6430,6 @@ where
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -6588,7 +6583,7 @@ where
         &session_telemetry,
         session_configuration.provider.clone(),
         &session_configuration,
-        session_configuration.multi_agent_version,
+        config.multi_agent_version_from_features(),
         services.user_shell.as_ref(),
         services.shell_zsh_path.as_ref(),
         services.main_execve_wrapper_exe.as_ref(),
@@ -6612,8 +6607,8 @@ where
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
-        multi_agent_version: session_configuration
-            .multi_agent_version
+        multi_agent_version: config
+            .multi_agent_version_from_features()
             .map(OnceLock::from)
             .unwrap_or_default(),
         pending_mcp_server_refresh_config: Mutex::new(None),

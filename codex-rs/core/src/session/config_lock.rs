@@ -21,6 +21,7 @@ use super::SessionConfiguration;
 
 pub(crate) async fn validate_config_lock_if_configured(
     session_configuration: &SessionConfiguration,
+    multi_agent_version: Option<MultiAgentVersion>,
 ) -> anyhow::Result<()> {
     if session_configuration.session_source.is_non_root_agent() {
         return Ok(());
@@ -32,7 +33,8 @@ pub(crate) async fn validate_config_lock_if_configured(
     else {
         return Ok(());
     };
-    let actual = session_configuration.to_config_lockfile_toml()?;
+    let actual = session_configuration
+        .to_config_lockfile_toml_with_multi_agent_version(multi_agent_version)?;
     let config = session_configuration.original_config_do_not_use.as_ref();
     let options = ConfigLockReplayOptions {
         allow_codex_version_mismatch: config.config_lock_allow_codex_version_mismatch,
@@ -45,13 +47,15 @@ pub(crate) async fn validate_config_lock_if_configured(
 pub(crate) async fn export_config_lock_if_configured(
     session_configuration: &SessionConfiguration,
     conversation_id: ThreadId,
+    multi_agent_version: Option<MultiAgentVersion>,
 ) -> anyhow::Result<()> {
     let config = session_configuration.original_config_do_not_use.as_ref();
     let Some(export_dir) = config.config_lock_export_dir.as_ref() else {
         return Ok(());
     };
 
-    let lock = session_configuration.to_config_lockfile_toml()?;
+    let lock = session_configuration
+        .to_config_lockfile_toml_with_multi_agent_version(multi_agent_version)?;
     let lock = toml::to_string_pretty(&lock).context("failed to serialize config lock")?;
     let path = export_dir.join(format!("{conversation_id}.config.lock.toml"));
 
@@ -71,15 +75,28 @@ pub(crate) async fn export_config_lock_if_configured(
 }
 
 impl SessionConfiguration {
+    #[cfg(test)]
     pub(crate) fn to_config_lockfile_toml(&self) -> anyhow::Result<ConfigLockfileToml> {
+        self.to_config_lockfile_toml_with_multi_agent_version(
+            self.original_config_do_not_use
+                .multi_agent_version_from_features(),
+        )
+    }
+
+    fn to_config_lockfile_toml_with_multi_agent_version(
+        &self,
+        multi_agent_version: Option<MultiAgentVersion>,
+    ) -> anyhow::Result<ConfigLockfileToml> {
         Ok(config_lockfile(session_configuration_to_lock_config_toml(
             self,
+            multi_agent_version,
         )?))
     }
 }
 
 fn session_configuration_to_lock_config_toml(
     sc: &SessionConfiguration,
+    multi_agent_version: Option<MultiAgentVersion>,
 ) -> anyhow::Result<ConfigToml> {
     let config = sc.original_config_do_not_use.as_ref();
     // Start from the resolved layer stack, then patch in values that are only
@@ -95,7 +112,7 @@ fn session_configuration_to_lock_config_toml(
         save_session_resolved_fields(sc, &mut lock_config);
     }
 
-    save_config_resolved_fields(sc, config, &mut lock_config)?;
+    save_config_resolved_fields(config, multi_agent_version, &mut lock_config)?;
     drop_lockfile_inputs(&mut lock_config);
 
     Ok(lock_config)
@@ -125,8 +142,8 @@ fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut Con
 /// Persist the resolved representation so replay compares against the behavior
 /// Codex actually ran with, not only the user-authored TOML inputs.
 fn save_config_resolved_fields(
-    sc: &SessionConfiguration,
     config: &Config,
+    multi_agent_version: Option<MultiAgentVersion>,
     lock_config: &mut ConfigToml,
 ) -> anyhow::Result<()> {
     lock_config.web_search = Some(config.web_search_mode.value());
@@ -147,15 +164,15 @@ fn save_config_resolved_fields(
         .features
         .get_or_insert_with(FeaturesToml::default);
     let mut materialized_features = config.features.get().clone();
-    materialized_features.set_enabled(Feature::Collab, sc.multi_agent_version.is_some());
+    materialized_features.set_enabled(Feature::Collab, multi_agent_version.is_some());
     materialized_features.set_enabled(
         Feature::MultiAgentV2,
-        sc.multi_agent_version == Some(MultiAgentVersion::V2),
+        multi_agent_version == Some(MultiAgentVersion::V2),
     );
     features.materialize_resolved_enabled(&materialized_features);
     let mut multi_agent_v2: MultiAgentV2ConfigToml =
         resolved_config_to_toml(&config.multi_agent_v2, "features.multi_agent_v2")?;
-    multi_agent_v2.enabled = Some(sc.multi_agent_version == Some(MultiAgentVersion::V2));
+    multi_agent_v2.enabled = Some(multi_agent_version == Some(MultiAgentVersion::V2));
     features.multi_agent_v2 = Some(FeatureToml::Config(multi_agent_v2));
     features.apps_mcp_path_override = Some(FeatureToml::Config(AppsMcpPathOverrideConfigToml {
         enabled: Some(config.features.enabled(Feature::AppsMcpPathOverride)),
@@ -169,10 +186,10 @@ fn save_config_resolved_fields(
     let agents = lock_config.agents.get_or_insert_with(Default::default);
     // Multi-agent v2 owns thread fanout through its feature config. Preserve
     // the legacy agents.max_threads setting only when v2 is disabled.
-    agents.max_threads = if sc.multi_agent_version == Some(MultiAgentVersion::V2) {
+    agents.max_threads = if multi_agent_version == Some(MultiAgentVersion::V2) {
         None
     } else {
-        config.effective_agent_max_threads(sc.multi_agent_version)?
+        config.effective_agent_max_threads(multi_agent_version)?
     };
     agents.max_depth = Some(config.agent_max_depth);
     agents.job_max_runtime_seconds = config.agent_job_max_runtime_seconds;
@@ -296,8 +313,9 @@ mod tests {
             (Some(MultiAgentVersion::V1), true, false),
             (Some(MultiAgentVersion::V2), true, true),
         ] {
-            sc.multi_agent_version = multi_agent_version;
-            let lockfile = sc.to_config_lockfile_toml().expect("lock should serialize");
+            let lockfile = sc
+                .to_config_lockfile_toml_with_multi_agent_version(multi_agent_version)
+                .expect("lock should serialize");
             let lock = &lockfile.config;
             let entries = lock
                 .features

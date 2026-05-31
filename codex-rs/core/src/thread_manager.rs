@@ -657,10 +657,9 @@ impl ThreadManager {
                 ))
             })?;
         let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
-        let inherited_multi_agent_version =
-            fork_source.multi_agent_version().await.ok_or_else(|| {
-                CodexErr::InvalidRequest("multi-agent version is unresolved".to_string())
-            })?;
+        let inherited_multi_agent_version = fork_source.multi_agent_version().ok_or_else(|| {
+            CodexErr::InvalidRequest("multi-agent version is unresolved".to_string())
+        })?;
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
@@ -1243,7 +1242,7 @@ impl ThreadManagerState {
             None => None,
         };
         let live_multi_agent_version = match source_thread.as_ref() {
-            Some(source_thread) => source_thread.multi_agent_version().await,
+            Some(source_thread) => source_thread.multi_agent_version(),
             None => None,
         };
         let multi_agent_version = live_multi_agent_version
@@ -1367,14 +1366,18 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let multi_agent_version = self
-            .resolve_multi_agent_version(
-                &config,
-                &initial_history,
-                forked_from_thread_id,
-                inherited_multi_agent_version,
-            )
-            .await;
+        let multi_agent_version = match inherited_multi_agent_version {
+            Some(multi_agent_version) => Some(multi_agent_version),
+            None => {
+                self.resolve_multi_agent_version(
+                    &config,
+                    &initial_history,
+                    forked_from_thread_id,
+                    /*inherited_multi_agent_version*/ None,
+                )
+                .await
+            }
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
