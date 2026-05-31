@@ -266,42 +266,7 @@ pub fn compatibility_sandbox_policy_for_permission_profile(
     network_policy: NetworkSandboxPolicy,
     cwd: &Path,
 ) -> SandboxPolicy {
-    permissions
-        .to_legacy_sandbox_policy(cwd)
-        .unwrap_or_else(|_| {
-            compatibility_workspace_write_policy(file_system_policy, network_policy, cwd)
-        })
-}
-
-fn compatibility_workspace_write_policy(
-    file_system_policy: &FileSystemSandboxPolicy,
-    network_policy: NetworkSandboxPolicy,
-    cwd: &Path,
-) -> SandboxPolicy {
-    let cwd_abs = AbsolutePathBuf::from_absolute_path(cwd).ok();
-    let writable_roots = file_system_policy
-        .get_writable_roots_with_cwd(cwd)
-        .into_iter()
-        .map(|root| root.root)
-        .filter(|root| cwd_abs.as_ref() != Some(root))
-        .collect();
-    let tmpdir_writable = std::env::var_os("TMPDIR")
-        .filter(|tmpdir| !tmpdir.is_empty())
-        .and_then(|tmpdir| {
-            AbsolutePathBuf::from_absolute_path(std::path::PathBuf::from(tmpdir)).ok()
-        })
-        .is_some_and(|tmpdir| file_system_policy.can_write_path_with_cwd(tmpdir.as_path(), cwd));
-    let slash_tmp = Path::new("/tmp");
-    let slash_tmp_writable = slash_tmp.is_absolute()
-        && slash_tmp.is_dir()
-        && file_system_policy.can_write_path_with_cwd(slash_tmp, cwd);
-
-    SandboxPolicy::WorkspaceWrite {
-        writable_roots,
-        network_access: network_policy.is_enabled(),
-        exclude_tmpdir_env_var: !tmpdir_writable,
-        exclude_slash_tmp: !slash_tmp_writable,
-    }
+    permissions.compatibility_sandbox_policy(file_system_policy, network_policy, cwd)
 }
 
 #[cfg(target_os = "linux")]

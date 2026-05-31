@@ -16,10 +16,17 @@ use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::ConstraintResult;
+use codex_core::config::Permissions;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;
 use regex_lite::Regex;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub mod apps_test_server;
@@ -109,6 +116,55 @@ pub fn test_absolute_path_with_windows(
 
 pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
     test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
+}
+
+pub fn legacy_sandbox_policy_for_config(config: &Config) -> SandboxPolicy {
+    legacy_sandbox_policy_for_permission_profile(
+        &config.permissions.effective_permission_profile(),
+        &config.permissions.file_system_sandbox_policy(),
+        config.permissions.network_sandbox_policy(),
+        config.cwd.as_path(),
+    )
+}
+
+pub fn legacy_sandbox_policy_for_permission_profile(
+    permission_profile: &PermissionProfile,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    cwd: &Path,
+) -> SandboxPolicy {
+    permission_profile
+        .to_legacy_sandbox_policy(cwd)
+        .unwrap_or_else(|_| {
+            permission_profile.compatibility_sandbox_policy(
+                file_system_sandbox_policy,
+                network_sandbox_policy,
+                cwd,
+            )
+        })
+}
+
+pub fn set_legacy_sandbox_policy_for_config(
+    config: &mut Config,
+    sandbox_policy: SandboxPolicy,
+) -> ConstraintResult<()> {
+    let cwd = config.cwd.clone();
+    set_legacy_sandbox_policy_for_permissions(
+        &mut config.permissions,
+        sandbox_policy,
+        cwd.as_path(),
+    )
+}
+
+pub fn set_legacy_sandbox_policy_for_permissions(
+    permissions: &mut Permissions,
+    sandbox_policy: SandboxPolicy,
+    cwd: &Path,
+) -> ConstraintResult<()> {
+    permissions.set_permission_profile(PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+        &sandbox_policy,
+        cwd,
+    ))
 }
 
 pub trait TempDirExt {

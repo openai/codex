@@ -32,6 +32,26 @@ fn resolve_runtime_workspace_roots(
     resolved_roots
 }
 
+fn permission_profile_from_legacy_sandbox_policy(
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    cwd: &AbsolutePathBuf,
+    current_permission_profile: &codex_protocol::models::PermissionProfile,
+) -> codex_protocol::models::PermissionProfile {
+    let current_file_system_sandbox_policy =
+        current_permission_profile.file_system_sandbox_policy();
+    let file_system_sandbox_policy =
+        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+            sandbox_policy,
+            cwd.as_path(),
+            &current_file_system_sandbox_policy,
+        );
+    codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
+        codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
+        &file_system_sandbox_policy,
+        codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy),
+    )
+}
+
 fn map_additional_context(
     additional_context: Option<HashMap<String, AdditionalContextEntry>>,
 ) -> BTreeMap<String, CoreAdditionalContextEntry> {
@@ -524,7 +544,10 @@ impl TurnRequestProcessor {
         // `thread/settings/update` only acknowledges that the update was queued.
         // Clients that send dependent partial updates should wait for
         // `thread/settings/updated` or combine the fields in one request.
-        let snapshot = if permissions.is_some() || runtime_workspace_roots_request.is_some() {
+        let snapshot = if permissions.is_some()
+            || runtime_workspace_roots_request.is_some()
+            || sandbox_policy.is_some()
+        {
             Some(thread.config_snapshot().await)
         } else {
             None
@@ -564,6 +587,26 @@ impl TurnRequestProcessor {
         let approvals_reviewer =
             approvals_reviewer.map(codex_app_server_protocol::ApprovalsReviewer::to_core);
         let sandbox_policy = sandbox_policy.map(|policy| policy.to_core());
+        let sandbox_policy_permission_profile = if let Some(sandbox_policy) =
+            sandbox_policy.as_ref()
+        {
+            let Some(snapshot) = snapshot.as_ref() else {
+                return Err(internal_error(format!(
+                    "{method} sandbox policy selection missing thread snapshot"
+                )));
+            };
+            let sandbox_policy_cwd = cwd
+                .as_ref()
+                .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, snapshot.cwd.as_path()))
+                .unwrap_or_else(|| snapshot.cwd.clone());
+            Some(permission_profile_from_legacy_sandbox_policy(
+                sandbox_policy,
+                &sandbox_policy_cwd,
+                &snapshot.permission_profile,
+            ))
+        } else {
+            None
+        };
         let (permission_profile, active_permission_profile, profile_workspace_roots) =
             if let Some(permissions) = permissions {
                 let Some(snapshot) = snapshot.as_ref() else {
@@ -623,8 +666,9 @@ impl TurnRequestProcessor {
                     workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
                     approvals_reviewer,
-                    sandbox_policy: sandbox_policy.clone(),
-                    permission_profile: permission_profile.clone(),
+                    permission_profile: permission_profile
+                        .clone()
+                        .or_else(|| sandbox_policy_permission_profile.clone()),
                     active_permission_profile: active_permission_profile.clone(),
                     profile_workspace_roots: profile_workspace_roots.clone(),
                     windows_sandbox_level: None,
