@@ -16,6 +16,7 @@ fn unified_exec_env_injects_defaults() {
         ("PAGER".to_string(), "cat".to_string()),
         ("GIT_PAGER".to_string(), "cat".to_string()),
         ("GIT_EDITOR".to_string(), ":".to_string()),
+        ("GIT_SEQUENCE_EDITOR".to_string(), ":".to_string()),
         ("GH_PAGER".to_string(), "cat".to_string()),
         ("CODEX_CI".to_string(), "1".to_string()),
     ]);
@@ -28,12 +29,14 @@ fn unified_exec_env_overrides_existing_values() {
     let mut base = HashMap::new();
     base.insert("NO_COLOR".to_string(), "0".to_string());
     base.insert("GIT_EDITOR".to_string(), "nvim".to_string());
+    base.insert("GIT_SEQUENCE_EDITOR".to_string(), "nvim".to_string());
     base.insert("PATH".to_string(), "/usr/bin".to_string());
 
     let env = apply_unified_exec_env(base);
 
     assert_eq!(env.get("NO_COLOR"), Some(&"1".to_string()));
     assert_eq!(env.get("GIT_EDITOR"), Some(&":".to_string()));
+    assert_eq!(env.get("GIT_SEQUENCE_EDITOR"), Some(&":".to_string()));
     assert_eq!(env.get("PATH"), Some(&"/usr/bin".to_string()));
 }
 
