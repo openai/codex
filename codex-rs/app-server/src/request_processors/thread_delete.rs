@@ -73,6 +73,8 @@ impl ThreadRequestProcessor {
                 .await
             {
                 Ok(()) => {
+                    self.cleanup_deleted_thread_state(descendant_thread_id)
+                        .await;
                     deleted_thread_ids.push(descendant_thread_id.to_string());
                 }
                 Err(ThreadStoreError::ThreadNotFound { .. }) => {
@@ -90,6 +92,7 @@ impl ThreadRequestProcessor {
             .delete_thread(StoreDeleteThreadParams { thread_id })
             .await
             .map_err(thread_store_delete_error)?;
+        self.cleanup_deleted_thread_state(thread_id).await;
         deleted_thread_ids.push(thread_id.to_string());
 
         Ok(ThreadDeleteResponse {})
@@ -131,6 +134,14 @@ impl ThreadRequestProcessor {
         self.prepare_thread_for_removal(thread_id, "delete").await;
         if let Some(log_db) = self.log_db.as_ref() {
             log_db.flush().await;
+        }
+    }
+
+    async fn cleanup_deleted_thread_state(&self, thread_id: ThreadId) {
+        if let Some(state_db) = self.state_db.as_ref()
+            && let Err(err) = state_db.delete_thread(thread_id).await
+        {
+            warn!("failed to delete app-server state for deleted thread {thread_id}: {err}");
         }
     }
 }

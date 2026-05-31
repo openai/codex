@@ -87,6 +87,11 @@ pub(super) async fn delete_thread(
     let deleted_state_rows = if let Some(ctx) = state_db_ctx.as_ref() {
         match ctx.delete_thread(thread_id).await {
             Ok(rows) => rows,
+            Err(err) if state_thread_exists && !deleted_rollout_file => {
+                return Err(ThreadStoreError::Internal {
+                    message: format!("failed to delete thread metadata for {thread_id}: {err}"),
+                });
+            }
             Err(err) => {
                 warn!("failed to delete thread metadata for {thread_id}: {err}");
                 0
