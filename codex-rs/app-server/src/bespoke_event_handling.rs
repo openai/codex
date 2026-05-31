@@ -3588,7 +3588,7 @@ mod tests {
                 assert!(payload.rate_limits.credits.is_some());
                 assert_eq!(
                     payload.individual_limit_update,
-                    Some(SpendControlLimitUpdate::Unchanged)
+                    SpendControlLimitUpdate::Unchanged
                 );
             }
             other => bail!("unexpected notification: {other:?}"),

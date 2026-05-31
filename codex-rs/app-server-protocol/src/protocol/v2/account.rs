@@ -255,15 +255,13 @@ pub struct AccountRateLimitsUpdatedNotification {
     /// `unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata
     /// learned from `account/rateLimits/read`.
     #[serde(default)]
-    #[ts(optional)]
-    pub individual_limit_update: Option<SpendControlLimitUpdate>,
+    pub individual_limit_update: SpendControlLimitUpdate,
 }
 
 impl AccountRateLimitsUpdatedNotification {
     pub fn from_core(rate_limits: CoreRateLimitSnapshot) -> Self {
-        let individual_limit_update = Some(SpendControlLimitUpdate::from_core(
-            rate_limits.individual_limit.clone(),
-        ));
+        let individual_limit_update =
+            SpendControlLimitUpdate::from_core(rate_limits.individual_limit.clone());
         Self {
             rate_limits: rate_limits.into(),
             individual_limit_update,
@@ -271,7 +269,7 @@ impl AccountRateLimitsUpdatedNotification {
     }
 
     pub fn individual_limit_update(&self) -> SpendControlLimitUpdate {
-        self.individual_limit_update.clone().unwrap_or_default()
+        self.individual_limit_update.clone()
     }
 }
 
@@ -309,8 +307,6 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub individual_limit: Option<SpendControlLimitSnapshot>,
     pub plan_type: Option<PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,

@@ -803,7 +803,7 @@ mod tests {
                     plan_type: Some(PlanType::Plus),
                     rate_limit_reached_type: None,
                 },
-                individual_limit_update: Some(SpendControlLimitUpdate::Unchanged),
+                individual_limit_update: SpendControlLimitUpdate::Unchanged,
             });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
@@ -821,6 +821,7 @@ mod tests {
                         },
                         "secondary": null,
                         "credits": null,
+                        "individualLimit": null,
                         "planType": "plus",
                         "rateLimitReachedType": null
                     },
