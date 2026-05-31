@@ -724,6 +724,7 @@ mod tests {
     use codex_app_server_protocol::RateLimitSnapshot;
     use codex_app_server_protocol::RateLimitWindow;
     use codex_app_server_protocol::ServerResponse;
+    use codex_app_server_protocol::SpendControlLimitUpdate;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
@@ -802,7 +803,7 @@ mod tests {
                     plan_type: Some(PlanType::Plus),
                     rate_limit_reached_type: None,
                 },
-                individual_limit_update: None,
+                individual_limit_update: SpendControlLimitUpdate::Unchanged,
             });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
@@ -823,7 +824,8 @@ mod tests {
                         "individualLimit": null,
                         "planType": "plus",
                         "rateLimitReachedType": null
-                    }
+                    },
+                    "individualLimitUpdate": { "type": "unchanged" }
                 },
             }),
             serde_json::to_value(jsonrpc_notification)

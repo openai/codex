@@ -5722,21 +5722,19 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "individualLimitUpdate": {
-            "anyOf": [
+            "allOf": [
               {
                 "$ref": "#/definitions/v2/SpendControlLimitUpdate"
-              },
-              {
-                "type": "null"
               }
             ],
-            "description": "Sparse spend-control update carried alongside the backward-compatible snapshot.\n\nWhen absent, clients should preserve their cached spend-control limit. This matters when rolling rate-limit headers omit account metadata learned from `account/rateLimits/read`."
+            "description": "Sparse spend-control update carried alongside the backward-compatible snapshot.\n\n`unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata learned from `account/rateLimits/read`."
           },
           "rateLimits": {
             "$ref": "#/definitions/v2/RateLimitSnapshot"
           }
         },
         "required": [
+          "individualLimitUpdate",
           "rateLimits"
         ],
         "title": "AccountRateLimitsUpdatedNotification",
@@ -15317,6 +15315,22 @@
       },
       "SpendControlLimitUpdate": {
         "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "unchanged"
+                ],
+                "title": "UnchangedSpendControlLimitUpdateType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "UnchangedSpendControlLimitUpdate",
+            "type": "object"
+          },
           {
             "properties": {
               "type": {

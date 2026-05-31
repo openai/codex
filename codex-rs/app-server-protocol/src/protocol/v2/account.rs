@@ -252,11 +252,9 @@ pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
     /// Sparse spend-control update carried alongside the backward-compatible snapshot.
     ///
-    /// When absent, clients should preserve their cached spend-control limit. This matters when
-    /// rolling rate-limit headers omit account metadata learned from `account/rateLimits/read`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub individual_limit_update: Option<SpendControlLimitUpdate>,
+    /// `unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata
+    /// learned from `account/rateLimits/read`.
+    pub individual_limit_update: SpendControlLimitUpdate,
 }
 
 impl AccountRateLimitsUpdatedNotification {
@@ -274,18 +272,20 @@ impl AccountRateLimitsUpdatedNotification {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum SpendControlLimitUpdate {
+    Unchanged,
     Cleared,
     Updated { limit: SpendControlLimitSnapshot },
 }
 
 impl SpendControlLimitUpdate {
-    fn from_core(value: Option<Option<CoreSpendControlLimitSnapshot>>) -> Option<Self> {
-        value.map(|limit| match limit {
-            Some(limit) => Self::Updated {
+    fn from_core(value: Option<Option<CoreSpendControlLimitSnapshot>>) -> Self {
+        match value {
+            None => Self::Unchanged,
+            Some(None) => Self::Cleared,
+            Some(Some(limit)) => Self::Updated {
                 limit: limit.into(),
             },
-            None => Self::Cleared,
-        })
+        }
     }
 }
 

@@ -133,6 +133,7 @@ pub(crate) struct SpendControlLimitSnapshotDisplay {
     pub percent_remaining: f64,
     pub used: String,
     pub limit: String,
+    pub resets_at_timestamp: i64,
     pub resets_at: Option<String>,
 }
 
@@ -187,14 +188,23 @@ impl SpendControlLimitSnapshotDisplay {
         value: &CoreSpendControlLimitSnapshot,
         captured_at: DateTime<Local>,
     ) -> Option<Self> {
-        let resets_at = DateTime::<Utc>::from_timestamp(value.resets_at, 0)
-            .map(|dt| format_reset_timestamp(dt.with_timezone(&Local), captured_at));
         Some(Self {
             percent_remaining: f64::from(value.remaining_percent.clamp(0, 100)),
             used: format_credit_amount(&value.used)?,
             limit: format_credit_amount(&value.limit)?,
-            resets_at,
+            resets_at_timestamp: value.resets_at,
+            resets_at: Self::format_resets_at(value.resets_at, captured_at),
         })
+    }
+
+    pub(crate) fn with_reset_text_for_capture(mut self, captured_at: DateTime<Local>) -> Self {
+        self.resets_at = Self::format_resets_at(self.resets_at_timestamp, captured_at);
+        self
+    }
+
+    fn format_resets_at(resets_at_timestamp: i64, captured_at: DateTime<Local>) -> Option<String> {
+        DateTime::<Utc>::from_timestamp(resets_at_timestamp, 0)
+            .map(|dt| format_reset_timestamp(dt.with_timezone(&Local), captured_at))
     }
 }
 
@@ -409,9 +419,13 @@ mod tests {
     use super::CreditsSnapshotDisplay;
     use super::RateLimitSnapshotDisplay;
     use super::RateLimitWindowDisplay;
+    use super::SpendControlLimitSnapshotDisplay;
     use super::StatusRateLimitData;
     use super::compose_rate_limit_data_many;
+    use chrono::Duration as ChronoDuration;
     use chrono::Local;
+    use chrono::TimeZone;
+    use codex_app_server_protocol::SpendControlLimitSnapshot;
     use pretty_assertions::assert_eq;
 
     fn window(used_percent: f64) -> RateLimitWindowDisplay {
@@ -500,6 +514,32 @@ mod tests {
                 "Usage limit".to_string(),
                 "Secondary usage limit".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn preserved_spend_control_limit_recomputes_reset_text_for_capture() {
+        let initial_capture = Local
+            .with_ymd_and_hms(2025, 1, 1, 10, 0, 0)
+            .single()
+            .expect("valid initial capture");
+        let later_capture = initial_capture + ChronoDuration::days(1);
+        let limit = SpendControlLimitSnapshot {
+            limit: "25000".to_string(),
+            used: "8000".to_string(),
+            remaining_percent: 68,
+            resets_at: (initial_capture + ChronoDuration::hours(29)).timestamp(),
+        };
+
+        let display = SpendControlLimitSnapshotDisplay::from_limit(&limit, initial_capture)
+            .expect("shape spend-control limit");
+        assert_eq!(display.resets_at.as_deref(), Some("15:00 on 2 Jan"));
+        assert_eq!(
+            display
+                .with_reset_text_for_capture(later_capture)
+                .resets_at
+                .as_deref(),
+            Some("15:00")
         );
     }
 }

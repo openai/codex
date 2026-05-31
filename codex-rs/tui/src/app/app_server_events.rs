@@ -78,16 +78,20 @@ impl App {
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 let mut rate_limits = notification.rate_limits.clone();
-                if let Some(individual_limit_update) = notification.individual_limit_update.as_ref()
-                {
-                    rate_limits.individual_limit = match individual_limit_update {
-                        SpendControlLimitUpdate::Cleared => None,
-                        SpendControlLimitUpdate::Updated { limit } => Some(limit.clone()),
-                    };
-                    self.chat_widget
-                        .replace_rate_limit_snapshot(Some(rate_limits));
-                } else {
-                    self.chat_widget.on_rate_limit_snapshot(Some(rate_limits));
+                match &notification.individual_limit_update {
+                    SpendControlLimitUpdate::Unchanged => {
+                        self.chat_widget.on_rate_limit_snapshot(Some(rate_limits));
+                    }
+                    SpendControlLimitUpdate::Cleared => {
+                        rate_limits.individual_limit = None;
+                        self.chat_widget
+                            .replace_rate_limit_snapshot(Some(rate_limits));
+                    }
+                    SpendControlLimitUpdate::Updated { limit } => {
+                        rate_limits.individual_limit = Some(limit.clone());
+                        self.chat_widget
+                            .replace_rate_limit_snapshot(Some(rate_limits));
+                    }
                 }
                 return;
             }

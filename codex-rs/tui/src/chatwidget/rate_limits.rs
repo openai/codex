@@ -255,10 +255,12 @@ impl ChatWidget {
                 self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
             }
 
+            let captured_at = Local::now();
             let mut display =
-                rate_limit_snapshot_display_for_limit(&snapshot, limit_label, Local::now());
+                rate_limit_snapshot_display_for_limit(&snapshot, limit_label, captured_at);
             if display.individual_limit.is_none() {
-                display.individual_limit = preserved_individual_limit;
+                display.individual_limit = preserved_individual_limit
+                    .map(|limit| limit.with_reset_text_for_capture(captured_at));
             }
             self.rate_limit_snapshots_by_limit_id
                 .insert(limit_id, display);

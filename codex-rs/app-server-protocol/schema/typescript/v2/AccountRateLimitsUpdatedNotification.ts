@@ -8,7 +8,7 @@ export type AccountRateLimitsUpdatedNotification = { rateLimits: RateLimitSnapsh
 /**
  * Sparse spend-control update carried alongside the backward-compatible snapshot.
  *
- * When absent, clients should preserve their cached spend-control limit. This matters when
- * rolling rate-limit headers omit account metadata learned from `account/rateLimits/read`.
+ * `unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata
+ * learned from `account/rateLimits/read`.
  */
-individualLimitUpdate?: SpendControlLimitUpdate, };
+individualLimitUpdate: SpendControlLimitUpdate, };

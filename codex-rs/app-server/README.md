@@ -1856,7 +1856,7 @@ Field notes:
 ```json
 { "method": "account/rateLimits/read", "id": 7 }
 { "id": 7, "result": { "rateLimits": { "primary": { "usedPercent": 25, "windowDurationMins": 15, "resetsAt": 1730947200 }, "secondary": null, "rateLimitReachedType": null } } }
-{ "method": "account/rateLimits/updated", "params": { "rateLimits": { … } } }
+{ "method": "account/rateLimits/updated", "params": { "rateLimits": { … }, "individualLimitUpdate": { "type": "unchanged" } } }
 ```
 
 Field notes:
@@ -1865,6 +1865,7 @@ Field notes:
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
 - `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
+- `individualLimitUpdate` describes the effective monthly credit-limit change carried by a notification: `unchanged` preserves cached metadata, `cleared` removes it, and `updated` replaces it with a `limit`.
 
 ### 8) Notify a workspace owner about a limit
 
