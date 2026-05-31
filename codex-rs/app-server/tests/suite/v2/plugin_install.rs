@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -21,6 +23,8 @@ use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppSummary;
+use codex_app_server_protocol::AppsListParams;
+use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
@@ -890,7 +894,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
         },
     ];
     let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle) = start_apps_server(connectors, tools).await?;
+    let (server_url, server_handle, server_control) = start_apps_server(connectors, tools).await?;
 
     let codex_home = TempDir::new()?;
     write_connectors_config(codex_home.path(), &server_url)?;
@@ -918,6 +922,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let directory_requests_before_install = server_control.directory_request_count();
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -947,6 +952,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
             }],
         }
     );
+    assert!(server_control.directory_request_count() > directory_requests_before_install);
 
     server_handle.abort();
     let _ = server_handle.await;
@@ -970,7 +976,8 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }];
-    let (server_url, server_handle) = start_apps_server(connectors, Vec::new()).await?;
+    let (server_url, server_handle, server_control) =
+        start_apps_server(connectors, Vec::new()).await?;
 
     let codex_home = TempDir::new()?;
     write_connectors_config(codex_home.path(), &server_url)?;
@@ -1002,6 +1009,8 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let directory_requests_before_install =
+        warm_app_directory_cache(&mut mcp, &server_control, "Alpha").await?;
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
@@ -1030,6 +1039,10 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
                 needs_auth: true,
             }],
         }
+    );
+    assert_eq!(
+        server_control.directory_request_count(),
+        directory_requests_before_install
     );
 
     server_handle.abort();
@@ -1113,6 +1126,46 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
 #[derive(Clone)]
 struct AppsServerState {
     response: Arc<StdMutex<serde_json::Value>>,
+    directory_request_count: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct AppsServerControl {
+    directory_request_count: Arc<AtomicUsize>,
+}
+
+impl AppsServerControl {
+    fn directory_request_count(&self) -> usize {
+        self.directory_request_count.load(Ordering::SeqCst)
+    }
+}
+
+async fn warm_app_directory_cache(
+    mcp: &mut McpProcess,
+    server_control: &AppsServerControl,
+    expected_app_name: &str,
+) -> Result<usize> {
+    let app_list_request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            force_refetch: true,
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(app_list_request_id)),
+    )
+    .await??;
+    let response: AppsListResponse = to_response(response)?;
+    assert!(
+        response
+            .data
+            .iter()
+            .any(|app| app.name == expected_app_name)
+    );
+    let directory_request_count = server_control.directory_request_count();
+    assert!(directory_request_count > 0);
+    Ok(directory_request_count)
 }
 
 #[derive(Clone)]
@@ -1149,12 +1202,17 @@ impl ServerHandler for PluginInstallMcpServer {
 async fn start_apps_server(
     connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
-) -> Result<(String, JoinHandle<()>)> {
+) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
+    let directory_request_count = Arc::new(AtomicUsize::new(0));
     let state = Arc::new(AppsServerState {
         response: Arc::new(StdMutex::new(
             json!({ "apps": connectors, "next_token": null }),
         )),
+        directory_request_count: directory_request_count.clone(),
     });
+    let server_control = AppsServerControl {
+        directory_request_count,
+    };
     let tools = Arc::new(StdMutex::new(tools));
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -1184,7 +1242,7 @@ async fn start_apps_server(
         let _ = axum::serve(listener, router).await;
     });
 
-    Ok((format!("http://{addr}"), handle))
+    Ok((format!("http://{addr}"), handle, server_control))
 }
 
 async fn list_directory_connectors(
@@ -1192,6 +1250,8 @@ async fn list_directory_connectors(
     headers: HeaderMap,
     uri: Uri,
 ) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    state.directory_request_count.fetch_add(1, Ordering::SeqCst);
+
     let bearer_ok = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
