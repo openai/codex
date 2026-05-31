@@ -7,6 +7,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
+use codex_exec_server::Environment;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use serde::Deserialize;
@@ -132,6 +133,17 @@ pub(crate) fn get_command(
             ],
             shell_type: ShellType::Zsh,
         }),
+    }
+}
+
+pub(crate) fn shell_mode_for_environment(
+    turn_shell_mode: &UnifiedExecShellMode,
+    environment: &Environment,
+) -> UnifiedExecShellMode {
+    if environment.is_remote() {
+        UnifiedExecShellMode::Direct
+    } else {
+        turn_shell_mode.clone()
     }
 }
 
