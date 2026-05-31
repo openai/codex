@@ -76,6 +76,7 @@ pub use tool_config::ZshForkConfig;
 pub use tool_config::request_user_input_available_modes;
 pub use tool_config::shell_command_backend_for_features;
 pub use tool_config::shell_type_for_model_and_features;
+pub use tool_config::unified_exec_uses_zsh_fork_for_features;
 pub use tool_definition::ToolDefinition;
 pub use tool_discovery::DiscoverablePluginInfo;
 pub use tool_discovery::DiscoverableTool;
