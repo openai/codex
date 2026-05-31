@@ -1,4 +1,5 @@
 use anyhow::Result;
+use anyhow::bail;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -11,15 +12,18 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
@@ -27,9 +31,18 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
+use std::io::Cursor;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use wiremock::Request;
+
+const CHILD_PROMPT: &str = "inspect the child runtime";
+const CHILD_MODEL: &str = "test-multi-agent-child";
+const ROOT_MODEL: &str = "test-multi-agent-root";
+const ROOT_PROMPT: &str = "spawn a child";
+const SPAWN_CALL_ID: &str = "spawn-call-1";
 
 fn remote_model(slug: &str) -> ModelInfo {
     ModelInfo {
@@ -37,6 +50,26 @@ fn remote_model(slug: &str) -> ModelInfo {
         used_fallback_model_metadata: false,
         ..model_info_from_slug(slug)
     }
+}
+
+fn body_contains(req: &Request, text: &str) -> bool {
+    let is_zstd = req
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    let bytes = if is_zstd {
+        zstd::stream::decode_all(Cursor::new(&req.body)).ok()
+    } else {
+        Some(req.body.clone())
+    };
+    bytes
+        .and_then(|body| String::from_utf8(body).ok())
+        .is_some_and(|body| body.contains(text))
 }
 
 fn tool_names(body: &Value) -> Vec<String> {
@@ -167,6 +200,117 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
             codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             codex_code_mode::WAIT_TOOL_NAME.to_string(),
         ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let mut root_model = remote_model(ROOT_MODEL);
+    root_model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let mut child_model = remote_model(CHILD_MODEL);
+    child_model.multi_agent_version = Some(MultiAgentVersion::V1);
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![root_model, child_model],
+        },
+    )
+    .await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "worker",
+        "model": CHILD_MODEL,
+        "fork_turns": "none",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &Request| body_contains(req, ROOT_PROMPT),
+        sse(vec![
+            ev_response_created("resp-root-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-root-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &Request| body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "child done"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let root_followup_mock = mount_sse_once_match(
+        &server,
+        |req: &Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-root-2"),
+            ev_assistant_message("msg-root-2", "root done"),
+            ev_completed("resp-root-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config.model = Some(ROOT_MODEL.to_string());
+        });
+    let test = builder.build(&server).await?;
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            test.codex.multi_agent_version(),
+        ),
+        (1, Some(MultiAgentVersion::V2))
+    );
+    test.submit_turn(ROOT_PROMPT).await?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_id = loop {
+        if let Some(child_id) = test
+            .thread_manager
+            .list_thread_ids()
+            .await
+            .into_iter()
+            .find(|thread_id| *thread_id != test.session_configured.thread_id)
+        {
+            break child_id;
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for spawn_agent to create a child thread: root lock {:?}, spawn output {:?}",
+                test.codex.multi_agent_version(),
+                root_followup_mock.function_call_output_text(SPAWN_CALL_ID),
+            );
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    let child = test.thread_manager.get_thread(child_id).await?;
+
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            test.codex.multi_agent_version(),
+            child.config_snapshot().await.model,
+            child.multi_agent_version(),
+        ),
+        (
+            1,
+            Some(MultiAgentVersion::V2),
+            CHILD_MODEL.to_string(),
+            Some(MultiAgentVersion::V2),
+        )
     );
 
     Ok(())

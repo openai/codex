@@ -372,5 +372,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         supports_search_tool: false,
         auto_review_model_override: None,
         tool_mode: None,
+        multi_agent_version: None,
     }
 }
