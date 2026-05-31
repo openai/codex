@@ -5721,6 +5721,17 @@
       "AccountRateLimitsUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "individualLimitUpdate": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpendControlLimitUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sparse spend-control update carried alongside the backward-compatible snapshot.\n\nWhen absent, clients should preserve their cached spend-control limit. This matters when rolling rate-limit headers omit account metadata learned from `account/rateLimits/read`."
+          },
           "rateLimits": {
             "$ref": "#/definitions/v2/RateLimitSnapshot"
           }
@@ -15303,6 +15314,46 @@
           "used"
         ],
         "type": "object"
+      },
+      "SpendControlLimitUpdate": {
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "cleared"
+                ],
+                "title": "ClearedSpendControlLimitUpdateType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ClearedSpendControlLimitUpdate",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "limit": {
+                "$ref": "#/definitions/v2/SpendControlLimitSnapshot"
+              },
+              "type": {
+                "enum": [
+                  "updated"
+                ],
+                "title": "UpdatedSpendControlLimitUpdateType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "limit",
+              "type"
+            ],
+            "title": "UpdatedSpendControlLimitUpdate",
+            "type": "object"
+          }
+        ]
       },
       "SubAgentSource": {
         "oneOf": [

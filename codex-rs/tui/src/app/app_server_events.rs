@@ -13,6 +13,7 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SpendControlLimitUpdate;
 
 impl App {
     fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -76,8 +77,18 @@ impl App {
                 self.refresh_mcp_startup_expected_servers_from_config();
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
-                self.chat_widget
-                    .on_rate_limit_snapshot(Some(notification.rate_limits.clone()));
+                let mut rate_limits = notification.rate_limits.clone();
+                if let Some(individual_limit_update) = notification.individual_limit_update.as_ref()
+                {
+                    rate_limits.individual_limit = match individual_limit_update {
+                        SpendControlLimitUpdate::Cleared => None,
+                        SpendControlLimitUpdate::Updated { limit } => Some(limit.clone()),
+                    };
+                    self.chat_widget
+                        .replace_rate_limit_snapshot(Some(rate_limits));
+                } else {
+                    self.chat_widget.on_rate_limit_snapshot(Some(rate_limits));
+                }
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {

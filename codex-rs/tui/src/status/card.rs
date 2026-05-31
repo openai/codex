@@ -556,9 +556,19 @@ impl StatusHistoryCell {
                             lines.push(Line::from(inline_spans));
                         } else {
                             lines.push(base_line);
-                            lines.push(formatter.continuation(vec![
-                                Span::from(format!("(resets {resets_at})")).dim(),
-                            ]));
+                            let reset_text = format!("(resets {resets_at})");
+                            let reset_width = formatter.value_width(available_inner_width).max(1);
+                            let wrap_options =
+                                textwrap::Options::new(reset_width).break_words(false);
+                            lines.extend(
+                                textwrap::wrap(reset_text.as_str(), wrap_options)
+                                    .into_iter()
+                                    .map(|wrapped| {
+                                        formatter.continuation(vec![
+                                            Span::from(wrapped.into_owned()).dim(),
+                                        ])
+                                    }),
+                            );
                         }
                     } else {
                         lines.push(base_line);

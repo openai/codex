@@ -250,6 +250,43 @@ pub struct AccountUpdatedNotification {
 #[ts(export_to = "v2/")]
 pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
+    /// Sparse spend-control update carried alongside the backward-compatible snapshot.
+    ///
+    /// When absent, clients should preserve their cached spend-control limit. This matters when
+    /// rolling rate-limit headers omit account metadata learned from `account/rateLimits/read`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub individual_limit_update: Option<SpendControlLimitUpdate>,
+}
+
+impl AccountRateLimitsUpdatedNotification {
+    pub fn from_core(rate_limits: CoreRateLimitSnapshot) -> Self {
+        let individual_limit_update =
+            SpendControlLimitUpdate::from_core(rate_limits.individual_limit.clone());
+        Self {
+            rate_limits: rate_limits.into(),
+            individual_limit_update,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum SpendControlLimitUpdate {
+    Cleared,
+    Updated { limit: SpendControlLimitSnapshot },
+}
+
+impl SpendControlLimitUpdate {
+    fn from_core(value: Option<Option<CoreSpendControlLimitSnapshot>>) -> Option<Self> {
+        value.map(|limit| match limit {
+            Some(limit) => Self::Updated {
+                limit: limit.into(),
+            },
+            None => Self::Cleared,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

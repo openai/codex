@@ -802,6 +802,7 @@ mod tests {
                     plan_type: Some(PlanType::Plus),
                     rate_limit_reached_type: None,
                 },
+                individual_limit_update: None,
             });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);

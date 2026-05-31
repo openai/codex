@@ -1591,9 +1591,7 @@ async fn handle_token_count_event(
     if let Some(rate_limits) = rate_limits {
         outgoing
             .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
-                AccountRateLimitsUpdatedNotification {
-                    rate_limits: rate_limits.into(),
-                },
+                AccountRateLimitsUpdatedNotification::from_core(rate_limits),
             ))
             .await;
     }
@@ -3587,6 +3585,7 @@ mod tests {
                 assert_eq!(payload.rate_limits.limit_name, None);
                 assert!(payload.rate_limits.primary.is_some());
                 assert!(payload.rate_limits.credits.is_some());
+                assert_eq!(payload.individual_limit_update, None);
             }
             other => bail!("unexpected notification: {other:?}"),
         }

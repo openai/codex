@@ -745,7 +745,7 @@ async fn status_line_secondary_only_non_weekly_limit_omits_primary_limit_item() 
 }
 
 #[tokio::test]
-async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
+async fn rate_limit_snapshot_keeps_account_metadata_when_missing_from_headers() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
@@ -784,12 +784,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         }),
         secondary: None,
         credits: None,
-        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
-            limit: "25000".to_string(),
-            used: "8000".to_string(),
-            remaining_percent: 68,
-            resets_at: 300,
-        }),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));
