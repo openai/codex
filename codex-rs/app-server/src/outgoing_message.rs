@@ -821,7 +821,6 @@ mod tests {
                         },
                         "secondary": null,
                         "credits": null,
-                        "individualLimit": null,
                         "planType": "plus",
                         "rateLimitReachedType": null
                     },

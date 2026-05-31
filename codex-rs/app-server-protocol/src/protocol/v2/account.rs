@@ -309,6 +309,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub individual_limit: Option<SpendControlLimitSnapshot>,
     pub plan_type: Option<PlanType>,
