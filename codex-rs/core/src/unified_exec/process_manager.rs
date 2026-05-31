@@ -57,7 +57,7 @@ use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
 
-const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
+const UNIFIED_EXEC_ENV: [(&str, &str); 11] = [
     ("NO_COLOR", "1"),
     ("TERM", "dumb"),
     ("LANG", "C.UTF-8"),
@@ -66,6 +66,7 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("COLORTERM", ""),
     ("PAGER", "cat"),
     ("GIT_PAGER", "cat"),
+    ("GIT_EDITOR", ":"),
     ("GH_PAGER", "cat"),
     ("CODEX_CI", "1"),
 ];
