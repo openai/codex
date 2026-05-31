@@ -1881,15 +1881,15 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
 async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    set_turn_config(&mut turn, config);
     let root = manager
         .start_thread((*turn.config).clone())
         .await
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
-    let mut config = turn.config.as_ref().clone();
-    let _ = config.features.enable(Feature::MultiAgentV2);
-    set_turn_config(&mut turn, config);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 

@@ -1638,9 +1638,15 @@ async fn spawn_child_completion_notifies_parent_history() {
 #[tokio::test]
 async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
     let harness = AgentControlHarness::new().await;
-    let (root_thread_id, root_thread) = harness.start_thread().await;
     let mut config = harness.config.clone();
     let _ = config.features.enable(Feature::MultiAgentV2);
+    let root = harness
+        .manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    let root_thread_id = root.thread_id;
+    let root_thread = root.thread;
     let worker_path = AgentPath::root().join("worker_a").expect("worker path");
     let worker_thread_id = harness
         .control

@@ -57,7 +57,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
-    pub(crate) multi_agent_version: Option<Option<MultiAgentVersion>>,
+    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
 }
 
 #[derive(Clone, Debug)]
@@ -191,11 +191,18 @@ impl AgentControl {
         initial_operation: Op,
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
+        let multi_agent_version = session_source
+            .is_none()
+            .then(|| config.multi_agent_version_from_features())
+            .flatten();
         let spawned_agent = Box::pin(self.spawn_agent_internal(
             config,
             initial_operation,
             session_source,
-            SpawnAgentOptions::default(),
+            SpawnAgentOptions {
+                multi_agent_version,
+                ..Default::default()
+            },
         ))
         .await?;
         Ok(spawned_agent.thread_id)
@@ -221,15 +228,18 @@ impl AgentControl {
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
         let state = self.upgrade()?;
-        let inherited_multi_agent_version = self
+        let multi_agent_version = self
             .inherited_multi_agent_version_for_source(
                 &state,
                 session_source.as_ref(),
                 options.multi_agent_version,
             )
-            .await;
+            .await
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest("multi-agent version is unresolved".to_string())
+            })?;
         let agent_max_threads = config
-            .effective_agent_max_threads(inherited_multi_agent_version.flatten())
+            .effective_agent_max_threads(Some(multi_agent_version))
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
         let mut reservation = self.state.reserve_spawn_slot(agent_max_threads)?;
         let inherited_shell_snapshot = self
@@ -271,7 +281,7 @@ impl AgentControl {
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
-                    inherited_multi_agent_version,
+                    Some(multi_agent_version),
                 ))
                 .await?
             }
@@ -288,7 +298,7 @@ impl AgentControl {
                     inherited_shell_snapshot,
                     inherited_exec_policy,
                     options.environments.clone(),
-                    inherited_multi_agent_version,
+                    Some(multi_agent_version),
                 ))
                 .await?
             }
@@ -385,7 +395,7 @@ impl AgentControl {
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-        inherited_multi_agent_version: Option<Option<MultiAgentVersion>>,
+        inherited_multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<crate::thread_manager::NewThread> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -529,7 +539,7 @@ impl AgentControl {
                 inherited_shell_snapshot,
                 inherited_exec_policy,
                 options.environments.clone(),
-                Some(multi_agent_version),
+                multi_agent_version,
             )
             .await
     }
@@ -700,7 +710,7 @@ impl AgentControl {
                 parent_thread_id,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
-                inherited_multi_agent_version: Some(multi_agent_version),
+                inherited_multi_agent_version: multi_agent_version,
             })
             .await?;
         let mut agent_metadata = agent_metadata;
@@ -1198,19 +1208,19 @@ impl AgentControl {
         &self,
         state: &Arc<ThreadManagerState>,
         session_source: Option<&SessionSource>,
-        requested_multi_agent_version: Option<Option<MultiAgentVersion>>,
-    ) -> Option<Option<MultiAgentVersion>> {
+        requested_multi_agent_version: Option<MultiAgentVersion>,
+    ) -> Option<MultiAgentVersion> {
         if requested_multi_agent_version.is_some() {
             return requested_multi_agent_version;
         }
-        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        if let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         })) = session_source
-        else {
-            return None;
-        };
-        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
-        Some(parent_thread.multi_agent_version().await)
+            && let Ok(parent_thread) = state.get_thread(*parent_thread_id).await
+        {
+            return parent_thread.multi_agent_version().await;
+        }
+        None
     }
 
     async fn inherited_exec_policy_for_source(

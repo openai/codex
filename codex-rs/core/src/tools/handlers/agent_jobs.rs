@@ -216,7 +216,7 @@ async fn run_agent_job_loop(
                         SpawnAgentOptions {
                             parent_thread_id: Some(session.conversation_id),
                             environments: Some(turn.environments.to_selections()),
-                            multi_agent_version: Some(turn.multi_agent_version),
+                            multi_agent_version: turn.multi_agent_version,
                             ..Default::default()
                         },
                     )
