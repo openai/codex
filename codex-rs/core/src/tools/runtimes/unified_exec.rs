@@ -110,16 +110,35 @@ fn unified_exec_options(
     }
 }
 
-fn guard_git_editors_after_login_profiles(command: &[String]) -> Vec<String> {
-    let [_, flag, script, ..] = command else {
-        return command.to_vec();
-    };
-    if flag != "-lc" {
-        return command.to_vec();
-    }
-
+fn guard_git_editors_after_shell_startup(
+    command: &[String],
+    shell_type: &ShellType,
+) -> Vec<String> {
     let mut command = command.to_vec();
-    command[2] = format!("export GIT_EDITOR=: GIT_SEQUENCE_EDITOR=:;\n{script}");
+    let (script, guard) = match (shell_type, command.as_mut_slice()) {
+        (ShellType::Zsh | ShellType::Bash | ShellType::Sh, [_, flag, script, ..])
+            if flag == "-lc" || flag == "-c" =>
+        {
+            (script, "export GIT_EDITOR=: GIT_SEQUENCE_EDITOR=:;\n")
+        }
+        (ShellType::PowerShell, [_, flag, script, ..]) if flag.eq_ignore_ascii_case("-Command") => {
+            (
+                script,
+                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\n",
+            )
+        }
+        (ShellType::PowerShell, [_, no_profile, flag, script, ..])
+            if no_profile.eq_ignore_ascii_case("-NoProfile")
+                && flag.eq_ignore_ascii_case("-Command") =>
+        {
+            (
+                script,
+                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\n",
+            )
+        }
+        _ => return command,
+    };
+    *script = format!("{guard}{script}");
     command
 }
 
@@ -274,7 +293,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
-        let base_command = &req.command;
+        let base_command = guard_git_editors_after_shell_startup(&req.command, &req.shell_type);
         let session_shell = ctx.session.user_shell();
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
@@ -306,17 +325,16 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         };
         let environment_is_remote = req.environment.is_remote();
         let command = if environment_is_remote {
-            base_command.to_vec()
+            base_command
         } else {
             maybe_wrap_shell_lc_with_snapshot(
-                base_command,
+                &base_command,
                 session_shell.as_ref(),
                 &req.cwd,
                 &explicit_env_overrides,
                 &env,
             )
         };
-        let command = guard_git_editors_after_login_profiles(&command);
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
             Some(&req.shell_type),
@@ -421,7 +439,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn guard_git_editors_after_login_profiles_prefixes_login_shell_script() {
+    fn guard_git_editors_after_shell_startup_prefixes_login_shell_script() {
         let command = vec![
             "/bin/sh".to_string(),
             "-lc".to_string(),
@@ -430,7 +448,7 @@ mod tests {
         ];
 
         assert_eq!(
-            guard_git_editors_after_login_profiles(&command),
+            guard_git_editors_after_shell_startup(&command, &ShellType::Sh),
             vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
@@ -441,14 +459,61 @@ mod tests {
     }
 
     #[test]
-    fn guard_git_editors_after_login_profiles_leaves_non_login_shell_script_unchanged() {
+    fn guard_git_editors_after_shell_startup_prefixes_non_login_shell_script() {
         let command = vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
             "printf ok".to_string(),
         ];
 
-        assert_eq!(guard_git_editors_after_login_profiles(&command), command);
+        assert_eq!(
+            guard_git_editors_after_shell_startup(&command, &ShellType::Sh),
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "export GIT_EDITOR=: GIT_SEQUENCE_EDITOR=:;\nprintf ok".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn guard_git_editors_after_shell_startup_prefixes_powershell_script() {
+        let command = vec![
+            "pwsh".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ];
+
+        assert_eq!(
+            guard_git_editors_after_shell_startup(&command, &ShellType::PowerShell),
+            vec![
+                "pwsh".to_string(),
+                "-Command".to_string(),
+                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\nWrite-Output ok"
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn guard_git_editors_after_shell_startup_prefixes_profile_free_powershell_script() {
+        let command = vec![
+            "pwsh".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ];
+
+        assert_eq!(
+            guard_git_editors_after_shell_startup(&command, &ShellType::PowerShell),
+            vec![
+                "pwsh".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "$env:GIT_EDITOR = ':'; $env:GIT_SEQUENCE_EDITOR = ':';\nWrite-Output ok"
+                    .to_string(),
+            ]
+        );
     }
 
     #[test]
