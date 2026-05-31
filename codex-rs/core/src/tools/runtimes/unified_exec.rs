@@ -110,6 +110,19 @@ fn unified_exec_options(
     }
 }
 
+fn guard_git_editors_after_login_profiles(command: &[String]) -> Vec<String> {
+    let [_, flag, script, ..] = command else {
+        return command.to_vec();
+    };
+    if flag != "-lc" {
+        return command.to_vec();
+    }
+
+    let mut command = command.to_vec();
+    command[2] = format!("export GIT_EDITOR=: GIT_SEQUENCE_EDITOR=:;\n{script}");
+    command
+}
+
 impl<'a> UnifiedExecRuntime<'a> {
     /// Creates a runtime bound to the shared unified-exec process manager.
     pub fn new(manager: &'a UnifiedExecProcessManager, shell_mode: UnifiedExecShellMode) -> Self {
@@ -303,6 +316,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &env,
             )
         };
+        let command = guard_git_editors_after_login_profiles(&command);
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
             Some(&req.shell_type),
@@ -402,8 +416,40 @@ mod tests {
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
     use crate::tools::sandboxing::ToolRuntime;
     use codex_exec_server::Environment;
+    use pretty_assertions::assert_eq;
     use std::time::Duration;
     use tempfile::tempdir;
+
+    #[test]
+    fn guard_git_editors_after_login_profiles_prefixes_login_shell_script() {
+        let command = vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            "printf ok".to_string(),
+            "arg0".to_string(),
+        ];
+
+        assert_eq!(
+            guard_git_editors_after_login_profiles(&command),
+            vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "export GIT_EDITOR=: GIT_SEQUENCE_EDITOR=:;\nprintf ok".to_string(),
+                "arg0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn guard_git_editors_after_login_profiles_leaves_non_login_shell_script_unchanged() {
+        let command = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf ok".to_string(),
+        ];
+
+        assert_eq!(guard_git_editors_after_login_profiles(&command), command);
+    }
 
     #[test]
     fn unified_exec_options_combines_default_timeout_with_network_denial_cancellation() {
