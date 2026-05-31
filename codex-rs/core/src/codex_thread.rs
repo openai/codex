@@ -507,6 +507,15 @@ impl CodexThread {
         self.codex.session.multi_agent_version().await
     }
 
+    pub(crate) fn set_multi_agent_version_if_unset(
+        &self,
+        multi_agent_version: MultiAgentVersion,
+    ) -> MultiAgentVersion {
+        self.codex
+            .session
+            .set_multi_agent_version_if_unset(multi_agent_version)
+    }
+
     /// Refresh the thread's layer-backed user config state from a caller-supplied
     /// config snapshot. Thread-scoped layers and session-static settings remain
     /// unchanged.

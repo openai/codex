@@ -1233,18 +1233,26 @@ impl ThreadManagerState {
             return Some(multi_agent_version);
         }
 
-        let multi_agent_version =
-            inherited_multi_agent_version.or_else(|| config.multi_agent_version_from_features());
-        let multi_agent_version = multi_agent_version?;
         let source_thread_id = match initial_history {
             InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
             InitialHistory::Forked(_) => forked_from_thread_id,
             InitialHistory::New | InitialHistory::Cleared => None,
         };
+        let source_thread = match source_thread_id {
+            Some(source_thread_id) => self.get_thread(source_thread_id).await.ok(),
+            None => None,
+        };
+        let live_multi_agent_version = match source_thread.as_ref() {
+            Some(source_thread) => source_thread.multi_agent_version().await,
+            None => None,
+        };
+        let multi_agent_version = live_multi_agent_version
+            .or(inherited_multi_agent_version)
+            .or_else(|| config.multi_agent_version_from_features())?;
         let Some(source_thread_id) = source_thread_id else {
             return Some(multi_agent_version);
         };
-        match self
+        let multi_agent_version = match self
             .thread_store
             .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
                 thread_id: source_thread_id,
@@ -1253,13 +1261,19 @@ impl ThreadManagerState {
             })
             .await
         {
-            Ok(multi_agent_version) => Some(multi_agent_version),
+            Ok(multi_agent_version) => multi_agent_version,
             Err(err) => {
                 warn!(
                     "failed to lock multi-agent version for legacy thread {source_thread_id}: {err}"
                 );
-                Some(multi_agent_version)
+                multi_agent_version
             }
+        };
+        match source_thread {
+            Some(source_thread) => {
+                Some(source_thread.set_multi_agent_version_if_unset(multi_agent_version))
+            }
+            None => Some(multi_agent_version),
         }
     }
 

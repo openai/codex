@@ -2624,8 +2624,14 @@ impl Session {
     }
 
     pub(crate) async fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
-        let state = self.state.lock().await;
-        state.session_configuration.multi_agent_version
+        self.multi_agent_version.get().copied()
+    }
+
+    pub(crate) fn set_multi_agent_version_if_unset(
+        &self,
+        multi_agent_version: MultiAgentVersion,
+    ) -> MultiAgentVersion {
+        *self.multi_agent_version.get_or_init(|| multi_agent_version)
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
