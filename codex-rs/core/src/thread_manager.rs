@@ -96,17 +96,6 @@ fn should_use_test_thread_manager_behavior() -> bool {
     FORCE_TEST_THREAD_MANAGER_BEHAVIOR.load(Ordering::Relaxed)
 }
 
-fn multi_agent_version_source_thread_id(
-    initial_history: &InitialHistory,
-    forked_from_thread_id: Option<ThreadId>,
-) -> Option<ThreadId> {
-    match initial_history {
-        InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-        InitialHistory::Forked(_) => forked_from_thread_id,
-        InitialHistory::New | InitialHistory::Cleared => None,
-    }
-}
-
 struct TempCodexHomeGuard {
     path: PathBuf,
 }
@@ -951,17 +940,9 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let inherited_multi_agent_version = self
-            .state
-            .resolve_inherited_multi_agent_version(
-                &history,
-                forked_from_thread_id,
-                /*inherited_multi_agent_version*/ None,
-            )
-            .await;
         let interrupted_marker = InterruptedTurnHistoryMarker::from_config_and_version(
             &config,
-            inherited_multi_agent_version,
+            history.get_multi_agent_version(),
         );
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
@@ -982,7 +963,7 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
-            inherited_multi_agent_version,
+            /*inherited_multi_agent_version*/ None,
         ))
         .await
     }
@@ -1232,29 +1213,6 @@ impl ThreadManagerState {
         .await
     }
 
-    pub(crate) async fn resolve_inherited_multi_agent_version(
-        &self,
-        initial_history: &InitialHistory,
-        forked_from_thread_id: Option<ThreadId>,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
-    ) -> Option<MultiAgentVersion> {
-        if let Some(multi_agent_version) = initial_history.get_multi_agent_version() {
-            return Some(multi_agent_version);
-        }
-
-        let source_thread_id =
-            multi_agent_version_source_thread_id(initial_history, forked_from_thread_id);
-        let source_thread = match source_thread_id {
-            Some(source_thread_id) => self.get_thread(source_thread_id).await.ok(),
-            None => None,
-        };
-        let live_multi_agent_version = match source_thread.as_ref() {
-            Some(source_thread) => source_thread.multi_agent_version(),
-            None => None,
-        };
-        live_multi_agent_version.or(inherited_multi_agent_version)
-    }
-
     /// Spawn a new thread with optional history and register it with the manager.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread(
@@ -1345,18 +1303,21 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let source_thread_id =
-            multi_agent_version_source_thread_id(&initial_history, forked_from_thread_id);
+        let source_thread_id = match &initial_history {
+            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+            InitialHistory::Forked(_) => forked_from_thread_id,
+            InitialHistory::New | InitialHistory::Cleared => None,
+        };
         let inherited_multi_agent_version = match inherited_multi_agent_version {
             Some(multi_agent_version) => Some(multi_agent_version),
-            None => {
-                self.resolve_inherited_multi_agent_version(
-                    &initial_history,
-                    forked_from_thread_id,
-                    /*inherited_multi_agent_version*/ None,
-                )
-                .await
-            }
+            None => match source_thread_id {
+                Some(source_thread_id) => self
+                    .get_thread(source_thread_id)
+                    .await
+                    .ok()
+                    .and_then(|source_thread| source_thread.multi_agent_version()),
+                None => None,
+            },
         };
         let CodexSpawnOk {
             codex, thread_id, ..

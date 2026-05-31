@@ -540,8 +540,10 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let multi_agent_version =
-            inherited_multi_agent_version.or_else(|| config.multi_agent_version_from_features());
+        let multi_agent_version = conversation_history
+            .get_multi_agent_version()
+            .or(inherited_multi_agent_version)
+            .or_else(|| config.multi_agent_version_from_features());
         let _ = config
             .effective_agent_max_threads(multi_agent_version)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;

@@ -144,54 +144,6 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
         .any(|usage_hint_text| usage_hint_text == text)
 }
 
-async fn load_resumed_history_and_resolve_inherited_multi_agent_version(
-    state: &ThreadManagerState,
-    thread_id: ThreadId,
-    session_source: &SessionSource,
-) -> CodexResult<(
-    InitialHistory,
-    Option<ThreadId>,
-    Option<MultiAgentVersion>,
-)> {
-    let inherited_multi_agent_version =
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) = session_source
-        {
-            match state.get_thread(*parent_thread_id).await {
-                Ok(parent_thread) => parent_thread.multi_agent_version(),
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
-    let stored_thread = state
-        .read_stored_thread(ReadThreadParams {
-            thread_id,
-            include_archived: true,
-            include_history: true,
-        })
-        .await?;
-    let history = stored_thread
-        .history
-        .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
-        .items;
-    let initial_history = InitialHistory::Resumed(ResumedHistory {
-        conversation_id: thread_id,
-        history,
-        rollout_path: stored_thread.rollout_path,
-    });
-    let parent_thread_id = stored_thread.parent_thread_id;
-    let multi_agent_version = state
-        .resolve_inherited_multi_agent_version(
-            &initial_history,
-            /*forked_from_thread_id*/ None,
-            inherited_multi_agent_version,
-        )
-        .await;
-    Ok((initial_history, parent_thread_id, multi_agent_version))
-}
-
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
@@ -670,13 +622,38 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
-        let (initial_history, parent_thread_id, multi_agent_version) =
-            load_resumed_history_and_resolve_inherited_multi_agent_version(
-                state.as_ref(),
+        let inherited_multi_agent_version =
+            if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) = &session_source
+            {
+                match state.get_thread(*parent_thread_id).await {
+                    Ok(parent_thread) => parent_thread.multi_agent_version(),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+        let stored_thread = state
+            .read_stored_thread(ReadThreadParams {
                 thread_id,
-                &session_source,
-            )
+                include_archived: true,
+                include_history: true,
+            })
             .await?;
+        let history = stored_thread
+            .history
+            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
+            .items;
+        let initial_history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: thread_id,
+            history,
+            rollout_path: stored_thread.rollout_path,
+        });
+        let parent_thread_id = stored_thread.parent_thread_id;
+        let multi_agent_version = initial_history
+            .get_multi_agent_version()
+            .or(inherited_multi_agent_version);
         let agent_max_threads = config
             .effective_agent_max_threads(multi_agent_version)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
