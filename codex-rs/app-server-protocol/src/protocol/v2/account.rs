@@ -254,6 +254,7 @@ pub struct AccountRateLimitsUpdatedNotification {
     ///
     /// `unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata
     /// learned from `account/rateLimits/read`.
+    #[serde(default)]
     pub individual_limit_update: SpendControlLimitUpdate,
 }
 
@@ -268,13 +269,16 @@ impl AccountRateLimitsUpdatedNotification {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum SpendControlLimitUpdate {
+    #[default]
     Unchanged,
     Cleared,
-    Updated { limit: SpendControlLimitSnapshot },
+    Updated {
+        limit: SpendControlLimitSnapshot,
+    },
 }
 
 impl SpendControlLimitUpdate {

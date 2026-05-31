@@ -1865,7 +1865,7 @@ Field notes:
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
 - `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
-- `individualLimitUpdate` describes the effective monthly credit-limit change carried by a notification: `unchanged` preserves cached metadata, `cleared` removes it, and `updated` replaces it with a `limit`.
+- `individualLimitUpdate` describes the effective monthly credit-limit change carried by a notification: `unchanged` preserves cached metadata, `cleared` removes it, and `updated` replaces it with a `limit`. Clients also treat omission from older app-server versions as `unchanged`.
 
 ### 8) Notify a workspace owner about a limit
 
