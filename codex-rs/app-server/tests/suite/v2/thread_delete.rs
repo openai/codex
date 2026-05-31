@@ -120,7 +120,7 @@ async fn thread_delete_deletes_spawned_descendants_and_metadata() -> Result<()> 
         )?;
         deleted_ids.push(deleted_notification.thread_id);
     }
-    assert_eq!(deleted_ids, vec![parent_id, grandchild_id, child_id]);
+    assert_eq!(deleted_ids, vec![grandchild_id, child_id, parent_id]);
 
     for thread_id in [parent_thread_id, child_thread_id, grandchild_thread_id] {
         let rollout_path = find_thread_path_by_id_str(

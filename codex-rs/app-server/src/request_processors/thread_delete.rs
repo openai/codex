@@ -59,19 +59,12 @@ impl ThreadRequestProcessor {
         }
 
         self.validate_root_thread_delete(thread_id).await?;
-        self.prepare_thread_for_delete(thread_id).await;
-        match self
-            .thread_store
-            .delete_thread(StoreDeleteThreadParams { thread_id })
-            .await
-        {
-            Ok(()) => {}
-            Err(err) => return Err(thread_store_delete_error(err)),
+        for thread_id_to_delete in thread_ids.iter().copied() {
+            self.prepare_thread_for_delete(thread_id_to_delete).await;
         }
 
-        let mut deleted_thread_ids = vec![thread_id.to_string()];
+        let mut deleted_thread_ids = Vec::new();
         for descendant_thread_id in thread_ids.iter().skip(1).rev().copied() {
-            self.prepare_thread_for_delete(descendant_thread_id).await;
             match self
                 .thread_store
                 .delete_thread(StoreDeleteThreadParams {
@@ -82,13 +75,22 @@ impl ThreadRequestProcessor {
                 Ok(()) => {
                     deleted_thread_ids.push(descendant_thread_id.to_string());
                 }
-                Err(err) => {
+                Err(ThreadStoreError::ThreadNotFound { .. }) => {
                     warn!(
-                        "failed to delete spawned descendant thread {descendant_thread_id} while deleting {thread_id}: {err}"
+                        "spawned descendant thread {descendant_thread_id} was already missing while deleting {thread_id}"
                     );
+                }
+                Err(err) => {
+                    return Err(thread_store_delete_error(err));
                 }
             }
         }
+
+        self.thread_store
+            .delete_thread(StoreDeleteThreadParams { thread_id })
+            .await
+            .map_err(thread_store_delete_error)?;
+        deleted_thread_ids.push(thread_id.to_string());
 
         Ok((ThreadDeleteResponse {}, deleted_thread_ids))
     }

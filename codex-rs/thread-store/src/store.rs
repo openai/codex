@@ -121,6 +121,6 @@ pub trait ThreadStore: Any + Send + Sync {
         params: ArchiveThreadParams,
     ) -> ThreadStoreResult<StoredThread>;
 
-    /// Deletes a thread and best-effort associated local artifacts.
+    /// Deletes a thread's persisted rollout data and associated metadata.
     async fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreResult<()>;
 }

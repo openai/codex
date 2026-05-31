@@ -1,7 +1,8 @@
 //! Local hard-delete support for persisted threads.
 //!
-//! Deleting the state DB row is the commit point when SQLite is available; rollout files and
-//! compatibility artifacts are removed best effort after that point.
+//! Existing rollout files are deleted before this operation reports success. Missing rollout files
+//! count as already deleted; SQLite and compatibility metadata cleanup is best effort after rollout
+//! deletion succeeds.
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -27,7 +28,18 @@ pub(super) async fn delete_thread(
     let thread_id_str = thread_id.to_string();
     let state_db_ctx = store.state_db().await;
     let mut rollout_paths = Vec::new();
-    let mut path_lookup_errors = Vec::new();
+    let state_thread_exists = if let Some(ctx) = state_db_ctx.as_ref() {
+        match ctx.get_thread(thread_id).await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(err) => {
+                warn!("failed to check thread metadata for {thread_id}: {err}");
+                false
+            }
+        }
+    } else {
+        false
+    };
 
     match find_thread_path_by_id_str(
         store.config.codex_home.as_path(),
@@ -39,7 +51,9 @@ pub(super) async fn delete_thread(
         Ok(Some(path)) => rollout_paths.push(path),
         Ok(None) => {}
         Err(err) => {
-            path_lookup_errors.push(format!("failed to locate thread id {thread_id}: {err}"))
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!("failed to locate thread id {thread_id}: {err}"),
+            });
         }
     }
 
@@ -57,49 +71,34 @@ pub(super) async fn delete_thread(
         }
         Ok(None) => {}
         Err(err) => {
-            path_lookup_errors.push(format!(
-                "failed to locate archived thread id {thread_id}: {err}"
-            ));
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!("failed to locate archived thread id {thread_id}: {err}"),
+            });
         }
-    }
-
-    let deleted_state_rows = if let Some(ctx) = state_db_ctx.as_ref() {
-        ctx.delete_thread(thread_id)
-            .await
-            .map_err(|err| ThreadStoreError::Internal {
-                message: format!("failed to delete thread metadata for {thread_id}: {err}"),
-            })?
-    } else {
-        0
-    };
-    if deleted_state_rows > 0 {
-        for message in &path_lookup_errors {
-            warn!("{message}");
-        }
-    }
-
-    let mut deleted_rollout_file = false;
-    for rollout_path in rollout_paths {
-        match delete_rollout_file(store, rollout_path.as_path(), thread_id) {
-            Ok(deleted) => deleted_rollout_file |= deleted,
-            Err(err) if deleted_state_rows > 0 => {
-                // Once SQLite deletion commits, rollout cleanup is best effort. If this JSONL
-                // survives, compatibility read/list paths may rediscover it and repair metadata;
-                // that is preferable to failing a delete whose state-row commit already succeeded.
-                warn!("failed to delete rollout file for thread {thread_id}: {err}");
-            }
-            Err(err) => return Err(err),
-        }
-    }
-
-    if deleted_state_rows == 0 && !deleted_rollout_file {
-        if let Some(message) = path_lookup_errors.into_iter().next() {
-            return Err(ThreadStoreError::InvalidRequest { message });
-        }
-        return Err(ThreadStoreError::ThreadNotFound { thread_id });
     }
 
     store.live_recorders.lock().await.remove(&thread_id);
+
+    let mut deleted_rollout_file = false;
+    for rollout_path in rollout_paths {
+        deleted_rollout_file |= delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
+    }
+
+    let deleted_state_rows = if let Some(ctx) = state_db_ctx.as_ref() {
+        match ctx.delete_thread(thread_id).await {
+            Ok(rows) => rows,
+            Err(err) => {
+                warn!("failed to delete thread metadata for {thread_id}: {err}");
+                0
+            }
+        }
+    } else {
+        0
+    };
+
+    if !deleted_rollout_file && !state_thread_exists && deleted_state_rows == 0 {
+        return Err(ThreadStoreError::ThreadNotFound { thread_id });
+    }
 
     Ok(())
 }
@@ -136,7 +135,9 @@ fn delete_rollout_file(
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -183,11 +184,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_thread_treats_missing_rollout_as_already_deleted_when_sqlite_row_exists() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let uuid = Uuid::from_u128(303);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            home.path()
+                .join("sessions/2025/01/03")
+                .join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl")),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.cwd = home.path().to_path_buf();
+        let metadata = builder.build(config.default_model_provider_id.as_str());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        store
+            .delete_thread(DeleteThreadParams { thread_id })
+            .await
+            .expect("delete thread");
+
+        assert_eq!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("sqlite metadata read"),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn delete_thread_reports_missing_thread() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000303").expect("valid thread id");
+            ThreadId::from_string("00000000-0000-0000-0000-000000000304").expect("valid thread id");
 
         let err = store
             .delete_thread(DeleteThreadParams { thread_id })
@@ -195,7 +238,7 @@ mod tests {
             .expect_err("missing thread should fail");
         assert_eq!(
             err.to_string(),
-            "thread 00000000-0000-0000-0000-000000000303 not found"
+            "thread 00000000-0000-0000-0000-000000000304 not found"
         );
     }
 }
