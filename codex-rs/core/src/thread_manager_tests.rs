@@ -769,7 +769,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
 }
 
 #[tokio::test]
-async fn resume_and_fork_preserve_stored_multi_agent_version() {
+async fn legacy_resume_seeds_multi_agent_version_for_later_forks() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -780,7 +780,7 @@ async fn resume_and_fork_preserve_stored_multi_agent_version() {
         .expect("test config should allow feature update");
     config
         .features
-        .enable(Feature::Collab)
+        .disable(Feature::Collab)
         .expect("test config should allow feature update");
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
@@ -803,10 +803,7 @@ async fn resume_and_fork_preserve_stored_multi_agent_version() {
         .start_thread(config.clone())
         .await
         .expect("start source thread");
-    assert_eq!(
-        source.thread.multi_agent_version(),
-        Some(MultiAgentVersion::V1)
-    );
+    assert_eq!(source.thread.multi_agent_version(), None);
     source.thread.ensure_rollout_materialized().await;
     source
         .thread
@@ -824,20 +821,20 @@ async fn resume_and_fork_preserve_stored_multi_agent_version() {
         .expect("shutdown source thread");
     let _ = manager.remove_thread(&source.thread_id).await;
 
-    let mut current_config = config;
-    current_config
+    let mut v1_config = config;
+    v1_config
         .features
-        .enable(Feature::MultiAgentV2)
+        .enable(Feature::Collab)
         .expect("test config should allow feature update");
     let resumed = manager
         .resume_thread_from_rollout(
-            current_config.clone(),
+            v1_config.clone(),
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
         )
         .await
-        .expect("resume source thread");
+        .expect("resume legacy source thread");
     assert_eq!(
         resumed.thread.multi_agent_version(),
         Some(MultiAgentVersion::V1)
@@ -849,10 +846,15 @@ async fn resume_and_fork_preserve_stored_multi_agent_version() {
         .expect("shutdown resumed thread");
     let _ = manager.remove_thread(&resumed.thread_id).await;
 
+    let mut v2_config = v1_config;
+    v2_config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            current_config,
+            v2_config,
             rollout_path,
             /*thread_source*/ None,
             /*persist_extended_history*/ false,

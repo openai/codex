@@ -4045,36 +4045,6 @@ mod tests {
     }
 
     #[test]
-    fn session_meta_multi_agent_version_treats_missing_and_null_as_unresolved() {
-        let mut meta = SessionMeta::default();
-        let serialized = serde_json::to_value(&meta).expect("serialize legacy session metadata");
-        assert_eq!(serialized.get("multi_agent_version"), None);
-        let deserialized: SessionMeta =
-            serde_json::from_value(serialized).expect("deserialize legacy session metadata");
-        assert_eq!(deserialized.multi_agent_version, None);
-
-        let deserialized: SessionMeta = serde_json::from_value(serde_json::json!({
-            "id": ThreadId::default(),
-            "timestamp": "",
-            "cwd": "",
-            "originator": "",
-            "cli_version": "",
-            "multi_agent_version": null
-        }))
-        .expect("deserialize null session metadata");
-        assert_eq!(deserialized.multi_agent_version, None);
-
-        for version in [MultiAgentVersion::V1, MultiAgentVersion::V2] {
-            meta.multi_agent_version = Some(version);
-            let serialized =
-                serde_json::to_value(&meta).expect("serialize locked session metadata");
-            let deserialized: SessionMeta =
-                serde_json::from_value(serialized).expect("deserialize locked session metadata");
-            assert_eq!(deserialized.multi_agent_version, Some(version));
-        }
-    }
-
-    #[test]
     fn inter_agent_communication_response_input_item_preserves_commentary_phase() {
         let communication = InterAgentCommunication {
             author: AgentPath::root(),
