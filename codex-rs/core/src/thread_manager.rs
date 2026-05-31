@@ -515,14 +515,12 @@ impl ThreadManager {
         &self,
         thread_id: ThreadId,
     ) -> CodexResult<Vec<ThreadId>> {
-        let thread = self.state.get_thread(thread_id).await?;
-
         let mut subtree_thread_ids = Vec::new();
         let mut seen_thread_ids = HashSet::new();
         subtree_thread_ids.push(thread_id);
         seen_thread_ids.insert(thread_id);
 
-        if let Some(state_db_ctx) = thread.state_db() {
+        if let Some(state_db_ctx) = self.state.state_db() {
             for status in [
                 DirectionalThreadSpawnEdgeStatus::Open,
                 DirectionalThreadSpawnEdgeStatus::Closed,
@@ -541,11 +539,8 @@ impl ThreadManager {
             }
         }
 
-        for descendant_id in thread
-            .codex
-            .session
-            .services
-            .agent_control
+        for descendant_id in self
+            .agent_control()
             .list_live_agent_subtree_thread_ids(thread_id)
             .await?
         {

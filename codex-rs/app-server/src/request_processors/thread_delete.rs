@@ -56,7 +56,6 @@ impl ThreadRequestProcessor {
                     }
                 }
             }
-            Err(CodexErr::ThreadNotFound(_)) => {}
             Err(err) => return Err(core_thread_write_error("delete thread", err)),
         }
 
