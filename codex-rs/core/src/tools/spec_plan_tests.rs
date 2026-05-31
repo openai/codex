@@ -15,6 +15,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_tools::DiscoverablePluginInfo;
@@ -215,6 +216,7 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .disable(feature)
             .expect("test feature should be disableable in config");
     }
+    turn.multi_agent_version = config.multi_agent_version_from_features();
     turn.config = Arc::new(config);
     turn.tool_mode = turn.model_info.tool_mode.unwrap_or_else(|| {
         if turn.config.features.enabled(Feature::CodeModeOnly) {
@@ -527,6 +529,14 @@ async fn host_context_gates_goal_and_agent_job_tools() {
     .await;
     normal_agent_job.assert_visible_contains(&["spawn_agents_on_csv"]);
     normal_agent_job.assert_visible_lacks(&["report_agent_job_result"]);
+
+    let agent_job_without_multi_agent = probe(|turn| {
+        set_feature(turn, Feature::SpawnCsv, /*enabled*/ true);
+        turn.multi_agent_version = MultiAgentVersion::None;
+    })
+    .await;
+    agent_job_without_multi_agent.assert_visible_contains(&["spawn_agents_on_csv"]);
+    agent_job_without_multi_agent.assert_visible_lacks(&[MULTI_AGENT_V1_NAMESPACE, "spawn_agent"]);
 
     let worker_agent_job = probe(|turn| {
         set_feature(turn, Feature::SpawnCsv, /*enabled*/ true);
@@ -862,6 +872,38 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         direct_model_only.exposure("spawn_agent"),
         ToolExposure::DirectModelOnly
     );
+}
+
+#[tokio::test]
+async fn multi_agent_tool_family_uses_locked_version_instead_of_features() {
+    let v1 = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        turn.multi_agent_version = MultiAgentVersion::V1;
+    })
+    .await;
+    v1.assert_visible_contains(&[MULTI_AGENT_V1_NAMESPACE]);
+    v1.assert_visible_lacks(&["spawn_agent", "send_message", "assign_task", "list_agents"]);
+
+    let v2 = probe(|turn| {
+        set_feature(turn, Feature::Collab, /*enabled*/ false);
+        turn.multi_agent_version = MultiAgentVersion::V2;
+    })
+    .await;
+    v2.assert_visible_contains(&["spawn_agent", "send_message", "assign_task", "list_agents"]);
+    v2.assert_visible_lacks(&[MULTI_AGENT_V1_NAMESPACE]);
+
+    let disabled = probe(|turn| {
+        set_feature(turn, Feature::Collab, /*enabled*/ true);
+        turn.multi_agent_version = MultiAgentVersion::None;
+    })
+    .await;
+    disabled.assert_visible_lacks(&[
+        MULTI_AGENT_V1_NAMESPACE,
+        "spawn_agent",
+        "send_message",
+        "assign_task",
+        "list_agents",
+    ]);
 }
 
 #[tokio::test]

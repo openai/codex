@@ -52,6 +52,7 @@ use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::MultiAgentVersion;
 
 #[cfg(test)]
 use crate::session::completed_session_loop_termination;
@@ -71,6 +72,7 @@ pub(crate) async fn run_codex_thread_interactive(
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
+    multi_agent_version: MultiAgentVersion,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -104,6 +106,7 @@ pub(crate) async fn run_codex_thread_interactive(
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),
+        multi_agent_version,
     }))
     .or_cancel(&cancel_token)
     .await??;
@@ -175,6 +178,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     subagent_source: SubAgentSource,
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
+    multi_agent_version: MultiAgentVersion,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -188,6 +192,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         child_cancel.clone(),
         subagent_source,
         initial_history,
+        multi_agent_version,
     ))
     .await?;
 

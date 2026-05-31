@@ -3079,6 +3079,7 @@ async fn set_rate_limits_retains_previous_credits() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -3185,6 +3186,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -3464,6 +3466,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            multi_agent_version: codex_protocol::protocol::MultiAgentVersion::None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
@@ -3715,6 +3718,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4460,6 +4464,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4571,6 +4576,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4808,6 +4814,7 @@ async fn make_session_with_config_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -4913,6 +4920,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -5966,6 +5974,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            multi_agent_version: codex_protocol::protocol::MultiAgentVersion::None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
@@ -6419,6 +6428,7 @@ where
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_version: config.multi_agent_version_from_features(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),

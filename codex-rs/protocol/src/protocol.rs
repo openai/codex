@@ -2453,6 +2453,16 @@ impl InitialHistory {
         }
     }
 
+    pub fn get_multi_agent_version(&self) -> Option<MultiAgentVersion> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            InitialHistory::Resumed(resumed) => {
+                multi_agent_version_from_items(&resumed.history, Some(resumed.conversation_id))
+            }
+            InitialHistory::Forked(items) => multi_agent_version_from_items(items, None),
+        }
+    }
+
     pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
         let meta = self.get_resumed_session_meta()?;
         Some((meta.source.clone(), meta.thread_source))
@@ -2723,6 +2733,29 @@ impl fmt::Display for InternalSessionSource {
     }
 }
 
+fn multi_agent_version_from_items(
+    items: &[RolloutItem],
+    thread_id: Option<ThreadId>,
+) -> Option<MultiAgentVersion> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line)
+            if thread_id.is_none_or(|thread_id| meta_line.meta.id == thread_id) =>
+        {
+            meta_line.meta.multi_agent_version
+        }
+        _ => None,
+    })
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiAgentVersion {
+    #[default]
+    None,
+    V1,
+    V2,
+}
+
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.
 ///
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
@@ -2762,6 +2795,8 @@ pub struct SessionMeta {
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_version: Option<MultiAgentVersion>,
 }
 
 impl Default for SessionMeta {
@@ -2783,6 +2818,7 @@ impl Default for SessionMeta {
             base_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
+            multi_agent_version: None,
         }
     }
 }
@@ -4006,6 +4042,29 @@ mod tests {
             SessionSource::from_startup_arg("app-server").unwrap(),
             SessionSource::Mcp
         );
+    }
+
+    #[test]
+    fn session_meta_multi_agent_version_distinguishes_missing_and_locked_values() {
+        let mut meta = SessionMeta::default();
+        let serialized = serde_json::to_value(&meta).expect("serialize legacy session metadata");
+        assert_eq!(serialized.get("multi_agent_version"), None);
+        let deserialized: SessionMeta =
+            serde_json::from_value(serialized).expect("deserialize legacy session metadata");
+        assert_eq!(deserialized.multi_agent_version, None);
+
+        for version in [
+            MultiAgentVersion::None,
+            MultiAgentVersion::V1,
+            MultiAgentVersion::V2,
+        ] {
+            meta.multi_agent_version = Some(version);
+            let serialized =
+                serde_json::to_value(&meta).expect("serialize locked session metadata");
+            let deserialized: SessionMeta =
+                serde_json::from_value(serialized).expect("deserialize locked session metadata");
+            assert_eq!(deserialized.multi_agent_version, Some(version));
+        }
     }
 
     #[test]

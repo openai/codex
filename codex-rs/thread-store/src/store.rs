@@ -14,6 +14,7 @@ use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::SearchThreadsParams;
+use crate::SetMultiAgentVersionIfUnsetParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -22,6 +23,7 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::TurnPage;
 use crate::UpdateThreadMetadataParams;
+use codex_protocol::protocol::MultiAgentVersion;
 
 /// Storage-neutral thread persistence boundary.
 #[async_trait]
@@ -34,6 +36,12 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Reopens an existing thread for live appends.
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()>;
+
+    /// Persists a multi-agent runtime for a legacy thread if one has not been stored yet.
+    async fn set_multi_agent_version_if_unset(
+        &self,
+        params: SetMultiAgentVersionIfUnsetParams,
+    ) -> ThreadStoreResult<MultiAgentVersion>;
 
     /// Appends canonical rollout items to a live thread.
     ///

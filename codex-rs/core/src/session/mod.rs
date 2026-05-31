@@ -105,6 +105,7 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
@@ -420,6 +421,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) multi_agent_version: MultiAgentVersion,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -482,17 +484,14 @@ impl Codex {
             analytics_events_client,
             thread_store,
             attestation_provider,
+            multi_agent_version,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= config.agent_max_depth
-            && !config.features.enabled(Feature::MultiAgentV2)
-        {
-            let _ = config.features.disable(Feature::SpawnCsv);
-            let _ = config.features.disable(Feature::Collab);
-        }
+        config
+            .apply_multi_agent_version(multi_agent_version)
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
 
         let primary_environment = environment_selections.primary_environment();
         let mut user_instruction_warnings = Vec::new();
@@ -574,6 +573,7 @@ impl Codex {
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
+            multi_agent_version,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
@@ -1652,7 +1652,7 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if !self.enabled(Feature::MultiAgentV2) {
+        if turn_context.multi_agent_version != MultiAgentVersion::V2 {
             return;
         }
 
@@ -2621,6 +2621,11 @@ impl Session {
     pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {
         let state = self.state.lock().await;
         state.session_configuration.collaboration_mode.clone()
+    }
+
+    pub(crate) async fn multi_agent_version(&self) -> MultiAgentVersion {
+        let state = self.state.lock().await;
+        state.session_configuration.multi_agent_version
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {

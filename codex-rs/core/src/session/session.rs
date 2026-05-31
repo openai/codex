@@ -9,6 +9,7 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use tokio::sync::Semaphore;
@@ -45,6 +46,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) provider: ModelProviderInfo,
 
     pub(super) collaboration_mode: CollaborationMode,
+    pub(super) multi_agent_version: MultiAgentVersion,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(super) service_tier: Option<String>,
 
@@ -564,6 +566,7 @@ impl Session {
                                     text: session_configuration.base_instructions.clone(),
                                 },
                                 dynamic_tools: session_configuration.dynamic_tools.clone(),
+                                multi_agent_version: session_configuration.multi_agent_version,
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
                                     model_provider: config.model_provider_id.clone(),

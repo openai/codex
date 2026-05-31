@@ -10,7 +10,11 @@ use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::ThreadMemoryMode;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -20,6 +24,7 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::SetMultiAgentVersionIfUnsetParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
@@ -43,6 +48,105 @@ mod tests {
     use crate::ListTurnsParams;
     use crate::SortDirection;
     use crate::StoredTurnItemsView;
+    use crate::ThreadEventPersistenceMode;
+    use crate::ThreadPersistenceMetadata;
+    use codex_protocol::models::BaseInstructions;
+    use codex_protocol::protocol::SessionSource;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn create_thread_records_multi_agent_version() {
+        let store = InMemoryThreadStore::default();
+        let thread_id = ThreadId::new();
+        store
+            .create_thread(CreateThreadParams {
+                thread_id,
+                forked_from_id: None,
+                source: SessionSource::Exec,
+                thread_source: None,
+                base_instructions: BaseInstructions::default(),
+                dynamic_tools: Vec::new(),
+                multi_agent_version: MultiAgentVersion::V2,
+                metadata: ThreadPersistenceMetadata {
+                    cwd: None,
+                    model_provider: "test-provider".to_string(),
+                    memory_mode: ThreadMemoryMode::Enabled,
+                },
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("create thread should succeed");
+
+        let history = store
+            .load_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: true,
+            })
+            .await
+            .expect("created history should load");
+        let versions = history
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.multi_agent_version,
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(versions, vec![MultiAgentVersion::V2]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_multi_agent_version_seeds_return_the_first_winner() {
+        let store = InMemoryThreadStore::default();
+        let thread_id = ThreadId::new();
+        store.state.lock().await.histories.insert(
+            thread_id,
+            vec![RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: thread_id,
+                    ..SessionMeta::default()
+                },
+                git: None,
+            })],
+        );
+
+        let (left, right) = tokio::join!(
+            store.set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
+                thread_id,
+                multi_agent_version: MultiAgentVersion::V1,
+                include_archived: true,
+            }),
+            store.set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
+                thread_id,
+                multi_agent_version: MultiAgentVersion::V2,
+                include_archived: true,
+            }),
+        );
+        let left = left.expect("first seed should succeed");
+        let right = right.expect("second seed should return the stored winner");
+        assert_eq!(left, right);
+        assert!(matches!(
+            left,
+            MultiAgentVersion::V1 | MultiAgentVersion::V2
+        ));
+
+        let history = store
+            .load_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: true,
+            })
+            .await
+            .expect("seeded history should load");
+        let versions = history
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.multi_agent_version,
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(versions, vec![left]);
+    }
 
     #[tokio::test]
     async fn default_turn_pagination_methods_return_unsupported() {
@@ -99,6 +203,7 @@ fn stores_guard() -> MutexGuard<'static, HashMap<String, Arc<InMemoryThreadStore
 pub struct InMemoryThreadStoreCalls {
     pub create_thread: usize,
     pub resume_thread: usize,
+    pub set_multi_agent_version_if_unset: usize,
     pub append_items: usize,
     pub persist_thread: usize,
     pub flush_thread: usize,
@@ -164,7 +269,31 @@ impl ThreadStore for InMemoryThreadStore {
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
         let mut state = self.state.lock().await;
         state.calls.create_thread += 1;
-        state.histories.entry(params.thread_id).or_default();
+        let session_meta = SessionMeta {
+            id: params.thread_id,
+            forked_from_id: params.forked_from_id,
+            cwd: params.metadata.cwd.clone().unwrap_or_default(),
+            agent_nickname: params.source.get_nickname(),
+            agent_role: params.source.get_agent_role(),
+            agent_path: params.source.get_agent_path().map(Into::into),
+            source: params.source.clone(),
+            thread_source: params.thread_source,
+            model_provider: Some(params.metadata.model_provider.clone()),
+            base_instructions: Some(params.base_instructions.clone()),
+            dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
+            memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
+                .then_some("disabled".to_string()),
+            multi_agent_version: Some(params.multi_agent_version),
+            ..SessionMeta::default()
+        };
+        state
+            .histories
+            .entry(params.thread_id)
+            .or_default()
+            .push(RolloutItem::SessionMeta(SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            }));
         state.created_threads.insert(params.thread_id, params);
         Ok(())
     }
@@ -177,6 +306,44 @@ impl ThreadStore for InMemoryThreadStore {
             state.rollout_paths.insert(rollout_path, params.thread_id);
         }
         Ok(())
+    }
+
+    async fn set_multi_agent_version_if_unset(
+        &self,
+        params: SetMultiAgentVersionIfUnsetParams,
+    ) -> ThreadStoreResult<MultiAgentVersion> {
+        let mut state = self.state.lock().await;
+        state.calls.set_multi_agent_version_if_unset += 1;
+        let history =
+            state
+                .histories
+                .get_mut(&params.thread_id)
+                .ok_or(ThreadStoreError::ThreadNotFound {
+                    thread_id: params.thread_id,
+                })?;
+        if let Some(multi_agent_version) = history.iter().rev().find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == params.thread_id => {
+                meta_line.meta.multi_agent_version
+            }
+            _ => None,
+        }) {
+            return Ok(multi_agent_version);
+        }
+        let mut session_meta = history
+            .iter()
+            .find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == params.thread_id => {
+                    Some(meta_line.clone())
+                }
+                _ => None,
+            })
+            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                message: format!("thread {} does not have session metadata", params.thread_id),
+            })?;
+        session_meta.git = None;
+        session_meta.meta.multi_agent_version = Some(params.multi_agent_version);
+        history.push(RolloutItem::SessionMeta(session_meta));
+        Ok(params.multi_agent_version)
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {

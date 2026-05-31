@@ -5,6 +5,7 @@ mod list_threads;
 mod live_writer;
 mod read_thread;
 mod search_threads;
+mod set_multi_agent_version;
 mod unarchive_thread;
 mod update_thread_metadata;
 
@@ -30,6 +31,7 @@ use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::SearchThreadsParams;
+use crate::SetMultiAgentVersionIfUnsetParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -38,6 +40,7 @@ use crate::ThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
+use codex_protocol::protocol::MultiAgentVersion;
 
 /// Local filesystem/SQLite-backed implementation of [`ThreadStore`].
 ///
@@ -56,6 +59,7 @@ use crate::UpdateThreadMetadataParams;
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
+    multi_agent_version_seed_lock: Arc<Mutex<()>>,
     state_db: Option<StateDbHandle>,
 }
 
@@ -95,6 +99,7 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
+            multi_agent_version_seed_lock: Arc::new(Mutex::new(())),
             state_db,
         }
     }
@@ -178,6 +183,13 @@ impl ThreadStore for LocalThreadStore {
 
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
         live_writer::resume_thread(self, params).await
+    }
+
+    async fn set_multi_agent_version_if_unset(
+        &self,
+        params: SetMultiAgentVersionIfUnsetParams,
+    ) -> ThreadStoreResult<MultiAgentVersion> {
+        set_multi_agent_version::set_multi_agent_version_if_unset(self, params).await
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
@@ -301,6 +313,7 @@ mod tests {
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadMemoryMode;
     use codex_protocol::protocol::UserMessageEvent;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     use super::*;
@@ -818,6 +831,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_multi_agent_version_if_unset_appends_one_lock_to_legacy_rollout() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = uuid::Uuid::from_u128(408);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-04T12-00-00", uuid).expect("session file");
+
+        let first = store
+            .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
+                thread_id,
+                multi_agent_version: MultiAgentVersion::V1,
+                include_archived: true,
+            })
+            .await
+            .expect("first seed should succeed");
+        let second = store
+            .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
+                thread_id,
+                multi_agent_version: MultiAgentVersion::V2,
+                include_archived: true,
+            })
+            .await
+            .expect("second seed should return the stored winner");
+        assert_eq!(
+            (first, second),
+            (MultiAgentVersion::V1, MultiAgentVersion::V1)
+        );
+
+        let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path)
+            .await
+            .expect("load rollout items");
+        let versions = items
+            .into_iter()
+            .filter_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.multi_agent_version,
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(versions, vec![MultiAgentVersion::V1]);
+    }
+
+    #[tokio::test]
     async fn load_history_uses_live_writer_rollout_path() {
         let home = TempDir::new().expect("temp dir");
         let external_home = TempDir::new().expect("external temp dir");
@@ -1028,6 +1084,7 @@ mod tests {
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            multi_agent_version: codex_protocol::protocol::MultiAgentVersion::None,
             metadata: thread_metadata(),
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
         }

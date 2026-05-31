@@ -9900,6 +9900,43 @@ subagent_usage_hint_text = ""
 }
 
 #[tokio::test]
+async fn multi_agent_version_resolution_prefers_v2_then_v1_then_disabled() -> std::io::Result<()> {
+    let mut config = test_config().await;
+    config
+        .features
+        .disable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config
+        .features
+        .disable(Feature::Collab)
+        .expect("test config should allow feature update");
+    assert_eq!(
+        config.multi_agent_version_from_features(),
+        codex_protocol::protocol::MultiAgentVersion::None
+    );
+
+    config
+        .features
+        .enable(Feature::Collab)
+        .expect("test config should allow feature update");
+    assert_eq!(
+        config.multi_agent_version_from_features(),
+        codex_protocol::protocol::MultiAgentVersion::V1
+    );
+
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    assert_eq!(
+        config.multi_agent_version_from_features(),
+        codex_protocol::protocol::MultiAgentVersion::V2
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn multi_agent_v2_rejects_agents_max_threads() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -9912,11 +9949,13 @@ max_threads = 3
 "#,
     )?;
 
-    let err = ConfigBuilder::without_managed_config_for_tests()
+    let mut config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
-        .await
+        .await?;
+    let err = config
+        .apply_multi_agent_version(codex_protocol::protocol::MultiAgentVersion::V2)
         .expect_err("agents.max_threads should conflict with multi_agent_v2");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);

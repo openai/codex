@@ -8,6 +8,7 @@ use codex_features::FeatureToml;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::MultiAgentVersion;
 
 use crate::config::Config;
 use crate::config_lock::ConfigLockReplayOptions;
@@ -94,7 +95,7 @@ fn session_configuration_to_lock_config_toml(
         save_session_resolved_fields(sc, &mut lock_config);
     }
 
-    save_config_resolved_fields(config, &mut lock_config)?;
+    save_config_resolved_fields(sc, config, &mut lock_config)?;
     drop_lockfile_inputs(&mut lock_config);
 
     Ok(lock_config)
@@ -124,6 +125,7 @@ fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut Con
 /// Persist the resolved representation so replay compares against the behavior
 /// Codex actually ran with, not only the user-authored TOML inputs.
 fn save_config_resolved_fields(
+    sc: &SessionConfiguration,
     config: &Config,
     lock_config: &mut ConfigToml,
 ) -> anyhow::Result<()> {
@@ -144,10 +146,19 @@ fn save_config_resolved_fields(
     let features = lock_config
         .features
         .get_or_insert_with(FeaturesToml::default);
-    features.materialize_resolved_enabled(config.features.get());
+    let mut materialized_features = config.features.get().clone();
+    materialized_features.set_enabled(
+        Feature::Collab,
+        sc.multi_agent_version != MultiAgentVersion::None,
+    );
+    materialized_features.set_enabled(
+        Feature::MultiAgentV2,
+        sc.multi_agent_version == MultiAgentVersion::V2,
+    );
+    features.materialize_resolved_enabled(&materialized_features);
     let mut multi_agent_v2: MultiAgentV2ConfigToml =
         resolved_config_to_toml(&config.multi_agent_v2, "features.multi_agent_v2")?;
-    multi_agent_v2.enabled = Some(config.features.enabled(Feature::MultiAgentV2));
+    multi_agent_v2.enabled = Some(sc.multi_agent_version == MultiAgentVersion::V2);
     features.multi_agent_v2 = Some(FeatureToml::Config(multi_agent_v2));
     features.apps_mcp_path_override = Some(FeatureToml::Config(AppsMcpPathOverrideConfigToml {
         enabled: Some(config.features.enabled(Feature::AppsMcpPathOverride)),
@@ -161,7 +172,7 @@ fn save_config_resolved_fields(
     let agents = lock_config.agents.get_or_insert_with(Default::default);
     // Multi-agent v2 owns thread fanout through its feature config. Preserve
     // the legacy agents.max_threads setting only when v2 is disabled.
-    agents.max_threads = if config.features.enabled(Feature::MultiAgentV2) {
+    agents.max_threads = if sc.multi_agent_version == MultiAgentVersion::V2 {
         None
     } else {
         config.agent_max_threads
@@ -271,6 +282,45 @@ mod tests {
         ));
 
         assert_eq!(lockfile.version, crate::config_lock::CONFIG_LOCK_VERSION);
+    }
+
+    #[tokio::test]
+    async fn lock_projects_multi_agent_version_over_current_feature_flags() {
+        let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
+        let mut config = (*sc.original_config_do_not_use).clone();
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+        sc.original_config_do_not_use = Arc::new(config);
+
+        for (multi_agent_version, collab, multi_agent_v2) in [
+            (MultiAgentVersion::None, false, false),
+            (MultiAgentVersion::V1, true, false),
+            (MultiAgentVersion::V2, true, true),
+        ] {
+            sc.multi_agent_version = multi_agent_version;
+            let lockfile = sc.to_config_lockfile_toml().expect("lock should serialize");
+            let lock = &lockfile.config;
+            let entries = lock
+                .features
+                .as_ref()
+                .expect("lock should materialize features")
+                .entries();
+            assert_eq!(entries.get(Feature::Collab.key()), Some(&collab));
+            assert_eq!(
+                entries.get(Feature::MultiAgentV2.key()),
+                Some(&multi_agent_v2)
+            );
+            assert_eq!(
+                lock.agents
+                    .as_ref()
+                    .expect("lock should materialize agent config")
+                    .max_threads
+                    .is_none(),
+                multi_agent_version == MultiAgentVersion::V2
+            );
+        }
     }
 
     #[tokio::test]

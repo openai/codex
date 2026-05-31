@@ -189,6 +189,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             /*thread_source*/ None,
             BaseInstructions::default(),
             Vec::new(),
+            codex_protocol::protocol::MultiAgentVersion::None,
         ),
     )
     .await?;

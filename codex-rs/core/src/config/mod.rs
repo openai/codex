@@ -99,6 +99,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -825,6 +826,8 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+    /// User-configured legacy thread limit before applying the locked multi-agent runtime.
+    pub(crate) configured_agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
 
@@ -1281,6 +1284,41 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
+        if self.features.enabled(Feature::MultiAgentV2) {
+            MultiAgentVersion::V2
+        } else if self.features.enabled(Feature::Collab) {
+            MultiAgentVersion::V1
+        } else {
+            MultiAgentVersion::None
+        }
+    }
+
+    pub(crate) fn apply_multi_agent_version(
+        &mut self,
+        multi_agent_version: MultiAgentVersion,
+    ) -> std::io::Result<()> {
+        self.agent_max_threads = match multi_agent_version {
+            MultiAgentVersion::V2 => {
+                if self.configured_agent_max_threads.is_some() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "agents.max_threads cannot be set when multi_agent_v2 is enabled",
+                    ));
+                }
+                Some(
+                    self.multi_agent_v2
+                        .max_concurrent_threads_per_session
+                        .saturating_sub(1),
+                )
+            }
+            MultiAgentVersion::None | MultiAgentVersion::V1 => self
+                .configured_agent_max_threads
+                .or(DEFAULT_AGENT_MAX_THREADS),
+        };
+        Ok(())
+    }
+
     pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
         self.permissions.legacy_sandbox_policy(self.cwd.as_path())
     }
@@ -3063,28 +3101,22 @@ impl Config {
             ));
         }
         validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
-        let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        let configured_agent_max_threads =
+            cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        if configured_agent_max_threads == Some(0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads must be at least 1",
+            ));
+        }
         let agent_max_threads = if features.enabled(Feature::MultiAgentV2) {
-            if agent_max_threads_from_config.is_some() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "agents.max_threads cannot be set when multi_agent_v2 is enabled",
-                ));
-            }
             Some(
                 multi_agent_v2
                     .max_concurrent_threads_per_session
                     .saturating_sub(1),
             )
         } else {
-            let agent_max_threads = agent_max_threads_from_config.or(DEFAULT_AGENT_MAX_THREADS);
-            if agent_max_threads == Some(0) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "agents.max_threads must be at least 1",
-                ));
-            }
-            agent_max_threads
+            configured_agent_max_threads.or(DEFAULT_AGENT_MAX_THREADS)
         };
         let agent_max_depth = cfg
             .agents
@@ -3457,6 +3489,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            configured_agent_max_threads,
             agent_max_depth,
             agent_roles,
             memories: memories_config,

@@ -129,6 +129,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            multi_agent_version: codex_protocol::protocol::MultiAgentVersion::None,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),

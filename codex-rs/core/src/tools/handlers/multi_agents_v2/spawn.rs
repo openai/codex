@@ -108,7 +108,6 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
 
     let spawn_source = thread_spawn_source(
         session.conversation_id,
@@ -146,6 +145,7 @@ async fn handle_spawn_agent(
                 fork_mode,
                 parent_thread_id: Some(session.conversation_id),
                 environments: Some(turn.environments.to_selections()),
+                multi_agent_version: Some(turn.multi_agent_version),
             },
         ),
     )
