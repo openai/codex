@@ -140,23 +140,16 @@ jobs:
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
-      - name: Write release mode marker
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode != 'promote_signed' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s\n' '${{ inputs.release_mode }}' > release-mode.txt
-
-      - name: Upload release mode marker
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode != 'promote_signed' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: release-mode-${{ inputs.release_mode }}
-          path: release-mode.txt
-          if-no-files-found: error
-
   build:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: >-
+      ${{
+        (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') &&
+        (
+          github.event_name != 'workflow_dispatch' ||
+          inputs.release_mode != 'build_unsigned_archive' ||
+          contains(matrix.target, 'apple-darwin')
+        )
+      }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -495,11 +488,15 @@ jobs:
           BUNDLE: ${{ matrix.bundle }}
         run: |
           set -euo pipefail
+          archive_dir="dist/${TARGET}"
+          if [[ "${RUNNER_OS}" == "macOS" && "${RELEASE_MODE}" == "build_unsigned_archive" ]]; then
+            archive_dir="unsigned-archive-dist/${TARGET}"
+          fi
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
             --target "$TARGET" \
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
-            --archive-dir "dist/${TARGET}"
+            --archive-dir "$archive_dir"
 
       - name: Upload unsigned macOS package archives
         if: ${{ runner.os == 'macOS' && env.RELEASE_MODE == 'build_unsigned_archive' }}
@@ -507,8 +504,7 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}-unsigned-archive
           path: |
-            codex-rs/dist/${{ matrix.target }}/*.tar.gz
-            codex-rs/dist/${{ matrix.target }}/*.tar.zst
+            codex-rs/unsigned-archive-dist/${{ matrix.target }}/*
           if-no-files-found: error
 
       - name: Build Python runtime wheel
@@ -997,15 +993,6 @@ jobs:
           if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
             echo "unsigned_run_id ${UNSIGNED_RUN_ID} is ${status}/${conclusion}, expected completed/success"
             echo "Run URL: ${run_url}"
-            exit 1
-          fi
-
-          artifact_names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UNSIGNED_RUN_ID}/artifacts" --paginate --jq '.artifacts[].name')"
-          if ! grep -qx 'release-mode-build_unsigned' <<< "$artifact_names"; then
-            echo "unsigned_run_id ${UNSIGNED_RUN_ID} must come from release_mode=build_unsigned"
-            echo "Run URL: ${run_url}"
-            echo "Artifacts:"
-            printf '%s\n' "$artifact_names"
             exit 1
           fi
 
