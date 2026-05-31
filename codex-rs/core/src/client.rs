@@ -238,6 +238,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    websocket_session_cache_mode: WebsocketSessionCacheMode,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -249,6 +250,12 @@ pub struct ModelClientSession {
     /// keep sending it unchanged between turn requests (e.g., for retries, incremental
     /// appends, or continuation requests), and must not send it between different turns.
     turn_state: Arc<OnceLock<String>>,
+}
+
+#[derive(Clone, Copy)]
+enum WebsocketSessionCacheMode {
+    Shared,
+    Isolated,
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +389,16 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
+            websocket_session_cache_mode: WebsocketSessionCacheMode::Shared,
+            turn_state: Arc::new(OnceLock::new()),
+        }
+    }
+
+    pub(crate) fn new_isolated_session(&self) -> ModelClientSession {
+        ModelClientSession {
+            client: self.clone(),
+            websocket_session: WebsocketSession::default(),
+            websocket_session_cache_mode: WebsocketSessionCacheMode::Isolated,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -951,6 +968,12 @@ impl ModelClient {
 
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
+        if matches!(
+            self.websocket_session_cache_mode,
+            WebsocketSessionCacheMode::Isolated
+        ) {
+            return;
+        }
         let websocket_session = std::mem::take(&mut self.websocket_session);
         self.client
             .store_cached_websocket_session(websocket_session);

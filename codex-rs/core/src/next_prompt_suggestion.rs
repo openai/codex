@@ -21,6 +21,7 @@ use crate::session::session::Session;
 use codex_async_utils::OrCancelExt;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -84,7 +85,7 @@ pub(crate) async fn suggest_next_prompt(
         tracing::debug!("next prompt suggestion skipped before assistant boundary");
         return None;
     }
-    if assistant_message_count(&prompt_input) < 2 {
+    if final_assistant_message_count(&prompt_input) < 2 {
         return None;
     }
     prompt_input.push(ContextualUserFragment::into(
@@ -103,7 +104,7 @@ pub(crate) async fn suggest_next_prompt(
     if !session_is_idle_for_suggestion(sess).await {
         return None;
     }
-    let mut client_session = sess.services.model_client.new_session();
+    let mut client_session = sess.services.model_client.new_isolated_session();
     let mut stream = match client_session
         .stream(
             &prompt,
@@ -201,15 +202,6 @@ pub(crate) async fn suggest_next_prompt(
                             }),
                         })
                         .await;
-                    } else {
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::TokenCount(TokenCountEvent {
-                                info: None,
-                                rate_limits: Some(rate_limits),
-                            }),
-                        )
-                        .await;
                     }
                 }
                 break response_id;
@@ -300,10 +292,16 @@ fn suggestion_prompt_has_headroom(estimated_token_count: i64, model_context_wind
         < model_context_window.saturating_sub(NEXT_PROMPT_SUGGESTION_TOKEN_HEADROOM)
 }
 
-fn assistant_message_count(items: &[ResponseItem]) -> usize {
+fn final_assistant_message_count(items: &[ResponseItem]) -> usize {
     items
         .iter()
-        .filter(|item| matches!(item, ResponseItem::Message { role, .. } if role == "assistant"))
+        .filter(|item| {
+            matches!(
+                item,
+                ResponseItem::Message { role, phase, .. }
+                    if role == "assistant" && !matches!(phase, Some(MessagePhase::Commentary))
+            )
+        })
         .count()
 }
 

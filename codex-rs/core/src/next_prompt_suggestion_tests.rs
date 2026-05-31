@@ -7,6 +7,7 @@ use super::suggestion_prompt_has_headroom;
 use crate::context_manager::ContextManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
@@ -85,6 +86,26 @@ fn history_boundary_requires_final_assistant_message() {
             tail,
         ]));
     }
+}
+
+#[test]
+fn final_assistant_message_count_ignores_commentary() {
+    let assistant_message = |phase| ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "done".to_string(),
+        }],
+        phase,
+    };
+
+    assert_eq!(
+        super::final_assistant_message_count(&[
+            assistant_message(Some(MessagePhase::Commentary)),
+            assistant_message(Some(MessagePhase::FinalAnswer)),
+        ]),
+        1
+    );
 }
 
 #[test]

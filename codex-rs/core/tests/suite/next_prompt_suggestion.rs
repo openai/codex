@@ -3,6 +3,7 @@ use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -11,10 +12,16 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use wiremock::MockServer;
 
@@ -179,6 +186,83 @@ async fn suggest_next_prompt_skips_active_realtime_conversation_without_request(
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
     realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suggest_next_prompt_stops_when_real_turn_starts() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (release_suggestion_tx, release_suggestion_rx) = oneshot::channel();
+    let complete_response = |response_id, message_id, text| {
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created(response_id),
+                ev_assistant_message(message_id, text),
+                ev_completed(response_id),
+            ]),
+        }]
+    };
+    let suggestion_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("resp-suggestion"),
+                ev_assistant_message("msg-suggestion", "stale suggestion"),
+            ]),
+        },
+        StreamingSseChunk {
+            gate: Some(release_suggestion_rx),
+            body: sse(vec![ev_completed("resp-suggestion")]),
+        },
+    ];
+    let (server, _) = start_streaming_sse_server(vec![
+        complete_response("resp-1", "msg-1", "first turn complete"),
+        complete_response("resp-2", "msg-2", "second turn complete"),
+        suggestion_chunks,
+        complete_response("resp-3", "msg-3", "third turn complete"),
+    ])
+    .await;
+    let mut builder = test_codex();
+    let test = builder.build_with_streaming_server(&server).await?;
+    test.submit_turn("first task").await?;
+    test.submit_turn("second task").await?;
+
+    let codex = Arc::clone(&test.codex);
+    let suggestion_task =
+        tokio::spawn(async move { codex.suggest_next_prompt(CancellationToken::new()).await });
+    server.wait_for_request_count(/*count*/ 3).await;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "third task".to_string(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    timeout(
+        Duration::from_secs(2),
+        server.wait_for_request_count(/*count*/ 4),
+    )
+    .await
+    .expect("real turn request should start");
+
+    let suggestion = timeout(Duration::from_secs(2), suggestion_task)
+        .await
+        .expect("suggestion task should stop after real turn starts")
+        .expect("suggestion task should not panic")?;
+    assert_eq!(suggestion, None);
+    let _ = release_suggestion_tx.send(());
+    wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+    assert_eq!(server.requests().await.len(), 4);
+
+    server.shutdown().await;
     Ok(())
 }
 
