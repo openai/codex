@@ -182,6 +182,7 @@ fn populate_merged_regular_fields_with_sources(
         allow_managed_hooks_only,
         allow_appshots,
         computer_use,
+        windows,
         feature_requirements,
         hooks: _,
         mcp_servers,
@@ -205,6 +206,7 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(allow_managed_hooks_only, &["allow_managed_hooks_only"]);
     set_sourced!(allow_appshots, &["allow_appshots"]);
     set_sourced!(computer_use, &["computer_use"]);
+    set_sourced!(windows, &["windows"]);
     set_sourced!(feature_requirements, &["features", "feature_requirements"]);
     set_sourced!(mcp_servers, &["mcp_servers"]);
     set_sourced!(plugins, &["plugins"]);
