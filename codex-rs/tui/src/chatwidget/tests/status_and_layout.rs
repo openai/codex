@@ -745,7 +745,7 @@ async fn status_line_secondary_only_non_weekly_limit_omits_primary_limit_item() 
 }
 
 #[tokio::test]
-async fn rate_limit_snapshot_keeps_prior_usage_metadata_when_missing_from_headers() {
+async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
@@ -758,12 +758,12 @@ async fn rate_limit_snapshot_keeps_prior_usage_metadata_when_missing_from_header
             unlimited: false,
             balance: Some("17.5".to_string()),
         }),
-        individual_limit: Some(Some(codex_app_server_protocol::SpendControlLimitSnapshot {
+        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
             limit: "25000".to_string(),
             used: "8000".to_string(),
             remaining_percent: 68,
             resets_at: 300,
-        })),
+        }),
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -784,7 +784,12 @@ async fn rate_limit_snapshot_keeps_prior_usage_metadata_when_missing_from_header
         }),
         secondary: None,
         credits: None,
-        individual_limit: None,
+        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
+            limit: "25000".to_string(),
+            used: "8000".to_string(),
+            remaining_percent: 68,
+            resets_at: 300,
+        }),
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -823,12 +828,12 @@ async fn account_rate_limit_refresh_clears_removed_individual_limit() {
         primary: None,
         secondary: None,
         credits: None,
-        individual_limit: Some(Some(codex_app_server_protocol::SpendControlLimitSnapshot {
+        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
             limit: "25000".to_string(),
             used: "8000".to_string(),
             remaining_percent: 68,
             resets_at: 300,
-        })),
+        }),
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -838,7 +843,7 @@ async fn account_rate_limit_refresh_clears_removed_individual_limit() {
         primary: None,
         secondary: None,
         credits: None,
-        individual_limit: Some(None),
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }));

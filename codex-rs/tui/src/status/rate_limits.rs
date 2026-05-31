@@ -168,7 +168,6 @@ pub(crate) fn rate_limit_snapshot_display_for_limit(
         individual_limit: snapshot
             .individual_limit
             .as_ref()
-            .and_then(Option::as_ref)
             .and_then(|limit| SpendControlLimitSnapshotDisplay::from_limit(limit, captured_at)),
     }
 }

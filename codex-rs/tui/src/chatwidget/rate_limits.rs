@@ -242,16 +242,8 @@ impl ChatWidget {
                 self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
             }
 
-            let preserved_individual_limit = self
-                .rate_limit_snapshots_by_limit_id
-                .get(&limit_id)
-                .and_then(|display| display.individual_limit.clone());
-            let preserve_individual_limit = snapshot.individual_limit.is_none();
-            let mut display =
+            let display =
                 rate_limit_snapshot_display_for_limit(&snapshot, limit_label, Local::now());
-            if display.individual_limit.is_none() && preserve_individual_limit {
-                display.individual_limit = preserved_individual_limit;
-            }
             self.rate_limit_snapshots_by_limit_id
                 .insert(limit_id, display);
 
