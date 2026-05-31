@@ -190,7 +190,7 @@ async fn suggest_next_prompt_skips_active_realtime_conversation_without_request(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn suggest_next_prompt_stops_when_real_turn_starts() -> Result<()> {
+async fn suggest_next_prompt_drops_stale_result_when_real_turn_starts() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (release_suggestion_tx, release_suggestion_rx) = oneshot::channel();
@@ -253,13 +253,13 @@ async fn suggest_next_prompt_stops_when_real_turn_starts() -> Result<()> {
     .await
     .expect("real turn request should start");
 
+    wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+    let _ = release_suggestion_tx.send(());
     let suggestion = timeout(Duration::from_secs(2), suggestion_task)
         .await
-        .expect("suggestion task should stop after real turn starts")
+        .expect("suggestion task should stop after hidden stream completes")
         .expect("suggestion task should not panic")?;
     assert_eq!(suggestion, None);
-    let _ = release_suggestion_tx.send(());
-    wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
     assert_eq!(server.requests().await.len(), 4);
 
     server.shutdown().await;
