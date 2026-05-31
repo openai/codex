@@ -69,7 +69,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
         },
         "limitId": {
           "type": [
