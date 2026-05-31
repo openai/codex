@@ -471,11 +471,12 @@ impl Client {
             .rate_limit_reached_type
             .flatten()
             .and_then(|details| Self::map_rate_limit_reached_type(details.kind));
-        let individual_limit = payload
-            .spend_control
-            .flatten()
-            .and_then(|details| details.individual_limit.flatten())
-            .map(|details| Self::map_individual_limit(*details));
+        let individual_limit = payload.spend_control.flatten().map(|details| {
+            details
+                .individual_limit
+                .flatten()
+                .map(|details| Self::map_individual_limit(*details))
+        });
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
             Some("codex".to_string()),
             /*limit_name*/ None,
@@ -506,7 +507,7 @@ impl Client {
         limit_name: Option<String>,
         rate_limit: Option<crate::types::RateLimitStatusDetails>,
         credits: Option<crate::types::CreditStatusDetails>,
-        individual_limit: Option<SpendControlLimitSnapshot>,
+        individual_limit: Option<Option<SpendControlLimitSnapshot>>,
         plan_type: Option<AccountPlanType>,
         rate_limit_reached_type: Option<RateLimitReachedType>,
     ) -> RateLimitSnapshot {
@@ -747,12 +748,12 @@ mod tests {
         );
         assert_eq!(
             snapshots[0].individual_limit,
-            Some(SpendControlLimitSnapshot {
+            Some(Some(SpendControlLimitSnapshot {
                 limit: "25000".to_string(),
                 used: "8000".to_string(),
                 remaining_percent: 68,
                 resets_at: 789,
-            })
+            }))
         );
 
         assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));

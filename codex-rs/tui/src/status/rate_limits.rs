@@ -190,7 +190,7 @@ impl SpendControlLimitSnapshotDisplay {
         let resets_at = DateTime::<Utc>::from_timestamp(value.resets_at, 0)
             .map(|dt| format_reset_timestamp(dt.with_timezone(&Local), captured_at));
         Some(Self {
-            percent_remaining: f64::from(value.remaining_percent),
+            percent_remaining: f64::from(value.remaining_percent.clamp(0, 100)),
             used: format_credit_amount(&value.used)?,
             limit: format_credit_amount(&value.limit)?,
             resets_at,

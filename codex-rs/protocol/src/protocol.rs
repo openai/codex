@@ -2009,7 +2009,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
-    pub individual_limit: Option<SpendControlLimitSnapshot>,
+    pub individual_limit: Option<Option<SpendControlLimitSnapshot>>,
     pub plan_type: Option<crate::account::PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }

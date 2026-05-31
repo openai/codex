@@ -274,7 +274,10 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
-            individual_limit: value.individual_limit.map(SpendControlLimitSnapshot::from),
+            individual_limit: value
+                .individual_limit
+                .flatten()
+                .map(SpendControlLimitSnapshot::from),
             plan_type: value.plan_type,
             rate_limit_reached_type: value
                 .rate_limit_reached_type
@@ -381,6 +384,7 @@ pub struct SpendControlLimitSnapshot {
     pub limit: String,
     pub used: String,
     pub remaining_percent: i32,
+    #[ts(type = "number")]
     pub resets_at: i64,
 }
 

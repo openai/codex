@@ -814,6 +814,44 @@ async fn rate_limit_snapshot_keeps_prior_usage_metadata_when_missing_from_header
 }
 
 #[tokio::test]
+async fn account_rate_limit_refresh_clears_removed_individual_limit() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
+            limit: "25000".to_string(),
+            used: "8000".to_string(),
+            remaining_percent: 68,
+            resets_at: 300,
+        }),
+        plan_type: None,
+        rate_limit_reached_type: None,
+    }));
+    chat.replace_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    }));
+
+    assert!(
+        chat.rate_limit_snapshots_by_limit_id
+            .get("codex")
+            .and_then(|snapshot| snapshot.individual_limit.as_ref())
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
