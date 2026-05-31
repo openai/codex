@@ -150,37 +150,35 @@ mod tests {
     use crate::local::test_support::write_session_file;
 
     #[tokio::test]
-    async fn delete_thread_removes_active_rollout() {
+    async fn delete_thread_removes_active_and_archived_rollouts() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-        let uuid = Uuid::from_u128(301);
-        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let active_path =
-            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let cases = [
+            (
+                Uuid::from_u128(301),
+                write_session_file(home.path(), "2025-01-03T12-00-00", Uuid::from_u128(301))
+                    .expect("session file"),
+            ),
+            (
+                Uuid::from_u128(302),
+                write_archived_session_file(
+                    home.path(),
+                    "2025-01-03T12-00-00",
+                    Uuid::from_u128(302),
+                )
+                .expect("archived session file"),
+            ),
+        ];
 
-        store
-            .delete_thread(DeleteThreadParams { thread_id })
-            .await
-            .expect("delete thread");
+        for (uuid, path) in cases {
+            let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+            store
+                .delete_thread(DeleteThreadParams { thread_id })
+                .await
+                .expect("delete thread");
 
-        assert!(!active_path.exists());
-    }
-
-    #[tokio::test]
-    async fn delete_thread_removes_archived_rollout() {
-        let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-        let uuid = Uuid::from_u128(302);
-        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let archived_path = write_archived_session_file(home.path(), "2025-01-03T12-00-00", uuid)
-            .expect("archived session file");
-
-        store
-            .delete_thread(DeleteThreadParams { thread_id })
-            .await
-            .expect("delete thread");
-
-        assert!(!archived_path.exists());
+            assert!(!path.exists());
+        }
     }
 
     #[tokio::test]
@@ -194,13 +192,11 @@ mod tests {
         .await
         .expect("state db should initialize");
         let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
-        let uuid = Uuid::from_u128(303);
-        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000303").expect("valid thread id");
         let mut builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
-            home.path()
-                .join("sessions/2025/01/03")
-                .join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl")),
+            home.path().join("sessions/missing-rollout.jsonl"),
             Utc::now(),
             SessionSource::Cli,
         );

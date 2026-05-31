@@ -61,7 +61,7 @@ use uuid::Uuid;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn thread_start_with_non_local_thread_store_does_not_create_local_persistence() -> Result<()>
+async fn thread_delete_with_non_local_thread_store_does_not_create_local_persistence() -> Result<()>
 {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -143,13 +143,38 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
     assert_eq!(data[0].path, None);
 
     delete_thread(&client, /*request_id*/ 4, thread.id.clone()).await?;
+    let unloaded_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
+    thread_store
+        .create_thread(StoreCreateThreadParams {
+            thread_id: unloaded_thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: SessionSource::Cli,
+            thread_source: None,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            multi_agent_version: None,
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(codex_home.path().to_path_buf()),
+                model_provider: "mock_provider".to_string(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        })
+        .await?;
+    delete_thread(
+        &client,
+        /*request_id*/ 5,
+        unloaded_thread_id.to_string(),
+    )
+    .await?;
 
     client.shutdown().await?;
 
     let calls = thread_store.calls().await;
-    assert_eq!(calls.create_thread, 1);
+    assert_eq!(calls.create_thread, 2);
     assert_eq!(calls.list_threads, 1);
-    assert_eq!(calls.delete_thread, 1);
+    assert_eq!(calls.delete_thread, 2);
     assert!(
         calls.append_items > 0,
         "turn/start should append rollout items through the injected store"
@@ -245,49 +270,6 @@ async fn cold_thread_resume_reuses_non_local_history_probe() -> Result<()> {
     );
 
     client.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_delete_with_non_local_thread_store_deletes_unloaded_thread_without_sqlite()
--> Result<()> {
-    let codex_home = TempDir::new()?;
-    let store_id = Uuid::new_v4().to_string();
-    create_config_toml_with_thread_store(codex_home.path(), "http://127.0.0.1:1", &store_id)?;
-
-    let thread_store = InMemoryThreadStore::for_id(store_id.clone());
-    let _in_memory_store = InMemoryThreadStoreId { store_id };
-    let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
-    thread_store
-        .create_thread(StoreCreateThreadParams {
-            thread_id,
-            extra_config: None,
-            forked_from_id: None,
-            parent_thread_id: None,
-            source: SessionSource::Cli,
-            thread_source: None,
-            base_instructions: BaseInstructions::default(),
-            dynamic_tools: Vec::new(),
-            multi_agent_version: None,
-            metadata: ThreadPersistenceMetadata {
-                cwd: Some(codex_home.path().to_path_buf()),
-                model_provider: "mock_provider".to_string(),
-                memory_mode: ThreadMemoryMode::Enabled,
-            },
-        })
-        .await?;
-
-    let client = start_in_process_server(codex_home.path()).await?;
-
-    delete_thread(&client, /*request_id*/ 1, thread_id.to_string()).await?;
-
-    client.shutdown().await?;
-
-    let calls = thread_store.calls().await;
-    assert_eq!(calls.read_thread, 1);
-    assert_eq!(calls.delete_thread, 1);
-    assert_no_local_persistence_artifacts(codex_home.path())?;
-
     Ok(())
 }
 

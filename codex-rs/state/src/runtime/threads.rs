@@ -1271,12 +1271,7 @@ mod tests {
             ))
             .await?;
         seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
-        sqlx::query(
-            r#"
-INSERT INTO thread_dynamic_tools (thread_id, position, name, description, input_schema)
-VALUES (?, ?, ?, ?, ?)
-            "#,
-        )
+        sqlx::query("INSERT INTO thread_dynamic_tools (thread_id, position, name, description, input_schema) VALUES (?, ?, ?, ?, ?)")
         .bind(thread_id.to_string())
         .bind(0_i64)
         .bind("test_tool")
@@ -1331,21 +1326,14 @@ VALUES (?, ?, ?, ?, ?)
             job_item.last_error,
             Some("assigned thread was deleted".to_string())
         );
-        Ok(())
-    }
 
-    #[tokio::test]
-    async fn delete_thread_cleans_associated_state_when_thread_row_is_missing() -> Result<()> {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
-        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000403")?;
-        let child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000404")?;
-        seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
+        let missing_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000403")?;
+        let missing_child_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000404")?;
+        seed_thread_cleanup_state(&runtime, missing_thread_id, missing_child_thread_id).await?;
 
-        let rows = runtime.delete_thread(thread_id).await?;
-
-        assert_eq!(rows, 0);
-        assert_thread_cleanup_state(&runtime, thread_id).await?;
+        assert_eq!(runtime.delete_thread(missing_thread_id).await?, 0);
+        assert_thread_cleanup_state(&runtime, missing_thread_id).await?;
         Ok(())
     }
 
@@ -1370,20 +1358,9 @@ VALUES (?, ?, ?, ?, ?)
                 /*token_budget*/ None,
             )
             .await?;
-        runtime
-            .insert_log(&LogEntry {
-                ts: 1,
-                ts_nanos: 0,
-                level: "INFO".to_string(),
-                target: "test".to_string(),
-                message: Some("legacy log".to_string()),
-                feedback_log_body: Some("feedback log".to_string()),
-                thread_id: Some(thread_id.to_string()),
-                process_uuid: Some("process-1".to_string()),
-                module_path: None,
-                file: None,
-                line: None,
-            })
+        sqlx::query("INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (1, 0, 'INFO', 'test', 'feedback log', ?)")
+            .bind(thread_id.to_string())
+            .execute(runtime.logs_pool.as_ref())
             .await?;
         Ok(())
     }
@@ -1400,15 +1377,17 @@ VALUES (?, ?, ?, ?, ?)
         .fetch_one(runtime.pool.as_ref())
         .await?;
         assert_eq!(spawn_edge_count, 0);
-        let goal = runtime.thread_goals().get_thread_goal(thread_id).await?;
-        assert!(goal.is_none());
+        assert_eq!(
+            runtime.thread_goals().get_thread_goal(thread_id).await?,
+            None
+        );
         let logs = runtime
             .query_logs(&LogQuery {
                 thread_ids: vec![thread_id.to_string()],
                 ..Default::default()
             })
             .await?;
-        assert_eq!(logs.len(), 0);
+        assert!(logs.is_empty());
         Ok(())
     }
 
