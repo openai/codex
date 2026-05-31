@@ -58,7 +58,6 @@ use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
-use codex_thread_store::SetMultiAgentVersionIfUnsetParams;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadStore;
@@ -95,6 +94,17 @@ pub(crate) fn set_thread_manager_test_mode_for_tests(enabled: bool) {
 
 fn should_use_test_thread_manager_behavior() -> bool {
     FORCE_TEST_THREAD_MANAGER_BEHAVIOR.load(Ordering::Relaxed)
+}
+
+fn multi_agent_version_source_thread_id(
+    initial_history: &InitialHistory,
+    forked_from_thread_id: Option<ThreadId>,
+) -> Option<ThreadId> {
+    match initial_history {
+        InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+        InitialHistory::Forked(_) => forked_from_thread_id,
+        InitialHistory::New | InitialHistory::Cleared => None,
+    }
 }
 
 struct TempCodexHomeGuard {
@@ -941,17 +951,18 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let multi_agent_version = self
+        let inherited_multi_agent_version = self
             .state
-            .resolve_multi_agent_version(
-                &config,
+            .resolve_inherited_multi_agent_version(
                 &history,
                 forked_from_thread_id,
                 /*inherited_multi_agent_version*/ None,
             )
             .await;
-        let interrupted_marker =
-            InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
+        let interrupted_marker = InterruptedTurnHistoryMarker::from_config_and_version(
+            &config,
+            inherited_multi_agent_version,
+        );
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -971,7 +982,7 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
-            multi_agent_version,
+            inherited_multi_agent_version,
         ))
         .await
     }
@@ -1221,9 +1232,8 @@ impl ThreadManagerState {
         .await
     }
 
-    pub(crate) async fn resolve_multi_agent_version(
+    pub(crate) async fn resolve_inherited_multi_agent_version(
         &self,
-        config: &Config,
         initial_history: &InitialHistory,
         forked_from_thread_id: Option<ThreadId>,
         inherited_multi_agent_version: Option<MultiAgentVersion>,
@@ -1232,11 +1242,8 @@ impl ThreadManagerState {
             return Some(multi_agent_version);
         }
 
-        let source_thread_id = match initial_history {
-            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-            InitialHistory::Forked(_) => forked_from_thread_id,
-            InitialHistory::New | InitialHistory::Cleared => None,
-        };
+        let source_thread_id =
+            multi_agent_version_source_thread_id(initial_history, forked_from_thread_id);
         let source_thread = match source_thread_id {
             Some(source_thread_id) => self.get_thread(source_thread_id).await.ok(),
             None => None,
@@ -1245,35 +1252,7 @@ impl ThreadManagerState {
             Some(source_thread) => source_thread.multi_agent_version(),
             None => None,
         };
-        let multi_agent_version = live_multi_agent_version
-            .or(inherited_multi_agent_version)
-            .or_else(|| config.multi_agent_version_from_features())?;
-        let Some(source_thread_id) = source_thread_id else {
-            return Some(multi_agent_version);
-        };
-        let multi_agent_version = match self
-            .thread_store
-            .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
-                thread_id: source_thread_id,
-                multi_agent_version,
-                include_archived: true,
-            })
-            .await
-        {
-            Ok(multi_agent_version) => multi_agent_version,
-            Err(err) => {
-                warn!(
-                    "failed to lock multi-agent version for legacy thread {source_thread_id}: {err}"
-                );
-                multi_agent_version
-            }
-        };
-        match source_thread {
-            Some(source_thread) => {
-                Some(source_thread.set_multi_agent_version_if_unset(multi_agent_version))
-            }
-            None => Some(multi_agent_version),
-        }
+        live_multi_agent_version.or(inherited_multi_agent_version)
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
@@ -1366,11 +1345,12 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let multi_agent_version = match inherited_multi_agent_version {
+        let source_thread_id =
+            multi_agent_version_source_thread_id(&initial_history, forked_from_thread_id);
+        let inherited_multi_agent_version = match inherited_multi_agent_version {
             Some(multi_agent_version) => Some(multi_agent_version),
             None => {
-                self.resolve_multi_agent_version(
-                    &config,
+                self.resolve_inherited_multi_agent_version(
                     &initial_history,
                     forked_from_thread_id,
                     /*inherited_multi_agent_version*/ None,
@@ -1408,9 +1388,15 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
-            multi_agent_version,
+            inherited_multi_agent_version,
         })
         .await?;
+        if let Some(source_thread_id) = source_thread_id
+            && let Some(multi_agent_version) = codex.session.multi_agent_version()
+            && let Ok(source_thread) = self.get_thread(source_thread_id).await
+        {
+            source_thread.set_multi_agent_version_if_unset(multi_agent_version);
+        }
         let new_thread = self
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)
             .await?;

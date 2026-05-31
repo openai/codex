@@ -144,9 +144,8 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
         .any(|usage_hint_text| usage_hint_text == text)
 }
 
-async fn load_resumed_history_and_resolve_multi_agent_version(
+async fn load_resumed_history_and_resolve_inherited_multi_agent_version(
     state: &ThreadManagerState,
-    config: &Config,
     thread_id: ThreadId,
     session_source: &SessionSource,
 ) -> CodexResult<(
@@ -184,8 +183,7 @@ async fn load_resumed_history_and_resolve_multi_agent_version(
     });
     let parent_thread_id = stored_thread.parent_thread_id;
     let multi_agent_version = state
-        .resolve_multi_agent_version(
-            config,
+        .resolve_inherited_multi_agent_version(
             &initial_history,
             /*forked_from_thread_id*/ None,
             inherited_multi_agent_version,
@@ -673,9 +671,8 @@ impl AgentControl {
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
         let (initial_history, parent_thread_id, multi_agent_version) =
-            load_resumed_history_and_resolve_multi_agent_version(
+            load_resumed_history_and_resolve_inherited_multi_agent_version(
                 state.as_ref(),
-                &config,
                 thread_id,
                 &session_source,
             )

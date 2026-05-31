@@ -522,6 +522,34 @@ impl Session {
             .parent_thread_id
             .or_else(|| initial_history.get_resumed_parent_thread_id());
         session_configuration.parent_thread_id = parent_thread_id;
+        let source_thread_id = match &initial_history {
+            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+            InitialHistory::Forked(_) => forked_from_id,
+            InitialHistory::New | InitialHistory::Cleared => None,
+        };
+        let multi_agent_version = match (source_thread_id, multi_agent_version) {
+            (Some(source_thread_id), Some(multi_agent_version))
+                if !config.ephemeral && initial_history.get_multi_agent_version().is_none() =>
+            {
+                match thread_store
+                    .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
+                        thread_id: source_thread_id,
+                        multi_agent_version,
+                        include_archived: true,
+                    })
+                    .await
+                {
+                    Ok(multi_agent_version) => Some(multi_agent_version),
+                    Err(err) => {
+                        warn!(
+                            "failed to lock multi-agent version for legacy thread {source_thread_id}: {err}"
+                        );
+                        Some(multi_agent_version)
+                    }
+                }
+            }
+            (_, multi_agent_version) => multi_agent_version,
+        };
         let multi_agent_version = multi_agent_version.map(OnceLock::from).unwrap_or_default();
         let initial_multi_agent_version = multi_agent_version.get().copied();
 
