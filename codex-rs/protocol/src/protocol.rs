@@ -2009,7 +2009,13 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "serde_with::rust::double_option::deserialize",
+        serialize_with = "serde_with::rust::double_option::serialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional, type = "SpendControlLimitSnapshot | null")]
     pub individual_limit: Option<Option<SpendControlLimitSnapshot>>,
     pub plan_type: Option<crate::account::PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
@@ -3993,6 +3999,29 @@ mod tests {
         .expect("deserialize pre-spend-control rate-limit snapshot");
 
         assert_eq!(snapshot.individual_limit, None);
+    }
+
+    #[test]
+    fn rate_limit_snapshot_preserves_explicit_null_individual_limit() {
+        let snapshot: RateLimitSnapshot = serde_json::from_value(json!({
+            "limit_id": "codex",
+            "limit_name": null,
+            "primary": null,
+            "secondary": null,
+            "credits": null,
+            "individual_limit": null,
+            "plan_type": null,
+            "rate_limit_reached_type": null
+        }))
+        .expect("deserialize explicit spend-control limit clear");
+
+        assert_eq!(snapshot.individual_limit, Some(None));
+        assert_eq!(
+            serde_json::to_value(snapshot)
+                .expect("serialize explicit spend-control limit clear")
+                .get("individual_limit"),
+            Some(&serde_json::Value::Null)
+        );
     }
 
     fn sandbox_policy_allows_read(policy: &SandboxPolicy, _path: &Path, _cwd: &Path) -> bool {
