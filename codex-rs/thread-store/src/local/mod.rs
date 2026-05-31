@@ -21,6 +21,7 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -59,7 +60,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
-    multi_agent_version_seed_lock: Arc<Mutex<()>>,
+    multi_agent_version_seed_lock: Arc<Semaphore>,
     state_db: Option<StateDbHandle>,
 }
 
@@ -99,7 +100,7 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
-            multi_agent_version_seed_lock: Arc::new(Mutex::new(())),
+            multi_agent_version_seed_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
             state_db,
         }
     }
