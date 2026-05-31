@@ -73,6 +73,7 @@ async fn suggest_next_prompt_samples_history_without_tools() -> Result<()> {
     let suggestion_body = suggestion_request.body_json();
     assert_eq!(suggestion_body["tools"], json!([]));
     assert_eq!(suggestion_body["parallel_tool_calls"], false);
+    assert_eq!(suggestion_body["max_output_tokens"], json!(32));
 
     let user_texts = suggestion_request.message_input_texts("user");
     let suggestion_prompt = user_texts

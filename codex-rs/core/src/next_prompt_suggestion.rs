@@ -29,6 +29,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_utils_output_truncation::approx_token_count;
 use futures::StreamExt;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -40,6 +41,8 @@ use tokio_util::sync::CancellationToken;
 mod next_prompt_suggestion_tests;
 
 const NEXT_PROMPT_SUGGESTION_TOKEN_HEADROOM: i64 = 1_024;
+const NEXT_PROMPT_SUGGESTION_MAX_HISTORY_TOKENS: usize = 4_096;
+const NEXT_PROMPT_SUGGESTION_MAX_OUTPUT_TOKENS: u64 = 32;
 const NEXT_PROMPT_SUGGESTION_SAMPLE_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy)]
@@ -80,7 +83,7 @@ pub(crate) async fn suggest_next_prompt(
         tracing::debug!("next prompt suggestion skipped for incomplete tool flow");
         return None;
     }
-    let mut prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     if !history_ends_at_assistant_response(&prompt_input) {
         tracing::debug!("next prompt suggestion skipped before assistant boundary");
         return None;
@@ -88,6 +91,12 @@ pub(crate) async fn suggest_next_prompt(
     if final_assistant_message_count(&prompt_input) < 2 {
         return None;
     }
+    let Some(mut prompt_input) =
+        bounded_recent_prompt_history(prompt_input, NEXT_PROMPT_SUGGESTION_MAX_HISTORY_TOKENS)
+    else {
+        tracing::debug!("next prompt suggestion skipped without bounded recent history");
+        return None;
+    };
     prompt_input.push(ContextualUserFragment::into(
         NextPromptSuggestionInstructions,
     ));
@@ -100,6 +109,7 @@ pub(crate) async fn suggest_next_prompt(
         personality: turn_context.personality,
         output_schema: None,
         output_schema_strict: true,
+        max_output_tokens: Some(NEXT_PROMPT_SUGGESTION_MAX_OUTPUT_TOKENS),
     };
     if !session_is_idle_for_suggestion(sess).await {
         return None;
@@ -305,8 +315,38 @@ fn final_assistant_message_count(items: &[ResponseItem]) -> usize {
         .count()
 }
 
+fn bounded_recent_prompt_history(
+    items: Vec<ResponseItem>,
+    max_tokens: usize,
+) -> Option<Vec<ResponseItem>> {
+    let mut remaining_tokens = max_tokens;
+    let mut keep_from = items.len();
+    for (index, item) in items.iter().enumerate().rev() {
+        let serialized = serde_json::to_string(item).ok()?;
+        let item_tokens = approx_token_count(&serialized);
+        if item_tokens > remaining_tokens {
+            break;
+        }
+        keep_from = index;
+        remaining_tokens = remaining_tokens.saturating_sub(item_tokens);
+    }
+    let bounded = items[keep_from..].to_vec();
+    if bounded.is_empty()
+        || has_unpaired_tool_flow(&bounded)
+        || !history_ends_at_assistant_response(&bounded)
+        || final_assistant_message_count(&bounded) < 2
+    {
+        return None;
+    }
+    Some(bounded)
+}
+
 fn history_ends_at_assistant_response(items: &[ResponseItem]) -> bool {
-    matches!(items.last(), Some(ResponseItem::Message { role, .. }) if role == "assistant")
+    matches!(
+        items.last(),
+        Some(ResponseItem::Message { role, phase, .. })
+            if role == "assistant" && !matches!(phase, Some(MessagePhase::Commentary))
+    )
 }
 
 fn assistant_output_text(item: &ResponseItem) -> Option<String> {

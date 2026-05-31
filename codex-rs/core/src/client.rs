@@ -798,6 +798,7 @@ impl ModelClient {
             store: provider.is_azure_responses_endpoint(),
             stream: true,
             include,
+            max_output_tokens: prompt.max_output_tokens,
             service_tier,
             prompt_cache_key,
             text,
@@ -1663,10 +1664,11 @@ impl ModelClientSession {
         }
     }
 
-    /// Permanently disables WebSockets for this Codex session and resets WebSocket state.
+    /// Disables WebSockets for this Codex session and resets WebSocket state.
     ///
-    /// This is used after exhausting the provider retry budget, to force subsequent requests onto
-    /// the HTTP transport.
+    /// Shared sessions permanently force subsequent requests onto HTTP after exhausting the
+    /// provider retry budget. Isolated sessions only reset their own WebSocket state, so hidden
+    /// best-effort requests cannot change transport behavior for real turns.
     ///
     /// Returns `true` if this call activated fallback, or `false` if fallback was already active.
     pub(crate) fn try_switch_fallback_transport(
@@ -1674,9 +1676,12 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         model_info: &ModelInfo,
     ) -> bool {
-        let activated = self
-            .client
-            .force_http_fallback(session_telemetry, model_info);
+        let activated = match self.websocket_session_cache_mode {
+            WebsocketSessionCacheMode::Shared => self
+                .client
+                .force_http_fallback(session_telemetry, model_info),
+            WebsocketSessionCacheMode::Isolated => false,
+        };
         self.websocket_session = WebsocketSession::default();
         activated
     }

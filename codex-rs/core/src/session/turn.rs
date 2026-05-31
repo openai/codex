@@ -970,6 +970,7 @@ pub(crate) fn build_prompt(
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
         ),
+        max_output_tokens: None,
     }
 }
 

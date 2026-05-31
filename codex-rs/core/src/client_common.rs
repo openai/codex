@@ -35,6 +35,9 @@ pub struct Prompt {
 
     /// Whether the Responses API should strictly validate `output_schema`.
     pub output_schema_strict: bool,
+
+    /// Optional cap for generated output tokens.
+    pub max_output_tokens: Option<u64>,
 }
 
 impl Default for Prompt {
@@ -47,6 +50,7 @@ impl Default for Prompt {
             personality: None,
             output_schema: None,
             output_schema_strict: true,
+            max_output_tokens: None,
         }
     }
 }

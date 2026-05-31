@@ -1,4 +1,5 @@
 use super::HistorySnapshot;
+use super::bounded_recent_prompt_history;
 use super::filter_next_prompt_suggestion;
 use super::has_unpaired_tool_flow;
 use super::history_ends_at_assistant_response;
@@ -76,6 +77,14 @@ fn history_boundary_requires_final_assistant_message() {
     )));
     for tail in [
         user,
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "still working".to_string(),
+            }],
+            phase: Some(MessagePhase::Commentary),
+        },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("done".to_string()),
@@ -86,6 +95,37 @@ fn history_boundary_requires_final_assistant_message() {
             tail,
         ]));
     }
+}
+
+#[test]
+fn bounded_recent_prompt_history_keeps_recent_complete_turns() {
+    let message = |role: &str, text: &str| ResponseItem::Message {
+        id: None,
+        role: role.to_string(),
+        content: vec![if role == "assistant" {
+            ContentItem::OutputText {
+                text: text.to_string(),
+            }
+        } else {
+            ContentItem::InputText {
+                text: text.to_string(),
+            }
+        }],
+        phase: None,
+    };
+    let recent = vec![
+        message("user", "first recent task"),
+        message("assistant", "first recent answer"),
+        message("user", "second recent task"),
+        message("assistant", "second recent answer"),
+    ];
+    let mut history = vec![message("user", &"old context ".repeat(1_000))];
+    history.extend(recent.clone());
+
+    assert_eq!(
+        bounded_recent_prompt_history(history, /*max_tokens*/ 256),
+        Some(recent)
+    );
 }
 
 #[test]
