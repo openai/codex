@@ -95,7 +95,7 @@ pub struct CreateThreadParams {
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Multi-agent runtime selected when the thread was created.
-    pub multi_agent_version: MultiAgentVersion,
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
     /// Whether persistence should include the extended event surface.

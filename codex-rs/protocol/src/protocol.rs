@@ -2749,11 +2749,9 @@ fn multi_agent_version_from_items(
     })
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum MultiAgentVersion {
-    #[default]
-    None,
     V1,
     V2,
 }
@@ -4047,7 +4045,7 @@ mod tests {
     }
 
     #[test]
-    fn session_meta_multi_agent_version_distinguishes_missing_and_locked_values() {
+    fn session_meta_multi_agent_version_treats_missing_and_null_as_unresolved() {
         let mut meta = SessionMeta::default();
         let serialized = serde_json::to_value(&meta).expect("serialize legacy session metadata");
         assert_eq!(serialized.get("multi_agent_version"), None);
@@ -4055,11 +4053,18 @@ mod tests {
             serde_json::from_value(serialized).expect("deserialize legacy session metadata");
         assert_eq!(deserialized.multi_agent_version, None);
 
-        for version in [
-            MultiAgentVersion::None,
-            MultiAgentVersion::V1,
-            MultiAgentVersion::V2,
-        ] {
+        let deserialized: SessionMeta = serde_json::from_value(serde_json::json!({
+            "id": ThreadId::default(),
+            "timestamp": "",
+            "cwd": "",
+            "originator": "",
+            "cli_version": "",
+            "multi_agent_version": null
+        }))
+        .expect("deserialize null session metadata");
+        assert_eq!(deserialized.multi_agent_version, None);
+
+        for version in [MultiAgentVersion::V1, MultiAgentVersion::V2] {
             meta.multi_agent_version = Some(version);
             let serialized =
                 serde_json::to_value(&meta).expect("serialize locked session metadata");

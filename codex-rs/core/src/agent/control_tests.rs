@@ -611,7 +611,10 @@ async fn spawn_agent_inherits_parent_multi_agent_version_over_child_feature_flag
         .await
         .expect("child thread should be registered");
 
-    assert_eq!(child.multi_agent_version().await, MultiAgentVersion::V2);
+    assert_eq!(
+        child.multi_agent_version().await,
+        Some(MultiAgentVersion::V2)
+    );
 }
 
 #[tokio::test]

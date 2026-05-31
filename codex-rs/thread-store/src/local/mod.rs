@@ -1085,7 +1085,7 @@ mod tests {
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
-            multi_agent_version: codex_protocol::protocol::MultiAgentVersion::None,
+            multi_agent_version: None,
             metadata: thread_metadata(),
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
         }

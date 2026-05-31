@@ -66,7 +66,7 @@ mod tests {
                 thread_source: None,
                 base_instructions: BaseInstructions::default(),
                 dynamic_tools: Vec::new(),
-                multi_agent_version: MultiAgentVersion::V2,
+                multi_agent_version: Some(MultiAgentVersion::V2),
                 metadata: ThreadPersistenceMetadata {
                     cwd: None,
                     model_provider: "test-provider".to_string(),
@@ -283,7 +283,7 @@ impl ThreadStore for InMemoryThreadStore {
             dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
             memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
                 .then_some("disabled".to_string()),
-            multi_agent_version: Some(params.multi_agent_version),
+            multi_agent_version: params.multi_agent_version,
             ..SessionMeta::default()
         };
         state

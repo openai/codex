@@ -805,7 +805,7 @@ async fn resume_and_fork_preserve_stored_multi_agent_version() {
         .expect("start source thread");
     assert_eq!(
         source.thread.multi_agent_version().await,
-        MultiAgentVersion::V1
+        Some(MultiAgentVersion::V1)
     );
     source.thread.ensure_rollout_materialized().await;
     source
@@ -840,7 +840,7 @@ async fn resume_and_fork_preserve_stored_multi_agent_version() {
         .expect("resume source thread");
     assert_eq!(
         resumed.thread.multi_agent_version().await,
-        MultiAgentVersion::V1
+        Some(MultiAgentVersion::V1)
     );
     resumed
         .thread
@@ -862,7 +862,7 @@ async fn resume_and_fork_preserve_stored_multi_agent_version() {
         .expect("fork source thread");
     assert_eq!(
         forked.thread.multi_agent_version().await,
-        MultiAgentVersion::V1
+        Some(MultiAgentVersion::V1)
     );
     forked
         .thread
@@ -930,7 +930,7 @@ async fn legacy_resume_continues_when_multi_agent_version_seed_fails() {
         .expect("legacy resume should continue after seed failure");
     assert_eq!(
         resumed.thread.multi_agent_version().await,
-        MultiAgentVersion::V2
+        Some(MultiAgentVersion::V2)
     );
     assert_eq!(
         in_memory_store

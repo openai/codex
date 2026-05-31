@@ -532,7 +532,7 @@ async fn host_context_gates_goal_and_agent_job_tools() {
 
     let agent_job_without_multi_agent = probe(|turn| {
         set_feature(turn, Feature::SpawnCsv, /*enabled*/ true);
-        turn.multi_agent_version = MultiAgentVersion::None;
+        turn.multi_agent_version = None;
     })
     .await;
     agent_job_without_multi_agent.assert_visible_contains(&["spawn_agents_on_csv"]);
@@ -878,7 +878,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
 async fn multi_agent_tool_family_uses_locked_version_instead_of_features() {
     let v1 = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
-        turn.multi_agent_version = MultiAgentVersion::V1;
+        turn.multi_agent_version = Some(MultiAgentVersion::V1);
     })
     .await;
     v1.assert_visible_contains(&[MULTI_AGENT_V1_NAMESPACE]);
@@ -886,7 +886,7 @@ async fn multi_agent_tool_family_uses_locked_version_instead_of_features() {
 
     let v2 = probe(|turn| {
         set_feature(turn, Feature::Collab, /*enabled*/ false);
-        turn.multi_agent_version = MultiAgentVersion::V2;
+        turn.multi_agent_version = Some(MultiAgentVersion::V2);
     })
     .await;
     v2.assert_visible_contains(&["spawn_agent", "send_message", "assign_task", "list_agents"]);
@@ -894,7 +894,7 @@ async fn multi_agent_tool_family_uses_locked_version_instead_of_features() {
 
     let disabled = probe(|turn| {
         set_feature(turn, Feature::Collab, /*enabled*/ true);
-        turn.multi_agent_version = MultiAgentVersion::None;
+        turn.multi_agent_version = None;
     })
     .await;
     disabled.assert_visible_lacks(&[

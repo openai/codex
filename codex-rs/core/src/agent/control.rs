@@ -57,7 +57,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
-    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) multi_agent_version: Option<Option<MultiAgentVersion>>,
 }
 
 #[derive(Clone, Debug)]
@@ -357,7 +357,7 @@ impl AgentControl {
 
         self.send_input(new_thread.thread_id, initial_operation)
             .await?;
-        if new_thread.thread.multi_agent_version().await != MultiAgentVersion::V2 {
+        if new_thread.thread.multi_agent_version().await != Some(MultiAgentVersion::V2) {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -386,7 +386,7 @@ impl AgentControl {
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
+        inherited_multi_agent_version: Option<Option<MultiAgentVersion>>,
     ) -> CodexResult<crate::thread_manager::NewThread> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -449,7 +449,7 @@ impl AgentControl {
         }
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
-                if multi_agent_version == MultiAgentVersion::V2 {
+                if multi_agent_version == Some(MultiAgentVersion::V2) {
                     let parent_config = parent_thread.codex.session.get_config().await;
                     [
                         parent_config
@@ -467,7 +467,7 @@ impl AgentControl {
                 } else {
                     Vec::new()
                 }
-            } else if multi_agent_version == MultiAgentVersion::V2 {
+            } else if multi_agent_version == Some(MultiAgentVersion::V2) {
                 [
                     config.multi_agent_v2.root_agent_usage_hint_text.clone(),
                     config.multi_agent_v2.subagent_usage_hint_text.clone(),
@@ -503,7 +503,7 @@ impl AgentControl {
             }
         }
         if preserve_reference_context_item
-            && multi_agent_version == MultiAgentVersion::V2
+            && multi_agent_version == Some(MultiAgentVersion::V2)
             && let Some(subagent_usage_hint_text) =
                 config.multi_agent_v2.subagent_usage_hint_text.clone()
             && let Some(subagent_usage_hint_message) =
@@ -706,7 +706,7 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        if resumed_thread.thread.multi_agent_version().await != MultiAgentVersion::V2 {
+        if resumed_thread.thread.multi_agent_version().await != Some(MultiAgentVersion::V2) {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -1093,7 +1093,7 @@ impl AgentControl {
             let message = format_subagent_notification_message(child_reference.as_str(), &status);
             let child_uses_multi_agent_v2 = match child_thread.as_ref() {
                 Some(child_thread) => {
-                    child_thread.multi_agent_version().await == MultiAgentVersion::V2
+                    child_thread.multi_agent_version().await == Some(MultiAgentVersion::V2)
                 }
                 None => true,
             };
@@ -1195,8 +1195,8 @@ impl AgentControl {
         &self,
         state: &Arc<ThreadManagerState>,
         session_source: Option<&SessionSource>,
-        requested_multi_agent_version: Option<MultiAgentVersion>,
-    ) -> Option<MultiAgentVersion> {
+        requested_multi_agent_version: Option<Option<MultiAgentVersion>>,
+    ) -> Option<Option<MultiAgentVersion>> {
         if requested_multi_agent_version.is_some() {
             return requested_multi_agent_version;
         }

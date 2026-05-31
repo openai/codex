@@ -79,7 +79,7 @@ pub struct TurnContext {
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
-    pub(crate) multi_agent_version: MultiAgentVersion,
+    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) permission_profile: PermissionProfile,

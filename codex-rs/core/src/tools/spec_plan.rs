@@ -289,17 +289,17 @@ fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.multi_agent_version == MultiAgentVersion::V2
+    turn_context.multi_agent_version == Some(MultiAgentVersion::V2)
 }
 
 fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
     match turn_context.multi_agent_version {
-        MultiAgentVersion::None => false,
-        MultiAgentVersion::V1 => !exceeds_thread_spawn_depth_limit(
+        None => false,
+        Some(MultiAgentVersion::V1) => !exceeds_thread_spawn_depth_limit(
             next_thread_spawn_depth(&turn_context.session_source),
             turn_context.config.agent_max_depth,
         ),
-        MultiAgentVersion::V2 => true,
+        Some(MultiAgentVersion::V2) => true,
     }
 }
 

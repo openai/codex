@@ -376,7 +376,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
             /*thread_source*/ None,
             BaseInstructions::default(),
             Vec::new(),
-            codex_protocol::protocol::MultiAgentVersion::None,
+            /*multi_agent_version*/ None,
         ),
     )
     .await?;
@@ -458,7 +458,7 @@ async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::i
             /*thread_source*/ None,
             BaseInstructions::default(),
             Vec::new(),
-            codex_protocol::protocol::MultiAgentVersion::None,
+            /*multi_agent_version*/ None,
         ),
     )
     .await?;

@@ -1284,22 +1284,22 @@ impl ConfigBuilder {
 }
 
 impl Config {
-    pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
+    pub(crate) fn multi_agent_version_from_features(&self) -> Option<MultiAgentVersion> {
         if self.features.enabled(Feature::MultiAgentV2) {
-            MultiAgentVersion::V2
+            Some(MultiAgentVersion::V2)
         } else if self.features.enabled(Feature::Collab) {
-            MultiAgentVersion::V1
+            Some(MultiAgentVersion::V1)
         } else {
-            MultiAgentVersion::None
+            None
         }
     }
 
     pub(crate) fn apply_multi_agent_version(
         &mut self,
-        multi_agent_version: MultiAgentVersion,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> std::io::Result<()> {
         self.agent_max_threads = match multi_agent_version {
-            MultiAgentVersion::V2 => {
+            Some(MultiAgentVersion::V2) => {
                 if self.configured_agent_max_threads.is_some() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -1312,7 +1312,7 @@ impl Config {
                         .saturating_sub(1),
                 )
             }
-            MultiAgentVersion::None | MultiAgentVersion::V1 => self
+            None | Some(MultiAgentVersion::V1) => self
                 .configured_agent_max_threads
                 .or(DEFAULT_AGENT_MAX_THREADS),
         };

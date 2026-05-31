@@ -172,7 +172,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             cancel_token,
             SubAgentSource::Review,
             /*initial_history*/ None,
-            codex_protocol::protocol::MultiAgentVersion::None,
+            /*multi_agent_version*/ None,
         ),
     )
     .await

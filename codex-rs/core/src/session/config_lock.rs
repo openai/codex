@@ -147,18 +147,15 @@ fn save_config_resolved_fields(
         .features
         .get_or_insert_with(FeaturesToml::default);
     let mut materialized_features = config.features.get().clone();
-    materialized_features.set_enabled(
-        Feature::Collab,
-        sc.multi_agent_version != MultiAgentVersion::None,
-    );
+    materialized_features.set_enabled(Feature::Collab, sc.multi_agent_version.is_some());
     materialized_features.set_enabled(
         Feature::MultiAgentV2,
-        sc.multi_agent_version == MultiAgentVersion::V2,
+        sc.multi_agent_version == Some(MultiAgentVersion::V2),
     );
     features.materialize_resolved_enabled(&materialized_features);
     let mut multi_agent_v2: MultiAgentV2ConfigToml =
         resolved_config_to_toml(&config.multi_agent_v2, "features.multi_agent_v2")?;
-    multi_agent_v2.enabled = Some(sc.multi_agent_version == MultiAgentVersion::V2);
+    multi_agent_v2.enabled = Some(sc.multi_agent_version == Some(MultiAgentVersion::V2));
     features.multi_agent_v2 = Some(FeatureToml::Config(multi_agent_v2));
     features.apps_mcp_path_override = Some(FeatureToml::Config(AppsMcpPathOverrideConfigToml {
         enabled: Some(config.features.enabled(Feature::AppsMcpPathOverride)),
@@ -172,7 +169,7 @@ fn save_config_resolved_fields(
     let agents = lock_config.agents.get_or_insert_with(Default::default);
     // Multi-agent v2 owns thread fanout through its feature config. Preserve
     // the legacy agents.max_threads setting only when v2 is disabled.
-    agents.max_threads = if sc.multi_agent_version == MultiAgentVersion::V2 {
+    agents.max_threads = if sc.multi_agent_version == Some(MultiAgentVersion::V2) {
         None
     } else {
         config.agent_max_threads
@@ -295,9 +292,9 @@ mod tests {
         sc.original_config_do_not_use = Arc::new(config);
 
         for (multi_agent_version, collab, multi_agent_v2) in [
-            (MultiAgentVersion::None, false, false),
-            (MultiAgentVersion::V1, true, false),
-            (MultiAgentVersion::V2, true, true),
+            (None, false, false),
+            (Some(MultiAgentVersion::V1), true, false),
+            (Some(MultiAgentVersion::V2), true, true),
         ] {
             sc.multi_agent_version = multi_agent_version;
             let lockfile = sc.to_config_lockfile_toml().expect("lock should serialize");
@@ -318,7 +315,7 @@ mod tests {
                     .expect("lock should materialize agent config")
                     .max_threads
                     .is_none(),
-                multi_agent_version == MultiAgentVersion::V2
+                multi_agent_version == Some(MultiAgentVersion::V2)
             );
         }
     }

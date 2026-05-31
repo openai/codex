@@ -710,7 +710,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         analytics_events_client: None,
         thread_store,
         attestation_provider: None,
-        multi_agent_version: codex_protocol::protocol::MultiAgentVersion::None,
+        multi_agent_version: None,
     })
     .await
     .expect("spawn guardian subagent");
@@ -730,10 +730,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             }],
         }
     );
-    assert_eq!(
-        codex.session.multi_agent_version().await,
-        codex_protocol::protocol::MultiAgentVersion::None
-    );
+    assert_eq!(codex.session.multi_agent_version().await, None);
 
     drop(codex);
 }

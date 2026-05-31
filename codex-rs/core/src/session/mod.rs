@@ -421,7 +421,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
-    pub(crate) multi_agent_version: MultiAgentVersion,
+    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -1652,7 +1652,7 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if turn_context.multi_agent_version != MultiAgentVersion::V2 {
+        if turn_context.multi_agent_version != Some(MultiAgentVersion::V2) {
             return;
         }
 
@@ -2623,7 +2623,7 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
-    pub(crate) async fn multi_agent_version(&self) -> MultiAgentVersion {
+    pub(crate) async fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         let state = self.state.lock().await;
         state.session_configuration.multi_agent_version
     }

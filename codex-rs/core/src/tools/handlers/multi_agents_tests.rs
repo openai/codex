@@ -388,7 +388,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
         .expect("test config should allow feature update");
     let turn = TurnContext {
         config: Arc::new(config),
-        multi_agent_version: codex_protocol::protocol::MultiAgentVersion::V2,
+        multi_agent_version: Some(codex_protocol::protocol::MultiAgentVersion::V2),
         ..turn
     };
 
@@ -966,7 +966,7 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
         .expect("test config should allow feature update");
     let turn = TurnContext {
         config: Arc::new(config),
-        multi_agent_version: codex_protocol::protocol::MultiAgentVersion::V2,
+        multi_agent_version: Some(codex_protocol::protocol::MultiAgentVersion::V2),
         ..turn
     };
 

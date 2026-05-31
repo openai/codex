@@ -46,7 +46,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) provider: ModelProviderInfo,
 
     pub(super) collaboration_mode: CollaborationMode,
-    pub(super) multi_agent_version: MultiAgentVersion,
+    pub(super) multi_agent_version: Option<MultiAgentVersion>,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(super) service_tier: Option<String>,
 

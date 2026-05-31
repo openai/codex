@@ -73,12 +73,12 @@ pub(crate) enum InterruptedTurnHistoryMarker {
 impl InterruptedTurnHistoryMarker {
     pub(crate) fn from_config_and_version(
         config: &Config,
-        multi_agent_version: MultiAgentVersion,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> Self {
         if !config.agent_interrupt_message_enabled {
             return Self::Disabled;
         }
-        if multi_agent_version == MultiAgentVersion::V2 {
+        if multi_agent_version == Some(MultiAgentVersion::V2) {
             Self::Developer
         } else {
             Self::ContextualUser
