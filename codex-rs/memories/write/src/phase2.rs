@@ -17,9 +17,10 @@ use codex_config::Constrained;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::Stage1Output;
@@ -320,18 +321,16 @@ mod agent {
             .features
             .disable(Feature::SkillMcpDependencyInstall);
 
-        // Sandbox policy
-        let writable_roots = vec![root];
         // The consolidation agent only needs local memory-root write access and no network.
-        let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
+        agent_config.permissions.set_workspace_roots(vec![root]);
         agent_config
             .permissions
-            .set_legacy_sandbox_policy(consolidation_sandbox_policy, agent_config.cwd.as_path())
+            .set_permission_profile(PermissionProfile::workspace_write_with(
+                &[],
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            ))
             .ok()?;
 
         agent_config.model = Some(
