@@ -515,7 +515,7 @@ async fn status_permissions_workspace_roots_do_not_repeat_additional_directories
         .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     let extra_root = test_path_buf("/workspace/extra").abs();
-    config.workspace_roots = vec![config.cwd.clone(), extra_root];
+    config.workspace_roots = vec![config.cwd.clone(), extra_root.clone()];
     config
         .permissions
         .set_workspace_roots(config.workspace_roots.clone());

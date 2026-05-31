@@ -214,6 +214,33 @@ async fn queued_slash_compact_dispatches_after_active_turn() {
 }
 
 #[tokio::test]
+async fn queued_slash_cwd_stops_before_next_queued_message() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+
+    queue_composer_text_with_tab(&mut chat, "/cwd ../stack-layer");
+    queue_composer_text_with_tab(&mut chat, "hello after cwd");
+
+    complete_turn_with_message(&mut chat, "turn-1", Some("done"));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateThreadWorkspace {
+                operation:
+                    codex_app_server_protocol::WorkspaceMutationOperation::SetWorkingDirectory,
+                path,
+            } if path == "../stack-layer"
+        )),
+        "expected queued /cwd to request a workspace update; events: {events:?}"
+    );
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn queued_slash_review_with_args_dispatches_after_active_turn() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

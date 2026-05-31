@@ -414,6 +414,21 @@ impl App {
                     .await
                 {
                     Ok(response) => {
+                        self.config.cwd = response.cwd.clone();
+                        self.config.workspace_roots = response.runtime_workspace_roots.clone();
+                        self.config
+                            .permissions
+                            .set_workspace_roots(self.config.workspace_roots.clone());
+                        self.chat_widget.apply_runtime_workspace(
+                            response.cwd.clone(),
+                            response.runtime_workspace_roots.clone(),
+                        );
+                        self.apply_workspace_to_cached_session(
+                            thread_id,
+                            &response.cwd,
+                            &response.runtime_workspace_roots,
+                        )
+                        .await;
                         let message = match (operation, response.changed) {
                             (
                                 WorkspaceMutationOperation::SetWorkingDirectory,

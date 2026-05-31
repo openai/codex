@@ -573,6 +573,27 @@ impl ChatWidget {
             .set_workspace_roots(self.config.workspace_roots.clone());
     }
 
+    pub(crate) fn apply_runtime_workspace(
+        &mut self,
+        cwd: AbsolutePathBuf,
+        workspace_roots: Vec<AbsolutePathBuf>,
+    ) {
+        let cwd_changed = self.config.cwd != cwd;
+        self.config.cwd = cwd.clone();
+        self.current_cwd = Some(cwd.to_path_buf());
+        self.config.workspace_roots = workspace_roots;
+        self.config
+            .permissions
+            .set_workspace_roots(self.config.workspace_roots.clone());
+        self.status_line_project_root_name_cache = None;
+        self.refresh_status_surfaces();
+        if cwd_changed {
+            self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+        }
+        self.refresh_plugin_mentions();
+        self.request_redraw();
+    }
+
     pub(super) fn set_effective_collaboration_mode(&mut self, mode: CollaborationMode) {
         let mode_kind = mode.mode;
         let settings = mode.settings;

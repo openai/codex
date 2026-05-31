@@ -10,6 +10,7 @@ use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::PermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 impl App {
     pub(super) async fn sync_active_thread_model_setting(
@@ -153,6 +154,26 @@ impl App {
         }
     }
 
+    pub(super) async fn apply_workspace_to_cached_session(
+        &mut self,
+        thread_id: ThreadId,
+        cwd: &AbsolutePathBuf,
+        runtime_workspace_roots: &[AbsolutePathBuf],
+    ) {
+        if self.primary_thread_id == Some(thread_id)
+            && let Some(session) = self.primary_session_configured.as_mut()
+        {
+            apply_workspace_to_session(session, cwd, runtime_workspace_roots);
+        }
+
+        if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+            let mut store = channel.store.lock().await;
+            if let Some(session) = store.session.as_mut() {
+                apply_workspace_to_session(session, cwd, runtime_workspace_roots);
+            }
+        }
+    }
+
     async fn send_thread_settings_update(
         &mut self,
         app_server: &mut AppServerSession,
@@ -195,6 +216,15 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
         .clone_from(&settings.model);
     collaboration_mode.settings.reasoning_effort = settings.effort.clone();
     session.collaboration_mode = Some(Box::new(collaboration_mode));
+}
+
+fn apply_workspace_to_session(
+    session: &mut ThreadSessionState,
+    cwd: &AbsolutePathBuf,
+    runtime_workspace_roots: &[AbsolutePathBuf],
+) {
+    session.cwd.clone_from(cwd);
+    session.runtime_workspace_roots = runtime_workspace_roots.to_vec();
 }
 
 fn thread_settings_update_has_changes(params: &ThreadSettingsUpdateParams) -> bool {

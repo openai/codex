@@ -5938,6 +5938,46 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
 }
 
 #[tokio::test]
+async fn workspace_update_updates_cached_session_roots() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, test_path_buf("/tmp/main"));
+    let cwd = test_absolute_path("/tmp/stack-layer");
+    let roots = vec![cwd.clone(), test_absolute_path("/tmp/shared")];
+
+    app.primary_thread_id = Some(thread_id);
+    app.primary_session_configured = Some(session.clone());
+    app.thread_event_channels.insert(
+        thread_id,
+        ThreadEventChannel::new_with_session(THREAD_EVENT_CHANNEL_CAPACITY, session, Vec::new()),
+    );
+
+    app.apply_workspace_to_cached_session(thread_id, &cwd, &roots)
+        .await;
+
+    let cached_session = app
+        .thread_event_channels
+        .get(&thread_id)
+        .expect("thread channel")
+        .store
+        .lock()
+        .await
+        .session
+        .clone()
+        .expect("cached session");
+    assert_eq!(cached_session.cwd, cwd);
+    assert_eq!(cached_session.runtime_workspace_roots, roots);
+    assert_eq!(
+        app.primary_session_configured
+            .as_ref()
+            .expect("primary session")
+            .runtime_workspace_roots
+            .as_slice(),
+        cached_session.runtime_workspace_roots.as_slice()
+    );
+}
+
+#[tokio::test]
 async fn clear_only_ui_reset_preserves_chat_session_state() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();

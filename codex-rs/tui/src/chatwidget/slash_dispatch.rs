@@ -1002,8 +1002,6 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
-            | SlashCommand::Cwd
-            | SlashCommand::AddDir
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
@@ -1021,6 +1019,8 @@ impl ChatWidget {
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback
+            | SlashCommand::Cwd
+            | SlashCommand::AddDir
             | SlashCommand::New
             | SlashCommand::Archive
             | SlashCommand::Delete
