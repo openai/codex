@@ -558,6 +558,53 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 }
 
 #[tokio::test]
+async fn spawned_agent_inherits_session_start_env_snapshot() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    parent_thread
+        .codex
+        .session
+        .replace_session_start_env(HashMap::from([(
+            "CODEX_TEST_PARENT_ENV".to_string(),
+            "at-spawn".to_string(),
+        )]));
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("spawned"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+
+    parent_thread
+        .codex
+        .session
+        .replace_session_start_env(HashMap::from([(
+            "CODEX_TEST_PARENT_ENV".to_string(),
+            "after-spawn".to_string(),
+        )]));
+
+    assert_eq!(
+        child_thread.codex.session.session_start_env_snapshot(),
+        HashMap::from([("CODEX_TEST_PARENT_ENV".to_string(), "at-spawn".to_string(),)])
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();

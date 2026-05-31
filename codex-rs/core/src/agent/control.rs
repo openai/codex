@@ -225,6 +225,9 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
             .await;
+        let inherited_session_start_env = self
+            .inherited_session_start_env_for_source(&state, session_source.as_ref())
+            .await;
         let (session_source, mut agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -258,6 +261,7 @@ impl AgentControl {
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
+                    inherited_session_start_env,
                 ))
                 .await?
             }
@@ -273,6 +277,7 @@ impl AgentControl {
                     /*metrics_service_name*/ None,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
+                    inherited_session_start_env,
                     options.environments.clone(),
                 ))
                 .await?
@@ -360,6 +365,7 @@ impl AgentControl {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_forked_thread(
         &self,
         state: &Arc<ThreadManagerState>,
@@ -368,6 +374,7 @@ impl AgentControl {
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_session_start_env: HashMap<String, String>,
     ) -> CodexResult<crate::thread_manager::NewThread> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -494,6 +501,7 @@ impl AgentControl {
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                inherited_session_start_env,
                 options.environments.clone(),
             )
             .await
@@ -627,6 +635,9 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
+        let inherited_session_start_env = self
+            .inherited_session_start_env_for_source(&state, Some(&session_source))
+            .await;
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
                 thread_id,
@@ -651,6 +662,7 @@ impl AgentControl {
                 session_source,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                inherited_session_start_env,
             })
             .await?;
         let mut agent_metadata = agent_metadata;
@@ -1165,6 +1177,24 @@ impl AgentControl {
         Some(Arc::clone(
             &parent_thread.codex.session.services.exec_policy,
         ))
+    }
+
+    async fn inherited_session_start_env_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+    ) -> HashMap<String, String> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return HashMap::new();
+        };
+
+        let Ok(parent_thread) = state.get_thread(*parent_thread_id).await else {
+            return HashMap::new();
+        };
+        parent_thread.codex.session.session_start_env_snapshot()
     }
 
     async fn open_thread_spawn_children(

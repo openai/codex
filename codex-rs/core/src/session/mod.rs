@@ -409,6 +409,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    pub(crate) inherited_session_start_env: HashMap<String, String>,
     /// Parent rollout trace used only to derive fresh spawned child traces.
     ///
     /// Root sessions and non-thread-spawn subagents pass a disabled context;
@@ -473,8 +474,9 @@ impl Codex {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
-            user_shell_override,
             inherited_exec_policy,
+            inherited_session_start_env,
+            user_shell_override,
             parent_rollout_thread_trace,
             parent_trace: _,
             environment_selections,
@@ -599,6 +601,7 @@ impl Codex {
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
+            inherited_session_start_env,
             user_shell_override,
         };
 
@@ -3224,6 +3227,10 @@ impl Session {
 
     pub(crate) fn replace_session_start_env(&self, env: HashMap<String, String>) {
         self.services.session_start_env.replace(env);
+    }
+
+    pub(crate) fn session_start_env_snapshot(&self) -> HashMap<String, String> {
+        self.services.session_start_env.snapshot()
     }
 
     pub(crate) fn apply_session_start_env(&self, env: &mut HashMap<String, String>) {

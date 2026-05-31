@@ -11,8 +11,21 @@ pub(crate) struct SessionStartEnvOverlay {
 }
 
 impl SessionStartEnvOverlay {
+    pub(crate) fn new(values: HashMap<String, String>) -> Self {
+        Self {
+            values: RwLock::new(values),
+        }
+    }
+
     pub(crate) fn replace(&self, values: HashMap<String, String>) {
         *self.values.write().unwrap_or_else(PoisonError::into_inner) = values;
+    }
+
+    pub(crate) fn snapshot(&self) -> HashMap<String, String> {
+        self.values
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn apply(&self, env: &mut HashMap<String, String>) {

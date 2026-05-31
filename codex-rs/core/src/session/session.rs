@@ -102,6 +102,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
     pub(super) persist_extended_history: bool,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(super) inherited_session_start_env: HashMap<String, String>,
     pub(super) user_shell_override: Option<shell::Shell>,
 }
 
@@ -998,7 +999,9 @@ impl Session {
                 hooks: arc_swap::ArcSwap::from_pointee(hooks),
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
-                session_start_env: Default::default(),
+                session_start_env: crate::session_start_env::SessionStartEnvOverlay::new(
+                    session_configuration.inherited_session_start_env.clone(),
+                ),
                 shell_snapshot_tx,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 exec_policy,
