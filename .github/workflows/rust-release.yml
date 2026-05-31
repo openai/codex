@@ -10,7 +10,9 @@
 # archive as a GitHub Release asset, then manually dispatch
 # `release_mode=promote_signed` with `unsigned_run_id` and `signed_macos_asset`.
 # The signed handoff archive should contain target or artifact directories such
-# as `aarch64-apple-darwin/` with signed binaries.
+# as `aarch64-apple-darwin/` with signed binaries. To inspect packaged unsigned
+# macOS archives without publishing them, manually dispatch
+# `release_mode=build_unsigned_archive`.
 
 name: rust-release
 on:
@@ -20,12 +22,13 @@ on:
   workflow_dispatch:
     inputs:
       release_mode:
-        description: "build_unsigned creates unsigned macOS handoff artifacts; promote_signed finishes a release from signed macOS handoff artifacts."
+        description: "build_unsigned creates unsigned macOS handoff artifacts; build_unsigned_archive uploads packaged unsigned macOS archives as run artifacts only; promote_signed finishes a release from signed macOS handoff artifacts."
         required: false
         type: choice
         default: build_unsigned
         options:
           - build_unsigned
+          - build_unsigned_archive
           - promote_signed
       sign_macos:
         description: "Deprecated compatibility input; use release_mode instead."
@@ -71,13 +74,19 @@ jobs:
           case "${RELEASE_MODE}" in
             signed)
               if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-                echo "❌  Manual rust-release runs must use release_mode=build_unsigned or release_mode=promote_signed"
+                echo "❌  Manual rust-release runs must use release_mode=build_unsigned, build_unsigned_archive, or promote_signed"
                 exit 1
               fi
               ;;
             build_unsigned)
               if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
                 echo "❌  release_mode=build_unsigned is only valid for manual runs"
+                exit 1
+              fi
+              ;;
+            build_unsigned_archive)
+              if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+                echo "❌  release_mode=build_unsigned_archive is only valid for manual runs"
                 exit 1
               fi
               ;;
@@ -110,7 +119,7 @@ jobs:
           esac
 
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${REQUESTED_SIGN_MACOS}" == "true" ]]; then
-            echo "::warning title=Deprecated sign_macos input ignored::Use release_mode=build_unsigned or release_mode=promote_signed instead."
+            echo "::warning title=Deprecated sign_macos input ignored::Use release_mode=build_unsigned, build_unsigned_archive, or promote_signed instead."
           fi
 
           # 1. Must be a tag and match the regex
@@ -131,6 +140,21 @@ jobs:
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
+      - name: Write release mode marker
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode != 'promote_signed' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' '${{ inputs.release_mode }}' > release-mode.txt
+
+      - name: Upload release mode marker
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode != 'promote_signed' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-mode-${{ inputs.release_mode }}
+          path: release-mode.txt
+          if-no-files-found: error
+
   build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     needs: tag-check
@@ -149,6 +173,7 @@ jobs:
       # 2026-03-04: temporarily change releases to use thin LTO because
       # Ubuntu ARM is timing out at 60 minutes.
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
+      RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode || 'signed' }}
       SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' }}
 
     strategy:
@@ -324,7 +349,7 @@ jobs:
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
-      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS != 'true' }}
+      - if: ${{ runner.os == 'macOS' && env.RELEASE_MODE == 'build_unsigned' }}
         name: Stage unsigned macOS artifacts
         shell: bash
         run: |
@@ -349,7 +374,7 @@ jobs:
             zstd -T0 -19 --rm "${unsigned_path}"
           done
 
-      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS != 'true' }}
+      - if: ${{ runner.os == 'macOS' && env.RELEASE_MODE == 'build_unsigned' }}
         name: Upload unsigned macOS artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -463,19 +488,28 @@ jobs:
           fi
 
       - name: Build Codex package archive
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' || env.RELEASE_MODE == 'build_unsigned_archive' }}
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           BUNDLE: ${{ matrix.bundle }}
         run: |
           set -euo pipefail
-          # Build the full package layout for unsigned macOS too so workflow_dispatch
-          # release builds validate packaged Codex without publishing it.
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
             --target "$TARGET" \
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}"
+
+      - name: Upload unsigned macOS package archives
+        if: ${{ runner.os == 'macOS' && env.RELEASE_MODE == 'build_unsigned_archive' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned-archive
+          path: |
+            codex-rs/dist/${{ matrix.target }}/*.tar.gz
+            codex-rs/dist/${{ matrix.target }}/*.tar.zst
+          if-no-files-found: error
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
@@ -814,7 +848,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-windows:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.release_mode != 'promote_signed' && inputs.release_mode != 'build_unsigned_archive') }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
@@ -822,7 +856,7 @@ jobs:
     secrets: inherit
 
   argument-comment-lint-release-assets:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.release_mode != 'promote_signed' && inputs.release_mode != 'build_unsigned_archive') }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
@@ -830,7 +864,7 @@ jobs:
       publish: true
 
   zsh-release-assets:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.release_mode != 'promote_signed' && inputs.release_mode != 'build_unsigned_archive') }}
     name: zsh release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-zsh.yml
@@ -859,6 +893,7 @@ jobs:
           ) ||
           (
             (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') &&
+            (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'build_unsigned_archive') &&
             needs.build.result == 'success' &&
             needs.stage-signed-macos.result == 'skipped' &&
             needs.build-windows.result == 'success' &&
@@ -962,6 +997,15 @@ jobs:
           if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
             echo "unsigned_run_id ${UNSIGNED_RUN_ID} is ${status}/${conclusion}, expected completed/success"
             echo "Run URL: ${run_url}"
+            exit 1
+          fi
+
+          artifact_names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UNSIGNED_RUN_ID}/artifacts" --paginate --jq '.artifacts[].name')"
+          if ! grep -qx 'release-mode-build_unsigned' <<< "$artifact_names"; then
+            echo "unsigned_run_id ${UNSIGNED_RUN_ID} must come from release_mode=build_unsigned"
+            echo "Run URL: ${run_url}"
+            echo "Artifacts:"
+            printf '%s\n' "$artifact_names"
             exit 1
           fi
 
