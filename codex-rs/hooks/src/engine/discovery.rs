@@ -612,9 +612,15 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
         Some(RequirementSource::LegacyManagedConfigTomlFromMdm) => {
             HookSource::LegacyManagedConfigMdm
         }
-        Some(RequirementSource::CloudRequirements)
-        | Some(RequirementSource::Composite { .. })
-        | Some(RequirementSource::EnterpriseManaged { .. }) => HookSource::CloudRequirements,
+        Some(RequirementSource::CloudRequirements) => HookSource::CloudRequirements,
+        Some(RequirementSource::Composite { sources }) => {
+            // Requirements hook composition preserves contributing sources in
+            // priority order, but discovery only carries one source for the
+            // whole merged hooks field. Use the primary contributor as the best
+            // available coarse attribution.
+            hook_source_for_requirement_source(sources.first())
+        }
+        Some(RequirementSource::EnterpriseManaged { .. }) => HookSource::CloudRequirements,
         Some(RequirementSource::Unknown) | None => HookSource::Unknown,
     }
 }
@@ -624,6 +630,7 @@ mod tests {
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerSource;
     use codex_config::HookEventsToml;
+    use codex_config::RequirementSource;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -678,6 +685,26 @@ mod tests {
             env: std::collections::HashMap::new(),
             plugin_id: None,
         }
+    }
+
+    #[test]
+    fn composite_requirement_hook_source_uses_primary_source() {
+        let source = RequirementSource::Composite {
+            sources: vec![
+                RequirementSource::SystemRequirementsToml {
+                    file: test_path_buf("/etc/codex/requirements.toml").abs(),
+                },
+                RequirementSource::EnterpriseManaged {
+                    id: "layer-1".to_string(),
+                    name: "Engineering".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            super::hook_source_for_requirement_source(Some(&source)),
+            HookSource::System
+        );
     }
 
     fn command_group(matcher: Option<&str>) -> MatcherGroup {
