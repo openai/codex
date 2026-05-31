@@ -141,15 +141,7 @@ jobs:
           echo "::endgroup::"
 
   build:
-    if: >-
-      ${{
-        (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') &&
-        (
-          github.event_name != 'workflow_dispatch' ||
-          inputs.release_mode != 'build_unsigned_archive' ||
-          contains(matrix.target, 'apple-darwin')
-        )
-      }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.release_mode != 'promote_signed' && inputs.release_mode != 'build_unsigned_archive') }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -481,31 +473,18 @@ jobs:
           fi
 
       - name: Build Codex package archive
-        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' || env.RELEASE_MODE == 'build_unsigned_archive' }}
+        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           BUNDLE: ${{ matrix.bundle }}
         run: |
           set -euo pipefail
-          archive_dir="dist/${TARGET}"
-          if [[ "${RUNNER_OS}" == "macOS" && "${RELEASE_MODE}" == "build_unsigned_archive" ]]; then
-            archive_dir="unsigned-archive-dist/${TARGET}"
-          fi
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
             --target "$TARGET" \
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
-            --archive-dir "$archive_dir"
-
-      - name: Upload unsigned macOS package archives
-        if: ${{ runner.os == 'macOS' && env.RELEASE_MODE == 'build_unsigned_archive' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: ${{ matrix.artifact_name }}-unsigned-archive
-          path: |
-            codex-rs/unsigned-archive-dist/${{ matrix.target }}/*
-          if-no-files-found: error
+            --archive-dir "dist/${TARGET}"
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
@@ -603,6 +582,112 @@ jobs:
           # prebuilt archives staged above.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
+
+  build-unsigned-archive:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'build_unsigned_archive' }}
+    needs: tag-check
+    name: Build unsigned package archive - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      # 2026-03-04: temporarily change releases to use thin LTO because
+      # Ubuntu ARM is timing out at 60 minutes.
+      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Print runner specs (macOS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          total_ram="$(sysctl -n hw.memsize | awk '{printf "%.1f GiB\n", $1 / 1024 / 1024 / 1024}')"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
+          echo "Hardware model: $(sysctl -n hw.model)"
+          echo "CPU architecture: $(uname -m)"
+          echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+          echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
+          echo "Total RAM: ${total_ram}"
+          echo "Disk usage:"
+          df -h .
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Cargo build
+        shell: bash
+        run: |
+          build_args=()
+          for binary in ${{ matrix.binaries }}; do
+            build_args+=(--bin "$binary")
+          done
+          echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
+          cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
+
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: cargo-timings-rust-release-${{ matrix.target }}-${{ matrix.bundle }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: Build Codex package archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle "$BUNDLE" \
+            --entrypoint-dir "target/${TARGET}/release" \
+            --archive-dir "unsigned-archive-dist/${TARGET}"
+
+      - name: Upload unsigned macOS package archives
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned-archive
+          path: |
+            codex-rs/unsigned-archive-dist/${{ matrix.target }}/*
+          if-no-files-found: error
 
   stage-signed-macos:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'promote_signed' }}
