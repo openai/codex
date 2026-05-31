@@ -313,6 +313,7 @@ fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
 
 fn agent_jobs_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.features.get().enabled(Feature::SpawnCsv)
+        && turn_context.multi_agent_version.is_some()
         && !exceeds_thread_spawn_depth_limit(
             next_thread_spawn_depth(&turn_context.session_source),
             turn_context.config.agent_max_depth,

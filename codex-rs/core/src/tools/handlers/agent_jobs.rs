@@ -11,6 +11,7 @@ use crate::tools::handlers::parse_arguments;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
@@ -89,6 +90,7 @@ struct ReportAgentJobResultToolResult {
 struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
+    multi_agent_version: MultiAgentVersion,
 }
 
 #[derive(Debug, Clone)]
@@ -119,9 +121,14 @@ async fn build_runner_options(
             "agent depth limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
+    let multi_agent_version = turn.multi_agent_version.ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "multi-agent version is unresolved; this session cannot spawn workers".to_string(),
+        )
+    })?;
     let agent_max_threads = turn
         .config
-        .effective_agent_max_threads(turn.multi_agent_version)
+        .effective_agent_max_threads(Some(multi_agent_version))
         .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
     if agent_max_threads == Some(0) {
         return Err(FunctionCallError::RespondToModel(
@@ -134,6 +141,7 @@ async fn build_runner_options(
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
+        multi_agent_version,
     })
 }
 
@@ -213,10 +221,10 @@ async fn run_agent_job_loop(
                         Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
                             "agent_job:{job_id}"
                         )))),
+                        options.multi_agent_version,
                         SpawnAgentOptions {
                             parent_thread_id: Some(session.conversation_id),
                             environments: Some(turn.environments.to_selections()),
-                            multi_agent_version: turn.multi_agent_version,
                             ..Default::default()
                         },
                     )

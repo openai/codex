@@ -109,6 +109,9 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+    let multi_agent_version = turn
+        .multi_agent_version
+        .ok_or_else(|| FunctionCallError::Fatal("multi-agent version is unresolved".to_string()))?;
 
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
@@ -120,12 +123,12 @@ async fn handle_spawn_agent(
             role_name,
             /*task_name*/ None,
         )?),
+        multi_agent_version,
         SpawnAgentOptions {
             fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
             parent_thread_id: Some(session.conversation_id),
             environments: Some(turn.environments.to_selections()),
-            multi_agent_version: turn.multi_agent_version,
         },
     ))
     .await

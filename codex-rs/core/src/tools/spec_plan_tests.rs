@@ -535,7 +535,7 @@ async fn host_context_gates_goal_and_agent_job_tools() {
         turn.multi_agent_version = None;
     })
     .await;
-    agent_job_without_multi_agent.assert_visible_contains(&["spawn_agents_on_csv"]);
+    agent_job_without_multi_agent.assert_visible_lacks(&["spawn_agents_on_csv"]);
     agent_job_without_multi_agent.assert_visible_lacks(&[MULTI_AGENT_V1_NAMESPACE, "spawn_agent"]);
 
     let worker_agent_job = probe(|turn| {

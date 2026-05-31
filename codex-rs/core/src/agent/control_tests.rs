@@ -719,6 +719,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 agent_nickname: None,
                 agent_role: None,
             })),
+            parent_thread
+                .multi_agent_version()
+                .await
+                .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -930,6 +934,10 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
                 agent_nickname: None,
                 agent_role: None,
             })),
+            parent_thread
+                .multi_agent_version()
+                .await
+                .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -1000,6 +1008,10 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
                 agent_nickname: None,
                 agent_role: None,
             })),
+            parent_thread
+                .multi_agent_version()
+                .await
+                .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -1117,6 +1129,10 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
                 agent_nickname: None,
                 agent_role: None,
             })),
+            parent_thread
+                .multi_agent_version()
+                .await
+                .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
@@ -1228,6 +1244,10 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
                 agent_nickname: None,
                 agent_role: None,
             })),
+            parent_thread
+                .multi_agent_version()
+                .await
+                .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
@@ -1338,6 +1358,10 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
                 agent_nickname: None,
                 agent_role: None,
             })),
+            parent_thread
+                .multi_agent_version()
+                .await
+                .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
