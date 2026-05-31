@@ -172,7 +172,7 @@ fn save_config_resolved_fields(
     agents.max_threads = if sc.multi_agent_version == Some(MultiAgentVersion::V2) {
         None
     } else {
-        config.agent_max_threads
+        config.effective_agent_max_threads(sc.multi_agent_version)?
     };
     agents.max_depth = Some(config.agent_max_depth);
     agents.job_max_runtime_seconds = config.agent_job_max_runtime_seconds;

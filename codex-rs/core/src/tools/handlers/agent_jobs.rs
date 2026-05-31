@@ -119,13 +119,16 @@ async fn build_runner_options(
             "agent depth limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    if turn.config.agent_max_threads == Some(0) {
+    let agent_max_threads = turn
+        .config
+        .effective_agent_max_threads(turn.multi_agent_version)
+        .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+    if agent_max_threads == Some(0) {
         return Err(FunctionCallError::RespondToModel(
             "agent thread limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    let max_concurrency =
-        normalize_concurrency(requested_concurrency, turn.config.agent_max_threads);
+    let max_concurrency = normalize_concurrency(requested_concurrency, agent_max_threads);
     let base_instructions = session.get_base_instructions().await;
     let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref())?;
     Ok(JobRunnerOptions {

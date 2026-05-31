@@ -215,7 +215,7 @@ impl AgentControl {
 
     async fn spawn_agent_internal(
         &self,
-        mut config: crate::config::Config,
+        config: crate::config::Config,
         initial_operation: Op,
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
@@ -228,12 +228,10 @@ impl AgentControl {
                 options.multi_agent_version,
             )
             .await;
-        if let Some(multi_agent_version) = inherited_multi_agent_version {
-            config
-                .apply_multi_agent_version(multi_agent_version)
-                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-        }
-        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let agent_max_threads = config
+            .effective_agent_max_threads(inherited_multi_agent_version.flatten())
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        let mut reservation = self.state.reserve_spawn_slot(agent_max_threads)?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
@@ -614,7 +612,7 @@ impl AgentControl {
 
     async fn resume_single_agent_from_rollout(
         &self,
-        mut config: crate::config::Config,
+        config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
@@ -652,10 +650,10 @@ impl AgentControl {
                 inherited_multi_agent_version,
             )
             .await;
-        config
-            .apply_multi_agent_version(multi_agent_version)
+        let agent_max_threads = config
+            .effective_agent_max_threads(multi_agent_version)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let mut reservation = self.state.reserve_spawn_slot(agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
