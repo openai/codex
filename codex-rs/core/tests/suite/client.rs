@@ -50,6 +50,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::legacy_sandbox_policy_for_config;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -1797,7 +1798,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(config.cwd.to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                sandbox_policy: Some(legacy_sandbox_policy_for_config(&config)),
                 summary: Some(
                     config
                         .model_reasoning_summary
@@ -1920,7 +1921,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(config.cwd.to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                sandbox_policy: Some(legacy_sandbox_policy_for_config(&config)),
                 summary: Some(ReasoningSummary::Concise),
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
                     mode: codex_protocol::config_types::ModeKind::Default,
