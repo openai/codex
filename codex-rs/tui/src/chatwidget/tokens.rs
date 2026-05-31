@@ -1,3 +1,22 @@
+//! Renders account token activity and coordinates asynchronous `/tokens` refreshes.
+//!
+//! The slash command inserts a composite history cell immediately so the user sees
+//! a loading state while the account request runs in the background. The returned
+//! [`TokenActivityHandle`] shares the card's state through an `Arc<RwLock<_>>`;
+//! completing the handle updates the existing history cell rather than appending a
+//! second result. [`ChatWidget::finish_token_activity_refresh`] then requests a
+//! redraw after matching the background response to its request ID.
+//!
+//! Chart rendering is intentionally terminal-native. Daily mode displays a
+//! GitHub-style 52-week calendar, while weekly and cumulative modes reuse the same
+//! grid as bottom-aligned bars. Truecolor terminals encode activity intensity with
+//! color. Lower-color terminals fall back to distinct hollow and filled glyphs so
+//! empty days remain legible.
+//!
+//! Backend buckets are normalized before rendering: malformed dates, future dates,
+//! and dates outside the visible window are ignored; duplicate dates are summed;
+//! and negative token counts are clamped to zero.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -41,6 +60,7 @@ const CHART_LEFT_WIDTH: usize = 4;
 const SUMMARY_INDENT: &str = " ";
 const SUMMARY_INDENT_WIDTH: u16 = 1;
 
+/// Selects the aggregation represented by the token activity chart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TokenActivityView {
     Daily,
@@ -49,6 +69,11 @@ pub(super) enum TokenActivityView {
 }
 
 impl TokenActivityView {
+    /// Parses the optional `/tokens` argument into a supported chart view.
+    ///
+    /// An empty argument selects the daily view so `/tokens` and `/tokens daily`
+    /// behave identically. Returning `None` lets the slash-command dispatcher
+    /// report unsupported arguments instead of silently choosing a view.
     pub(super) fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "" | "day" | "daily" => Some(Self::Daily),
@@ -67,6 +92,7 @@ impl TokenActivityView {
     }
 }
 
+/// Tracks the renderable lifecycle of one token activity history cell.
 #[derive(Debug)]
 enum TokenActivityState {
     Loading,
@@ -74,12 +100,22 @@ enum TokenActivityState {
     Error,
 }
 
+/// Completes an asynchronously rendered token activity history cell.
+///
+/// Clones share the same card state, allowing the background request path to
+/// update a cell already owned by transcript history. The widget remains
+/// responsible for requesting a redraw after completion.
 #[derive(Clone, Debug)]
 pub(super) struct TokenActivityHandle {
     state: Arc<RwLock<TokenActivityState>>,
 }
 
 impl TokenActivityHandle {
+    /// Replaces the loading state with either fetched activity or an unavailable state.
+    ///
+    /// This method intentionally discards the error string because the TUI exposes
+    /// one stable unavailable message. Calling it more than once replaces the prior
+    /// terminal state, so request-ID matching should happen before completion.
     pub(super) fn finish(&self, result: Result<GetAccountTokenUsageResponse, String>) {
         let state = match result {
             Ok(response) => TokenActivityState::Loaded(response),
@@ -91,12 +127,18 @@ impl TokenActivityHandle {
     }
 }
 
+/// Renders one `/tokens` card from shared asynchronous state.
 #[derive(Debug)]
 struct TokenActivityHistoryCell {
     view: TokenActivityView,
     state: Arc<RwLock<TokenActivityState>>,
 }
 
+/// Creates the transcript cell and completion handle for one `/tokens` invocation.
+///
+/// The composite cell includes the echoed slash command and a loading card from
+/// the start. Callers must retain the returned handle and complete it when the
+/// matching background response arrives; otherwise the card remains loading.
 pub(super) fn new_token_activity_output(
     view: TokenActivityView,
 ) -> (CompositeHistoryCell, TokenActivityHandle) {
@@ -454,6 +496,11 @@ fn month_labels(today: NaiveDate, first_column: usize, shown_columns: usize) -> 
     .into()
 }
 
+/// Normalizes backend daily buckets into the fixed 52-week display window.
+///
+/// The returned vector is ordered by chart cell, starting with the oldest Sunday.
+/// Invalid, out-of-window, and future dates are ignored. Duplicate dates are
+/// accumulated and negative token values do not reduce activity.
 fn daily_values(
     buckets: &[codex_app_server_protocol::AccountTokenUsageDailyBucket],
     today: NaiveDate,
@@ -542,6 +589,7 @@ fn cell_date(today: NaiveDate, index: usize) -> Option<NaiveDate> {
     chart_start(today).checked_add_signed(Duration::days(index as i64))
 }
 
+/// Stores the terminal-specific styles and glyph strategy for token activity cells.
 struct TokenActivityPalette {
     styles: [Style; 5],
     bar_style: Style,
@@ -631,6 +679,11 @@ fn theme_anchor_rgb() -> Option<(u8, u8, u8)> {
 }
 
 impl ChatWidget {
+    /// Starts a token activity refresh and inserts its loading card into history.
+    ///
+    /// Each invocation receives a request ID so background responses update only
+    /// their own card. Skipping the request ID when handling the response could
+    /// update the wrong card after repeated `/tokens` commands.
     pub(super) fn add_token_activity_output(&mut self, view: TokenActivityView) {
         let request_id = self.next_token_activity_request_id;
         self.next_token_activity_request_id =
@@ -643,6 +696,11 @@ impl ChatWidget {
             .send(AppEvent::RefreshTokenActivity { request_id });
     }
 
+    /// Applies a background token activity result to its matching history cell.
+    ///
+    /// Returns `true` when a pending request matched and a redraw was requested.
+    /// Late responses return `false`, including responses for cards cleared during
+    /// backtracking or session replacement.
     pub(crate) fn finish_token_activity_refresh(
         &mut self,
         request_id: u64,
@@ -667,6 +725,10 @@ impl ChatWidget {
         updated_any
     }
 
+    /// Drops completion handles for token activity cards that must no longer update.
+    ///
+    /// Existing rendered cells remain in history, but late background responses
+    /// cannot mutate them after a transcript reset or backtrack operation.
     pub(crate) fn clear_pending_token_activity_refreshes(&mut self) {
         self.refreshing_token_activity_outputs.clear();
     }
