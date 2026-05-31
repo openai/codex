@@ -27,9 +27,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn thread_delete_deletes_spawned_descendants() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let parent_id = create_delete_test_rollout(codex_home.path(), 0, "parent")?;
-    let child_id = create_delete_test_rollout(codex_home.path(), 1, "child")?;
-    let grandchild_id = create_delete_test_rollout(codex_home.path(), 2, "grandchild")?;
+    let parent_id = create_delete_test_rollout(codex_home.path(), /*minute*/ 0, "parent")?;
+    let child_id = create_delete_test_rollout(codex_home.path(), /*minute*/ 1, "child")?;
+    let grandchild_id =
+        create_delete_test_rollout(codex_home.path(), /*minute*/ 2, "grandchild")?;
 
     let state_db =
         StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
