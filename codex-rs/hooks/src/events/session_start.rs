@@ -373,7 +373,7 @@ fn session_start_env_for_event(event_name: HookEventName) -> Option<HashMap<Stri
 fn merge_session_start_env<'a>(
     envs: impl IntoIterator<Item = &'a HashMap<String, String>>,
 ) -> HashMap<String, String> {
-    let mut merged = HashMap::new();
+    let mut merged: HashMap<String, String> = HashMap::new();
     for env in envs {
         for (key, value) in env {
             #[cfg(windows)]
