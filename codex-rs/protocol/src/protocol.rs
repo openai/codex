@@ -475,6 +475,37 @@ pub struct ThreadSettingsOverrides {
     pub personality: Option<Personality>,
 }
 
+impl ThreadSettingsOverrides {
+    pub fn permission_profile_update_for_cwd(
+        &self,
+        cwd: &Path,
+        current_file_system_sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> Option<PermissionProfile> {
+        if let Some(permission_profile) = self.permission_profile.clone() {
+            return Some(permission_profile);
+        }
+
+        self.sandbox_policy.as_ref().map(|sandbox_policy| {
+            let file_system_sandbox_policy = if let Some(current_file_system_sandbox_policy) =
+                current_file_system_sandbox_policy
+            {
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                    sandbox_policy,
+                    cwd,
+                    current_file_system_sandbox_policy,
+                )
+            } else {
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd)
+            };
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(sandbox_policy),
+            )
+        })
+    }
+}
+
 /// Source classification for client-supplied context.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]

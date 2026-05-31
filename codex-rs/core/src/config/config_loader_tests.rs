@@ -39,6 +39,18 @@ use std::path::Path;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 
+fn legacy_sandbox_policy(
+    config: &crate::config::Config,
+) -> codex_protocol::protocol::SandboxPolicy {
+    let permission_profile = config.permissions.effective_permission_profile();
+    let file_system_policy = permission_profile.file_system_sandbox_policy();
+    permission_profile.compatibility_sandbox_policy(
+        &file_system_policy,
+        permission_profile.network_sandbox_policy(),
+        config.cwd.as_path(),
+    )
+}
+
 fn config_error_from_io(err: &std::io::Error) -> &ConfigError {
     err.get_ref()
         .and_then(|err| err.downcast_ref::<ConfigLoadError>())
@@ -850,7 +862,7 @@ writable_roots = ["~/code"]
         .await?;
 
     let expected_root = AbsolutePathBuf::from_absolute_path(home.join("code"))?;
-    match &config.legacy_sandbox_policy() {
+    match &legacy_sandbox_policy(&config) {
         SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
             assert_eq!(
                 writable_roots

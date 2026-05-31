@@ -12,6 +12,8 @@ use std::time::Duration;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 
 use serde::Deserialize;
@@ -27,6 +29,30 @@ pub struct SandboxState {
     pub sandbox_cwd: PathBuf,
     #[serde(default)]
     pub use_legacy_landlock: bool,
+}
+
+impl SandboxState {
+    pub fn from_permission_profile(
+        permission_profile: PermissionProfile,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
+        codex_linux_sandbox_exe: Option<PathBuf>,
+        sandbox_cwd: PathBuf,
+        use_legacy_landlock: bool,
+    ) -> Self {
+        let sandbox_policy = permission_profile.compatibility_sandbox_policy(
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+            sandbox_cwd.as_path(),
+        );
+        Self {
+            permission_profile: Some(permission_profile),
+            sandbox_policy,
+            codex_linux_sandbox_exe,
+            sandbox_cwd,
+            use_legacy_landlock,
+        }
+    }
 }
 
 /// Runtime context used when resolving per-server MCP environments.

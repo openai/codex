@@ -17,6 +17,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
+use core_test_support::legacy_sandbox_policy_for_config;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -855,7 +856,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
 
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.permissions.approval_policy.value();
-    let default_sandbox_policy = &config.legacy_sandbox_policy();
+    let default_sandbox_policy = &legacy_sandbox_policy_for_config(&config);
     let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
@@ -996,7 +997,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.permissions.approval_policy.value();
-    let default_sandbox_policy = &config.legacy_sandbox_policy();
+    let default_sandbox_policy = &legacy_sandbox_policy_for_config(&config);
     let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
