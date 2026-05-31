@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::chatwidget::CopyStatus;
 use crate::footer_hints::FooterHint;
@@ -45,6 +46,9 @@ use crate::style::user_message_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::visible_lines;
+use crate::transcript_layout::TranscriptLayoutKey;
+use crate::transcript_layout::TranscriptLayoutResult;
+use crate::transcript_layout::spawn_transcript_layout_worker;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
@@ -198,6 +202,21 @@ impl PagerView {
 
     fn content_height(&mut self, width: u16) -> usize {
         self.layout(width).total_height
+    }
+
+    fn install_precomputed_layout(&mut self, width: u16, heights: Vec<usize>) {
+        let mut offsets = Vec::with_capacity(heights.len());
+        let mut total_height = 0usize;
+        for height in &heights {
+            offsets.push(total_height);
+            total_height = total_height.saturating_add(*height);
+        }
+        self.layout = Some(PagerLayout {
+            width,
+            offsets: offsets.into(),
+            heights: heights.into(),
+            total_height,
+        });
     }
 
     fn layout(&mut self, width: u16) -> &PagerLayout {
@@ -550,10 +569,12 @@ pub(crate) struct TranscriptOverlay {
     footer_status: Option<FooterStatus>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
+    async_layout: AsyncTranscriptLayout,
     is_done: bool,
 }
 
 const FOOTER_STATUS_TTL: Duration = Duration::from_secs(2);
+const ASYNC_TRANSCRIPT_LAYOUT_CELL_THRESHOLD: usize = 2_000;
 
 #[derive(Clone)]
 struct FooterStatus {
@@ -576,6 +597,29 @@ struct LiveTailKey {
     animation_tick: Option<u64>,
 }
 
+#[derive(Debug)]
+struct AsyncTranscriptLayout {
+    generation: u64,
+    pending: Option<TranscriptLayoutKey>,
+    measured: Option<TranscriptLayoutResult>,
+}
+
+impl AsyncTranscriptLayout {
+    fn new() -> Self {
+        Self {
+            generation: 0,
+            pending: None,
+            measured: None,
+        }
+    }
+
+    fn invalidate(&mut self) {
+        self.generation = self.generation.saturating_add(/*rhs*/ 1);
+        self.pending = None;
+        self.measured = None;
+    }
+}
+
 impl TranscriptOverlay {
     /// Creates a transcript overlay for a fixed set of committed cells.
     ///
@@ -589,14 +633,17 @@ impl TranscriptOverlay {
         state: TranscriptOverlayState,
     ) -> Self {
         let highlight_cell = Rc::new(StdCell::new(state.highlight_cell));
+        let renderables = Self::render_cells(
+            &transcript_cells,
+            Rc::clone(&highlight_cell),
+            state.render_mode,
+        );
+        let user_prompt_positions = Self::user_prompt_positions(&transcript_cells);
+
         Self {
             view: {
                 let mut view = PagerView::new(
-                    Self::render_cells(
-                        &transcript_cells,
-                        Rc::clone(&highlight_cell),
-                        state.render_mode,
-                    ),
+                    renderables,
                     "Transcript".to_string(),
                     state.scroll_offset,
                     keymap,
@@ -604,7 +651,7 @@ impl TranscriptOverlay {
                 view.show_header_progress = false;
                 view
             },
-            user_prompt_positions: Self::user_prompt_positions(&transcript_cells),
+            user_prompt_positions,
             cells: transcript_cells,
             highlight_cell,
             render_mode: state.render_mode,
@@ -614,6 +661,7 @@ impl TranscriptOverlay {
             scroll_selected_user_cell: None,
             footer_status: None,
             live_tail_key: None,
+            async_layout: AsyncTranscriptLayout::new(),
             is_done: false,
         }
     }
@@ -687,6 +735,7 @@ impl TranscriptOverlay {
         let had_prior_cells = !self.cells.is_empty();
         let tail_renderable = self.take_live_tail_renderable();
         self.cells.push(cell);
+        self.invalidate_async_layout();
         self.user_prompt_positions = Self::user_prompt_positions(&self.cells);
         self.view.renderables = Self::render_cells(
             &self.cells,
@@ -726,6 +775,7 @@ impl TranscriptOverlay {
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
         self.cells = cells;
+        self.invalidate_async_layout();
         self.user_prompt_positions = Self::user_prompt_positions(&self.cells);
         if self
             .highlight_cell
@@ -771,6 +821,7 @@ impl TranscriptOverlay {
             }
             self.cells
                 .splice(clamped_start..clamped_end, std::iter::once(consolidated));
+            self.invalidate_async_layout();
             self.user_prompt_positions = Self::user_prompt_positions(&self.cells);
             if self
                 .highlight_cell
@@ -812,6 +863,7 @@ impl TranscriptOverlay {
         });
 
         if self.live_tail_key == next_key {
+            self.install_measured_layout_if_ready(width);
             return;
         }
         let follow_bottom = self.view.is_scrolled_to_bottom();
@@ -833,6 +885,82 @@ impl TranscriptOverlay {
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
+        self.install_measured_layout_if_ready(width);
+    }
+
+    pub(crate) fn ensure_async_layout(&mut self, width: u16, app_event_tx: AppEventSender) {
+        if !self.uses_async_layout() {
+            return;
+        }
+        let key = self.layout_key(width);
+        if self
+            .async_layout
+            .measured
+            .as_ref()
+            .is_some_and(|result| result.key == key)
+        {
+            self.install_measured_layout_if_ready(width);
+            return;
+        }
+        if self.async_layout.pending == Some(key) {
+            return;
+        }
+        self.async_layout.pending = Some(key);
+        self.async_layout.measured = None;
+        spawn_transcript_layout_worker(key, self.cells.clone(), app_event_tx);
+    }
+
+    pub(crate) fn apply_layout_result(&mut self, result: TranscriptLayoutResult) -> bool {
+        if result.key != self.layout_key(result.key.width) {
+            return false;
+        }
+        let width = result.key.width;
+        self.async_layout.pending = None;
+        self.async_layout.measured = Some(result);
+        self.install_measured_layout_if_ready(width);
+        true
+    }
+
+    fn uses_async_layout(&self) -> bool {
+        self.cells.len() >= ASYNC_TRANSCRIPT_LAYOUT_CELL_THRESHOLD
+    }
+
+    fn layout_key(&self, width: u16) -> TranscriptLayoutKey {
+        TranscriptLayoutKey {
+            generation: self.async_layout.generation,
+            width,
+            render_mode: self.render_mode,
+            cell_count: self.cells.len(),
+        }
+    }
+
+    fn is_waiting_for_async_layout(&self, width: u16) -> bool {
+        if !self.uses_async_layout() {
+            return false;
+        }
+        let Some(layout) = self.view.layout.as_ref() else {
+            return true;
+        };
+        layout.width != width || layout.heights.len() != self.view.renderables.len()
+    }
+
+    fn install_measured_layout_if_ready(&mut self, width: u16) -> bool {
+        let Some(result) = self.async_layout.measured.as_ref() else {
+            return false;
+        };
+        if result.key != self.layout_key(width) {
+            return false;
+        }
+        let mut heights = result.heights.clone();
+        for renderable in self.view.renderables.iter().skip(self.cells.len()) {
+            heights.push(renderable.desired_height(width) as usize);
+        }
+        self.view.install_precomputed_layout(width, heights);
+        true
+    }
+
+    fn invalidate_async_layout(&mut self) {
+        self.async_layout.invalidate();
     }
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
@@ -910,6 +1038,7 @@ impl TranscriptOverlay {
             HistoryRenderMode::Rich => HistoryRenderMode::Raw,
             HistoryRenderMode::Raw => HistoryRenderMode::Rich,
         };
+        self.invalidate_async_layout();
         self.rebuild_renderables();
     }
 
@@ -994,6 +1123,9 @@ impl TranscriptOverlay {
             top_h,
         );
         let content_area = self.view.content_area(top);
+        if self.is_waiting_for_async_layout(content_area.width) {
+            return Ok(());
+        }
         let before = self.view.clamped_scroll_offset(content_area);
         if !self.view.handle_key_event(tui, key_event)? {
             return Ok(());
@@ -1029,6 +1161,26 @@ impl TranscriptOverlay {
             format!(" {selected} / {total} · {percent}% "),
             format!(" {selected}/{total} · {percent}% "),
             format!(" {percent}% "),
+        ];
+        first_fitting_right_label(width, &labels)
+    }
+
+    fn loading_progress_label(&self, width: u16) -> String {
+        let total = self.user_prompt_positions.len();
+        let selected = self
+            .highlight_cell
+            .get()
+            .and_then(|highlight_cell| {
+                let selected = self
+                    .user_prompt_positions
+                    .partition_point(|idx| *idx <= highlight_cell);
+                (selected > 0).then_some(selected)
+            })
+            .unwrap_or(total);
+        let labels = [
+            format!(" {selected} / {total} · loading... "),
+            format!(" {selected}/{total} · loading... "),
+            " loading... ".to_string(),
         ];
         first_fitting_right_label(width, &labels)
     }
@@ -1219,11 +1371,36 @@ impl TranscriptOverlay {
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
         self.view.title = self.header_title();
         let content_area = self.view.content_area(top);
+        self.install_measured_layout_if_ready(content_area.width);
+        if self.is_waiting_for_async_layout(content_area.width) {
+            self.render_loading(top, bottom, buf);
+            return;
+        }
         let total_len = self.view.content_height(content_area.width);
         self.view.resolve_pending_scroll(content_area, total_len);
         self.view.footer_separator_label =
             self.footer_progress_label(content_area.height, total_len, top.width);
         self.view.render(top, buf);
+        self.render_hints(bottom, buf);
+    }
+
+    fn render_loading(&mut self, top: Rect, bottom: Rect, buf: &mut Buffer) {
+        Clear.render(top, buf);
+        let header = Rect::new(top.x, top.y, top.width, /*height*/ 1);
+        render_footer_separator(header, buf, String::new());
+        format!(" {} ", self.header_title())
+            .dim()
+            .render_ref(header, buf);
+
+        let content_area = self.view.content_area(top);
+        if content_area.height > 0 {
+            Paragraph::new("Loading transcript...".dim())
+                .wrap(Wrap { trim: false })
+                .render(content_area, buf);
+        }
+
+        let separator = Rect::new(top.x, content_area.bottom(), top.width, /*height*/ 1);
+        render_footer_separator(separator, buf, self.loading_progress_label(top.width));
         self.render_hints(bottom, buf);
     }
 }
@@ -1535,6 +1712,29 @@ mod tests {
             )) as Arc<dyn HistoryCell>);
         }
         cells
+    }
+
+    fn large_test_cells() -> Vec<Arc<dyn HistoryCell>> {
+        (0..ASYNC_TRANSCRIPT_LAYOUT_CELL_THRESHOLD)
+            .map(|idx| {
+                Arc::new(TestCell {
+                    lines: vec![Line::from(format!("line-{idx}"))],
+                }) as Arc<dyn HistoryCell>
+            })
+            .collect()
+    }
+
+    fn measured_layout_for(
+        overlay: &TranscriptOverlay,
+        width: u16,
+        height: usize,
+    ) -> TranscriptLayoutResult {
+        let cell_count = overlay.committed_cell_count();
+        TranscriptLayoutResult {
+            key: overlay.layout_key(width),
+            heights: vec![height; cell_count],
+            total_height: cell_count.saturating_mul(height),
+        }
     }
 
     fn session_info_cell(cwd: &str) -> Arc<dyn HistoryCell> {
@@ -2096,6 +2296,89 @@ mod tests {
         overlay.render(area, &mut buf);
         let second_selection = prompt_marker_reversed_states(&buf, area);
         assert_eq!(second_selection, vec![false, true]);
+    }
+
+    #[test]
+    fn large_transcript_renders_loading_until_layout_is_ready() {
+        let mut overlay = transcript_overlay(large_test_cells());
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 10,
+        );
+        let mut buf = Buffer::empty(area);
+
+        overlay.render(area, &mut buf);
+
+        assert!(overlay.view.layout.is_none());
+        assert_snapshot!(
+            "large_transcript_renders_loading_until_layout_is_ready",
+            buffer_to_text(&buf, area)
+        );
+    }
+
+    #[test]
+    fn large_transcript_applies_matching_precomputed_layout() {
+        let mut overlay = transcript_overlay(large_test_cells());
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 10,
+        );
+        let result = measured_layout_for(&overlay, /*width*/ 80, /*height*/ 1);
+        let committed_cell_count = overlay.committed_cell_count();
+
+        assert!(overlay.apply_layout_result(result));
+
+        let layout = overlay.view.layout(/*width*/ 80);
+        assert_eq!(layout.heights.len(), committed_cell_count);
+        assert_eq!(layout.total_height, committed_cell_count);
+
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        assert!(!buffer_to_text(&buf, area).contains("Loading transcript"));
+    }
+
+    #[test]
+    fn large_transcript_ignores_stale_layout_result() {
+        let mut overlay = transcript_overlay(large_test_cells());
+        let mut result = measured_layout_for(&overlay, /*width*/ 80, /*height*/ 1);
+        result.key.generation = result.key.generation.saturating_add(/*rhs*/ 1);
+
+        assert!(!overlay.apply_layout_result(result));
+        assert!(overlay.view.layout.is_none());
+    }
+
+    #[test]
+    fn prompt_selection_anchors_after_async_layout_arrives() {
+        let cells: Vec<Arc<dyn HistoryCell>> = (0..ASYNC_TRANSCRIPT_LAYOUT_CELL_THRESHOLD)
+            .map(|idx| user_cell(&format!("prompt {idx}")))
+            .collect();
+        let mut overlay = transcript_overlay(cells);
+        let selected = overlay.committed_cell_count() / 2;
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 15,
+        );
+        let top = Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            area.height.saturating_sub(/*rhs*/ 3),
+        );
+        let content_area = overlay.view.content_area(top);
+
+        overlay.set_highlight_cell(Some(selected));
+        overlay.render(area, &mut Buffer::empty(area));
+        assert!(overlay.view.layout.is_none());
+
+        let result = measured_layout_for(&overlay, /*width*/ 80, /*height*/ 3);
+        assert!(overlay.apply_layout_result(result));
+        overlay.render(area, &mut Buffer::empty(area));
+
+        let selected_row = {
+            let layout = overlay.view.layout(content_area.width);
+            layout.offsets[selected].saturating_add(overlay.prompt_first_text_row_offset(selected))
+        };
+        assert_eq!(
+            selected_row.saturating_sub(overlay.view.scroll_offset),
+            (content_area.height as usize) / 3,
+        );
     }
 
     fn prompt_marker_reversed_states(buf: &Buffer, area: Rect) -> Vec<bool> {

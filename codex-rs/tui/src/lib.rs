@@ -192,6 +192,7 @@ mod text_formatting;
 mod theme_picker;
 mod token_usage;
 mod tooltips;
+mod transcript_layout;
 mod transcript_reflow;
 mod tui;
 mod ui_consts;

@@ -151,6 +151,19 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
             });
             LOGGER.write_json_line(value);
         }
+        AppEvent::TranscriptLayoutReady(result) => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "transcript_layout_ready",
+                "generation": result.key.generation,
+                "width": result.key.width,
+                "cell_count": result.key.cell_count,
+                "height_count": result.heights.len(),
+                "total_height": result.total_height,
+            });
+            LOGGER.write_json_line(value);
+        }
         AppEvent::StartFileSearch(query) => {
             let value = json!({
                 "ts": now_ts(),

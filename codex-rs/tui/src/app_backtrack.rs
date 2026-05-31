@@ -443,8 +443,10 @@ impl App {
         {
             let active_key = self.chat_widget.active_cell_transcript_key();
             let chat_widget = &self.chat_widget;
+            let app_event_tx = self.app_event_tx.clone();
             tui.draw(u16::MAX, |frame| {
-                let width = frame.area().width.max(1);
+                let width = frame.area().width.max(/*other*/ 1);
+                t.ensure_async_layout(width, app_event_tx.clone());
                 t.sync_live_tail(width, active_key, |w| {
                     chat_widget.active_cell_transcript_hyperlink_lines(w)
                 });

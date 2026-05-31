@@ -219,6 +219,13 @@ impl App {
                     );
                 }
             }
+            AppEvent::TranscriptLayoutReady(result) => {
+                if let Some(Overlay::Transcript(transcript)) = &mut self.overlay
+                    && transcript.apply_layout_result(result)
+                {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
