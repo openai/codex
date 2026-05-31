@@ -2438,6 +2438,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_path_display;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -2465,7 +2466,9 @@ mod tests {
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\n")
+            .replace(&test_path_display("/tmp/current"), "/tmp/current")
+            .replace(&test_path_display("/tmp/shared"), "/tmp/shared");
         insta::assert_snapshot!(text, @r"
         • Workspace
           cwd    /tmp/current

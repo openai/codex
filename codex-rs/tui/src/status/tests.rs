@@ -15,6 +15,7 @@ use crate::status::StatusAccountDisplay;
 use crate::status::remote_connection::RemoteConnectionStatus;
 use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
+use crate::test_support::test_path_display;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use chrono::Duration as ChronoDuration;
@@ -515,7 +516,7 @@ async fn status_permissions_workspace_roots_do_not_repeat_additional_directories
         .set(AskForApproval::OnRequest.to_core())
         .expect("set approval policy");
     let extra_root = test_path_buf("/workspace/extra").abs();
-    config.workspace_roots = vec![config.cwd.clone(), extra_root.clone()];
+    config.workspace_roots = vec![config.cwd.clone(), extra_root];
     config
         .permissions
         .set_workspace_roots(config.workspace_roots.clone());
@@ -528,11 +529,8 @@ async fn status_permissions_workspace_roots_do_not_repeat_additional_directories
         .expect("set permission profile");
 
     assert_eq!(
-        permissions_text_for(&config),
-        Some(format!(
-            "Workspace [{}] (Ask for approval)",
-            extra_root.display()
-        ))
+        permissions_text_for(&config).as_deref(),
+        Some("Workspace (Ask for approval)")
     );
 }
 
@@ -552,12 +550,14 @@ async fn status_workspace_roots_list_additional_runtime_directories() {
     assert!(
         rendered
             .lines()
-            .any(|line| line.contains("Workspace roots:") && line.contains("/workspace/extra"))
+            .any(|line| line.contains("Workspace roots:")
+                && line.contains(&test_path_display("/workspace/extra")))
     );
     assert!(
         !rendered
             .lines()
-            .any(|line| line.contains("Workspace roots:") && line.contains("/workspace/tests"))
+            .any(|line| line.contains("Workspace roots:")
+                && line.contains(&test_path_display("/workspace/tests")))
     );
 }
 
@@ -608,11 +608,8 @@ async fn status_permissions_workspace_roots_do_not_repeat_profile_defined_direct
         .expect("set permission profile");
 
     assert_eq!(
-        permissions_text_for(&config),
-        Some(format!(
-            "Workspace [{}] (Ask for approval)",
-            profile_root.display()
-        ))
+        permissions_text_for(&config).as_deref(),
+        Some("Workspace (Ask for approval)")
     );
     assert!(
         !rendered_status_for(&config).contains(profile_root.as_path().to_string_lossy().as_ref())

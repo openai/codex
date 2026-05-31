@@ -148,6 +148,8 @@ async fn status_output_uses_authoritative_runtime_workspace() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = test_path_buf("/workspace/runtime").abs();
     let extra_root = test_path_buf("/workspace/shared").abs();
+    let cwd_display = cwd.display().to_string();
+    let extra_root_display = extra_root.display().to_string();
     chat.instruction_source_paths = vec![cwd.join("AGENTS.md")];
 
     chat.add_status_output_with_workspace(
@@ -168,8 +170,8 @@ async fn status_output_uses_authoritative_runtime_workspace() {
     };
     assert!(rendered.contains("Directory:"));
     assert!(rendered.contains("Workspace roots:"));
-    assert!(rendered.contains("/workspace/runtime"));
-    assert!(rendered.contains("/workspace/shared"));
+    assert!(rendered.contains(&cwd_display));
+    assert!(rendered.contains(&extra_root_display));
     assert!(rendered.contains("Agents.md:"));
     assert!(rendered.contains("AGENTS.md"));
 }
