@@ -15,6 +15,7 @@ use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
 use crate::config::Config;
+use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
@@ -51,6 +52,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -121,42 +123,65 @@ async fn thread_settings_update(
     sess: &Session,
     thread_settings: ThreadSettingsOverrides,
 ) -> SessionSettingsUpdate {
+    let (collaboration_mode, permission_profile) = {
+        let state = sess.state.lock().await;
+        let session_configuration = &state.session_configuration;
+        let collaboration_mode = match thread_settings.collaboration_mode.clone() {
+            Some(collaboration_mode) => collaboration_mode,
+            None => {
+                // Model and reasoning effort live in CollaborationMode settings today, so
+                // partial thread-settings updates refresh those fields on the active mode.
+                session_configuration.collaboration_mode.with_updates(
+                    thread_settings.model.clone(),
+                    thread_settings.effort,
+                    /*developer_instructions*/ None,
+                )
+            }
+        };
+        let update_cwd = thread_settings
+            .cwd
+            .as_ref()
+            .map(|cwd| {
+                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
+                    cwd.as_path(),
+                ))
+                .unwrap_or_else(|err| {
+                    tracing::warn!("failed to normalize update cwd: {cwd:?}: {err}");
+                    session_configuration.cwd.clone()
+                })
+            })
+            .unwrap_or_else(|| session_configuration.cwd.clone());
+        let current_file_system_sandbox_policy = session_configuration.file_system_sandbox_policy();
+        let permission_profile = thread_settings.permission_profile_update_for_cwd(
+            update_cwd.as_path(),
+            Some(&current_file_system_sandbox_policy),
+        );
+        (collaboration_mode, permission_profile)
+    };
+
     let ThreadSettingsOverrides {
         cwd,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
         approvals_reviewer,
-        sandbox_policy,
-        permission_profile,
+        sandbox_policy: _,
+        permission_profile: _,
         active_permission_profile,
         windows_sandbox_level,
-        model,
-        effort,
+        model: _,
+        effort: _,
         summary,
         service_tier,
-        collaboration_mode,
+        collaboration_mode: _,
         personality,
     } = thread_settings;
-    let collaboration_mode = match collaboration_mode {
-        Some(collaboration_mode) => collaboration_mode,
-        None => {
-            let state = sess.state.lock().await;
-            // Model and reasoning effort live in CollaborationMode settings today, so
-            // partial thread-settings updates refresh those fields on the active mode.
-            state
-                .session_configuration
-                .collaboration_mode
-                .with_updates(model, effort, /*developer_instructions*/ None)
-        }
-    };
     SessionSettingsUpdate {
         cwd,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
         approvals_reviewer,
-        sandbox_policy,
         permission_profile,
         active_permission_profile,
         windows_sandbox_level,

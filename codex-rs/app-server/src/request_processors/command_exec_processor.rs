@@ -234,10 +234,6 @@ impl CommandExecRequestProcessor {
                 config.effective_workspace_roots(),
             )
         } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
-            self.config
-                .permissions
-                .can_set_legacy_sandbox_policy(&policy, &sandbox_cwd)
-                .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
             let file_system_sandbox_policy =
                 codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, &sandbox_cwd);
             let network_sandbox_policy =

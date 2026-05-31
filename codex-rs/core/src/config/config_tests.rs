@@ -108,6 +108,22 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
+trait LegacySandboxPolicyForTests {
+    fn legacy_sandbox_policy(&self) -> SandboxPolicy;
+}
+
+impl LegacySandboxPolicyForTests for Config {
+    fn legacy_sandbox_policy(&self) -> SandboxPolicy {
+        let permission_profile = self.permissions.effective_permission_profile();
+        let file_system_policy = permission_profile.file_system_sandbox_policy();
+        permission_profile.compatibility_sandbox_policy(
+            &file_system_policy,
+            permission_profile.network_sandbox_policy(),
+            self.cwd.as_path(),
+        )
+    }
+}
+
 fn stdio_mcp(command: &str) -> McpServerConfig {
     McpServerConfig {
         transport: McpServerTransportConfig::Stdio {

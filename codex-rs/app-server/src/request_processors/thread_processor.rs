@@ -96,21 +96,24 @@ fn collect_resume_override_mismatches(
         }
     }
     if let Some(requested_sandbox) = request.sandbox.as_ref() {
-        let active_sandbox = config_snapshot.sandbox_policy();
+        let active_sandbox = thread_response_sandbox_policy(
+            &config_snapshot.permission_profile,
+            config_snapshot.cwd.as_path(),
+        );
         let sandbox_matches = matches!(
             (requested_sandbox, &active_sandbox),
             (
                 SandboxMode::ReadOnly,
-                codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
+                codex_app_server_protocol::SandboxPolicy::ReadOnly { .. }
             ) | (
                 SandboxMode::WorkspaceWrite,
-                codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                codex_app_server_protocol::SandboxPolicy::WorkspaceWrite { .. }
             ) | (
                 SandboxMode::DangerFullAccess,
-                codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+                codex_app_server_protocol::SandboxPolicy::DangerFullAccess
             ) | (
                 SandboxMode::DangerFullAccess,
-                codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+                codex_app_server_protocol::SandboxPolicy::ExternalSandbox { .. }
             )
         );
         if !sandbox_matches {

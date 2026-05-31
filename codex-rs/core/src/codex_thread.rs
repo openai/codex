@@ -25,7 +25,6 @@ use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
@@ -72,18 +71,6 @@ pub struct ThreadConfigSnapshot {
     pub thread_source: Option<ThreadSource>,
 }
 
-impl ThreadConfigSnapshot {
-    pub fn sandbox_policy(&self) -> SandboxPolicy {
-        let file_system_sandbox_policy = self.permission_profile.file_system_sandbox_policy();
-        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-            &self.permission_profile,
-            &file_system_sandbox_policy,
-            self.permission_profile.network_sandbox_policy(),
-            self.cwd.as_path(),
-        )
-    }
-}
-
 /// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
@@ -92,7 +79,6 @@ pub struct CodexThreadSettingsOverrides {
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
-    pub sandbox_policy: Option<SandboxPolicy>,
     pub permission_profile: Option<PermissionProfile>,
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub windows_sandbox_level: Option<WindowsSandboxLevel>,
@@ -315,7 +301,6 @@ impl CodexThread {
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
-            sandbox_policy,
             permission_profile,
             active_permission_profile,
             windows_sandbox_level,
@@ -342,7 +327,6 @@ impl CodexThread {
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
-            sandbox_policy,
             permission_profile,
             active_permission_profile,
             windows_sandbox_level,
