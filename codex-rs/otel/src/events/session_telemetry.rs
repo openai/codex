@@ -40,7 +40,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
@@ -444,7 +443,7 @@ impl SessionTelemetry {
         context_window: Option<i64>,
         auto_compact_token_limit: Option<i64>,
         approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        sandbox_policy: impl std::fmt::Display,
         mcp_servers: Vec<&str>,
     ) {
         log_and_trace_event!(
