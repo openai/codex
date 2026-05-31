@@ -621,7 +621,11 @@ impl AgentControl {
         let state = self.upgrade()?;
         let state_db_ctx = state.state_db();
         let inherited_multi_agent_version = self
-            .inherited_multi_agent_version_for_source(&state, Some(&session_source), None)
+            .inherited_multi_agent_version_for_source(
+                &state,
+                Some(&session_source),
+                /*requested_multi_agent_version*/ None,
+            )
             .await;
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
