@@ -73,9 +73,6 @@ pub(crate) async fn suggest_next_prompt(
     let started_at = Instant::now();
     let mut turn_context = sess.new_lightweight_turn().await;
     prefer_fast_suggestion_profile(&mut turn_context);
-    if !suggestion_prompt_fits_context_window(sess, &turn_context).await {
-        return None;
-    }
 
     let history = sess.clone_history().await;
     let history_snapshot = HistorySnapshot::from_history(&history);
@@ -111,6 +108,9 @@ pub(crate) async fn suggest_next_prompt(
         output_schema_strict: true,
         max_output_tokens: Some(NEXT_PROMPT_SUGGESTION_MAX_OUTPUT_TOKENS),
     };
+    if !suggestion_prompt_fits_context_window(&prompt, &turn_context) {
+        return None;
+    }
     if !session_is_idle_for_suggestion(sess).await {
         return None;
     }
@@ -276,14 +276,19 @@ fn history_matches_snapshot(history: &ContextManager, snapshot: HistorySnapshot)
     history.history_version() == snapshot.version && history.raw_items().len() == snapshot.len
 }
 
-async fn suggestion_prompt_fits_context_window(sess: &Session, turn_context: &TurnContext) -> bool {
+fn suggestion_prompt_fits_context_window(prompt: &Prompt, turn_context: &TurnContext) -> bool {
     let Some(model_context_window) = turn_context.model_context_window() else {
         tracing::debug!("next prompt suggestion skipped without model context window");
         return false;
     };
-    if let Some(estimated_token_count) = sess.get_estimated_token_count(turn_context).await
-        && !suggestion_prompt_has_headroom(estimated_token_count, model_context_window)
-    {
+    let Ok(input) = serde_json::to_string(&prompt.input) else {
+        tracing::debug!("next prompt suggestion skipped without serializable prompt input");
+        return false;
+    };
+    let estimated_token_count = approx_token_count(&prompt.base_instructions.text)
+        .saturating_add(approx_token_count(&input));
+    let estimated_token_count = i64::try_from(estimated_token_count).unwrap_or(i64::MAX);
+    if !suggestion_prompt_has_headroom(estimated_token_count, model_context_window) {
         let suggestion_prompt_limit =
             model_context_window.saturating_sub(NEXT_PROMPT_SUGGESTION_TOKEN_HEADROOM);
         tracing::debug!(
@@ -503,6 +508,7 @@ fn filter_next_prompt_suggestion(raw: &str) -> Option<String> {
     ) || lower.starts_with("suggestion:")
         || lower.starts_with("next prompt:")
         || is_wrapped_meta(&suggestion)
+        || is_wrapped_quote(&suggestion)
         || starts_with_any(&lower, &["looks good", "thanks", "thank you"])
         || starts_with_any(&lower, &["let me", "i'll", "i will", "here's"])
     {
@@ -522,6 +528,11 @@ fn filter_next_prompt_suggestion(raw: &str) -> Option<String> {
 fn is_wrapped_meta(suggestion: &str) -> bool {
     (suggestion.starts_with('(') && suggestion.ends_with(')'))
         || (suggestion.starts_with('[') && suggestion.ends_with(']'))
+}
+
+fn is_wrapped_quote(suggestion: &str) -> bool {
+    (suggestion.starts_with('"') && suggestion.ends_with('"'))
+        || (suggestion.starts_with('\'') && suggestion.ends_with('\''))
 }
 
 fn starts_with_any(value: &str, prefixes: &[&str]) -> bool {

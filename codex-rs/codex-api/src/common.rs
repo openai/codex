@@ -20,6 +20,25 @@ use tokio::sync::mpsc;
 pub const WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY: &str = "ws_request_header_traceparent";
 pub const WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY: &str = "ws_request_header_tracestate";
 
+pub(crate) fn insert_max_output_tokens(
+    body: &mut Value,
+    max_output_tokens: Option<u64>,
+) -> Result<(), ApiError> {
+    let Some(max_output_tokens) = max_output_tokens else {
+        return Ok(());
+    };
+    let Some(body) = body.as_object_mut() else {
+        return Err(ApiError::Stream(
+            "failed to add max_output_tokens to responses request".to_string(),
+        ));
+    };
+    body.insert(
+        "max_output_tokens".to_string(),
+        Value::from(max_output_tokens),
+    );
+    Ok(())
+}
+
 /// Canonical input payload for the compaction endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompactionInput<'a> {
@@ -180,8 +199,6 @@ pub struct ResponsesApiRequest {
     pub stream: bool,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
@@ -205,7 +222,6 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             store: request.store,
             stream: request.stream,
             include: request.include.clone(),
-            max_output_tokens: request.max_output_tokens,
             service_tier: request.service_tier.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
@@ -230,8 +246,6 @@ pub struct ResponseCreateWsRequest {
     pub store: bool,
     pub stream: bool,
     pub include: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

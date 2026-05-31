@@ -3,6 +3,7 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseProcessedWsRequest;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
+use crate::common::insert_max_output_tokens;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
@@ -251,6 +252,20 @@ impl ResponsesWebsocketConnection {
         request: ResponsesWsRequest,
         connection_reused: bool,
     ) -> Result<ResponseStream, ApiError> {
+        self.stream_request_with_max_output_tokens(
+            request,
+            connection_reused,
+            /*max_output_tokens*/ None,
+        )
+        .await
+    }
+
+    pub async fn stream_request_with_max_output_tokens(
+        &self,
+        request: ResponsesWsRequest,
+        connection_reused: bool,
+        max_output_tokens: Option<u64>,
+    ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
         let stream = Arc::clone(&self.stream);
@@ -259,9 +274,10 @@ impl ResponsesWebsocketConnection {
         let models_etag = self.models_etag.clone();
         let server_model = self.server_model.clone();
         let telemetry = self.telemetry.clone();
-        let request_body = serde_json::to_value(&request).map_err(|err| {
+        let mut request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
+        insert_max_output_tokens(&mut request_body, max_output_tokens)?;
 
         let current_span = Span::current();
         tokio::spawn(

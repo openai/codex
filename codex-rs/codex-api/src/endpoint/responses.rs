@@ -1,6 +1,7 @@
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
+use crate::common::insert_max_output_tokens;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -72,6 +73,18 @@ impl<T: HttpTransport> ResponsesClient<T> {
         request: ResponsesApiRequest,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        self.stream_request_with_max_output_tokens(
+            request, options, /*max_output_tokens*/ None,
+        )
+        .await
+    }
+
+    pub async fn stream_request_with_max_output_tokens(
+        &self,
+        request: ResponsesApiRequest,
+        options: ResponsesOptions,
+        max_output_tokens: Option<u64>,
+    ) -> Result<ResponseStream, ApiError> {
         let ResponsesOptions {
             session_id,
             thread_id,
@@ -83,6 +96,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
 
         let mut body = serde_json::to_value(&request)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        insert_max_output_tokens(&mut body, max_output_tokens)?;
         if request.store && self.session.provider().is_azure_responses_endpoint() {
             attach_item_ids(&mut body, &request.input);
         }

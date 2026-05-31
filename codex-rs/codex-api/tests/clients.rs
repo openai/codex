@@ -331,7 +331,6 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         store: false,
         stream: true,
         include: Vec::new(),
-        max_output_tokens: None,
         service_tier: None,
         prompt_cache_key: None,
         text: None,
@@ -433,7 +432,6 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
         store: true,
         stream: true,
         include: Vec::new(),
-        max_output_tokens: None,
         service_tier: None,
         prompt_cache_key: None,
         text: None,
@@ -443,7 +441,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let mut extra_headers = HeaderMap::new();
     extra_headers.insert("x-test-header", HeaderValue::from_static("present"));
     let _stream = client
-        .stream_request(
+        .stream_request_with_max_output_tokens(
             request,
             ResponsesOptions {
                 session_id: Some("sess_123".into()),
@@ -453,6 +451,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
                 compression: Compression::None,
                 turn_state: None,
             },
+            /*max_output_tokens*/ Some(32),
         )
         .await?;
 
@@ -496,6 +495,13 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
         .and_then(|item| item.get("id"))
         .and_then(|id| id.as_str());
     assert_eq!(input_id, Some("msg_1"));
+    let max_output_tokens = req
+        .body
+        .as_ref()
+        .and_then(RequestBody::json)
+        .and_then(|body| body.get("max_output_tokens"))
+        .and_then(serde_json::Value::as_u64);
+    assert_eq!(max_output_tokens, Some(32));
 
     Ok(())
 }

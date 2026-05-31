@@ -22,6 +22,7 @@ fn filter_keeps_valid_prompts() {
         ("set CODEX_HOME", "set CODEX_HOME"),
         ("update Cargo.toml", "update Cargo.toml"),
         ("open app-server/README.md", "open app-server/README.md"),
+        ("don't run tests yet", "don't run tests yet"),
     ] {
         assert_eq!(
             filter_next_prompt_suggestion(suggestion),
@@ -235,6 +236,8 @@ fn filter_rejects_invalid_prompts() {
         "let me run tests",
         "what about tests?",
         "run tests.",
+        "\"run the tests\"",
+        "'run the tests'",
         "run\ntests",
         "continue with every possible next step in this project and explain every detail now",
     ] {
