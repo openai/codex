@@ -4,6 +4,7 @@
 use crate::ConfigLayerEntry;
 use crate::ConfigLayerStack;
 use crate::ConfigLayerStackOrdering;
+use crate::format_config_layer_source;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::de::DeserializeOwned;
@@ -200,7 +201,7 @@ where
 {
     for layer in layers {
         if let Some(contents) = layer.raw_toml() {
-            let source_name = display_name_for_layer(layer, config_toml_file);
+            let source_name = format_config_layer_source(&layer.name, config_toml_file);
             let Some(base_dir) = layer.raw_toml_base_dir() else {
                 tracing::debug!(
                     "Skipping raw TOML diagnostics for {source_name} because it has no base directory"
@@ -257,26 +258,6 @@ fn config_path_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> Op
         | ConfigLayerSource::EnterpriseManaged { .. }
         | ConfigLayerSource::SessionFlags
         | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
-    }
-}
-
-fn display_name_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> String {
-    match &layer.name {
-        ConfigLayerSource::EnterpriseManaged { id, name } => {
-            format!("enterprise-managed config {name} ({id})")
-        }
-        ConfigLayerSource::Mdm { domain, key } => format!("managed policy {domain}:{key}"),
-        ConfigLayerSource::SessionFlags => "session flags".to_string(),
-        ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
-            "legacy managed configuration from MDM".to_string()
-        }
-        ConfigLayerSource::System { file }
-        | ConfigLayerSource::User { file, .. }
-        | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.display().to_string(),
-        ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder
-            .join(config_toml_file)
-            .display()
-            .to_string(),
     }
 }
 

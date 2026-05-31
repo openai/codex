@@ -202,7 +202,7 @@ async fn raw_toml_diagnostics_use_enterprise_layer_name() {
 
     assert_eq!(
         error.path,
-        Path::new("enterprise-managed config Base policy (cfg_123)").to_path_buf()
+        Path::new("enterprise-managed (Base policy, cfg_123)").to_path_buf()
     );
     assert_eq!(error.range.start.line, 2);
     assert_eq!(error.range.start.column, 9);

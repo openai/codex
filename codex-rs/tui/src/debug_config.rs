@@ -2,6 +2,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::legacy_core::config::Config;
 use crate::session_state::SessionNetworkProxyRuntime;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
@@ -13,6 +14,7 @@ use codex_config::RequirementSource;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::WebSearchModeRequirement;
+use codex_config::format_config_layer_source;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use toml::Value as TomlValue;
@@ -71,7 +73,7 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         lines.push("  <none>".dim().into());
     } else {
         for (index, layer) in layers.iter().enumerate() {
-            let source = format_config_layer_source(&layer.name);
+            let source = format_config_layer_source(&layer.name, CONFIG_TOML_FILE);
             let status = if layer.is_disabled() {
                 "disabled"
             } else {
@@ -401,36 +403,6 @@ fn normalize_allowed_web_search_modes(
         normalized.push(WebSearchModeRequirement::Disabled);
     }
     normalized
-}
-
-fn format_config_layer_source(source: &ConfigLayerSource) -> String {
-    match source {
-        ConfigLayerSource::Mdm { domain, key } => {
-            format!("MDM ({domain}:{key})")
-        }
-        ConfigLayerSource::System { file } => {
-            format!("system ({})", file.as_path().display())
-        }
-        ConfigLayerSource::EnterpriseManaged { id, name } => {
-            format!("enterprise-managed ({name}, {id})")
-        }
-        ConfigLayerSource::User { file, .. } => {
-            format!("user ({})", file.as_path().display())
-        }
-        ConfigLayerSource::Project { dot_codex_folder } => {
-            format!(
-                "project ({}/config.toml)",
-                dot_codex_folder.as_path().display()
-            )
-        }
-        ConfigLayerSource::SessionFlags => "session-flags".to_string(),
-        ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
-            format!("legacy managed_config.toml ({})", file.as_path().display())
-        }
-        ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
-            "legacy managed_config.toml (MDM)".to_string()
-        }
-    }
 }
 
 fn format_sandbox_mode_requirement(mode: SandboxModeRequirement) -> String {
