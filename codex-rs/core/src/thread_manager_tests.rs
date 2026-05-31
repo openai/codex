@@ -24,6 +24,7 @@ use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::responses::mount_models_once;
+use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -180,10 +181,10 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
 #[tokio::test]
 async fn hydrate_runtime_workspace_from_history_restores_persisted_baseline() {
     let (_session, turn_context) = make_session_and_context().await;
-    let persisted_cwd = PathBuf::from("/workspace/updated").abs();
+    let persisted_cwd = test_path_buf("/workspace/updated").abs();
     let persisted_roots = vec![
-        PathBuf::from("/workspace").abs(),
-        PathBuf::from("/external").abs(),
+        test_path_buf("/workspace").abs(),
+        test_path_buf("/external").abs(),
     ];
     let mut context_item = turn_context.to_turn_context_item();
     context_item.cwd = persisted_cwd.to_path_buf();
@@ -208,7 +209,7 @@ async fn hydrate_runtime_workspace_from_history_restores_persisted_baseline() {
 #[tokio::test]
 async fn hydrate_runtime_workspace_from_history_restores_cwd_with_empty_roots() {
     let (_session, turn_context) = make_session_and_context().await;
-    let persisted_cwd = PathBuf::from("/workspace/updated").abs();
+    let persisted_cwd = test_path_buf("/workspace/updated").abs();
     let mut context_item = turn_context.to_turn_context_item();
     context_item.cwd = persisted_cwd.to_path_buf();
     context_item.workspace_roots = None;
@@ -233,14 +234,14 @@ async fn hydrate_runtime_workspace_from_history_restores_cwd_with_empty_roots() 
 async fn hydrate_runtime_workspace_from_history_preserves_explicit_replacements() {
     let (_session, turn_context) = make_session_and_context().await;
     let mut context_item = turn_context.to_turn_context_item();
-    context_item.cwd = PathBuf::from("/workspace/persisted").abs().to_path_buf();
-    context_item.workspace_roots = Some(vec![PathBuf::from("/persisted-root").abs()]);
+    context_item.cwd = test_path_buf("/workspace/persisted").abs().to_path_buf();
+    context_item.workspace_roots = Some(vec![test_path_buf("/persisted-root").abs()]);
     let history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("mutate workspace")),
         RolloutItem::TurnContext(context_item),
     ]);
-    let requested_cwd = PathBuf::from("/workspace/requested").abs();
-    let requested_roots = vec![PathBuf::from("/requested-root").abs()];
+    let requested_cwd = test_path_buf("/workspace/requested").abs();
+    let requested_roots = vec![test_path_buf("/requested-root").abs()];
     let mut config = test_config().await;
     config.cwd = requested_cwd.clone();
     config.workspace_roots = requested_roots.clone();
@@ -265,15 +266,15 @@ async fn hydrate_runtime_workspace_from_history_preserves_explicit_replacements(
 #[tokio::test]
 async fn hydrate_runtime_workspace_from_history_preserves_cwd_without_retargeting_roots() {
     let (_session, turn_context) = make_session_and_context().await;
-    let persisted_roots = vec![PathBuf::from("/persisted-root").abs()];
+    let persisted_roots = vec![test_path_buf("/persisted-root").abs()];
     let mut context_item = turn_context.to_turn_context_item();
-    context_item.cwd = PathBuf::from("/workspace/persisted").abs().to_path_buf();
+    context_item.cwd = test_path_buf("/workspace/persisted").abs().to_path_buf();
     context_item.workspace_roots = Some(persisted_roots.clone());
     let history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("mutate workspace")),
         RolloutItem::TurnContext(context_item),
     ]);
-    let requested_cwd = PathBuf::from("/workspace/requested").abs();
+    let requested_cwd = test_path_buf("/workspace/requested").abs();
     let mut config = test_config().await;
     config.cwd = requested_cwd.clone();
 
