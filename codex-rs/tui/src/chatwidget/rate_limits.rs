@@ -133,12 +133,6 @@ pub(super) enum RateLimitErrorKind {
     Generic,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MissingIndividualLimitBehavior {
-    Preserve,
-    Clear,
-}
-
 pub(super) fn app_server_rate_limit_error_kind(
     info: &AppServerCodexErrorInfo,
 ) -> Option<RateLimitErrorKind> {
@@ -158,24 +152,14 @@ pub(super) fn is_app_server_cyber_policy_error(info: &AppServerCodexErrorInfo) -
 
 impl ChatWidget {
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        self.on_rate_limit_snapshot_with_missing_individual_limit(
-            snapshot,
-            MissingIndividualLimitBehavior::Preserve,
-        );
+        self.merge_rate_limit_snapshot(snapshot);
     }
 
     pub(crate) fn replace_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        self.on_rate_limit_snapshot_with_missing_individual_limit(
-            snapshot,
-            MissingIndividualLimitBehavior::Clear,
-        );
+        self.merge_rate_limit_snapshot(snapshot);
     }
 
-    fn on_rate_limit_snapshot_with_missing_individual_limit(
-        &mut self,
-        snapshot: Option<RateLimitSnapshot>,
-        missing_individual_limit_behavior: MissingIndividualLimitBehavior,
-    ) {
+    fn merge_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(mut snapshot) = snapshot {
             let limit_id = snapshot
                 .limit_id
@@ -262,11 +246,10 @@ impl ChatWidget {
                 .rate_limit_snapshots_by_limit_id
                 .get(&limit_id)
                 .and_then(|display| display.individual_limit.clone());
+            let preserve_individual_limit = snapshot.individual_limit.is_none();
             let mut display =
                 rate_limit_snapshot_display_for_limit(&snapshot, limit_label, Local::now());
-            if display.individual_limit.is_none()
-                && missing_individual_limit_behavior == MissingIndividualLimitBehavior::Preserve
-            {
+            if display.individual_limit.is_none() && preserve_individual_limit {
                 display.individual_limit = preserved_individual_limit;
             }
             self.rate_limit_snapshots_by_limit_id

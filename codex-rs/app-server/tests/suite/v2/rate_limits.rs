@@ -197,12 +197,12 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 resets_at: Some(secondary_reset_timestamp),
             }),
             credits: None,
-            individual_limit: Some(SpendControlLimitSnapshot {
+            individual_limit: Some(Some(SpendControlLimitSnapshot {
                 limit: "25000".to_string(),
                 used: "8000".to_string(),
                 remaining_percent: 68,
                 resets_at: secondary_reset_timestamp,
-            }),
+            })),
             plan_type: Some(AccountPlanType::Pro),
             rate_limit_reached_type: Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached),
         },
@@ -224,12 +224,12 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                             resets_at: Some(secondary_reset_timestamp),
                         }),
                         credits: None,
-                        individual_limit: Some(SpendControlLimitSnapshot {
+                        individual_limit: Some(Some(SpendControlLimitSnapshot {
                             limit: "25000".to_string(),
                             used: "8000".to_string(),
                             remaining_percent: 68,
                             resets_at: secondary_reset_timestamp,
-                        }),
+                        })),
                         plan_type: Some(AccountPlanType::Pro),
                         rate_limit_reached_type: Some(
                             RateLimitReachedType::WorkspaceMemberUsageLimitReached,

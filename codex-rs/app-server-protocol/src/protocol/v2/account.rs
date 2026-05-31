@@ -261,7 +261,9 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
-    pub individual_limit: Option<SpendControlLimitSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub individual_limit: Option<Option<SpendControlLimitSnapshot>>,
     pub plan_type: Option<PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }
@@ -276,8 +278,7 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             credits: value.credits.map(CreditsSnapshot::from),
             individual_limit: value
                 .individual_limit
-                .flatten()
-                .map(SpendControlLimitSnapshot::from),
+                .map(|individual_limit| individual_limit.map(SpendControlLimitSnapshot::from)),
             plan_type: value.plan_type,
             rate_limit_reached_type: value
                 .rate_limit_reached_type

@@ -932,12 +932,12 @@ async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
         primary: None,
         secondary: None,
         credits: None,
-        individual_limit: Some(SpendControlLimitSnapshot {
+        individual_limit: Some(Some(SpendControlLimitSnapshot {
             limit: "25000".to_string(),
             used: "8000".to_string(),
             remaining_percent: 68,
             resets_at: reset_at_from(&captured_at, /*seconds*/ 86_400),
-        }),
+        })),
         plan_type: None,
         rate_limit_reached_type: None,
     };

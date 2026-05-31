@@ -13330,7 +13330,14 @@
           "individualLimit": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/SpendControlLimitSnapshot"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/SpendControlLimitSnapshot"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               {
                 "type": "null"

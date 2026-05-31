@@ -758,12 +758,12 @@ async fn rate_limit_snapshot_keeps_prior_usage_metadata_when_missing_from_header
             unlimited: false,
             balance: Some("17.5".to_string()),
         }),
-        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
+        individual_limit: Some(Some(codex_app_server_protocol::SpendControlLimitSnapshot {
             limit: "25000".to_string(),
             used: "8000".to_string(),
             remaining_percent: 68,
             resets_at: 300,
-        }),
+        })),
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -823,12 +823,12 @@ async fn account_rate_limit_refresh_clears_removed_individual_limit() {
         primary: None,
         secondary: None,
         credits: None,
-        individual_limit: Some(codex_app_server_protocol::SpendControlLimitSnapshot {
+        individual_limit: Some(Some(codex_app_server_protocol::SpendControlLimitSnapshot {
             limit: "25000".to_string(),
             used: "8000".to_string(),
             remaining_percent: 68,
             resets_at: 300,
-        }),
+        })),
         plan_type: None,
         rate_limit_reached_type: None,
     }));
@@ -838,7 +838,7 @@ async fn account_rate_limit_refresh_clears_removed_individual_limit() {
         primary: None,
         secondary: None,
         credits: None,
-        individual_limit: None,
+        individual_limit: Some(None),
         plan_type: None,
         rate_limit_reached_type: None,
     }));

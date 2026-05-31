@@ -2009,6 +2009,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    #[serde(default)]
     pub individual_limit: Option<Option<SpendControlLimitSnapshot>>,
     pub plan_type: Option<crate::account::PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
@@ -3976,6 +3977,22 @@ mod tests {
             .collect();
         sorted_roots.sort_by(|left, right| left.0.cmp(&right.0));
         sorted_roots
+    }
+
+    #[test]
+    fn rate_limit_snapshot_accepts_rollouts_without_individual_limit() {
+        let snapshot: RateLimitSnapshot = serde_json::from_value(json!({
+            "limit_id": "codex",
+            "limit_name": null,
+            "primary": null,
+            "secondary": null,
+            "credits": null,
+            "plan_type": null,
+            "rate_limit_reached_type": null
+        }))
+        .expect("deserialize pre-spend-control rate-limit snapshot");
+
+        assert_eq!(snapshot.individual_limit, None);
     }
 
     fn sandbox_policy_allows_read(policy: &SandboxPolicy, _path: &Path, _cwd: &Path) -> bool {
