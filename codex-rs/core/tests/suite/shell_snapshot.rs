@@ -516,9 +516,19 @@ async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() ->
     )
     .await?;
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    fs::write(&snapshot_path, snapshot_override_content_for_policy_test()).await?;
+    fs::write(
+        &snapshot_path,
+        format!(
+            "{}export GIT_EDITOR='nvim'\nexport GIT_SEQUENCE_EDITOR='nvim'\n",
+            snapshot_override_content_for_policy_test()
+        ),
+    )
+    .await?;
 
-    let command = command_asserting_policy_after_snapshot();
+    let command = format!(
+        "{}; printf '|git_editor=%s|git_sequence_editor=%s' \"$GIT_EDITOR\" \"$GIT_SEQUENCE_EDITOR\"",
+        command_asserting_policy_after_snapshot()
+    );
     let end = run_tool_turn_on_harness(
         &harness,
         "verify unified exec policy after snapshot",
@@ -533,7 +543,7 @@ async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() ->
 
     assert_eq!(
         normalize_newlines(&end.stdout).trim(),
-        POLICY_SUCCESS_OUTPUT
+        "policy-after-snapshot|git_editor=:|git_sequence_editor=:"
     );
     assert_eq!(end.exit_code, 0);
     assert!(snapshot_path.starts_with(codex_home));

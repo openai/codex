@@ -1007,6 +1007,8 @@ impl UnifiedExecProcessManager {
             context.session.conversation_id.to_string(),
         );
         let env = apply_unified_exec_env(env);
+        let explicit_env_overrides =
+            apply_unified_exec_env(context.turn.shell_environment_policy.r#set.clone());
         let exec_server_env_config = ExecServerEnvConfig {
             policy: exec_env_policy_from_shell_policy(&context.turn.shell_environment_policy),
             local_policy_env,
@@ -1045,7 +1047,7 @@ impl UnifiedExecProcessManager {
             environment: Arc::clone(&request.environment),
             env,
             exec_server_env_config: Some(exec_server_env_config),
-            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            explicit_env_overrides,
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
