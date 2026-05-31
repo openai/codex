@@ -471,11 +471,11 @@ impl Client {
             .rate_limit_reached_type
             .flatten()
             .and_then(|details| Self::map_rate_limit_reached_type(details.kind));
-        let individual_limit = payload.spend_control.flatten().map(|details| {
-            details
+        let individual_limit = payload.spend_control.and_then(|details| match details {
+            Some(details) => details
                 .individual_limit
-                .flatten()
-                .map(|details| Self::map_individual_limit(*details))
+                .map(|details| details.map(|details| Self::map_individual_limit(*details))),
+            None => Some(None),
         });
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
             Some("codex".to_string()),
@@ -790,6 +790,41 @@ mod tests {
         assert_eq!(snapshots[0].primary, None);
         assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
         assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
+    }
+
+    #[test]
+    fn usage_payload_preserves_explicit_null_spend_control_as_clear() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Plus,
+            rate_limit: None,
+            credits: None,
+            spend_control: Some(None),
+            additional_rate_limits: None,
+            rate_limit_reached_type: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        assert_eq!(snapshots[0].individual_limit, Some(None));
+    }
+
+    #[test]
+    fn usage_payload_preserves_explicit_null_individual_limit_as_clear() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Plus,
+            rate_limit: None,
+            credits: None,
+            spend_control: Some(Some(Box::new(
+                codex_backend_openapi_models::models::SpendControlStatusDetails {
+                    reached: false,
+                    individual_limit: Some(None),
+                },
+            ))),
+            additional_rate_limits: None,
+            rate_limit_reached_type: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        assert_eq!(snapshots[0].individual_limit, Some(None));
     }
 
     #[test]
