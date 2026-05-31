@@ -10,32 +10,34 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         params: ThreadDeleteParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let mut deleted_thread_ids = Vec::new();
         let result = {
             let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-            self.thread_delete_response(params).await
+            self.thread_delete_response(params, &mut deleted_thread_ids)
+                .await
         };
         match result {
-            Ok((response, deleted_thread_ids)) => {
+            Ok(response) => {
                 self.outgoing
                     .send_response(request_id.clone(), response)
                     .await;
-                for thread_id in deleted_thread_ids {
-                    self.outgoing
-                        .send_server_notification(ServerNotification::ThreadDeleted(
-                            ThreadDeletedNotification { thread_id },
-                        ))
-                        .await;
-                }
+                self.send_thread_deleted_notifications(deleted_thread_ids)
+                    .await;
                 Ok(None)
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                self.send_thread_deleted_notifications(deleted_thread_ids)
+                    .await;
+                Err(error)
+            }
         }
     }
 
     async fn thread_delete_response(
         &self,
         params: ThreadDeleteParams,
-    ) -> Result<(ThreadDeleteResponse, Vec<String>), JSONRPCErrorError> {
+        deleted_thread_ids: &mut Vec<String>,
+    ) -> Result<ThreadDeleteResponse, JSONRPCErrorError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
@@ -63,7 +65,6 @@ impl ThreadRequestProcessor {
             self.prepare_thread_for_delete(thread_id_to_delete).await;
         }
 
-        let mut deleted_thread_ids = Vec::new();
         for descendant_thread_id in thread_ids.iter().skip(1).rev().copied() {
             match self
                 .thread_store
@@ -92,7 +93,17 @@ impl ThreadRequestProcessor {
             .map_err(thread_store_delete_error)?;
         deleted_thread_ids.push(thread_id.to_string());
 
-        Ok((ThreadDeleteResponse {}, deleted_thread_ids))
+        Ok(ThreadDeleteResponse {})
+    }
+
+    async fn send_thread_deleted_notifications(&self, deleted_thread_ids: Vec<String>) {
+        for thread_id in deleted_thread_ids {
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadDeleted(
+                    ThreadDeletedNotification { thread_id },
+                ))
+                .await;
+        }
     }
 
     async fn validate_root_thread_delete(
