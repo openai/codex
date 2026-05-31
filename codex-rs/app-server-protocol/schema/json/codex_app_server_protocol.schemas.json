@@ -5722,14 +5722,15 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "individualLimitUpdate": {
-            "allOf": [
+            "anyOf": [
               {
                 "$ref": "#/definitions/v2/SpendControlLimitUpdate"
+              },
+              {
+                "type": "null"
               }
             ],
-            "default": {
-              "type": "unchanged"
-            },
+            "default": null,
             "description": "Sparse spend-control update carried alongside the backward-compatible snapshot.\n\n`unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata learned from `account/rateLimits/read`."
           },
           "rateLimits": {

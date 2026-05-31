@@ -11,4 +11,4 @@ export type AccountRateLimitsUpdatedNotification = { rateLimits: RateLimitSnapsh
  * `unchanged` preserves cached metadata when rolling rate-limit headers omit account metadata
  * learned from `account/rateLimits/read`.
  */
-individualLimitUpdate: SpendControlLimitUpdate, };
+individualLimitUpdate?: SpendControlLimitUpdate, };
