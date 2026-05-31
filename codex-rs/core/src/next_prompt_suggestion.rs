@@ -258,6 +258,10 @@ async fn session_is_idle_for_suggestion(sess: &Session) -> bool {
         tracing::debug!("next prompt suggestion skipped while a turn is active");
         return false;
     }
+    if sess.conversation.running_state().await.is_some() {
+        tracing::debug!("next prompt suggestion skipped while realtime conversation is active");
+        return false;
+    }
     true
 }
 

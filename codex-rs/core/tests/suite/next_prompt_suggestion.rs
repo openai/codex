@@ -1,11 +1,15 @@
 use anyhow::Result;
+use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeOutputModality;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -119,6 +123,62 @@ async fn suggest_next_prompt_skips_early_history_without_request() -> Result<()>
     assert_eq!(suggestion, None);
     assert_eq!(responses.requests().len(), 1);
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suggest_next_prompt_skips_active_realtime_conversation_without_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "first turn complete"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "second turn complete"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let realtime_server = start_websocket_server(vec![vec![vec![]]]).await;
+    let realtime_base_url = realtime_server.uri().to_string();
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        config.experimental_realtime_ws_startup_context = Some(String::new());
+    });
+    let test = builder.build(&server).await?;
+    test.submit_turn("first task").await?;
+    test.submit_turn("second task").await?;
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+    wait_for_event(&test.codex, |msg| {
+        matches!(msg, EventMsg::RealtimeConversationStarted(_))
+    })
+    .await;
+
+    let suggestion = test
+        .codex
+        .suggest_next_prompt(CancellationToken::new())
+        .await?;
+    assert_eq!(suggestion, None);
+    assert_eq!(responses.requests().len(), 2);
+
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    realtime_server.shutdown().await;
     Ok(())
 }
 
