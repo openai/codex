@@ -6,8 +6,7 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
-# Linux SDK runtime wheels target musllinux, including on glibc development hosts.
-sdk_python_platform := if os() == "linux" { "--python-platform " + arch() + "-unknown-linux-musl" } else { "" }
+sdk_python_platform := env_var_or_default("CODEX_SDK_PYTHON_PLATFORM", "")
 
 # Display help
 help:
