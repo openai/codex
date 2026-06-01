@@ -125,26 +125,18 @@ def test_root_fmt_check_recipe_checks_all_formatters() -> None:
         if line.strip() and not line.strip().startswith("#")
     ]
     fmt_to_fmt_check = {
-        "just --unstable --fmt": ["just --unstable --fmt --check"],
-        "cargo fmt -- --config imports_granularity=Item {stderr-null}": [
-            "cargo fmt -- --config imports_granularity=Item --check {stderr-null}"
-        ],
-        "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python": [
-            "uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin",
-            "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --diff ../sdk/python",
-        ],
-        "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python": [
-            "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format --check ../sdk/python"
-        ],
-        "uv run --frozen --project ../scripts ruff format ../scripts": [
-            "uv run --frozen --project ../scripts ruff format --check ../scripts"
-        ],
+        "just --unstable --fmt": "just --unstable --fmt --check",
+        "cargo fmt -- --config imports_granularity=Item {stderr-null}": "cargo fmt -- --config imports_granularity=Item --check {stderr-null}",
+        "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python": "uv run --frozen --project ../sdk/python --extra dev ruff check --diff ../sdk/python",
+        "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python": "uv run --frozen --project ../sdk/python --extra dev ruff format --check ../sdk/python",
+        "uv run --frozen --project ../scripts ruff format ../scripts": "uv run --frozen --project ../scripts ruff format --check ../scripts",
     }
-    assert [line.strip() for line in fmt_check_recipe[1:] if line.strip()] == [
-        fmt_check_command
-        for command in fmt_commands
-        for fmt_check_command in fmt_to_fmt_check[command]
-    ]
+    assert fmt_check_recipe[1] == "    # Keep this recipe in sync with `fmt` above."
+    assert [
+        line.strip()
+        for line in fmt_check_recipe[1:]
+        if line.strip() and not line.strip().startswith("#")
+    ] == [fmt_to_fmt_check[command] for command in fmt_commands]
 
 
 def test_generate_types_wires_all_generation_steps() -> None:

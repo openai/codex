@@ -46,11 +46,11 @@ fmt:
     uv run --frozen --project ../scripts ruff format ../scripts
 
 fmt-check:
+    # Keep this recipe in sync with `fmt` above.
     just --unstable --fmt --check
     cargo fmt -- --config imports_granularity=Item --check {stderr-null}
-    uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin
-    uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --diff ../sdk/python
-    uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format --check ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev ruff check --diff ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev ruff format --check ../sdk/python
     uv run --frozen --project ../scripts ruff format --check ../scripts
 
 fix *args:
