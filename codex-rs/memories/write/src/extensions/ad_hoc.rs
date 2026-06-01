@@ -16,7 +16,8 @@ pub(super) async fn seed_instructions(memory_root: &Path) -> std::io::Result<()>
         .await
     {
         Ok(mut file) => {
-            tokio::io::AsyncWriteExt::write_all(&mut file, INSTRUCTIONS.as_bytes()).await
+            tokio::io::AsyncWriteExt::write_all(&mut file, INSTRUCTIONS.as_bytes()).await?;
+            tokio::io::AsyncWriteExt::flush(&mut file).await
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(err) => Err(err),
