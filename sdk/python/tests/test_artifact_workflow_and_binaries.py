@@ -68,8 +68,8 @@ def test_generation_has_single_maintenance_entrypoint_script() -> None:
     assert scripts == ["update_sdk_artifacts.py"]
 
 
-def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
-    """The repo fmt command should work from Rust and Python SDK directories."""
+def test_root_fmt_recipe_formats_rust_python_sdk_and_scripts() -> None:
+    """The repo fmt command should format Rust, the Python SDK, and scripts."""
     justfile = ROOT.parents[1] / "justfile"
     lines = justfile.read_text().splitlines()
     fmt_index = lines.index("fmt:")
@@ -81,21 +81,25 @@ def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
     fmt_recipe = lines[fmt_index:next_recipe_index]
     actual = {
         "working_directory": lines[0],
-        "previous_attribute": lines[fmt_index - 1],
+        "previous_comment": next(
+            line for line in reversed(lines[:fmt_index]) if line.startswith("#")
+        ),
         "commands": [line.strip() for line in fmt_recipe[1:] if line.strip()],
     }
     expected = {
         "working_directory": 'set working-directory := "codex-rs"',
-        "previous_attribute": "# Format Rust and Python SDK code.",
+        "previous_comment": "# Format Rust, Python SDK code, and Python scripts.",
         "commands": [
-            "cargo fmt -- --config imports_granularity=Item 2>/dev/null",
+            "cargo fmt -- --config imports_granularity=Item {stderr-null}",
             "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
             "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python",
+            "# Root scripts have their own locked Ruff environment.",
+            "uv run --frozen --project ../scripts ruff format ../scripts",
         ],
     }
 
     assert actual == expected, (
-        "The root `just fmt` recipe must run Rust fmt and Python SDK Ruff. "
+        "The root `just fmt` recipe must run Rust fmt and Ruff for Python SDK code and scripts. "
         "Fix the `fmt` recipe in `justfile`, then run `just fmt`.\n"
         f"Expected: {json.dumps(expected, indent=2)}\n"
         f"Actual: {json.dumps(actual, indent=2)}"
