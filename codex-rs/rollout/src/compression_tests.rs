@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
@@ -15,7 +16,9 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
+use crate::RolloutConfig;
 use crate::RolloutRecorder;
+use crate::RolloutRecorderParams;
 use crate::append_rollout_item_to_path;
 
 #[tokio::test]
@@ -90,6 +93,58 @@ async fn append_rollout_item_materializes_compressed_rollout() -> anyhow::Result
 
     assert!(rollout_path.exists());
     assert!(!compressed_rollout_path(&rollout_path).exists());
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_materializes_compressed_rollout_path() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let config = RolloutConfig {
+        codex_home: home.path().to_path_buf(),
+        sqlite_home: home.path().to_path_buf(),
+        cwd: home.path().to_path_buf(),
+        model_provider_id: "test-provider".to_string(),
+        generate_memories: true,
+    };
+    let uuid = Uuid::from_u128(3);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "hello before resume")?;
+    compress_now(&rollout_path)?;
+    let compressed_path = compressed_rollout_path(&rollout_path);
+
+    let InitialHistory::Resumed(history) =
+        RolloutRecorder::get_rollout_history(compressed_path.as_path()).await?
+    else {
+        panic!("expected compressed rollout to load as resumed history");
+    };
+    assert_eq!(history.rollout_path, Some(rollout_path.clone()));
+
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::resume(compressed_path.clone()),
+    )
+    .await?;
+
+    assert_eq!(recorder.rollout_path(), rollout_path.as_path());
+    assert!(rollout_path.exists());
+    assert!(!compressed_path.exists());
+    recorder
+        .record_canonical_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "hello after resume".to_string(),
+                ..Default::default()
+            },
+        ))])
+        .await?;
+    recorder.flush().await?;
+    recorder.shutdown().await?;
+
     let (items, loaded_thread_id, parse_errors) =
         RolloutRecorder::load_rollout_items(&rollout_path).await?;
     assert_eq!(loaded_thread_id, Some(thread_id));
