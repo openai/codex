@@ -75,10 +75,12 @@ pub(crate) async fn materialize_rollout_for_append(path: &Path) -> io::Result<Pa
 pub(crate) fn materialize_rollout_for_append_blocking(path: &Path) -> io::Result<PathBuf> {
     let plain_path = plain_rollout_path(path);
     if plain_path.exists() {
+        metrics::materialize("plain_exists");
         return Ok(plain_path);
     }
     let compressed_path = path::compressed_rollout_path(plain_path.as_path());
     if !compressed_path.exists() {
+        metrics::materialize("missing");
         return Ok(plain_path);
     }
 
@@ -111,8 +113,10 @@ pub(crate) fn materialize_rollout_for_append_blocking(path: &Path) -> io::Result
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(temp_path.as_path());
+        metrics::materialize("failed");
     }
     result?;
+    metrics::materialize("decompressed");
     Ok(plain_path)
 }
 
@@ -241,6 +245,7 @@ mod worker {
     use crate::SESSIONS_SUBDIR;
 
     use super::RolloutFile;
+    use super::metrics;
     use super::path;
 
     const TEMP_SUFFIX: &str = ".tmp";
@@ -318,6 +323,7 @@ mod worker {
 
     pub(super) fn spawn(codex_home: PathBuf) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            metrics::run("skipped_no_runtime");
             warn!(
                 "failed to start rollout compression worker for {}: no Tokio runtime",
                 codex_home.display()
@@ -335,25 +341,46 @@ mod worker {
     }
 
     pub(super) async fn run(codex_home: PathBuf) -> io::Result<()> {
-        let Some(marker) = CompressionRunMarker::try_claim(codex_home.as_path())? else {
-            debug!(
-                "rollout compression worker recently ran or is already running for {}",
-                codex_home.display()
-            );
-            return Ok(());
+        let marker = match CompressionRunMarker::try_claim(codex_home.as_path()) {
+            Ok(Some(marker)) => marker,
+            Ok(None) => {
+                metrics::run("skipped_already_running");
+                debug!(
+                    "rollout compression worker recently ran or is already running for {}",
+                    codex_home.display()
+                );
+                return Ok(());
+            }
+            Err(err) => {
+                metrics::run("failed");
+                return Err(err);
+            }
         };
 
+        metrics::run("started");
         let started_at = Instant::now();
-        cleanup_stale_temps(codex_home.as_path()).await?;
-        let mut stats = CompressionStats::default();
-        if started_at.elapsed() < WORKER_MAX_RUNTIME {
-            let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
-            compress_rollouts_in_root(archived_root.as_path(), started_at, &mut stats).await?;
+        let result = async {
+            cleanup_stale_temps(codex_home.as_path()).await?;
+            let mut stats = CompressionStats::default();
+            if started_at.elapsed() < WORKER_MAX_RUNTIME {
+                let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+                compress_rollouts_in_root(archived_root.as_path(), started_at, &mut stats).await?;
+            }
+            Ok::<_, io::Error>(stats)
         }
+        .await;
+        let stats = match result {
+            Ok(stats) => stats,
+            Err(err) => {
+                metrics::run("failed");
+                return Err(err);
+            }
+        };
         info!(
             "rollout compression worker finished: scanned={}, compressed={}, skipped={}, failed={}",
             stats.scanned, stats.compressed, stats.skipped, stats.failed
         );
+        metrics::run("completed");
         marker.persist();
         Ok(())
     }
@@ -434,6 +461,7 @@ mod worker {
                 }
                 let path = rollout_file.into_path();
                 stats.scanned = stats.scanned.saturating_add(1);
+                metrics::file("scanned");
                 while jobs.len() >= MAX_CONCURRENT_COMPRESSION_JOBS {
                     collect_next_compression_job(&mut jobs, stats).await;
                 }
@@ -447,7 +475,26 @@ mod worker {
         Ok(())
     }
 
-    type CompressionJobResult = (PathBuf, io::Result<bool>);
+    type CompressionJobResult = (PathBuf, io::Result<CompressionOutcome>);
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum CompressionOutcome {
+        Compressed,
+        SkippedNotCold,
+        SkippedChanged,
+        SkippedAlreadyCompressed,
+    }
+
+    impl CompressionOutcome {
+        fn tag(self) -> &'static str {
+            match self {
+                CompressionOutcome::Compressed => "compressed",
+                CompressionOutcome::SkippedNotCold => "skipped_not_cold",
+                CompressionOutcome::SkippedChanged => "skipped_changed",
+                CompressionOutcome::SkippedAlreadyCompressed => "skipped_already_compressed",
+            }
+        }
+    }
 
     async fn drain_compression_jobs(
         jobs: &mut JoinSet<CompressionJobResult>,
@@ -466,27 +513,35 @@ mod worker {
             return;
         };
         match result {
-            Ok((_, Ok(true))) => stats.compressed = stats.compressed.saturating_add(1),
-            Ok((_, Ok(false))) => stats.skipped = stats.skipped.saturating_add(1),
+            Ok((_, Ok(CompressionOutcome::Compressed))) => {
+                stats.compressed = stats.compressed.saturating_add(1);
+                metrics::file(CompressionOutcome::Compressed.tag());
+            }
+            Ok((_, Ok(outcome))) => {
+                stats.skipped = stats.skipped.saturating_add(1);
+                metrics::file(outcome.tag());
+            }
             Ok((path, Err(err))) => {
                 stats.failed = stats.failed.saturating_add(1);
+                metrics::file("failed");
                 warn!("failed to compress rollout {}: {err}", path.display());
             }
             Err(err) => {
                 stats.failed = stats.failed.saturating_add(1);
+                metrics::file("failed");
                 warn!("rollout compression task failed: {err}");
             }
         }
     }
 
-    fn compress_rollout_if_cold_blocking(path: &Path) -> io::Result<bool> {
+    fn compress_rollout_if_cold_blocking(path: &Path) -> io::Result<CompressionOutcome> {
         let before = match cold_file_state(path)? {
             Some(state) => state,
-            None => return Ok(false),
+            None => return Ok(CompressionOutcome::SkippedNotCold),
         };
         let compressed_path = path::compressed_rollout_path(path);
         if compressed_path.exists() {
-            return Ok(false);
+            return Ok(CompressionOutcome::SkippedAlreadyCompressed);
         }
 
         let temp_dir = compressed_path
@@ -502,22 +557,24 @@ mod worker {
         temp_file.as_file_mut().flush()?;
         verify_zstd(temp_file.path())?;
         if !same_file_state(path, &before)? {
-            return Ok(false);
+            return Ok(CompressionOutcome::SkippedChanged);
         }
         set_file_metadata(temp_file.as_file(), before.modified, &before.permissions)?;
         temp_file.as_file().sync_all()?;
 
         match temp_file.persist_noclobber(compressed_path.as_path()) {
             Ok(_) => {}
-            Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+            Err(err) if err.error.kind() == io::ErrorKind::AlreadyExists => {
+                return Ok(CompressionOutcome::SkippedAlreadyCompressed);
+            }
             Err(err) => return Err(err.error),
         }
         if !same_file_state(path, &before)? {
             let _ = std::fs::remove_file(compressed_path.as_path());
-            return Ok(false);
+            return Ok(CompressionOutcome::SkippedChanged);
         }
         std::fs::remove_file(path)?;
-        Ok(true)
+        Ok(CompressionOutcome::Compressed)
     }
 
     struct FileState {
@@ -643,17 +700,50 @@ mod worker {
                         continue;
                     }
                     match tokio::fs::remove_file(path.as_path()).await {
-                        Ok(()) => {}
+                        Ok(()) => metrics::temp_cleanup("removed"),
                         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                        Err(err) => warn!(
-                            "failed to remove stale rollout temp {}: {err}",
-                            path.display()
-                        ),
+                        Err(err) => {
+                            metrics::temp_cleanup("failed");
+                            warn!(
+                                "failed to remove stale rollout temp {}: {err}",
+                                path.display()
+                            );
+                        }
                     }
                 }
             }
         }
         Ok(())
+    }
+}
+
+mod metrics {
+    const FILE_COUNTER: &str = "codex.rollout_compression.file";
+    const MATERIALIZE_COUNTER: &str = "codex.rollout_compression.materialize";
+    const RUN_COUNTER: &str = "codex.rollout_compression.run";
+    const TEMP_CLEANUP_COUNTER: &str = "codex.rollout_compression.temp_cleanup";
+
+    pub(super) fn file(outcome: &'static str) {
+        counter(FILE_COUNTER, &[("outcome", outcome)]);
+    }
+
+    pub(super) fn materialize(outcome: &'static str) {
+        counter(MATERIALIZE_COUNTER, &[("outcome", outcome)]);
+    }
+
+    pub(super) fn run(status: &'static str) {
+        counter(RUN_COUNTER, &[("status", status)]);
+    }
+
+    pub(super) fn temp_cleanup(outcome: &'static str) {
+        counter(TEMP_CLEANUP_COUNTER, &[("outcome", outcome)]);
+    }
+
+    fn counter(name: &str, tags: &[(&str, &str)]) {
+        let Some(metrics) = codex_otel::global() else {
+            return;
+        };
+        let _ = metrics.counter(name, /*inc*/ 1, tags);
     }
 }
 
