@@ -11,6 +11,7 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
@@ -168,6 +169,43 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
             codex_code_mode::WAIT_TOOL_NAME.to_string(),
         ]
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut v2_model = remote_model("test-multi-agent-v2");
+    v2_model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let v2_body = response_body_for_remote_model(v2_model, |config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .disable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+    })
+    .await?;
+    assert!(tool_names(&v2_body).contains(&"send_message".to_string()));
+
+    let mut disabled_model = remote_model("test-multi-agent-disabled");
+    disabled_model.multi_agent_version = Some(MultiAgentVersion::Disabled);
+    let disabled_body = response_body_for_remote_model(disabled_model, |config| {
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+    })
+    .await?;
+    let disabled_tools = tool_names(&disabled_body);
+    assert!(disabled_tools.iter().all(|name| !matches!(
+        name.as_str(),
+        "multi_agent_v1" | "spawn_agent" | "send_message" | "wait_agent" | "list_agents"
+    )));
 
     Ok(())
 }
