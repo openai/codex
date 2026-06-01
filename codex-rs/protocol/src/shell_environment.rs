@@ -82,6 +82,12 @@ where
             EnvironmentVariablePattern::new_case_insensitive("*KEY*"),
             EnvironmentVariablePattern::new_case_insensitive("*SECRET*"),
             EnvironmentVariablePattern::new_case_insensitive("*TOKEN*"),
+            // Harnesses like Codex Desktop and the VS Code extension
+            // will spawn the app-server with `RUST_LOG=warn` by default,
+            // which can then cause unexpected behavior in subprocesses.
+            // This removes it by default; users can still explicitly
+            // include it via overrides.
+            EnvironmentVariablePattern::new("RUST_LOG"),
         ];
         env_map.retain(|k, _| !matches_any(k, &default_excludes));
     }
