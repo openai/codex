@@ -1311,7 +1311,9 @@ impl ThreadRequestProcessor {
             .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
 
         let mut thread_ids = vec![thread_id];
-        if let Some(state_db_ctx) = self.state_db.as_ref() {
+        if params.include_descendants.unwrap_or(true)
+            && let Some(state_db_ctx) = self.state_db.as_ref()
+        {
             let descendants = state_db_ctx
                 .list_thread_spawn_descendants(thread_id)
                 .await

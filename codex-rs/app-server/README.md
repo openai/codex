@@ -150,7 +150,7 @@ Example with notification opt-out:
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/settings/updated` — experimental notification emitted to subscribed clients when a loaded thread’s effective next-turn settings change; includes `threadId` and the full `threadSettings`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
-- `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
+- `thread/archive` — move a thread’s rollout file into the archived directory. The optional `includeDescendants` parameter controls whether the server attempts to archive spawned subagent descendants using the server-owned thread graph. It defaults to `true` for compatibility with older clients. Descendant moves are best-effort because thread stores expose single-thread archive operations. Returns `{}` on success and emits `thread/archived` for each archived thread.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
@@ -584,10 +584,10 @@ Use `thread/goal/clear` to remove the current goal.
 
 ### Example: Archive a thread
 
-Use `thread/archive` to move the persisted rollout (stored as a JSONL file on disk) into the archived sessions directory and attempt to move any spawned descendant thread rollouts.
+Use `thread/archive` to move the persisted rollout (stored as a JSONL file on disk) into the archived sessions directory. Set `includeDescendants` to `true` to attempt to archive all spawned subagent descendants using the server-owned thread graph. The field defaults to `true` for compatibility with older clients; set it to `false` to archive only the requested thread.
 
 ```json
-{ "method": "thread/archive", "id": 21, "params": { "threadId": "thr_b" } }
+{ "method": "thread/archive", "id": 21, "params": { "threadId": "thr_b", "includeDescendants": true } }
 { "id": 21, "result": {} }
 { "method": "thread/archived", "params": { "threadId": "thr_b" } }
 ```

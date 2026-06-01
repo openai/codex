@@ -602,6 +602,10 @@ pub struct ThreadForkResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadArchiveParams {
     pub thread_id: String,
+    /// Whether to archive spawned subagent descendants. Defaults to true for
+    /// compatibility with the legacy `thread/archive` behavior.
+    #[ts(optional = nullable)]
+    pub include_descendants: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

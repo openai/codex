@@ -1,6 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
+    "includeDescendants": {
+      "description": "Whether to archive spawned subagent descendants. Defaults to true for compatibility with the legacy `thread/archive` behavior.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "threadId": {
       "type": "string"
     }

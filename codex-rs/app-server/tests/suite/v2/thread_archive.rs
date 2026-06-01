@@ -73,6 +73,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: thread.id.clone(),
+            include_descendants: None,
         })
         .await?;
     let archive_err: JSONRPCError = timeout(
@@ -128,6 +129,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: thread.id.clone(),
+            include_descendants: None,
         })
         .await?;
     let archive_resp: JSONRPCResponse = timeout(
@@ -227,6 +229,7 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: parent_id.clone(),
+            include_descendants: None,
         })
         .await?;
     let archive_resp: JSONRPCResponse = timeout(
@@ -274,6 +277,89 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
             "expected archived rollout for {thread_id} to exist"
         );
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_archive_without_descendants_archives_only_requested_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let parent_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-00-00",
+        "2025-01-01T00:00:00Z",
+        "parent",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let child_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-01-00",
+        "2025-01-01T00:01:00Z",
+        "child",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
+    state_db
+        .upsert_thread_spawn_edge(
+            ThreadId::from_string(&parent_id)?,
+            ThreadId::from_string(&child_id)?,
+            DirectionalThreadSpawnEdgeStatus::Open,
+        )
+        .await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let archive_id = mcp
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: parent_id.clone(),
+            include_descendants: Some(false),
+        })
+        .await?;
+    let archive_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
+    )
+    .await??;
+    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/archived"),
+    )
+    .await??;
+    let archived_notification: ThreadArchivedNotification = serde_json::from_value(
+        notification
+            .params
+            .expect("thread/archived notification params"),
+    )?;
+    assert_eq!(archived_notification.thread_id, parent_id);
+
+    assert!(
+        find_archived_thread_path_by_id_str(
+            codex_home.path(),
+            &parent_id,
+            /*state_db_ctx*/ None,
+        )
+        .await?
+        .is_some(),
+        "parent should be archived"
+    );
+    assert!(
+        find_thread_path_by_id_str(codex_home.path(), &child_id, /*state_db_ctx*/ None)
+            .await?
+            .is_some(),
+        "child should stay active when includeDescendants is false"
+    );
 
     Ok(())
 }
@@ -348,6 +434,7 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: parent_id.clone(),
+            include_descendants: Some(true),
         })
         .await?;
     let archive_resp: JSONRPCResponse = timeout(
@@ -452,6 +539,7 @@ async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: parent_id.clone(),
+            include_descendants: Some(true),
         })
         .await?;
     let archive_resp: JSONRPCResponse = timeout(
@@ -545,6 +633,7 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
     let archive_id = primary
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: thread.id.clone(),
+            include_descendants: None,
         })
         .await?;
     let archive_resp: JSONRPCResponse = timeout(

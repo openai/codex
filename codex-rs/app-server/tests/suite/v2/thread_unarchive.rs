@@ -110,6 +110,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     let archive_id = mcp
         .send_thread_archive_request(ThreadArchiveParams {
             thread_id: thread.id.clone(),
+            include_descendants: None,
         })
         .await?;
     let archive_resp: JSONRPCResponse = timeout(

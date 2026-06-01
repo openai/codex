@@ -115,6 +115,7 @@ fn sample_thread_archive_request() -> ClientRequest {
         request_id: RequestId::Integer(3),
         params: ThreadArchiveParams {
             thread_id: "thread-1".to_string(),
+            include_descendants: None,
         },
     }
 }

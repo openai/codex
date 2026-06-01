@@ -113,6 +113,22 @@ fn thread_turns_list_params_accepts_items_view() {
 }
 
 #[test]
+fn thread_archive_params_accept_omitted_include_descendants() {
+    let params = serde_json::from_value::<ThreadArchiveParams>(json!({
+        "threadId": "thr_123",
+    }))
+    .expect("legacy thread archive params should deserialize");
+
+    assert_eq!(
+        params,
+        ThreadArchiveParams {
+            thread_id: "thr_123".to_string(),
+            include_descendants: None,
+        }
+    );
+}
+
+#[test]
 fn thread_resume_params_accept_turns_page_bootstrap() {
     let params = serde_json::from_value::<ThreadResumeParams>(json!({
         "threadId": "thr_123",

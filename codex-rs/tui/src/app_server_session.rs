@@ -576,6 +576,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadArchiveParams {
                     thread_id: thread_id.to_string(),
+                    include_descendants: None,
                 },
             })
             .await

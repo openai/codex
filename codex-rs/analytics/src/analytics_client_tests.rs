@@ -1662,6 +1662,7 @@ async fn unrelated_client_requests_are_ignored_by_reducer() {
                     request_id: RequestId::Integer(3),
                     params: ThreadArchiveParams {
                         thread_id: "thread-2".to_string(),
+                        include_descendants: None,
                     },
                 }),
             },
