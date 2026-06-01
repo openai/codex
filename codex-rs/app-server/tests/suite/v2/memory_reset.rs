@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::AppServer;
 use app_test_support::to_response;
 use chrono::Utc;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -36,7 +36,7 @@ async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result
 
     let thread_id = seed_stage1_output(&state_db, codex_home.path()).await?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

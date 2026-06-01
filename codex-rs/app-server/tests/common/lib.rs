@@ -1,13 +1,16 @@
 mod analytics_server;
+mod app_server;
 mod auth_fixtures;
 mod config;
-mod mcp_process;
 mod mock_model_server;
 mod models_cache;
 mod responses;
 mod rollout;
 
 pub use analytics_server::start_analytics_events_server;
+pub use app_server::AppServer;
+pub use app_server::DEFAULT_CLIENT_NAME;
+pub use app_server::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 pub use auth_fixtures::ChatGptAuthFixture;
 pub use auth_fixtures::ChatGptIdTokenClaims;
 pub use auth_fixtures::encode_id_token;
@@ -24,9 +27,6 @@ pub use core_test_support::test_absolute_path;
 pub use core_test_support::test_path_buf_with_windows;
 pub use core_test_support::test_tmp_path;
 pub use core_test_support::test_tmp_path_buf;
-pub use mcp_process::DEFAULT_CLIENT_NAME;
-pub use mcp_process::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
-pub use mcp_process::McpProcess;
 pub use mock_model_server::create_mock_responses_server_repeating_assistant;
 pub use mock_model_server::create_mock_responses_server_sequence;
 pub use mock_model_server::create_mock_responses_server_sequence_unchecked;
