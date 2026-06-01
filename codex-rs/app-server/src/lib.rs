@@ -1103,11 +1103,8 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
-    #[cfg(unix)]
     use super::analytics_rpc_transport;
-    #[cfg(unix)]
     use crate::transport::AppServerTransport;
-    #[cfg(unix)]
     use codex_analytics::AppServerRpcTransport;
     use pretty_assertions::assert_eq;
 
@@ -1129,10 +1126,9 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
     }
 
-    #[cfg(unix)]
     #[test]
     fn analytics_rpc_transport_preserves_unix_socket() {
-        let transport = "unix:///tmp/codex-app-server.sock"
+        let transport = "unix://codex-app-server.sock"
             .parse::<AppServerTransport>()
             .expect("unix socket transport should parse");
 
