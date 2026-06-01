@@ -425,6 +425,17 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
 
+fn resolve_multi_agent_version(
+    conversation_history: &InitialHistory,
+    inherited_multi_agent_version: Option<MultiAgentVersion>,
+    config: &Config,
+) -> Option<MultiAgentVersion> {
+    conversation_history
+        .get_multi_agent_version()
+        .or(inherited_multi_agent_version)
+        .or_else(|| config.multi_agent_version_from_features())
+}
+
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
@@ -540,10 +551,11 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let multi_agent_version = conversation_history
-            .get_multi_agent_version()
-            .or(inherited_multi_agent_version)
-            .or_else(|| config.multi_agent_version_from_features());
+        let multi_agent_version = resolve_multi_agent_version(
+            &conversation_history,
+            inherited_multi_agent_version,
+            &config,
+        );
         let _ = config
             .effective_agent_max_threads(multi_agent_version)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
