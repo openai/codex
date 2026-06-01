@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
@@ -33,7 +33,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let codex_home = TempDir::new()?;
     let expected_codex_home = AbsolutePathBuf::try_from(codex_home.path().canonicalize()?)?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
 
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -68,7 +68,7 @@ async fn initialize_probe_does_not_override_originator() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
 
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -95,7 +95,7 @@ async fn initialize_codex_backend_does_not_override_originator() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
 
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -123,7 +123,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let codex_home = TempDir::new()?;
     let expected_codex_home = AbsolutePathBuf::try_from(codex_home.path().canonicalize()?)?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[(
             "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
@@ -165,7 +165,7 @@ async fn initialize_rejects_invalid_client_name() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)],
     )
@@ -200,7 +200,7 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
 
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -282,7 +282,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
         ),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {

@@ -7,6 +7,7 @@ use codex_tools::ExtensionTurnItem;
 use codex_tools::ImageGenerationCompletionFuture;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::TurnItemEmissionFuture;
 use codex_tools::TurnItemEmitter;
@@ -47,6 +48,10 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
 
     fn supports_parallel_tool_calls(&self) -> bool {
         self.0.supports_parallel_tool_calls()
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        self.0.search_info()
     }
 
     async fn handle(

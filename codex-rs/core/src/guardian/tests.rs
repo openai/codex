@@ -1288,6 +1288,95 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
     );
 }
 
+async fn guardian_request_model_for_auto_review_override(
+    auto_review_model_override: Option<String>,
+) -> anyhow::Result<(String, String, String)> {
+    let server = start_mock_server().await;
+    let guardian_assessment = serde_json::json!({
+        "outcome": "allow",
+    })
+    .to_string();
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message("msg-guardian", &guardian_assessment),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    Arc::get_mut(&mut turn)
+        .expect("turn should be unique")
+        .model_info
+        .auto_review_model_override = auto_review_model_override;
+    let parent_model = turn.model_info.slug.clone();
+    let preferred_model = turn.provider.approval_review_preferred_model().to_string();
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        turn,
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+        },
+        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let (GuardianReviewOutcome::Completed(_), _) = outcome else {
+        panic!("expected guardian assessment");
+    };
+
+    let request_model = request_log
+        .single_request()
+        .body_json()
+        .get("model")
+        .and_then(|value| value.as_str())
+        .expect("guardian request should include a model")
+        .to_string();
+
+    Ok((request_model, parent_model, preferred_model))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_uses_model_catalog_override_when_preferred_review_model_exists()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let override_model = "guardian-review-model-override".to_string();
+    let (request_model, parent_model, preferred_model) =
+        guardian_request_model_for_auto_review_override(Some(override_model.clone())).await?;
+
+    assert_eq!(request_model, override_model);
+    assert_ne!(request_model, parent_model);
+    assert_ne!(request_model, preferred_model);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_uses_preferred_review_model_without_model_catalog_override()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (request_model, parent_model, preferred_model) =
+        guardian_request_model_for_auto_review_override(/*auto_review_model_override*/ None)
+            .await?;
+
+    assert_eq!(request_model, preferred_model);
+    assert_ne!(request_model, parent_model);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 -> anyhow::Result<()> {
