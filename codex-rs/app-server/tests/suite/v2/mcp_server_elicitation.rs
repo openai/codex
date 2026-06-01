@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
+use app_test_support::TestAppServer;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
@@ -116,7 +116,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp

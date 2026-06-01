@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_fake_parented_rollout_with_source;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
@@ -59,7 +59,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         /*supports_websockets*/ false,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -152,7 +152,7 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
         /*git_info*/ None,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let ThreadForkResponse { thread, .. } =
@@ -236,7 +236,7 @@ async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2()
         /*git_info*/ None,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let ThreadForkResponse { thread, .. } =
@@ -333,7 +333,7 @@ async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -
         parent_thread_id,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_req = mcp
@@ -423,7 +423,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         /*supports_websockets*/ false,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -548,7 +548,7 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
         /*supports_websockets*/ true,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -650,7 +650,7 @@ supports_websockets = {supports_websockets}
 }
 
 async fn fork_fake_rollout_thread(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     source_thread_id: String,
 ) -> Result<ThreadForkResponse> {
     let fork_req = mcp

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_fake_parented_rollout_with_source;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_source;
@@ -48,14 +48,14 @@ use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-async fn init_mcp(codex_home: &Path) -> Result<McpProcess> {
-    let mut mcp = McpProcess::new(codex_home).await?;
+async fn init_mcp(codex_home: &Path) -> Result<TestAppServer> {
+    let mut mcp = TestAppServer::new(codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok(mcp)
 }
 
 async fn list_threads(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     cursor: Option<String>,
     limit: Option<u32>,
     providers: Option<Vec<String>>,
@@ -75,7 +75,7 @@ async fn list_threads(
 }
 
 async fn list_threads_with_sort(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     cursor: Option<String>,
     limit: Option<u32>,
     providers: Option<Vec<String>>,

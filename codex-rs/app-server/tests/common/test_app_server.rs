@@ -106,7 +106,7 @@ use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use tokio::process::Command;
 
-pub struct McpProcess {
+pub struct TestAppServer {
     next_request_id: AtomicI64,
     /// Retain this child process until the client is dropped. The Tokio runtime
     /// will make a "best effort" to reap the process after it exits, but it is
@@ -122,7 +122,7 @@ pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 pub const DISABLE_PLUGIN_STARTUP_TASKS_ARG: &str = "--disable-plugin-startup-tasks-for-tests";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
-impl McpProcess {
+impl TestAppServer {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env_and_args(codex_home, &[], &[DISABLE_PLUGIN_STARTUP_TASKS_ARG]).await
     }
@@ -1513,7 +1513,7 @@ impl McpProcess {
     }
 }
 
-impl Drop for McpProcess {
+impl Drop for TestAppServer {
     fn drop(&mut self) {
         // These tests spawn a `codex-app-server` child process.
         //

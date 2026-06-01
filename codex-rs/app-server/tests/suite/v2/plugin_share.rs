@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
+use app_test_support::TestAppServer;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCError;
@@ -102,7 +102,7 @@ async fn plugin_share_save_uploads_local_plugin() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let expected_plugin_path = AbsolutePathBuf::try_from(plugin_path.clone())?;
     let request_id = mcp
@@ -251,7 +251,7 @@ async fn plugin_share_save_forwards_access_policy() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let expected_plugin_path = AbsolutePathBuf::try_from(plugin_path)?;
     let request_id = mcp
@@ -304,7 +304,7 @@ async fn plugin_share_save_rejects_listed_discoverability() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request(
@@ -359,7 +359,7 @@ plugin_sharing = false
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request(
@@ -404,7 +404,7 @@ async fn plugin_share_rejects_workspace_targets_from_client() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request(
@@ -482,7 +482,7 @@ async fn plugin_share_save_rejects_access_policy_for_existing_plugin() -> Result
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request(
@@ -555,7 +555,7 @@ async fn plugin_share_list_returns_created_workspace_plugins() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request("plugin/share/list", Some(json!({})))
@@ -626,7 +626,7 @@ async fn plugin_share_checkout_adds_personal_marketplace_entry() -> Result<()> {
     mount_empty_remote_installed_plugins(&server, "WORKSPACE").await;
 
     let home_env = home.path().to_string_lossy().into_owned();
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[
             ("HOME", Some(home_env.as_str())),
@@ -789,7 +789,7 @@ async fn plugin_share_checkout_rejects_non_share_remote_plugin() -> Result<()> {
     mount_empty_remote_installed_plugins(&server, "GLOBAL").await;
 
     let home_env = home.path().to_string_lossy().into_owned();
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[
             ("HOME", Some(home_env.as_str())),
@@ -880,7 +880,7 @@ async fn plugin_share_checkout_cleans_up_path_when_marketplace_update_fails() ->
     mount_empty_remote_installed_plugins(&server, "WORKSPACE").await;
 
     let home_env = home.path().to_string_lossy().into_owned();
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[
             ("HOME", Some(home_env.as_str())),
@@ -983,7 +983,7 @@ async fn plugin_share_update_targets_updates_share_targets() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request(
@@ -1065,7 +1065,7 @@ plugin_sharing = false
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request(
@@ -1114,7 +1114,7 @@ async fn plugin_share_delete_removes_created_workspace_plugin() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let request_id = mcp
         .send_raw_request(

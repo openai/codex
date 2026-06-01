@@ -1,6 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
@@ -191,7 +191,7 @@ struct RealtimeSidebandScript {
 }
 
 struct RealtimeE2eHarness {
-    mcp: McpProcess,
+    mcp: TestAppServer,
     _codex_home: TempDir,
     main_loop_responses_server: MockServer,
     realtime_server: WebSocketTestServer,
@@ -280,7 +280,7 @@ impl RealtimeE2eHarness {
             sandbox,
         )?;
 
-        let mut mcp = McpProcess::new(codex_home.path()).await?;
+        let mut mcp = TestAppServer::new(codex_home.path()).await?;
         timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
         login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -539,7 +539,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -788,7 +788,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -890,7 +890,7 @@ async fn realtime_list_voices_returns_supported_names() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -962,7 +962,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -1058,7 +1058,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         StartupContextConfig::Override("startup context"),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -1973,7 +1973,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
         StartupContextConfig::Override("startup context"),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
@@ -2034,7 +2034,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_request_id = mcp
@@ -2074,7 +2074,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     Ok(())
 }
 
-async fn read_notification<T: DeserializeOwned>(mcp: &mut McpProcess, method: &str) -> Result<T> {
+async fn read_notification<T: DeserializeOwned>(mcp: &mut TestAppServer, method: &str) -> Result<T> {
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message(method),
@@ -2086,7 +2086,7 @@ async fn read_notification<T: DeserializeOwned>(mcp: &mut McpProcess, method: &s
     Ok(serde_json::from_value(params)?)
 }
 
-async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
+async fn login_with_api_key(mcp: &mut TestAppServer, api_key: &str) -> Result<()> {
     let request_id = mcp.send_login_account_api_key_request(api_key).await?;
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -2100,7 +2100,7 @@ async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
 }
 
 async fn wait_for_started_command_execution(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
 ) -> Result<ItemStartedNotification> {
     loop {
         let started = read_notification::<ItemStartedNotification>(mcp, "item/started").await?;
@@ -2111,7 +2111,7 @@ async fn wait_for_started_command_execution(
 }
 
 async fn wait_for_completed_command_execution(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
 ) -> Result<ItemCompletedNotification> {
     loop {
         let completed =
