@@ -386,7 +386,7 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         .abs();
 
     assert_eq!(skill.path_to_skills_md, skill_path);
-    assert!(outcome.disabled_paths.contains(&skill.path_to_skills_md));
+    assert!(outcome.disabled_paths.contains(&skill.source_path));
     assert!(
         !outcome
             .allowed_skills_for_implicit_invocation()
@@ -686,10 +686,12 @@ fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill(
     let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
-        HashSet::from([skill_path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize")])
+        HashSet::from([EnvironmentPathRef::local(
+            skill_path
+                .abs()
+                .canonicalize()
+                .expect("skill path should canonicalize"),
+        )])
     );
 }
 
@@ -719,10 +721,12 @@ fn disabled_paths_for_skills_disables_matching_name_selectors() {
     let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
         resolve_disabled_skill_paths(&[skill], &skill_config_rules),
-        HashSet::from([skill_path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize")])
+        HashSet::from([EnvironmentPathRef::local(
+            skill_path
+                .abs()
+                .canonicalize()
+                .expect("skill path should canonicalize"),
+        )])
     );
 }
 

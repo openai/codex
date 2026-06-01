@@ -1,15 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
-use crate::build_skill_name_counts;
+use crate::mention_counts::build_skill_name_counts_for_raw_paths;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::TrackEventsContext;
-use codex_exec_server::LOCAL_FS;
 use codex_otel::SessionTelemetry;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -30,7 +28,7 @@ pub struct SkillInjection {
 
 pub async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
-    loaded_skills: Option<&SkillLoadOutcome>,
+    _loaded_skills: Option<&SkillLoadOutcome>,
     otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
@@ -46,10 +44,9 @@ pub async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        let fs = loaded_skills
-            .and_then(|outcome| outcome.file_system_for_skill(skill))
-            .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        match fs
+        match skill
+            .source_path
+            .file_system()
             .read_file_text(&skill.path_to_skills_md, /*sandbox*/ None)
             .await
         {
@@ -118,7 +115,7 @@ pub fn collect_explicit_skill_mentions(
     disabled_paths: &HashSet<AbsolutePathBuf>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
-    let skill_name_counts = build_skill_name_counts(skills, disabled_paths).0;
+    let skill_name_counts = build_skill_name_counts_for_raw_paths(skills, disabled_paths).0;
 
     let selection_context = SkillSelectionContext {
         skills,
