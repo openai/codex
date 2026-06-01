@@ -302,7 +302,6 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
 use codex_core::windows_sandbox::sandbox_setup_is_complete;
-use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallError as CorePluginInstallError;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginLoadOutcome;
