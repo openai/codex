@@ -656,9 +656,9 @@ impl ThreadManager {
                 ))
             })?;
         let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
-        let inherited_multi_agent_version = fork_source.multi_agent_version().ok_or_else(|| {
-            CodexErr::InvalidRequest("multi-agent version is unresolved".to_string())
-        })?;
+        let inherited_multi_agent_version = fork_source
+            .multi_agent_version()
+            .unwrap_or(MultiAgentVersion::V1);
         options.initial_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
