@@ -215,7 +215,7 @@ jobs:
       - name: Build symbols archive
         shell: bash
         run: |
-          bash "${GITHUB_WORKSPACE}/.github/scripts/build-release-symbols-archive.sh" \
+          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
             --target "${{ matrix.target }}" \
             --artifact-name "${{ matrix.target }}" \
             --release-dir "target/${{ matrix.target }}/release" \

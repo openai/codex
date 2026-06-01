@@ -306,13 +306,7 @@ jobs:
             exit 1
           fi
 
-          bash "${GITHUB_WORKSPACE}/.github/scripts/build-release-symbols-archive.sh" \
-            --target "${{ matrix.target }}" \
-            --artifact-name "${{ matrix.artifact_name }}" \
-            --release-dir "target/${{ matrix.target }}/release" \
-            --archive-dir "symbols-dist/${{ matrix.artifact_name }}" \
-            --binaries bwrap
-
+          strip --strip-debug --strip-unneeded "$bwrap_path"
           digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
           echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
           echo "Built bwrap ${bwrap_path} with sha256:${digest}"
@@ -340,7 +334,6 @@ jobs:
       - name: Build symbols archive and strip binaries
         shell: bash
         run: |
-          symbols_args=()
           binaries=()
           for binary in ${{ matrix.binaries }}; do
             if [[ "$binary" == "bwrap" ]]; then
@@ -348,17 +341,12 @@ jobs:
             fi
             binaries+=("$binary")
           done
-          if [[ "${{ matrix.target }}" == *linux* ]]; then
-            symbols_args+=(--append)
-          fi
-
-          bash "${GITHUB_WORKSPACE}/.github/scripts/build-release-symbols-archive.sh" \
+          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
             --target "${{ matrix.target }}" \
             --artifact-name "${{ matrix.artifact_name }}" \
             --release-dir "target/${{ matrix.target }}/release" \
             --archive-dir "symbols-dist/${{ matrix.artifact_name }}" \
-            --binaries "${binaries[*]}" \
-            "${symbols_args[@]}"
+            --binaries "${binaries[*]}"
 
       - name: Upload symbols archive
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
