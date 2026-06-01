@@ -16,7 +16,7 @@ import sys
 ARGS_TOKEN = "{args}"
 STDERR_NULL_TOKEN = "{stderr-null}"
 POWERSHELL_ARGS = "@($args | Select-Object -Skip 1)"
-POWERSHELL_STDERR_NULL = '2>$null; exit $LASTEXITCODE'
+POWERSHELL_STDERR_NULL = "2>$null; exit $LASTEXITCODE"
 SH_ARGS = '"$@"'
 SH_STDERR_NULL = "2>/dev/null"
 
