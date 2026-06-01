@@ -6,10 +6,10 @@ mod tests;
 
 use self::layer_io::LoadedConfigLayers;
 use crate::CONFIG_TOML_FILE;
+use crate::CloudConfigBundleLayers;
 use crate::ProfileV2Name;
-use crate::cloud_requirements::CloudRequirementsLoader;
-use crate::config_requirements::ConfigRequirementsToml;
-use crate::config_requirements::ConfigRequirementsWithSources;
+use crate::RequirementsLayerEntry;
+use crate::compose_requirements;
 use crate::config_requirements::RequirementSource;
 use crate::config_requirements::SandboxModeRequirement;
 use crate::config_toml::ConfigToml;
@@ -75,14 +75,16 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
     typed_first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE).await
 }
 
-/// To build up the set of admin-enforced constraints, we build up from multiple
-/// configuration layers in the following order, but a constraint defined in an
-/// earlier layer cannot be overridden by a later layer:
+/// To build up the set of admin-enforced constraints, requirements layers are
+/// collected in ascending precedence order, matching config layers, and then
+/// composed with config-style TOML merging plus field-specific handling for
+/// hooks, rules, deny-read permissions, and remote sandbox config:
 ///
-/// - cloud:    managed cloud requirements
-/// - admin:    managed preferences (*)
 /// - system    `/etc/codex/requirements.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\requirements.toml` (Windows)
+/// - cloud:    enterprise-managed cloud config bundle requirements
+/// - legacy:   managed_config.toml reinterpreted as requirements.toml
+/// - admin:    managed preferences (*)
 ///
 /// For backwards compatibility, we also load from
 /// `managed_config.toml` and map it to `requirements.toml`.
@@ -92,6 +94,7 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/config.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\config.toml` (Windows)
+/// - cloud     enterprise-managed cloud config bundle fragments
 /// - user      `${CODEX_HOME}/config.toml`
 /// - profile   `${CODEX_HOME}/<name>.config.toml`, when selected
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
@@ -114,55 +117,76 @@ pub async fn load_config_layers_state(
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     options: impl Into<ConfigLoadOptions>,
-    cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: &dyn ThreadConfigLoader,
 ) -> io::Result<ConfigLayerStack> {
     let ConfigLoadOptions {
         loader_overrides: overrides,
         strict_config,
+        cloud_config_bundle,
     } = options.into();
     let active_user_profile = overrides.user_config_profile.clone();
     let ignore_managed_requirements = overrides.ignore_managed_requirements;
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
-    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    let mut requirements_layers = Vec::new();
+    let mut bundle_requirements_layers = Vec::new();
+    let mut system_requirements_layer = None;
+    let managed_preferences_requirements_layer;
+    let mut cloud_config_layers = Vec::new();
 
     if !ignore_managed_requirements {
-        if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
-            merge_requirements_with_remote_sandbox_config(
-                &mut config_requirements_toml,
-                RequirementSource::CloudRequirements,
-                requirements,
-            );
+        if let Some(bundle) = cloud_config_bundle.get().await.map_err(io::Error::other)? {
+            let cloud_config_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
+            let bundle_layers = if strict_config {
+                CloudConfigBundleLayers::from_bundle_strict_config(bundle, &cloud_config_base_dir)?
+            } else {
+                CloudConfigBundleLayers::from_bundle(bundle, &cloud_config_base_dir)?
+            };
+            let CloudConfigBundleLayers {
+                enterprise_managed_config,
+                enterprise_managed_requirements,
+            } = bundle_layers;
+            bundle_requirements_layers = enterprise_managed_requirements;
+            cloud_config_layers = enterprise_managed_config;
         }
 
         #[cfg(target_os = "macos")]
-        macos::load_managed_admin_requirements_toml(
-            &mut config_requirements_toml,
-            overrides
-                .macos_managed_config_requirements_base64
-                .as_deref(),
-        )
-        .await?;
+        {
+            managed_preferences_requirements_layer = macos::load_managed_admin_requirements_layer(
+                overrides
+                    .macos_managed_config_requirements_base64
+                    .as_deref(),
+            )
+            .await?;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            managed_preferences_requirements_layer = None;
+        }
 
         // Honor the system requirements.toml location.
         let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
-        load_requirements_toml(fs, &mut config_requirements_toml, &requirements_toml_file).await?;
+        system_requirements_layer = load_requirements_toml(fs, &requirements_toml_file).await?;
+    } else {
+        managed_preferences_requirements_layer = None;
     }
 
-    // Make a best-effort to support the legacy `managed_config.toml` as a
-    // requirements specification.
     let loaded_config_layers =
         layer_io::load_config_layers_internal(fs, codex_home, overrides.clone(), strict_config)
             .await?;
     if !ignore_managed_requirements {
-        load_requirements_from_legacy_scheme(
-            &mut config_requirements_toml,
+        requirements_layers.extend(system_requirements_layer);
+        requirements_layers.extend(bundle_requirements_layers);
+        // Continue to support the legacy `managed_config.toml` locations as
+        // requirements layers for backwards compatibility.
+        requirements_layers.extend(requirements_layers_from_legacy_scheme(
             loaded_config_layers.clone(),
-        )
-        .await?;
+        )?);
+        requirements_layers.extend(managed_preferences_requirements_layer);
     }
+
+    let config_requirements_toml = compose_requirements(requirements_layers)?.unwrap_or_default();
 
     let thread_config_context = ThreadConfigContext {
         thread_id: None,
@@ -210,6 +234,7 @@ pub async fn load_config_layers_state(
     )
     .await?;
     layers.push(system_layer);
+    layers.extend(cloud_config_layers);
 
     // Add the base user config layer. When profile-v2 is selected, add the
     // profile config as a second user layer on top so the profile only needs to
@@ -535,15 +560,13 @@ fn validate_cli_overrides_strictly(
     Ok(())
 }
 
-/// If available, apply requirements from the platform system
-/// `requirements.toml` location to `config_requirements_toml` by filling in
-/// any unset fields.
+/// If available, load requirements from the platform system `requirements.toml`
+/// location as a requirements layer.
 #[doc(hidden)]
 pub async fn load_requirements_toml(
     fs: &dyn ExecutorFileSystem,
-    config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: &AbsolutePathBuf,
-) -> io::Result<()> {
+) -> io::Result<Option<RequirementsLayerEntry>> {
     match fs
         .read_file_text(requirements_toml_file, /*sandbox*/ None)
         .await
@@ -558,39 +581,31 @@ pub async fn load_requirements_toml(
                     ),
                 )
             })?;
-            let _guard = AbsolutePathBufGuard::new(requirements_parent.as_path());
-            let requirements_config: ConfigRequirementsToml =
-                toml::from_str(&contents).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!(
-                            "Error parsing requirements file {}: {e}",
-                            requirements_toml_file.as_path().display(),
-                        ),
-                    )
-                })?;
-            merge_requirements_with_remote_sandbox_config(
-                config_requirements_toml,
-                RequirementSource::SystemRequirementsToml {
-                    file: requirements_toml_file.clone(),
-                },
-                requirements_config,
-            );
+            let base_dir = AbsolutePathBuf::from_absolute_path(requirements_parent)?;
+            Ok(Some(
+                RequirementsLayerEntry::from_toml(
+                    RequirementSource::SystemRequirementsToml {
+                        file: requirements_toml_file.clone(),
+                    },
+                    contents,
+                )
+                .with_base_dir(base_dir),
+            ))
         }
         Err(e) => {
             if e.kind() != io::ErrorKind::NotFound {
-                return Err(io::Error::new(
+                Err(io::Error::new(
                     e.kind(),
                     format!(
                         "Failed to read requirements file {}: {e}",
                         requirements_toml_file.as_path().display(),
                     ),
-                ));
+                ))
+            } else {
+                Ok(None)
             }
         }
     }
-
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -704,30 +719,30 @@ fn windows_program_data_dir_from_known_folder() -> io::Result<PathBuf> {
     Ok(path)
 }
 
-async fn load_requirements_from_legacy_scheme(
-    config_requirements_toml: &mut ConfigRequirementsWithSources,
+fn requirements_layers_from_legacy_scheme(
     loaded_config_layers: LoadedConfigLayers,
-) -> io::Result<()> {
-    // In this implementation, earlier layers cannot be overwritten by later
-    // layers, so list managed_config_from_mdm first because it has the highest
-    // precedence.
+) -> io::Result<Vec<RequirementsLayerEntry>> {
+    // List the file-backed legacy layer first because requirements layers are
+    // composed lowest-precedence to highest-precedence, and MDM has higher
+    // precedence than the legacy managed_config.toml file.
     let LoadedConfigLayers {
         managed_config,
         managed_config_from_mdm,
     } = loaded_config_layers;
 
-    for (source, config) in managed_config_from_mdm
-        .map(|config| {
-            (
-                RequirementSource::LegacyManagedConfigTomlFromMdm,
-                config.managed_config,
-            )
-        })
-        .into_iter()
-        .chain(managed_config.map(|c| {
+    let mut layers = Vec::new();
+    for (source, config) in managed_config
+        .map(|c| {
             (
                 RequirementSource::LegacyManagedConfigTomlFromFile { file: c.file },
                 c.managed_config,
+            )
+        })
+        .into_iter()
+        .chain(managed_config_from_mdm.map(|config| {
+            (
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
+                config.managed_config,
             )
         }))
     {
@@ -739,26 +754,56 @@ async fn load_requirements_from_legacy_scheme(
                 )
             })?;
 
-        merge_requirements_with_remote_sandbox_config(
-            config_requirements_toml,
+        layers.push(RequirementsLayerEntry::from_toml_value(
             source,
-            ConfigRequirementsToml::from(legacy_config),
-        );
+            legacy_requirements_to_toml_value(legacy_config)?,
+        ));
     }
 
-    Ok(())
+    Ok(layers)
 }
 
-pub(super) fn merge_requirements_with_remote_sandbox_config(
-    target: &mut ConfigRequirementsWithSources,
-    source: RequirementSource,
-    mut requirements: ConfigRequirementsToml,
-) {
-    if requirements.remote_sandbox_config.is_some() {
-        let host_name = crate::host_name();
-        requirements.apply_remote_sandbox_config(host_name.as_deref());
+fn legacy_requirements_to_toml_value(legacy: LegacyManagedConfigToml) -> io::Result<TomlValue> {
+    let LegacyManagedConfigToml {
+        approval_policy,
+        approvals_reviewer,
+        sandbox_mode,
+    } = legacy;
+    let mut table = toml::map::Map::new();
+    if let Some(approval_policy) = approval_policy {
+        table.insert(
+            "allowed_approval_policies".to_string(),
+            toml_value_from_serializable(vec![approval_policy])?,
+        );
     }
-    target.merge_unset_fields(source, requirements);
+    if let Some(approvals_reviewer) = approvals_reviewer {
+        let mut allowed_reviewers = vec![approvals_reviewer];
+        if approvals_reviewer == ApprovalsReviewer::AutoReview {
+            allowed_reviewers.push(ApprovalsReviewer::User);
+        }
+        table.insert(
+            "allowed_approvals_reviewers".to_string(),
+            toml_value_from_serializable(allowed_reviewers)?,
+        );
+    }
+    if let Some(sandbox_mode) = sandbox_mode {
+        let required_mode: SandboxModeRequirement = sandbox_mode.into();
+        // Allowing read-only is a requirement for Codex to function correctly.
+        // So in this backfill path, we append read-only if it's not already specified.
+        let mut allowed_modes = vec![SandboxModeRequirement::ReadOnly];
+        if required_mode != SandboxModeRequirement::ReadOnly {
+            allowed_modes.push(required_mode);
+        }
+        table.insert(
+            "allowed_sandbox_modes".to_string(),
+            toml_value_from_serializable(allowed_modes)?,
+        );
+    }
+    Ok(TomlValue::Table(table))
+}
+
+fn toml_value_from_serializable<T: serde::Serialize>(value: T) -> io::Result<TomlValue> {
+    TomlValue::try_from(value).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 struct ProjectTrustContext {
@@ -1342,39 +1387,6 @@ struct LegacyManagedConfigToml {
     sandbox_mode: Option<SandboxMode>,
 }
 
-impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
-    fn from(legacy: LegacyManagedConfigToml) -> Self {
-        let mut config_requirements_toml = ConfigRequirementsToml::default();
-
-        let LegacyManagedConfigToml {
-            approval_policy,
-            approvals_reviewer,
-            sandbox_mode,
-        } = legacy;
-        if let Some(approval_policy) = approval_policy {
-            config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
-        }
-        if let Some(approvals_reviewer) = approvals_reviewer {
-            let mut allowed_reviewers = vec![approvals_reviewer];
-            if approvals_reviewer == ApprovalsReviewer::AutoReview {
-                allowed_reviewers.push(ApprovalsReviewer::User);
-            }
-            config_requirements_toml.allowed_approvals_reviewers = Some(allowed_reviewers);
-        }
-        if let Some(sandbox_mode) = sandbox_mode {
-            let required_mode: SandboxModeRequirement = sandbox_mode.into();
-            // Allowing read-only is a requirement for Codex to function correctly.
-            // So in this backfill path, we append read-only if it's not already specified.
-            let mut allowed_modes = vec![SandboxModeRequirement::ReadOnly];
-            if required_mode != SandboxModeRequirement::ReadOnly {
-                allowed_modes.push(required_mode);
-            }
-            config_requirements_toml.allowed_sandbox_modes = Some(allowed_modes);
-        }
-        config_requirements_toml
-    }
-}
-
 // Cannot name this `mod tests` because of tests.rs in this folder.
 #[cfg(test)]
 mod unit_tests {
@@ -1421,54 +1433,63 @@ foo = "xyzzy"
     }
 
     #[test]
-    fn legacy_managed_config_backfill_includes_read_only_sandbox_mode() {
+    fn legacy_managed_config_backfill_includes_read_only_sandbox_mode() -> io::Result<()> {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
         };
 
-        let requirements = ConfigRequirementsToml::from(legacy);
-
         assert_eq!(
-            requirements.allowed_sandbox_modes,
-            Some(vec![
-                SandboxModeRequirement::ReadOnly,
-                SandboxModeRequirement::WorkspaceWrite
-            ])
+            legacy_requirements_to_toml_value(legacy)?,
+            TomlValue::Table(toml::map::Map::from_iter([(
+                "allowed_sandbox_modes".to_string(),
+                TomlValue::Array(vec![
+                    TomlValue::String("read-only".to_string()),
+                    TomlValue::String("workspace-write".to_string()),
+                ]),
+            )]))
         );
+        Ok(())
     }
 
     #[test]
-    fn legacy_managed_config_backfill_allows_user_when_guardian_is_required() {
+    fn legacy_managed_config_backfill_allows_user_when_guardian_is_required() -> io::Result<()> {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             sandbox_mode: None,
         };
 
-        let requirements = ConfigRequirementsToml::from(legacy);
-
         assert_eq!(
-            requirements.allowed_approvals_reviewers,
-            Some(vec![ApprovalsReviewer::AutoReview, ApprovalsReviewer::User,])
+            legacy_requirements_to_toml_value(legacy)?,
+            TomlValue::Table(toml::map::Map::from_iter([(
+                "allowed_approvals_reviewers".to_string(),
+                TomlValue::Array(vec![
+                    TomlValue::String("guardian_subagent".to_string()),
+                    TomlValue::String("user".to_string()),
+                ]),
+            )]))
         );
+        Ok(())
     }
 
     #[test]
-    fn legacy_managed_config_backfill_preserves_user_only_approvals_reviewer() {
+    fn legacy_managed_config_backfill_preserves_user_only_approvals_reviewer() -> io::Result<()> {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_mode: None,
         };
 
-        let requirements = ConfigRequirementsToml::from(legacy);
-
         assert_eq!(
-            requirements.allowed_approvals_reviewers,
-            Some(vec![ApprovalsReviewer::User])
+            legacy_requirements_to_toml_value(legacy)?,
+            TomlValue::Table(toml::map::Map::from_iter([(
+                "allowed_approvals_reviewers".to_string(),
+                TomlValue::Array(vec![TomlValue::String("user".to_string())]),
+            )]))
         );
+        Ok(())
     }
 
     #[cfg(windows)]

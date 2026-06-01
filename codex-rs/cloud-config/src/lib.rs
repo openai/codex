@@ -1,12 +1,7 @@
-//! Cloud-hosted config requirements for Codex.
+//! Cloud-hosted configuration data for Codex.
 //!
-//! This crate fetches `requirements.toml` data from the backend as an alternative to loading it
-//! from the local filesystem. It only applies to Business (aka Enterprise CBP) or Enterprise ChatGPT
-//! customers.
-//!
-//! Fetching fails closed for eligible ChatGPT Business and Enterprise accounts. When cloud
-//! requirements cannot be loaded for those accounts, Codex fails configuration loading rather than
-//! continuing without them.
+//! This crate owns transport, caching, and refresh behavior for cloud-delivered
+//! config data. Parsing and composition remain in `codex-config`.
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -15,17 +10,25 @@ use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_backend_client::Client as BackendClient;
-use codex_config::CloudRequirementsLoadError;
-use codex_config::CloudRequirementsLoadErrorCode;
-use codex_config::CloudRequirementsLoader;
-use codex_config::ConfigRequirementsToml;
+use codex_backend_client::ConfigBundleResponse;
+use codex_backend_client::DeliveredTomlFragment;
+use codex_config::AbsolutePathBuf;
+use codex_config::CloudConfigBundle;
+use codex_config::CloudConfigBundleLayers;
+use codex_config::CloudConfigBundleLoadError;
+use codex_config::CloudConfigBundleLoadErrorCode;
+use codex_config::CloudConfigBundleLoader;
+use codex_config::CloudConfigFragment;
+use codex_config::CloudConfigTomlBundle;
+use codex_config::CloudRequirementsFragment;
+use codex_config::CloudRequirementsTomlBundle;
+use codex_config::compose_requirements;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::util::backoff;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_protocol::account::PlanType;
-use codex_utils_absolute_path::AbsolutePathBufGuard;
 use hmac::Hmac;
 use hmac::Mac;
 use serde::Deserialize;
@@ -46,24 +49,21 @@ use tokio::time::timeout;
 
 const CLOUD_REQUIREMENTS_TIMEOUT: Duration = Duration::from_secs(15);
 const CLOUD_REQUIREMENTS_MAX_ATTEMPTS: usize = 5;
-const CLOUD_REQUIREMENTS_CACHE_FILENAME: &str = "cloud-requirements-cache.json";
+const CLOUD_CONFIG_BUNDLE_CACHE_VERSION: u32 = 1;
+const CLOUD_REQUIREMENTS_CACHE_FILENAME: &str = "cloud-config-bundle-cache.json";
 const CLOUD_REQUIREMENTS_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const CLOUD_REQUIREMENTS_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
-const CLOUD_REQUIREMENTS_FETCH_ATTEMPT_METRIC: &str = "codex.cloud_requirements.fetch_attempt";
-const CLOUD_REQUIREMENTS_FETCH_FINAL_METRIC: &str = "codex.cloud_requirements.fetch_final";
-const CLOUD_REQUIREMENTS_LOAD_METRIC: &str = "codex.cloud_requirements.load";
+const CLOUD_REQUIREMENTS_FETCH_ATTEMPT_METRIC: &str = "codex.cloud_config_bundle.fetch_attempt";
+const CLOUD_REQUIREMENTS_FETCH_FINAL_METRIC: &str = "codex.cloud_config_bundle.fetch_final";
+const CLOUD_REQUIREMENTS_LOAD_METRIC: &str = "codex.cloud_config_bundle.load";
 const CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE: &str =
-    "Failed to load cloud requirements (workspace-managed policies).";
-const CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE: &str = concat!(
-    "Cloud requirements (workspace-managed policies) are invalid and could not be parsed. ",
-    "Please contact your workspace admin."
-);
+    "Failed to load cloud config bundle (workspace-managed policies).";
 const CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE: &str = concat!(
     "Your authentication session could not be refreshed automatically. ",
     "Please log out and sign in again."
 );
 const CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY: &[u8] =
-    b"codex-cloud-requirements-cache-v3-064f8542-75b4-494c-a294-97d3ce597271";
+    b"codex-cloud-config-bundle-cache-v1-6160ae70-bcfd-4ca8-a99b-40f73b3b072e";
 const CLOUD_REQUIREMENTS_CACHE_READ_HMAC_KEYS: &[&[u8]] =
     &[CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY];
 
@@ -100,54 +100,50 @@ enum FetchAttemptError {
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 enum CacheLoadStatus {
-    #[error("Skipping cloud requirements cache read because auth identity is incomplete.")]
+    #[error("Skipping cloud config bundle cache read because auth identity is incomplete.")]
     AuthIdentityIncomplete,
-    #[error("Cloud requirements cache file not found.")]
+    #[error("Cloud config bundle cache file not found.")]
     CacheFileNotFound,
-    #[error("Failed to read cloud requirements cache: {0}.")]
+    #[error("Failed to read cloud config bundle cache: {0}.")]
     CacheReadFailed(String),
-    #[error("Failed to parse cloud requirements cache: {0}.")]
+    #[error("Failed to parse cloud config bundle cache: {0}.")]
     CacheParseFailed(String),
-    #[error("Cloud requirements cache failed signature verification.")]
+    #[error("Cloud config bundle cache failed signature verification.")]
     CacheSignatureInvalid,
-    #[error("Ignoring cloud requirements cache because cached identity is incomplete.")]
+    #[error("Ignoring cloud config bundle cache because cached identity is incomplete.")]
     CacheIdentityIncomplete,
-    #[error("Ignoring cloud requirements cache for different auth identity.")]
+    #[error("Ignoring cloud config bundle cache for different auth identity.")]
     CacheIdentityMismatch,
-    #[error("Cloud requirements cache expired.")]
+    #[error("Ignoring cloud config bundle cache with unsupported version {0}.")]
+    CacheVersionUnsupported(u32),
+    #[error("Cloud config bundle cache expired.")]
     CacheExpired,
+    #[error("Ignoring cloud config bundle cache because the cached bundle is invalid.")]
+    CacheInvalidBundle,
 }
 
 #[derive(Debug, Error)]
 enum CloudRequirementsError {
-    #[error("failed to write cloud requirements cache")]
+    #[error("failed to write cloud config bundle cache")]
     CacheWrite,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct CloudRequirementsCacheFile {
     signed_payload: CloudRequirementsCacheSignedPayload,
     signature: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct CloudRequirementsCacheSignedPayload {
+    version: u32,
     cached_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     chatgpt_user_id: Option<String>,
     account_id: Option<String>,
-    contents: Option<String>,
+    bundle: CloudConfigBundle,
 }
 
-impl CloudRequirementsCacheSignedPayload {
-    fn requirements(&self, requirements_base_dir: &Path) -> Option<ConfigRequirementsToml> {
-        self.contents.as_deref().and_then(|contents| {
-            parse_cloud_requirements(contents, requirements_base_dir)
-                .ok()
-                .flatten()
-        })
-    }
-}
 fn sign_cache_payload(payload_bytes: &[u8]) -> Option<String> {
     let mut mac = HmacSha256::new_from_slice(CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY).ok()?;
     mac.update(payload_bytes);
@@ -191,19 +187,28 @@ fn cloud_requirements_eligible_auth(auth: &CodexAuth) -> bool {
         && (plan_type.is_business_like() || matches!(plan_type, PlanType::Enterprise))
 }
 
+fn optional_bundle(bundle: CloudConfigBundle) -> Option<CloudConfigBundle> {
+    if bundle.is_empty() {
+        None
+    } else {
+        Some(bundle)
+    }
+}
+
 fn cache_payload_bytes(payload: &CloudRequirementsCacheSignedPayload) -> Option<Vec<u8>> {
     serde_json::to_vec(&payload).ok()
 }
 
+/// Retrieves one cloud config bundle from the backend.
+///
+/// Implementations should return the backend-selected bundle exactly as delivered and leave
+/// validation, caching, and config/requirements parsing decisions to the service layer.
 #[async_trait]
 trait RequirementsFetcher: Send + Sync {
-    /// Returns `Ok(None)` when there are no cloud requirements for the account.
-    ///
-    /// Returning `Err` indicates cloud requirements could not be fetched.
     async fn fetch_requirements(
         &self,
         auth: &CodexAuth,
-    ) -> Result<Option<String>, FetchAttemptError>;
+    ) -> Result<CloudConfigBundle, FetchAttemptError>;
 }
 
 struct BackendRequirementsFetcher {
@@ -221,20 +226,22 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
     async fn fetch_requirements(
         &self,
         auth: &CodexAuth,
-    ) -> Result<Option<String>, FetchAttemptError> {
+    ) -> Result<CloudConfigBundle, FetchAttemptError> {
         let client = BackendClient::from_auth(self.base_url.clone(), auth)
             .inspect_err(|err| {
                 tracing::warn!(
                     error = %err,
-                    "Failed to construct backend client for cloud requirements"
+                    "Failed to construct backend client for cloud config bundle"
                 );
             })
             .map_err(|_| FetchAttemptError::Retryable(RetryableFailureKind::BackendClientInit))?;
 
         let response = client
-            .get_config_requirements_file()
+            .get_config_bundle()
             .await
-            .inspect_err(|err| tracing::warn!(error = %err, "Failed to fetch cloud requirements"))
+            .inspect_err(|err| {
+                tracing::warn!(error = %err, "Failed to fetch cloud config bundle");
+            })
             .map_err(|err| {
                 let status_code = err.status().map(|status| status.as_u16());
                 if err.is_unauthorized() {
@@ -247,14 +254,55 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
                 }
             })?;
 
-        let Some(contents) = response.contents else {
-            tracing::info!(
-                "Cloud requirements response missing contents; treating as no requirements"
-            );
-            return Ok(None);
-        };
+        Ok(bundle_from_response(response))
+    }
+}
 
-        Ok(Some(contents))
+fn bundle_from_response(response: ConfigBundleResponse) -> CloudConfigBundle {
+    let config_toml = response
+        .config_toml
+        .flatten()
+        .map(|config_toml| *config_toml)
+        .and_then(|config_toml| config_toml.enterprise_managed.flatten())
+        .unwrap_or_default()
+        .into_iter()
+        .map(config_fragment_from_delivered)
+        .collect();
+    let requirements_toml = response
+        .requirements_toml
+        .flatten()
+        .map(|requirements_toml| *requirements_toml)
+        .and_then(|requirements_toml| requirements_toml.enterprise_managed.flatten())
+        .unwrap_or_default()
+        .into_iter()
+        .map(requirements_fragment_from_delivered)
+        .collect();
+
+    CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle {
+            enterprise_managed: config_toml,
+        },
+        requirements_toml: CloudRequirementsTomlBundle {
+            enterprise_managed: requirements_toml,
+        },
+    }
+}
+
+fn config_fragment_from_delivered(fragment: DeliveredTomlFragment) -> CloudConfigFragment {
+    CloudConfigFragment {
+        id: fragment.id,
+        name: fragment.name,
+        contents: fragment.contents,
+    }
+}
+
+fn requirements_fragment_from_delivered(
+    fragment: DeliveredTomlFragment,
+) -> CloudRequirementsFragment {
+    CloudRequirementsFragment {
+        id: fragment.id,
+        name: fragment.name,
+        contents: fragment.contents,
     }
 }
 
@@ -262,11 +310,10 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
 struct CloudRequirementsService {
     auth_manager: Arc<AuthManager>,
     fetcher: Arc<dyn RequirementsFetcher>,
-    requirements_base_dir: PathBuf,
     cache_path: PathBuf,
+    codex_home: PathBuf,
     timeout: Duration,
 }
-
 impl CloudRequirementsService {
     fn new(
         auth_manager: Arc<AuthManager>,
@@ -277,87 +324,97 @@ impl CloudRequirementsService {
         Self {
             auth_manager,
             fetcher,
-            requirements_base_dir: codex_home.clone(),
             cache_path: codex_home.join(CLOUD_REQUIREMENTS_CACHE_FILENAME),
+            codex_home,
             timeout,
         }
     }
 
     async fn fetch_with_timeout(
         &self,
-    ) -> Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError> {
+    ) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
         let _timer =
-            codex_otel::start_global_timer("codex.cloud_requirements.fetch.duration_ms", &[]);
+            codex_otel::start_global_timer("codex.cloud_config_bundle.fetch.duration_ms", &[]);
         let started_at = Instant::now();
-        let fetch_result = timeout(self.timeout, self.fetch())
+        let load_result = timeout(self.timeout, self.fetch())
             .await
             .inspect_err(|_| {
                 let message = format!(
-                    "Timed out waiting for cloud requirements after {}s",
+                    "Timed out waiting for cloud config bundle after {}s",
                     self.timeout.as_secs()
                 );
                 tracing::error!("{message}");
-                emit_load_metric("startup", "error");
+                emit_load_metric("startup", "error", /*bundle*/ None);
             })
             .map_err(|_| {
-                CloudRequirementsLoadError::new(
-                    CloudRequirementsLoadErrorCode::Timeout,
+                CloudConfigBundleLoadError::new(
+                    CloudConfigBundleLoadErrorCode::Timeout,
                     /*status_code*/ None,
                     format!(
-                        "timed out waiting for cloud requirements after {}s",
+                        "timed out waiting for cloud config bundle after {}s",
                         self.timeout.as_secs()
                     ),
                 )
             })?;
 
-        let result = match fetch_result {
+        let result = match load_result {
             Ok(result) => result,
             Err(err) => {
-                emit_load_metric("startup", "error");
+                emit_load_metric("startup", "error", /*bundle*/ None);
                 return Err(err);
             }
         };
 
         match result.as_ref() {
-            Some(requirements) => {
+            Some(bundle) => {
                 tracing::info!(
                     elapsed_ms = started_at.elapsed().as_millis(),
-                    requirements = ?requirements,
-                    "Cloud requirements load completed"
+                    config_fragments = bundle.config_toml.enterprise_managed.len(),
+                    requirements_fragments = bundle.requirements_toml.enterprise_managed.len(),
+                    "Cloud config bundle load completed"
                 );
-                emit_load_metric("startup", "success");
+                emit_load_metric("startup", "success", Some(bundle));
             }
             None => {
                 tracing::info!(
                     elapsed_ms = started_at.elapsed().as_millis(),
-                    "Cloud requirements load completed (none)"
+                    "Cloud config bundle load completed (none)"
                 );
-                emit_load_metric("startup", "success");
+                emit_load_metric("startup", "success", /*bundle*/ None);
             }
         }
 
         Ok(result)
     }
 
-    async fn fetch(&self) -> Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError> {
+    async fn fetch(&self) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
         let Some(auth) = self.auth_manager.auth().await else {
             return Ok(None);
         };
         if !cloud_requirements_eligible_auth(&auth) {
             return Ok(None);
         }
-        let (chatgpt_user_id, account_id) = auth_identity(&auth);
 
+        let (chatgpt_user_id, account_id) = auth_identity(&auth);
         match self
             .load_cache(chatgpt_user_id.as_deref(), account_id.as_deref())
             .await
         {
             Ok(signed_payload) => {
-                tracing::info!(
-                    path = %self.cache_path.display(),
-                    "Using cached cloud requirements"
-                );
-                return Ok(signed_payload.requirements(&self.requirements_base_dir));
+                if let Err(err) = validate_bundle(&signed_payload.bundle, &self.codex_home) {
+                    tracing::warn!(
+                        path = %self.cache_path.display(),
+                        error = %err,
+                        "Ignoring invalid cached cloud config bundle"
+                    );
+                    self.log_cache_load_status(&CacheLoadStatus::CacheInvalidBundle);
+                } else {
+                    tracing::info!(
+                        path = %self.cache_path.display(),
+                        "Using cached cloud config bundle"
+                    );
+                    return Ok(optional_bundle(signed_payload.bundle));
+                }
             }
             Err(cache_load_status) => {
                 self.log_cache_load_status(&cache_load_status);
@@ -371,18 +428,18 @@ impl CloudRequirementsService {
         &self,
         mut auth: CodexAuth,
         trigger: &'static str,
-    ) -> Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError> {
+    ) -> Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError> {
         let mut attempt = 1;
         let mut last_status_code: Option<u16> = None;
         let mut auth_recovery = self.auth_manager.unauthorized_recovery();
 
         while attempt <= CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
-            let contents = match self.fetcher.fetch_requirements(&auth).await {
-                Ok(contents) => {
+            let bundle = match self.fetcher.fetch_requirements(&auth).await {
+                Ok(bundle) => {
                     emit_fetch_attempt_metric(
                         trigger, attempt, "success", /*status_code*/ None,
                     );
-                    contents
+                    bundle
                 }
                 Err(FetchAttemptError::Retryable(status)) => {
                     let status_code = status.status_code();
@@ -393,7 +450,7 @@ impl CloudRequirementsService {
                             status = ?status,
                             attempt,
                             max_attempts = CLOUD_REQUIREMENTS_MAX_ATTEMPTS,
-                            "Failed to fetch cloud requirements; retrying"
+                            "Failed to fetch cloud config bundle; retrying"
                         );
                         sleep(backoff(attempt as u64)).await;
                     }
@@ -410,13 +467,13 @@ impl CloudRequirementsService {
                         tracing::warn!(
                             attempt,
                             max_attempts = CLOUD_REQUIREMENTS_MAX_ATTEMPTS,
-                            "Cloud requirements request was unauthorized; attempting auth recovery"
+                            "Cloud config bundle request was unauthorized; attempting auth recovery"
                         );
                         match auth_recovery.next().await {
                             Ok(_) => {
                                 let Some(refreshed_auth) = self.auth_manager.auth().await else {
                                     tracing::error!(
-                                        "Auth recovery succeeded but no auth is available for cloud requirements"
+                                        "Auth recovery succeeded but no auth is available for cloud config bundle"
                                     );
                                     emit_fetch_final_metric(
                                         trigger,
@@ -424,9 +481,10 @@ impl CloudRequirementsService {
                                         "auth_recovery_missing_auth",
                                         attempt,
                                         status_code,
+                                        /*bundle*/ None,
                                     );
-                                    return Err(CloudRequirementsLoadError::new(
-                                        CloudRequirementsLoadErrorCode::Auth,
+                                    return Err(CloudConfigBundleLoadError::new(
+                                        CloudConfigBundleLoadErrorCode::Auth,
                                         status_code,
                                         CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE,
                                     ));
@@ -437,7 +495,7 @@ impl CloudRequirementsService {
                             Err(RefreshTokenError::Permanent(failed)) => {
                                 tracing::warn!(
                                     error = %failed,
-                                    "Failed to recover from unauthorized cloud requirements request"
+                                    "Failed to recover from unauthorized cloud config bundle request"
                                 );
                                 emit_fetch_final_metric(
                                     trigger,
@@ -445,9 +503,10 @@ impl CloudRequirementsService {
                                     "auth_recovery_unrecoverable",
                                     attempt,
                                     status_code,
+                                    /*bundle*/ None,
                                 );
-                                return Err(CloudRequirementsLoadError::new(
-                                    CloudRequirementsLoadErrorCode::Auth,
+                                return Err(CloudConfigBundleLoadError::new(
+                                    CloudConfigBundleLoadErrorCode::Auth,
                                     status_code,
                                     failed.message,
                                 ));
@@ -458,7 +517,7 @@ impl CloudRequirementsService {
                                         error = %recovery_err,
                                         attempt,
                                         max_attempts = CLOUD_REQUIREMENTS_MAX_ATTEMPTS,
-                                        "Failed to recover from unauthorized cloud requirements request; retrying"
+                                        "Failed to recover from unauthorized cloud config bundle request; retrying"
                                     );
                                     sleep(backoff(attempt as u64)).await;
                                 }
@@ -470,7 +529,7 @@ impl CloudRequirementsService {
 
                     tracing::warn!(
                         error = %message,
-                        "Cloud requirements request was unauthorized and no auth recovery is available"
+                        "Cloud config bundle request was unauthorized and no auth recovery is available"
                     );
                     emit_fetch_final_metric(
                         trigger,
@@ -478,48 +537,48 @@ impl CloudRequirementsService {
                         "auth_recovery_unavailable",
                         attempt,
                         status_code,
+                        /*bundle*/ None,
                     );
-                    return Err(CloudRequirementsLoadError::new(
-                        CloudRequirementsLoadErrorCode::Auth,
+                    return Err(CloudConfigBundleLoadError::new(
+                        CloudConfigBundleLoadErrorCode::Auth,
                         status_code,
                         CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE,
                     ));
                 }
             };
 
-            let requirements = match contents.as_deref() {
-                Some(contents) => {
-                    match parse_cloud_requirements(contents, &self.requirements_base_dir) {
-                        Ok(requirements) => requirements,
-                        Err(err) => {
-                            tracing::error!(error = %err, "Failed to parse cloud requirements");
-                            emit_fetch_final_metric(
-                                trigger,
-                                "error",
-                                "parse_error",
-                                attempt,
-                                last_status_code,
-                            );
-                            return Err(CloudRequirementsLoadError::new(
-                                CloudRequirementsLoadErrorCode::Parse,
-                                /*status_code*/ None,
-                                format_cloud_requirements_parse_failed_message(contents, &err),
-                            ));
-                        }
-                    }
-                }
-                None => None,
-            };
+            if let Err(err) = validate_bundle(&bundle, &self.codex_home) {
+                emit_fetch_final_metric(
+                    trigger,
+                    "error",
+                    "invalid_bundle",
+                    attempt,
+                    /*status_code*/ None,
+                    /*bundle*/ None,
+                );
+                return Err(err);
+            }
 
             let (chatgpt_user_id, account_id) = auth_identity(&auth);
-            if let Err(err) = self.save_cache(chatgpt_user_id, account_id, contents).await {
-                tracing::warn!(error = %err, "Failed to write cloud requirements cache");
+            if let Err(err) = self
+                .save_cache(chatgpt_user_id, account_id, bundle.clone())
+                .await
+            {
+                tracing::warn!(
+                    error = %err,
+                    "Failed to write cloud config bundle cache"
+                );
             }
 
             emit_fetch_final_metric(
-                trigger, "success", "none", attempt, /*status_code*/ None,
+                trigger,
+                "success",
+                "none",
+                attempt,
+                /*status_code*/ None,
+                Some(&bundle),
             );
-            return Ok(requirements);
+            return Ok(optional_bundle(bundle));
         }
 
         emit_fetch_final_metric(
@@ -528,13 +587,14 @@ impl CloudRequirementsService {
             "request_retry_exhausted",
             CLOUD_REQUIREMENTS_MAX_ATTEMPTS,
             last_status_code,
+            /*bundle*/ None,
         );
         tracing::error!(
             path = %self.cache_path.display(),
             "{CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE}"
         );
-        Err(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::RequestFailed,
+        Err(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::RequestFailed,
             last_status_code,
             CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
         ))
@@ -548,9 +608,9 @@ impl CloudRequirementsService {
                 Ok(false) => break,
                 Err(_) => {
                     tracing::error!(
-                        "Timed out refreshing cloud requirements cache from remote; keeping existing cache"
+                        "Timed out refreshing cloud config bundle cache from remote; keeping existing cache"
                     );
-                    emit_load_metric("refresh", "error");
+                    emit_load_metric("refresh", "error", /*bundle*/ None);
                 }
             }
         }
@@ -565,14 +625,14 @@ impl CloudRequirementsService {
         }
 
         match self.fetch_with_retries(auth, "refresh").await {
-            Ok(_) => emit_load_metric("refresh", "success"),
+            Ok(bundle) => emit_load_metric("refresh", "success", bundle.as_ref()),
             Err(err) => {
                 tracing::error!(
                     path = %self.cache_path.display(),
                     error = %err,
-                    "Failed to refresh cloud requirements cache from remote"
+                    "Failed to refresh cloud config bundle cache from remote"
                 );
-                emit_load_metric("refresh", "error");
+                emit_load_metric("refresh", "error", /*bundle*/ None);
             }
         }
         true
@@ -613,6 +673,11 @@ impl CloudRequirementsService {
         };
         if !verify_cache_signature(&payload_bytes, &cache_file.signature) {
             return Err(CacheLoadStatus::CacheSignatureInvalid);
+        }
+        if cache_file.signed_payload.version != CLOUD_CONFIG_BUNDLE_CACHE_VERSION {
+            return Err(CacheLoadStatus::CacheVersionUnsupported(
+                cache_file.signed_payload.version,
+            ));
         }
 
         let (Some(cached_chatgpt_user_id), Some(cached_account_id)) = (
@@ -656,7 +721,7 @@ impl CloudRequirementsService {
         &self,
         chatgpt_user_id: Option<String>,
         account_id: Option<String>,
-        contents: Option<String>,
+        bundle: CloudConfigBundle,
     ) -> Result<(), CloudRequirementsError> {
         let now = Utc::now();
         let expires_at = now
@@ -666,11 +731,12 @@ impl CloudRequirementsService {
             )
             .ok_or(CloudRequirementsError::CacheWrite)?;
         let signed_payload = CloudRequirementsCacheSignedPayload {
+            version: CLOUD_CONFIG_BUNDLE_CACHE_VERSION,
             cached_at: now,
             expires_at,
             chatgpt_user_id,
             account_id,
-            contents,
+            bundle,
         };
         let payload_bytes =
             cache_payload_bytes(&signed_payload).ok_or(CloudRequirementsError::CacheWrite)?;
@@ -694,11 +760,11 @@ impl CloudRequirementsService {
     }
 }
 
-pub fn cloud_requirements_loader(
+pub fn cloud_config_bundle_loader(
     auth_manager: Arc<AuthManager>,
     chatgpt_base_url: String,
     codex_home: PathBuf,
-) -> CloudRequirementsLoader {
+) -> CloudConfigBundleLoader {
     let service = CloudRequirementsService::new(
         auth_manager,
         Arc::new(BackendRequirementsFetcher::new(chatgpt_base_url)),
@@ -710,30 +776,30 @@ pub fn cloud_requirements_loader(
     let refresh_task =
         tokio::spawn(async move { refresh_service.refresh_cache_in_background().await });
     let mut refresher_guard = refresher_task_slot().lock().unwrap_or_else(|err| {
-        tracing::warn!("cloud requirements refresher task slot was poisoned");
+        tracing::warn!("cloud config bundle refresher task slot was poisoned");
         err.into_inner()
     });
     if let Some(existing_task) = refresher_guard.replace(refresh_task) {
         existing_task.abort();
     }
-    CloudRequirementsLoader::new(async move {
+    CloudConfigBundleLoader::new(async move {
         task.await.map_err(|err| {
-            tracing::error!(error = %err, "Cloud requirements task failed");
-            CloudRequirementsLoadError::new(
-                CloudRequirementsLoadErrorCode::Internal,
+            tracing::error!(error = %err, "Cloud config bundle task failed");
+            CloudConfigBundleLoadError::new(
+                CloudConfigBundleLoadErrorCode::Internal,
                 /*status_code*/ None,
-                format!("cloud requirements load failed: {err}"),
+                format!("cloud config bundle load failed: {err}"),
             )
         })?
     })
 }
 
-pub async fn cloud_requirements_loader_for_storage(
+pub async fn cloud_config_bundle_loader_for_storage(
     codex_home: PathBuf,
     enable_codex_api_key_env: bool,
     credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: String,
-) -> CloudRequirementsLoader {
+) -> CloudConfigBundleLoader {
     let auth_manager = AuthManager::shared(
         codex_home.clone(),
         enable_codex_api_key_env,
@@ -741,31 +807,42 @@ pub async fn cloud_requirements_loader_for_storage(
         Some(chatgpt_base_url.clone()),
     )
     .await;
-    cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home)
+    cloud_config_bundle_loader(auth_manager, chatgpt_base_url, codex_home)
 }
 
-fn parse_cloud_requirements(
-    contents: &str,
-    requirements_base_dir: &Path,
-) -> Result<Option<ConfigRequirementsToml>, toml::de::Error> {
-    if contents.trim().is_empty() {
-        return Ok(None);
-    }
+fn validate_bundle(
+    bundle: &CloudConfigBundle,
+    codex_home: &Path,
+) -> Result<(), CloudConfigBundleLoadError> {
+    let base_dir = AbsolutePathBuf::from_absolute_path(codex_home).map_err(|err| {
+        CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::Internal,
+            /*status_code*/ None,
+            format!("failed to validate cloud config bundle base path: {err}"),
+        )
+    })?;
+    let bundle_layers =
+        CloudConfigBundleLayers::from_bundle(bundle.clone(), &base_dir).map_err(|err| {
+            CloudConfigBundleLoadError::new(
+                CloudConfigBundleLoadErrorCode::InvalidBundle,
+                /*status_code*/ None,
+                format!("invalid cloud config bundle: {err}"),
+            )
+        })?;
+    let CloudConfigBundleLayers {
+        enterprise_managed_config: _,
+        enterprise_managed_requirements,
+    } = bundle_layers;
 
-    let _guard = AbsolutePathBufGuard::new(requirements_base_dir);
-    let requirements: ConfigRequirementsToml = toml::from_str(contents)?;
-    if requirements.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(requirements))
-    }
-}
+    compose_requirements(enterprise_managed_requirements).map_err(|err| {
+        CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::InvalidBundle,
+            /*status_code*/ None,
+            format!("invalid cloud config bundle: {err}"),
+        )
+    })?;
 
-fn format_cloud_requirements_parse_failed_message(
-    _contents: &str,
-    err: &toml::de::Error,
-) -> String {
-    format!("{CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE}\n\nDetails:\n{err}")
+    Ok(())
 }
 
 fn emit_fetch_attempt_metric(
@@ -793,6 +870,7 @@ fn emit_fetch_final_metric(
     reason: &str,
     attempt_count: usize,
     status_code: Option<u16>,
+    bundle: Option<&CloudConfigBundle>,
 ) {
     let attempt_count_tag = attempt_count.to_string();
     let status_code_tag = status_code_tag(status_code);
@@ -804,18 +882,41 @@ fn emit_fetch_final_metric(
             ("reason", reason.to_string()),
             ("attempt_count", attempt_count_tag),
             ("status_code", status_code_tag),
+            ("bundle_shape", bundle_shape_tag(bundle)),
         ],
     );
 }
 
-fn emit_load_metric(trigger: &str, outcome: &str) {
+fn emit_load_metric(trigger: &str, outcome: &str, bundle: Option<&CloudConfigBundle>) {
     emit_metric(
         CLOUD_REQUIREMENTS_LOAD_METRIC,
         vec![
             ("trigger", trigger.to_string()),
             ("outcome", outcome.to_string()),
+            ("bundle_shape", bundle_shape_tag(bundle)),
         ],
     );
+}
+
+fn bundle_shape_tag(bundle: Option<&CloudConfigBundle>) -> String {
+    let Some(bundle) = bundle else {
+        return "none".to_string();
+    };
+
+    let mut sources = Vec::new();
+    if !bundle.config_toml.enterprise_managed.is_empty() {
+        sources.push("enterprise_config");
+    }
+    if !bundle.requirements_toml.enterprise_managed.is_empty() {
+        sources.push("enterprise_requirements");
+    }
+
+    if sources.is_empty() {
+        "empty".to_string()
+    } else {
+        sources.sort_unstable();
+        sources.join(",")
+    }
 }
 
 fn status_code_tag(status_code: Option<u16>) -> String {
@@ -839,42 +940,21 @@ mod tests {
     use super::*;
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use codex_config::AppToolApproval;
+    use codex_backend_client::ConfigBundleResponse;
+    use codex_backend_client::DeliveredTomlFragment;
+    use codex_config::CloudConfigFragment;
+    use codex_config::CloudConfigTomlBundle;
+    use codex_config::CloudRequirementsFragment;
+    use codex_config::CloudRequirementsTomlBundle;
     use codex_config::types::AuthCredentialsStoreMode;
-    use codex_login::auth::AgentIdentityAuth;
-    use codex_login::auth::AgentIdentityAuthRecord;
-    use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use std::collections::BTreeMap;
     use std::collections::VecDeque;
-    use std::ffi::OsString;
     use std::future::pending;
-    use std::io::Read;
-    use std::io::Write;
-    use std::net::TcpListener;
     use std::path::Path;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
-    use std::thread;
-    use tempfile::TempDir;
     use tempfile::tempdir;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<OsString>,
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.original {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
 
     fn write_auth_json(codex_home: &Path, value: serde_json::Value) -> std::io::Result<()> {
         std::fs::write(codex_home.join("auth.json"), serde_json::to_string(&value)?)?;
@@ -926,6 +1006,11 @@ mod tests {
             )
             .await,
         )
+    }
+
+    async fn auth_manager_with_plan(plan_type: &str) -> Arc<AuthManager> {
+        auth_manager_with_plan_and_identity(plan_type, Some("user-12345"), Some("account-12345"))
+            .await
     }
 
     fn chatgpt_auth_json(
@@ -1004,55 +1089,44 @@ mod tests {
         auth_json
     }
 
-    struct ManagedAuthContext {
-        _home: TempDir,
-        manager: Arc<AuthManager>,
-    }
-
-    async fn managed_auth_context(
-        plan_type: &str,
-        chatgpt_user_id: Option<&str>,
-        account_id: Option<&str>,
-        access_token: &str,
-        refresh_token: &str,
-    ) -> ManagedAuthContext {
-        let home = tempdir().expect("tempdir");
-        write_auth_json(
-            home.path(),
-            chatgpt_auth_json(
-                plan_type,
-                chatgpt_user_id,
-                account_id,
-                access_token,
-                refresh_token,
-            ),
-        )
-        .expect("write auth");
-        ManagedAuthContext {
-            manager: Arc::new(
-                AuthManager::new(
-                    home.path().to_path_buf(),
-                    /*enable_codex_api_key_env*/ false,
-                    AuthCredentialsStoreMode::File,
-                    /*chatgpt_base_url*/ None,
-                )
-                .await,
-            ),
-            _home: home,
+    fn test_bundle() -> CloudConfigBundle {
+        CloudConfigBundle {
+            config_toml: CloudConfigTomlBundle {
+                enterprise_managed: vec![test_config_fragment()],
+            },
+            requirements_toml: CloudRequirementsTomlBundle {
+                enterprise_managed: vec![test_requirements_fragment()],
+            },
         }
     }
 
-    async fn auth_manager_with_plan(plan_type: &str) -> Arc<AuthManager> {
-        auth_manager_with_plan_and_identity(plan_type, Some("user-12345"), Some("account-12345"))
-            .await
+    fn test_config_fragment() -> CloudConfigFragment {
+        CloudConfigFragment {
+            id: "cfg_1".to_string(),
+            name: "Base config".to_string(),
+            contents: "model = \"gpt-5\"".to_string(),
+        }
     }
 
-    fn parse_for_fetch(contents: Option<&str>) -> Option<ConfigRequirementsToml> {
-        contents.and_then(|contents| {
-            parse_cloud_requirements(contents, &std::env::temp_dir())
-                .ok()
-                .flatten()
-        })
+    fn test_requirements_fragment() -> CloudRequirementsFragment {
+        CloudRequirementsFragment {
+            id: "req_1".to_string(),
+            name: "Base requirements".to_string(),
+            contents: "allowed_approval_policies = [\"never\"]".to_string(),
+        }
+    }
+
+    fn invalid_config_bundle() -> CloudConfigBundle {
+        CloudConfigBundle {
+            config_toml: CloudConfigTomlBundle {
+                enterprise_managed: vec![CloudConfigFragment {
+                    id: "cfg_invalid".to_string(),
+                    name: "Invalid config".to_string(),
+                    contents: "model = [".to_string(),
+                }],
+            },
+            requirements_toml: CloudRequirementsTomlBundle::default(),
+        }
     }
 
     fn request_error() -> FetchAttemptError {
@@ -1060,39 +1134,50 @@ mod tests {
     }
 
     struct StaticFetcher {
-        contents: Option<String>,
+        bundle: CloudConfigBundle,
+        request_count: AtomicUsize,
     }
 
-    #[async_trait::async_trait]
+    impl StaticFetcher {
+        fn new(bundle: CloudConfigBundle) -> Self {
+            Self {
+                bundle,
+                request_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
     impl RequirementsFetcher for StaticFetcher {
         async fn fetch_requirements(
             &self,
             _auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchAttemptError> {
-            Ok(self.contents.clone())
+        ) -> Result<CloudConfigBundle, FetchAttemptError> {
+            self.request_count.fetch_add(1, Ordering::SeqCst);
+            Ok(self.bundle.clone())
         }
     }
 
     struct PendingFetcher;
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl RequirementsFetcher for PendingFetcher {
         async fn fetch_requirements(
             &self,
             _auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchAttemptError> {
+        ) -> Result<CloudConfigBundle, FetchAttemptError> {
             pending::<()>().await;
-            Ok(None)
+            Ok(CloudConfigBundle::default())
         }
     }
 
     struct SequenceFetcher {
-        responses: tokio::sync::Mutex<VecDeque<Result<Option<String>, FetchAttemptError>>>,
+        responses: tokio::sync::Mutex<VecDeque<Result<CloudConfigBundle, FetchAttemptError>>>,
         request_count: AtomicUsize,
     }
 
     impl SequenceFetcher {
-        fn new(responses: Vec<Result<Option<String>, FetchAttemptError>>) -> Self {
+        fn new(responses: Vec<Result<CloudConfigBundle, FetchAttemptError>>) -> Self {
             Self {
                 responses: tokio::sync::Mutex::new(VecDeque::from(responses)),
                 request_count: AtomicUsize::new(0),
@@ -1100,40 +1185,42 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl RequirementsFetcher for SequenceFetcher {
         async fn fetch_requirements(
             &self,
             _auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchAttemptError> {
+        ) -> Result<CloudConfigBundle, FetchAttemptError> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
             let mut responses = self.responses.lock().await;
-            responses.pop_front().unwrap_or(Ok(None))
+            responses
+                .pop_front()
+                .unwrap_or_else(|| Ok(CloudConfigBundle::default()))
         }
     }
 
     struct TokenFetcher {
         expected_token: String,
-        contents: String,
+        bundle: CloudConfigBundle,
         request_count: AtomicUsize,
     }
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl RequirementsFetcher for TokenFetcher {
         async fn fetch_requirements(
             &self,
             auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchAttemptError> {
+        ) -> Result<CloudConfigBundle, FetchAttemptError> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
             if matches!(
                 auth.get_token().as_deref(),
                 Ok(token) if token == self.expected_token.as_str()
             ) {
-                Ok(Some(self.contents.clone()))
+                Ok(self.bundle.clone())
             } else {
                 Err(FetchAttemptError::Unauthorized {
                     status_code: Some(401),
-                    message: "GET /config/requirements failed: 401".to_string(),
+                    message: "GET /config/bundle failed: 401".to_string(),
                 })
             }
         }
@@ -1144,12 +1231,12 @@ mod tests {
         request_count: AtomicUsize,
     }
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl RequirementsFetcher for UnauthorizedFetcher {
         async fn fetch_requirements(
             &self,
             _auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchAttemptError> {
+        ) -> Result<CloudConfigBundle, FetchAttemptError> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
             Err(FetchAttemptError::Unauthorized {
                 status_code: Some(401),
@@ -1158,389 +1245,293 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bundle_shape_tag_describes_sorted_enterprise_sources() {
+        assert_eq!(bundle_shape_tag(/*bundle*/ None), "none");
+        assert_eq!(
+            bundle_shape_tag(Some(&CloudConfigBundle::default())),
+            "empty"
+        );
+        assert_eq!(
+            bundle_shape_tag(Some(&CloudConfigBundle {
+                config_toml: CloudConfigTomlBundle {
+                    enterprise_managed: vec![test_config_fragment()],
+                },
+                requirements_toml: CloudRequirementsTomlBundle::default(),
+            })),
+            "enterprise_config"
+        );
+        assert_eq!(
+            bundle_shape_tag(Some(&CloudConfigBundle {
+                config_toml: CloudConfigTomlBundle::default(),
+                requirements_toml: CloudRequirementsTomlBundle {
+                    enterprise_managed: vec![test_requirements_fragment()],
+                },
+            })),
+            "enterprise_requirements"
+        );
+        assert_eq!(
+            bundle_shape_tag(Some(&CloudConfigBundle {
+                config_toml: CloudConfigTomlBundle {
+                    enterprise_managed: vec![test_config_fragment()],
+                },
+                requirements_toml: CloudRequirementsTomlBundle {
+                    enterprise_managed: vec![test_requirements_fragment()],
+                },
+            })),
+            "enterprise_config,enterprise_requirements"
+        );
+    }
+
     #[tokio::test]
     async fn fetch_cloud_requirements_skips_non_chatgpt_auth() {
-        let auth_manager = auth_manager_with_api_key().await;
+        let fetcher = Arc::new(StaticFetcher::new(test_bundle()));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager,
-            Arc::new(StaticFetcher { contents: None }),
+            auth_manager_with_api_key().await,
+            fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
-        let result = service.fetch().await;
-        assert_eq!(result, Ok(None));
+
+        assert_eq!(service.fetch().await, Ok(None));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn fetch_cloud_requirements_skips_non_business_or_enterprise_plan() {
+        let fetcher = Arc::new(StaticFetcher::new(test_bundle()));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("pro").await,
-            Arc::new(StaticFetcher { contents: None }),
+            fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
-        let result = service.fetch().await;
-        assert_eq!(result, Ok(None));
+
+        assert_eq!(service.fetch().await, Ok(None));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn fetch_cloud_requirements_skips_team_like_usage_based_plan() {
+        let fetcher = Arc::new(StaticFetcher::new(test_bundle()));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("self_serve_business_usage_based").await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
+            fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
+
         assert_eq!(service.fetch().await, Ok(None));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn fetch_cloud_requirements_allows_business_plan() {
+        let bundle = test_bundle();
         let codex_home = tempdir().expect("tempdir");
+        let fetcher = Arc::new(StaticFetcher::new(bundle.clone()));
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("business").await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
+            fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
+
+        assert_eq!(service.fetch().await, Ok(Some(bundle.clone())));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+        assert!(
+            codex_home
+                .path()
+                .join(CLOUD_REQUIREMENTS_CACHE_FILENAME)
+                .exists()
         );
     }
 
     #[tokio::test]
-    async fn cloud_requirements_eligible_auth_allows_agent_identity_business_plan() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind task registration server");
-        let addr = listener
-            .local_addr()
-            .expect("task registration server addr");
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept task registration request");
-            let mut request = [0; 4096];
-            let _ = stream
-                .read(&mut request)
-                .expect("read task registration request");
-            let body = r#"{"task_id":"task-123"}"#;
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-            .expect("write task registration response");
-        });
-        let record = AgentIdentityAuthRecord {
-            agent_runtime_id: "agent-runtime-123".to_string(),
-            agent_private_key: "MC4CAQAwBQYDK2VwBCIEIDQg14jybCLydjHQwXeBzsDM7oB6BSAenodx6oCovQ/D"
-                .to_string(),
-            account_id: "account-12345".to_string(),
-            chatgpt_user_id: "user-12345".to_string(),
-            email: "user@example.com".to_string(),
-            plan_type: PlanType::Business,
-            chatgpt_account_is_fedramp: false,
-        };
-        let authapi_base_url = format!("http://{addr}/backend-api");
-        let original_authapi_base_url = std::env::var_os("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL");
-        unsafe {
-            std::env::set_var("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", &authapi_base_url);
-        }
-        let _authapi_guard = EnvVarGuard {
-            key: "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL",
-            original: original_authapi_base_url,
-        };
-        let auth = AgentIdentityAuth::load(record)
-            .await
-            .map(CodexAuth::AgentIdentity)
-            .expect("agent identity auth");
-        server.join().expect("task registration server joined");
+    async fn fetch_requirements_rejects_invalid_remote_bundle_before_cache_write() {
+        let codex_home = tempdir().expect("tempdir");
+        let fetcher = Arc::new(StaticFetcher::new(invalid_config_bundle()));
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("business").await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
 
-        assert!(cloud_requirements_eligible_auth(&auth));
+        let err = service
+            .fetch()
+            .await
+            .expect_err("invalid remote bundle should fail closed");
+
+        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+        assert!(err.to_string().contains("invalid cloud config bundle"));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+        assert!(
+            !codex_home
+                .path()
+                .join(CLOUD_REQUIREMENTS_CACHE_FILENAME)
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_requirements_ignores_invalid_cache_and_refetches() {
+        let codex_home = tempdir().expect("tempdir");
+        let replacement_bundle = test_bundle();
+        let fetcher = Arc::new(StaticFetcher::new(replacement_bundle.clone()));
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("business").await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+        service
+            .save_cache(
+                Some("user-12345".to_string()),
+                Some("account-12345".to_string()),
+                invalid_config_bundle(),
+            )
+            .await
+            .expect("write invalid cache");
+
+        assert_eq!(service.fetch().await, Ok(Some(replacement_bundle.clone())));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            service
+                .load_cache(Some("user-12345"), Some("account-12345"))
+                .await
+                .expect("load refreshed cache")
+                .bundle,
+            replacement_bundle
+        );
     }
 
     #[tokio::test]
     async fn fetch_cloud_requirements_allows_business_like_usage_based_plan() {
+        let fetcher = Arc::new(StaticFetcher::new(test_bundle()));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("enterprise_cbp_usage_based").await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
+            fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
+
+        assert_eq!(service.fetch().await, Ok(Some(test_bundle())));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn fetch_cloud_requirements_allows_hc_plan_as_enterprise() {
+        let fetcher = Arc::new(StaticFetcher::new(test_bundle()));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("hc").await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
+            fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
+
+        assert_eq!(service.fetch().await, Ok(Some(test_bundle())));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn fetch_cloud_requirements_handles_missing_contents() {
-        let result = parse_for_fetch(/*contents*/ None);
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_handles_empty_contents() {
-        let result = parse_for_fetch(Some("   "));
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_handles_invalid_toml() {
-        let result = parse_for_fetch(Some("not = ["));
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_ignores_empty_requirements() {
-        let result = parse_for_fetch(Some("# comment"));
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_parses_valid_toml() {
-        let result = parse_for_fetch(Some("allowed_approval_policies = [\"never\"]"));
-
-        assert_eq!(
-            result,
-            Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_resolves_relative_deny_read_globs_from_codex_home() {
+    async fn fetch_requirements_empty_response_is_success_and_cached() {
         let codex_home = tempdir().expect("tempdir");
+        let fetcher = Arc::new(StaticFetcher::new(CloudConfigBundle::default()));
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("enterprise").await,
-            Arc::new(StaticFetcher {
-                contents: Some(
-                    r#"
-[permissions.filesystem]
-deny_read = ["./sensitive/**/*.txt"]
-"#
-                    .to_string(),
-                ),
-            }),
+            fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
-        let deny_read = format!("{}/sensitive/**/*.txt", codex_home.path().display());
-        let expected = toml::from_str::<ConfigRequirementsToml>(&format!(
-            r#"
-[permissions.filesystem]
-deny_read = [{deny_read:?}]
-"#
-        ))
-        .expect("parse expected cloud requirements");
 
-        assert_eq!(service.fetch().await, Ok(Some(expected)));
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_parses_apps_requirements_toml() {
-        let result = parse_for_fetch(Some(
-            r#"
-[apps.connector_5f3c8c41a1e54ad7a76272c89e2554fa]
-enabled = false
-"#,
-        ));
-
-        assert_eq!(
-            result,
-            Some(ConfigRequirementsToml {
-                apps: Some(codex_config::AppsRequirementsToml {
-                    apps: BTreeMap::from([(
-                        "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
-                        codex_config::AppRequirementToml {
-                            enabled: Some(false),
-                            tools: None,
-                        },
-                    )]),
-                }),
-                ..Default::default()
-            })
+        assert_eq!(service.fetch().await, Ok(None));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+        assert!(
+            codex_home
+                .path()
+                .join(CLOUD_REQUIREMENTS_CACHE_FILENAME)
+                .exists()
         );
     }
 
     #[tokio::test]
-    async fn fetch_cloud_requirements_parses_apps_tool_requirements_toml() {
-        let result = parse_for_fetch(Some(
-            r#"
-[apps.connector_5f3c8c41a1e54ad7a76272c89e2554fa.tools."calendar/list_events"]
-approval_mode = "approve"
-"#,
-        ));
-
-        assert_eq!(
-            result,
-            Some(ConfigRequirementsToml {
-                apps: Some(codex_config::AppsRequirementsToml {
-                    apps: BTreeMap::from([(
-                        "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
-                        codex_config::AppRequirementToml {
-                            enabled: None,
-                            tools: Some(codex_config::AppToolsRequirementsToml {
-                                tools: BTreeMap::from([(
-                                    "calendar/list_events".to_string(),
-                                    codex_config::AppToolRequirementToml {
-                                        approval_mode: Some(AppToolApproval::Approve),
-                                    },
-                                )]),
-                            }),
-                        },
-                    )]),
-                }),
-                ..Default::default()
-            })
+    async fn fetch_cloud_requirements_uses_cache_when_valid() {
+        let bundle = test_bundle();
+        let codex_home = tempdir().expect("tempdir");
+        let prime_service = CloudRequirementsService::new(
+            auth_manager_with_plan("business").await,
+            Arc::new(StaticFetcher::new(bundle.clone())),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
         );
+        let _ = prime_service.fetch().await;
+
+        let fetcher = Arc::new(SequenceFetcher::new(vec![Err(request_error())]));
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("business").await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+
+        assert_eq!(service.fetch().await, Ok(Some(bundle)));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
-    async fn fetch_cloud_requirements_parses_plugin_mcp_requirements_toml() {
-        let result = parse_for_fetch(Some(
-            r#"
-[plugins."sample@test".mcp_servers.sample.identity]
-command = "sample-mcp"
-"#,
-        ));
-
-        assert_eq!(
-            result,
-            Some(ConfigRequirementsToml {
-                plugins: Some(BTreeMap::from([(
-                    "sample@test".to_string(),
-                    codex_config::PluginRequirementsToml {
-                        mcp_servers: Some(BTreeMap::from([(
-                            "sample".to_string(),
-                            codex_config::McpServerRequirement {
-                                identity: codex_config::McpServerIdentity::Command {
-                                    command: "sample-mcp".to_string(),
-                                },
-                            },
-                        )])),
-                    },
-                )])),
-                ..Default::default()
-            })
+    async fn fetch_cloud_requirements_ignores_cache_for_different_auth_identity() {
+        let codex_home = tempdir().expect("tempdir");
+        let prime_service = CloudRequirementsService::new(
+            auth_manager_with_plan_and_identity(
+                "business",
+                Some("user-12345"),
+                Some("account-12345"),
+            )
+            .await,
+            Arc::new(StaticFetcher::new(test_bundle())),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
         );
+        let _ = prime_service.fetch().await;
+
+        let replacement_bundle = CloudConfigBundle {
+            config_toml: CloudConfigTomlBundle::default(),
+            requirements_toml: CloudRequirementsTomlBundle {
+                enterprise_managed: vec![CloudRequirementsFragment {
+                    id: "req_2".to_string(),
+                    name: "Replacement requirements".to_string(),
+                    contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
+                }],
+            },
+        };
+        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(replacement_bundle.clone())]));
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan_and_identity(
+                "business",
+                Some("user-99999"),
+                Some("account-12345"),
+            )
+            .await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+
+        assert_eq!(service.fetch().await, Ok(Some(replacement_bundle)));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test(start_paused = true)]
     async fn fetch_cloud_requirements_times_out() {
-        let auth_manager = auth_manager_with_plan("enterprise").await;
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            auth_manager,
+            auth_manager_with_plan("enterprise").await,
             Arc::new(PendingFetcher),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1548,11 +1539,11 @@ command = "sample-mcp"
         let handle = tokio::spawn(async move { service.fetch_with_timeout().await });
         tokio::time::advance(CLOUD_REQUIREMENTS_TIMEOUT + Duration::from_millis(1)).await;
 
-        let result = handle.await.expect("cloud requirements task");
-        let err = result.expect_err("cloud requirements timeout should fail closed");
+        let result = handle.await.expect("cloud config bundle task");
+        let err = result.expect_err("cloud config bundle timeout should fail closed");
         assert!(
             err.to_string()
-                .contains("timed out waiting for cloud requirements")
+                .contains("timed out waiting for cloud config bundle")
         );
     }
 
@@ -1560,7 +1551,7 @@ command = "sample-mcp"
     async fn fetch_cloud_requirements_retries_until_success() {
         let fetcher = Arc::new(SequenceFetcher::new(vec![
             Err(request_error()),
-            Ok(Some("allowed_approval_policies = [\"never\"]".to_string())),
+            Ok(test_bundle()),
         ]));
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
@@ -1574,31 +1565,7 @@ command = "sample-mcp"
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(1)).await;
 
-        assert_eq!(
-            handle.await.expect("cloud requirements task"),
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
+        assert_eq!(handle.await.expect("bundle task"), Ok(Some(test_bundle())));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
     }
 
@@ -1641,49 +1608,20 @@ command = "sample-mcp"
             ),
         )
         .expect("write refreshed auth");
-        let auth = ManagedAuthContext {
-            _home: auth_home,
-            manager: auth_manager,
-        };
-
         let fetcher = Arc::new(TokenFetcher {
             expected_token: "fresh-access-token".to_string(),
-            contents: "allowed_approval_policies = [\"never\"]".to_string(),
+            bundle: test_bundle(),
             request_count: AtomicUsize::new(0),
         });
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            Arc::clone(&auth.manager),
+            auth_manager,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
 
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
+        assert_eq!(service.fetch().await, Ok(Some(test_bundle())));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
     }
 
@@ -1724,77 +1662,57 @@ command = "sample-mcp"
             ),
         )
         .expect("write refreshed auth");
-        let auth = ManagedAuthContext {
-            _home: auth_home,
-            manager: auth_manager,
-        };
-
         let fetcher = Arc::new(TokenFetcher {
             expected_token: "fresh-access-token".to_string(),
-            contents: "allowed_approval_policies = [\"never\"]".to_string(),
+            bundle: test_bundle(),
             request_count: AtomicUsize::new(0),
         });
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            Arc::clone(&auth.manager),
+            auth_manager,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
 
+        assert_eq!(service.fetch().await, Ok(Some(test_bundle())));
         assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
-
-        let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
-        let cache_file: CloudRequirementsCacheFile =
-            serde_json::from_str(&std::fs::read_to_string(path).expect("read cache"))
-                .expect("parse cache");
-        assert_eq!(
-            cache_file.signed_payload.chatgpt_user_id,
-            Some("user-99999".to_string())
-        );
-        assert_eq!(
-            cache_file.signed_payload.account_id,
-            Some("account-12345".to_string())
+            service
+                .load_cache(Some("user-99999"), Some("account-12345"))
+                .await
+                .expect("load cache")
+                .bundle,
+            test_bundle()
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
     async fn fetch_cloud_requirements_surfaces_auth_recovery_message() {
-        let auth = managed_auth_context(
-            "enterprise",
-            Some("user-12345"),
-            Some("account-12345"),
-            "stale-access-token",
-            "test-refresh-token",
-        )
-        .await;
+        let auth_home = tempdir().expect("tempdir");
         write_auth_json(
-            auth._home.path(),
+            auth_home.path(),
+            chatgpt_auth_json(
+                "enterprise",
+                Some("user-12345"),
+                Some("account-12345"),
+                "stale-access-token",
+                "test-refresh-token",
+            ),
+        )
+        .expect("write auth");
+        let auth_manager = Arc::new(
+            AuthManager::new(
+                auth_home.path().to_path_buf(),
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                /*chatgpt_base_url*/ None,
+            )
+            .await,
+        );
+
+        write_auth_json(
+            auth_home.path(),
             chatgpt_auth_json(
                 "enterprise",
                 Some("user-12345"),
@@ -1804,14 +1722,13 @@ command = "sample-mcp"
             ),
         )
         .expect("write mismatched auth");
-
         let fetcher = Arc::new(UnauthorizedFetcher {
-            message: "GET /config/requirements failed: 401".to_string(),
+            message: "GET /config/bundle failed: 401".to_string(),
             request_count: AtomicUsize::new(0),
         });
         let codex_home = tempdir().expect("tempdir");
         let service = CloudRequirementsService::new(
-            Arc::clone(&auth.manager),
+            auth_manager,
             fetcher.clone(),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
@@ -1820,11 +1737,13 @@ command = "sample-mcp"
         let err = service
             .fetch()
             .await
-            .expect_err("cloud requirements should surface auth recovery errors");
+            .expect_err("cloud config bundle should surface auth recovery errors");
         assert_eq!(
             err.to_string(),
             "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again."
         );
+        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::Auth);
+        assert_eq!(err.status_code(), Some(401));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
@@ -1856,7 +1775,7 @@ command = "sample-mcp"
 
         let fetcher = Arc::new(UnauthorizedFetcher {
             message:
-                "GET https://chatgpt.com/backend-api/wham/config/requirements failed: 401; content-type=text/html; body=<html>nope</html>"
+                "GET https://chatgpt.com/backend-api/wham/config/bundle failed: 401; content-type=text/html; body=<html>nope</html>"
                     .to_string(),
             request_count: AtomicUsize::new(0),
         });
@@ -1871,168 +1790,14 @@ command = "sample-mcp"
         let err = service
             .fetch()
             .await
-            .expect_err("cloud requirements should fail closed");
+            .expect_err("cloud config bundle should fail closed");
         assert_eq!(
             err.to_string(),
             CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE
         );
-        assert_eq!(err.code(), CloudRequirementsLoadErrorCode::Auth);
+        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::Auth);
         assert_eq!(err.status_code(), Some(401));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_parse_error_does_not_retry() {
-        let fetcher = Arc::new(SequenceFetcher::new(vec![
-            Ok(Some("not = [".to_string())),
-            Ok(Some("allowed_approval_policies = [\"never\"]".to_string())),
-        ]));
-        let codex_home = tempdir().expect("tempdir");
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business").await,
-            fetcher.clone(),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        let err = service
-            .fetch()
-            .await
-            .expect_err("parse error should fail closed");
-        let err_text = err.to_string();
-        assert!(err_text.contains(CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE));
-        assert!(err_text.contains("Details:"));
-        assert!(err_text.contains("not = ["));
-        assert_eq!(err.code(), CloudRequirementsLoadErrorCode::Parse);
-        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_invalid_enum_value_surfaces_field_name() {
-        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(Some(
-            "allowed_approval_policies = [\"definitely-not-valid\"]".to_string(),
-        ))]));
-        let codex_home = tempdir().expect("tempdir");
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business").await,
-            fetcher,
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        let err = service
-            .fetch()
-            .await
-            .expect_err("invalid enum value should fail closed");
-        let err_text = err.to_string();
-        assert!(err_text.contains(CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE));
-        assert!(err_text.contains("allowed_approval_policies"));
-        assert!(err_text.contains("definitely-not-valid"));
-        assert!(err_text.contains("unknown variant"));
-        assert_eq!(err.code(), CloudRequirementsLoadErrorCode::Parse);
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_uses_cache_when_valid() {
-        let codex_home = tempdir().expect("tempdir");
-        let prime_service = CloudRequirementsService::new(
-            auth_manager_with_plan("business").await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-        let _ = prime_service.fetch().await;
-
-        let fetcher = Arc::new(SequenceFetcher::new(vec![Err(request_error())]));
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business").await,
-            fetcher.clone(),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
-        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_writes_cache_when_identity_is_incomplete() {
-        let codex_home = tempdir().expect("tempdir");
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan_and_identity(
-                "business",
-                /*chatgpt_user_id*/ None,
-                Some("account-12345"),
-            )
-            .await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
-
-        let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
-        let cache_file: CloudRequirementsCacheFile =
-            serde_json::from_str(&std::fs::read_to_string(path).expect("read cache"))
-                .expect("parse cache");
-        assert_eq!(cache_file.signed_payload.chatgpt_user_id, None);
-        assert_eq!(
-            cache_file.signed_payload.account_id,
-            Some("account-12345".to_string())
-        );
     }
 
     #[tokio::test]
@@ -2040,17 +1805,23 @@ command = "sample-mcp"
         let codex_home = tempdir().expect("tempdir");
         let prime_service = CloudRequirementsService::new(
             auth_manager_with_plan("business").await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
+            Arc::new(StaticFetcher::new(test_bundle())),
             codex_home.path().to_path_buf(),
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
         let _ = prime_service.fetch().await;
 
-        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(Some(
-            "allowed_approval_policies = [\"on-request\"]".to_string(),
-        ))]));
+        let replacement_bundle = CloudConfigBundle {
+            config_toml: CloudConfigTomlBundle::default(),
+            requirements_toml: CloudRequirementsTomlBundle {
+                enterprise_managed: vec![CloudRequirementsFragment {
+                    id: "req_2".to_string(),
+                    name: "Replacement requirements".to_string(),
+                    contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
+                }],
+            },
+        };
+        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(replacement_bundle.clone())]));
         let service = CloudRequirementsService::new(
             auth_manager_with_plan_and_identity(
                 "business",
@@ -2063,306 +1834,7 @@ command = "sample-mcp"
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
 
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
-        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_ignores_cache_for_different_auth_identity() {
-        let codex_home = tempdir().expect("tempdir");
-        let prime_service = CloudRequirementsService::new(
-            auth_manager_with_plan_and_identity(
-                "business",
-                Some("user-12345"),
-                Some("account-12345"),
-            )
-            .await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-        let _ = prime_service.fetch().await;
-
-        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(Some(
-            "allowed_approval_policies = [\"on-request\"]".to_string(),
-        ))]));
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan_and_identity(
-                "business",
-                Some("user-99999"),
-                Some("account-12345"),
-            )
-            .await,
-            fetcher.clone(),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
-        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_ignores_tampered_cache() {
-        let codex_home = tempdir().expect("tempdir");
-        let prime_service = CloudRequirementsService::new(
-            auth_manager_with_plan("business").await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-        let _ = prime_service.fetch().await;
-
-        let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
-        let mut cache_file: CloudRequirementsCacheFile =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read cache"))
-                .expect("parse cache");
-        cache_file.signed_payload.contents =
-            Some("allowed_approval_policies = [\"on-request\"]".to_string());
-        std::fs::write(
-            &path,
-            serde_json::to_vec_pretty(&cache_file).expect("serialize cache"),
-        )
-        .expect("write cache");
-
-        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(Some(
-            "allowed_approval_policies = [\"never\"]".to_string(),
-        ))]));
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan("enterprise").await,
-            fetcher.clone(),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
-        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_ignores_expired_cache() {
-        let codex_home = tempdir().expect("tempdir");
-        let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
-        let cache_file = CloudRequirementsCacheFile {
-            signed_payload: CloudRequirementsCacheSignedPayload {
-                cached_at: Utc::now(),
-                expires_at: Utc::now() - ChronoDuration::seconds(1),
-                chatgpt_user_id: Some("user-12345".to_string()),
-                account_id: Some("account-12345".to_string()),
-                contents: Some("allowed_approval_policies = [\"on-request\"]".to_string()),
-            },
-            signature: String::new(),
-        };
-        let payload_bytes = cache_payload_bytes(&cache_file.signed_payload).expect("payload");
-        let signature = sign_cache_payload(&payload_bytes).expect("sign payload");
-        let cache_file = CloudRequirementsCacheFile {
-            signature,
-            ..cache_file
-        };
-        std::fs::write(
-            &path,
-            serde_json::to_vec_pretty(&cache_file).expect("serialize cache"),
-        )
-        .expect("write cache");
-
-        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(Some(
-            "allowed_approval_policies = [\"never\"]".to_string(),
-        ))]));
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan("enterprise").await,
-            fetcher.clone(),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
-        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_writes_signed_cache() {
-        let codex_home = tempdir().expect("tempdir");
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan("business").await,
-            Arc::new(StaticFetcher {
-                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
-            }),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        let _ = service.fetch().await;
-
-        let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
-        let cache_file: CloudRequirementsCacheFile =
-            serde_json::from_str(&std::fs::read_to_string(path).expect("read cache"))
-                .expect("parse cache");
-        assert!(
-            cache_file.signed_payload.expires_at
-                <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(30)
-        );
-        assert!(cache_file.signed_payload.expires_at > cache_file.signed_payload.cached_at);
-        assert!(cache_file.signed_payload.cached_at <= Utc::now());
-        assert_eq!(
-            cache_file.signed_payload.chatgpt_user_id,
-            Some("user-12345".to_string())
-        );
-        assert_eq!(
-            cache_file.signed_payload.account_id,
-            Some("account-12345".to_string())
-        );
-        assert_eq!(
-            cache_file
-                .signed_payload
-                .contents
-                .as_deref()
-                .and_then(|contents| {
-                    parse_cloud_requirements(contents, codex_home.path())
-                        .ok()
-                        .flatten()
-                }),
-            Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            })
-        );
-        let payload_bytes = cache_payload_bytes(&cache_file.signed_payload).expect("payload bytes");
-        assert!(verify_cache_signature(
-            &payload_bytes,
-            &cache_file.signature
-        ));
-    }
-
-    #[tokio::test]
-    async fn fetch_cloud_requirements_none_is_success_without_retry() {
-        let fetcher = Arc::new(SequenceFetcher::new(vec![Ok(None), Err(request_error())]));
-        let codex_home = tempdir().expect("tempdir");
-        let service = CloudRequirementsService::new(
-            auth_manager_with_plan("enterprise").await,
-            fetcher.clone(),
-            codex_home.path().to_path_buf(),
-            CLOUD_REQUIREMENTS_TIMEOUT,
-        );
-
-        assert_eq!(service.fetch().await, Ok(None));
+        assert_eq!(service.fetch().await, Ok(Some(replacement_bundle)));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
@@ -2387,10 +1859,10 @@ command = "sample-mcp"
 
         let err = handle
             .await
-            .expect("cloud requirements task")
-            .expect_err("cloud requirements retry exhaustion should fail closed");
+            .expect("cloud config bundle task")
+            .expect_err("cloud config bundle retry exhaustion should fail closed");
         assert_eq!(err.to_string(), CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE);
-        assert_eq!(err.code(), CloudRequirementsLoadErrorCode::RequestFailed);
+        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::RequestFailed);
         assert_eq!(
             fetcher.request_count.load(Ordering::SeqCst),
             CLOUD_REQUIREMENTS_MAX_ATTEMPTS
@@ -2398,13 +1870,21 @@ command = "sample-mcp"
     }
 
     #[tokio::test]
-    async fn refresh_from_remote_updates_cached_cloud_requirements() {
+    async fn refresh_from_remote_updates_cached_bundle() {
+        let replacement_bundle = CloudConfigBundle {
+            config_toml: CloudConfigTomlBundle::default(),
+            requirements_toml: CloudRequirementsTomlBundle {
+                enterprise_managed: vec![CloudRequirementsFragment {
+                    id: "req_2".to_string(),
+                    name: "Replacement requirements".to_string(),
+                    contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
+                }],
+            },
+        };
         let codex_home = tempdir().expect("tempdir");
         let fetcher = Arc::new(SequenceFetcher::new(vec![
-            Ok(Some("allowed_approval_policies = [\"never\"]".to_string())),
-            Ok(Some(
-                "allowed_approval_policies = [\"on-request\"]".to_string(),
-            )),
+            Ok(test_bundle()),
+            Ok(replacement_bundle.clone()),
         ]));
         let service = CloudRequirementsService::new(
             auth_manager_with_plan("business").await,
@@ -2413,70 +1893,333 @@ command = "sample-mcp"
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
 
-        assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            }))
-        );
-
+        assert_eq!(service.fetch().await, Ok(Some(test_bundle())));
         assert!(service.refresh_cache().await);
 
-        let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
-        let cache_file: CloudRequirementsCacheFile =
-            serde_json::from_str(&std::fs::read_to_string(path).expect("read cache"))
-                .expect("parse cache");
+        let signed_payload = service
+            .load_cache(Some("user-12345"), Some("account-12345"))
+            .await
+            .expect("load cache");
+        assert_eq!(signed_payload.bundle, replacement_bundle);
+    }
+
+    #[test]
+    fn bundle_response_conversion_preserves_fragment_order() {
+        let response = ConfigBundleResponse {
+            config_toml: Some(Some(Box::new(codex_backend_client::DeliveredConfigToml {
+                enterprise_managed: Some(Some(vec![
+                    DeliveredTomlFragment::new(
+                        "cfg_high".to_string(),
+                        "High config".to_string(),
+                        "model = \"high\"".to_string(),
+                    ),
+                    DeliveredTomlFragment::new(
+                        "cfg_low".to_string(),
+                        "Low config".to_string(),
+                        "model = \"low\"".to_string(),
+                    ),
+                ])),
+            }))),
+            requirements_toml: Some(Some(Box::new(
+                codex_backend_client::DeliveredRequirementsToml {
+                    enterprise_managed: Some(Some(vec![DeliveredTomlFragment::new(
+                        "req_high".to_string(),
+                        "High requirements".to_string(),
+                        "allowed_approval_policies = [\"never\"]".to_string(),
+                    )])),
+                },
+            ))),
+        };
+
         assert_eq!(
-            cache_file
-                .signed_payload
-                .contents
-                .as_deref()
-                .and_then(|contents| {
-                    parse_cloud_requirements(contents, codex_home.path())
-                        .ok()
-                        .flatten()
-                }),
-            Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-                allowed_approvals_reviewers: None,
-                allowed_sandbox_modes: None,
-                allowed_permissions: None,
-                remote_sandbox_config: None,
-                allowed_web_search_modes: None,
-                allow_managed_hooks_only: None,
-                allow_appshots: None,
-                computer_use: None,
-                windows: None,
-                guardian_policy_config: None,
-                feature_requirements: None,
-                hooks: None,
-                mcp_servers: None,
-                plugins: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-                permissions: None,
-            })
+            bundle_from_response(response),
+            CloudConfigBundle {
+                config_toml: CloudConfigTomlBundle {
+                    enterprise_managed: vec![
+                        CloudConfigFragment {
+                            id: "cfg_high".to_string(),
+                            name: "High config".to_string(),
+                            contents: "model = \"high\"".to_string(),
+                        },
+                        CloudConfigFragment {
+                            id: "cfg_low".to_string(),
+                            name: "Low config".to_string(),
+                            contents: "model = \"low\"".to_string(),
+                        },
+                    ],
+                },
+                requirements_toml: CloudRequirementsTomlBundle {
+                    enterprise_managed: vec![CloudRequirementsFragment {
+                        id: "req_high".to_string(),
+                        name: "High requirements".to_string(),
+                        contents: "allowed_approval_policies = [\"never\"]".to_string(),
+                    }],
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn bundle_response_conversion_treats_missing_sections_as_empty() {
+        assert_eq!(
+            bundle_from_response(ConfigBundleResponse::new()),
+            CloudConfigBundle::default()
+        );
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use codex_config::CloudConfigFragment;
+    use codex_config::CloudConfigTomlBundle;
+    use codex_config::CloudRequirementsFragment;
+    use codex_config::CloudRequirementsTomlBundle;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    fn test_bundle() -> CloudConfigBundle {
+        CloudConfigBundle {
+            config_toml: CloudConfigTomlBundle {
+                enterprise_managed: vec![CloudConfigFragment {
+                    id: "cfg_1".to_string(),
+                    name: "Base config".to_string(),
+                    contents: "model = \"gpt-5\"".to_string(),
+                }],
+            },
+            requirements_toml: CloudRequirementsTomlBundle {
+                enterprise_managed: vec![CloudRequirementsFragment {
+                    id: "req_1".to_string(),
+                    name: "Base requirements".to_string(),
+                    contents: "allowed_approval_policies = [\"never\"]".to_string(),
+                }],
+            },
+        }
+    }
+
+    struct NeverFetcher;
+
+    #[async_trait]
+    impl RequirementsFetcher for NeverFetcher {
+        async fn fetch_requirements(
+            &self,
+            _auth: &CodexAuth,
+        ) -> Result<CloudConfigBundle, FetchAttemptError> {
+            panic!("cache tests should not fetch from remote");
+        }
+    }
+
+    async fn test_service(codex_home: &Path) -> CloudRequirementsService {
+        let auth_home = tempdir().expect("tempdir");
+        let auth_manager = Arc::new(
+            AuthManager::new(
+                auth_home.path().to_path_buf(),
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                /*chatgpt_base_url*/ None,
+            )
+            .await,
+        );
+        CloudRequirementsService::new(
+            auth_manager,
+            Arc::new(NeverFetcher),
+            codex_home.to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        )
+    }
+
+    fn signed_cache_file(
+        signed_payload: CloudRequirementsCacheSignedPayload,
+    ) -> CloudRequirementsCacheFile {
+        let payload_bytes = cache_payload_bytes(&signed_payload).expect("payload bytes");
+        CloudRequirementsCacheFile {
+            signature: sign_cache_payload(&payload_bytes).expect("signature"),
+            signed_payload,
+        }
+    }
+
+    fn valid_signed_payload() -> CloudRequirementsCacheSignedPayload {
+        let cached_at = Utc::now();
+        CloudRequirementsCacheSignedPayload {
+            version: CLOUD_CONFIG_BUNDLE_CACHE_VERSION,
+            cached_at,
+            expires_at: cached_at + ChronoDuration::minutes(30),
+            chatgpt_user_id: Some("user-12345".to_string()),
+            account_id: Some("account-12345".to_string()),
+            bundle: test_bundle(),
+        }
+    }
+
+    fn write_cache_file(cache_path: &Path, cache_file: &CloudRequirementsCacheFile) {
+        std::fs::write(
+            cache_path,
+            serde_json::to_vec_pretty(cache_file).expect("serialize cache"),
+        )
+        .expect("write cache");
+    }
+
+    #[tokio::test]
+    async fn save_writes_signed_payload_and_loads_for_matching_identity() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = test_service(codex_home.path()).await;
+        let bundle = test_bundle();
+
+        service
+            .save_cache(
+                Some("user-12345".to_string()),
+                Some("account-12345".to_string()),
+                bundle.clone(),
+            )
+            .await
+            .expect("save cache");
+
+        let cache_file: CloudRequirementsCacheFile =
+            serde_json::from_slice(&std::fs::read(&service.cache_path).expect("read cache"))
+                .expect("parse cache");
+        assert_eq!(cache_file.signed_payload.version, 1);
+        assert_eq!(
+            cache_file.signed_payload.chatgpt_user_id,
+            Some("user-12345".to_string())
+        );
+        assert_eq!(
+            cache_file.signed_payload.account_id,
+            Some("account-12345".to_string())
+        );
+        assert_eq!(cache_file.signed_payload.bundle, bundle);
+        assert!(
+            cache_file.signed_payload.expires_at
+                <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(30)
+        );
+        assert!(cache_file.signed_payload.expires_at > cache_file.signed_payload.cached_at);
+        assert!(verify_cache_signature(
+            &cache_payload_bytes(&cache_file.signed_payload).expect("payload bytes"),
+            &cache_file.signature,
+        ));
+
+        assert_eq!(
+            service
+                .load_cache(Some("user-12345"), Some("account-12345"))
+                .await,
+            Ok(cache_file.signed_payload)
+        );
+    }
+
+    #[tokio::test]
+    async fn load_rejects_missing_request_identity_before_reading_cache_file() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = test_service(codex_home.path()).await;
+
+        assert_eq!(
+            service
+                .load_cache(/*chatgpt_user_id*/ None, Some("account-12345"))
+                .await,
+            Err(CacheLoadStatus::AuthIdentityIncomplete)
+        );
+        assert_eq!(
+            service
+                .load_cache(Some("user-12345"), /*account_id*/ None)
+                .await,
+            Err(CacheLoadStatus::AuthIdentityIncomplete)
+        );
+    }
+
+    #[tokio::test]
+    async fn load_reports_missing_and_malformed_cache_files() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = test_service(codex_home.path()).await;
+
+        assert_eq!(
+            service
+                .load_cache(Some("user-12345"), Some("account-12345"))
+                .await,
+            Err(CacheLoadStatus::CacheFileNotFound)
+        );
+
+        std::fs::write(&service.cache_path, "{").expect("write malformed cache");
+        assert!(matches!(
+            service
+                .load_cache(Some("user-12345"), Some("account-12345"))
+                .await,
+            Err(CacheLoadStatus::CacheParseFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_rejects_tampered_payload() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = test_service(codex_home.path()).await;
+        let mut cache_file = signed_cache_file(valid_signed_payload());
+        cache_file
+            .signed_payload
+            .bundle
+            .requirements_toml
+            .enterprise_managed[0]
+            .contents = "allowed_approval_policies = [\"on-request\"]".to_string();
+        write_cache_file(&service.cache_path, &cache_file);
+
+        assert_eq!(
+            service
+                .load_cache(Some("user-12345"), Some("account-12345"))
+                .await,
+            Err(CacheLoadStatus::CacheSignatureInvalid)
+        );
+    }
+
+    #[tokio::test]
+    async fn load_rejects_cache_for_incomplete_or_different_identity() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = test_service(codex_home.path()).await;
+        let cache_file = signed_cache_file(valid_signed_payload());
+        write_cache_file(&service.cache_path, &cache_file);
+
+        assert_eq!(
+            service
+                .load_cache(Some("user-99999"), Some("account-12345"))
+                .await,
+            Err(CacheLoadStatus::CacheIdentityMismatch)
+        );
+
+        let mut signed_payload = valid_signed_payload();
+        signed_payload.chatgpt_user_id = None;
+        write_cache_file(&service.cache_path, &signed_cache_file(signed_payload));
+
+        assert_eq!(
+            service
+                .load_cache(Some("user-12345"), Some("account-12345"))
+                .await,
+            Err(CacheLoadStatus::CacheIdentityIncomplete)
+        );
+    }
+
+    #[tokio::test]
+    async fn load_rejects_expired_cache() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = test_service(codex_home.path()).await;
+        let mut signed_payload = valid_signed_payload();
+        signed_payload.expires_at = Utc::now() - ChronoDuration::seconds(1);
+        write_cache_file(&service.cache_path, &signed_cache_file(signed_payload));
+
+        assert_eq!(
+            service
+                .load_cache(Some("user-12345"), Some("account-12345"))
+                .await,
+            Err(CacheLoadStatus::CacheExpired)
+        );
+    }
+
+    #[tokio::test]
+    async fn load_rejects_unsupported_cache_version() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = test_service(codex_home.path()).await;
+        let mut signed_payload = valid_signed_payload();
+        signed_payload.version = 2;
+        write_cache_file(&service.cache_path, &signed_cache_file(signed_payload));
+
+        assert_eq!(
+            service
+                .load_cache(Some("user-12345"), Some("account-12345"))
+                .await,
+            Err(CacheLoadStatus::CacheVersionUnsupported(2))
         );
     }
 }

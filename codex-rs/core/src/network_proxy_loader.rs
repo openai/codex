@@ -10,7 +10,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
-use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
@@ -60,7 +59,6 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
         /*cwd*/ None,
         &cli_overrides,
         overrides,
-        CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
     .await

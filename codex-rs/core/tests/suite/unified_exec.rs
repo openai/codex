@@ -916,7 +916,7 @@ allow_local_binding = true
     let permission_profile = permission_profile_for_config.clone();
     let mut builder = test_codex()
         .with_home(home)
-        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_cloud_config_bundle(managed_network_requirements_loader())
         .with_config(move |config| {
             config.use_experimental_unified_exec_tool = true;
             config
