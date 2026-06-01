@@ -32,6 +32,10 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
 
+const CHILD_MODEL: &str = "test-multi-agent-child";
+const ROOT_MODEL: &str = "test-multi-agent-root";
+const ROOT_PROMPT: &str = "spawn a child";
+
 fn remote_model(slug: &str) -> ModelInfo {
     ModelInfo {
         visibility: ModelVisibility::List,
@@ -206,6 +210,92 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
         name.as_str(),
         "multi_agent_v1" | "spawn_agent" | "send_message" | "wait_agent" | "list_agents"
     )));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let mut initial_model = remote_model(ROOT_MODEL);
+    initial_model.multi_agent_version = Some(MultiAgentVersion::V1);
+    let mut selected_model = remote_model(CHILD_MODEL);
+    selected_model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![initial_model, selected_model],
+        },
+    )
+    .await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some(ROOT_MODEL.to_string());
+        });
+    let test = builder.build(&server).await?;
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            test.codex.multi_agent_version(),
+        ),
+        (1, None)
+    );
+
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            model: Some(CHILD_MODEL.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(test.codex.multi_agent_version(), None);
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: ROOT_PROMPT.into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            test.codex.multi_agent_version(),
+            tool_names(
+                &response_mock
+                    .last_request()
+                    .expect("expected response request")
+                    .body_json(),
+            )
+            .contains(&"send_message".to_string()),
+        ),
+        (1, Some(MultiAgentVersion::V2), true)
+    );
 
     Ok(())
 }
