@@ -247,17 +247,17 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 }
 
 #[test]
-fn assign_task_tool_requires_message_and_has_no_output_schema() {
+fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         name,
         parameters,
         output_schema,
         ..
-    }) = create_assign_task_tool()
+    }) = create_followup_task_tool()
     else {
-        panic!("assign_task should be a function tool");
+        panic!("followup_task should be a function tool");
     };
-    assert_eq!(name, "assign_task");
+    assert_eq!(name, "followup_task");
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
@@ -265,7 +265,7 @@ fn assign_task_tool_requires_message_and_has_no_output_schema() {
     let properties = parameters
         .properties
         .as_ref()
-        .expect("assign_task should use object params");
+        .expect("followup_task should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
     assert!(!properties.contains_key("items"));

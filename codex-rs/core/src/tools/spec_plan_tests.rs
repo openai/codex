@@ -766,6 +766,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         "wait_agent",
         "close_agent",
         "send_message",
+        "followup_task",
         "assign_task",
         "list_agents",
     ]);
@@ -790,12 +791,12 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     v2.assert_visible_contains(&[
         "spawn_agent",
         "send_message",
-        "assign_task",
+        "followup_task",
         "wait_agent",
         "close_agent",
         "list_agents",
     ]);
-    v2.assert_visible_lacks(&["send_input", "resume_agent"]);
+    v2.assert_visible_lacks(&["send_input", "resume_agent", "assign_task"]);
     let spawn_agent_description = match v2.visible_spec("spawn_agent") {
         ToolSpec::Function(tool) => tool.description.as_str(),
         other => panic!("expected spawn_agent function spec, got {other:?}"),
@@ -892,10 +893,24 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
     .await;
 
     namespaced.assert_visible_contains(&["agents"]);
+    namespaced.assert_visible_lacks(&["assign_task"]);
+    assert!(
+        !namespaced
+            .registered_names
+            .contains(&ToolName::namespaced("agents", "assign_task").to_string()),
+        "expected no namespaced runtime for assign_task"
+    );
+    assert!(
+        !namespaced
+            .namespace_function_names("agents")
+            .iter()
+            .any(|name| name == "assign_task"),
+        "expected assign_task to be absent from agents namespace"
+    );
     for tool_name in [
         "spawn_agent",
         "send_message",
-        "assign_task",
+        "followup_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -966,10 +981,17 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
     .await;
 
     assert_eq!(plan.visible_names, vec!["exec", "wait", "agents"]);
+    assert!(
+        !plan
+            .namespace_function_names("agents")
+            .iter()
+            .any(|name| name == "assign_task"),
+        "expected assign_task to be absent from agents namespace"
+    );
     for tool_name in [
         "spawn_agent",
         "send_message",
-        "assign_task",
+        "followup_task",
         "wait_agent",
         "close_agent",
         "list_agents",
