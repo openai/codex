@@ -37,6 +37,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ForkedHistory;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ResumedHistory;
@@ -1439,6 +1440,7 @@ fn truncate_before_nth_user_message(
     n: usize,
     snapshot_state: &SnapshotTurnState,
 ) -> InitialHistory {
+    let source_thread_id = history.source_thread_id();
     let items: Vec<RolloutItem> = history.get_rollout_items();
     let user_positions = truncation::user_message_positions_in_rollout(&items);
     let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
@@ -1457,7 +1459,10 @@ fn truncate_before_nth_user_message(
     if rolled.is_empty() {
         InitialHistory::New
     } else {
-        InitialHistory::Forked(rolled)
+        InitialHistory::Forked(ForkedHistory {
+            source_thread_id,
+            history: rolled,
+        })
     }
 }
 
@@ -1536,7 +1541,10 @@ fn fork_history_from_snapshot(
                 InitialHistory::New => InitialHistory::New,
                 InitialHistory::Cleared => InitialHistory::Cleared,
                 InitialHistory::Forked(history) => InitialHistory::Forked(history),
-                InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+                InitialHistory::Resumed(resumed) => InitialHistory::Forked(ForkedHistory {
+                    source_thread_id: Some(resumed.conversation_id),
+                    history: resumed.history,
+                }),
             };
             if snapshot_state.ends_mid_turn {
                 append_interrupted_boundary(
@@ -1573,21 +1581,27 @@ fn append_interrupted_boundary(
                 history.push(RolloutItem::ResponseItem(marker));
             }
             history.push(aborted_event);
-            InitialHistory::Forked(history)
+            InitialHistory::Forked(ForkedHistory {
+                source_thread_id: None,
+                history,
+            })
         }
-        InitialHistory::Forked(mut history) => {
+        InitialHistory::Forked(mut forked) => {
             if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
-                history.push(RolloutItem::ResponseItem(marker));
+                forked.history.push(RolloutItem::ResponseItem(marker));
             }
-            history.push(aborted_event);
-            InitialHistory::Forked(history)
+            forked.history.push(aborted_event);
+            InitialHistory::Forked(forked)
         }
         InitialHistory::Resumed(mut resumed) => {
             if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
                 resumed.history.push(RolloutItem::ResponseItem(marker));
             }
             resumed.history.push(aborted_event);
-            InitialHistory::Forked(resumed.history)
+            InitialHistory::Forked(ForkedHistory {
+                source_thread_id: Some(resumed.conversation_id),
+                history: resumed.history,
+            })
         }
     }
 }

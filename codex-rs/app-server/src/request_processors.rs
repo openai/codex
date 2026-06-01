@@ -384,6 +384,7 @@ use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ForkedHistory;
 #[cfg(test)]
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::InitialHistory;

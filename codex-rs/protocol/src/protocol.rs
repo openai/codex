@@ -2335,11 +2335,17 @@ pub struct ResumedHistory {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ForkedHistory {
+    pub source_thread_id: Option<ThreadId>,
+    pub history: Vec<RolloutItem>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub enum InitialHistory {
     New,
     Cleared,
     Resumed(ResumedHistory),
-    Forked(Vec<RolloutItem>),
+    Forked(ForkedHistory),
 }
 
 impl InitialHistory {
@@ -2347,7 +2353,7 @@ impl InitialHistory {
         match self {
             InitialHistory::New | InitialHistory::Cleared => false,
             InitialHistory::Resumed(resumed) => resumed.history.iter().any(&mut predicate),
-            InitialHistory::Forked(items) => items.iter().any(predicate),
+            InitialHistory::Forked(forked) => forked.history.iter().any(predicate),
         }
     }
 
@@ -2360,10 +2366,15 @@ impl InitialHistory {
                     _ => None,
                 })
             }
-            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
-                RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.id),
-                _ => None,
-            }),
+            InitialHistory::Forked(forked) => forked.source_thread_id,
+        }
+    }
+
+    pub fn source_thread_id(&self) -> Option<ThreadId> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+            InitialHistory::Forked(forked) => forked.source_thread_id,
         }
     }
 
@@ -2371,7 +2382,7 @@ impl InitialHistory {
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => session_cwd_from_items(&resumed.history),
-            InitialHistory::Forked(items) => session_cwd_from_items(items),
+            InitialHistory::Forked(forked) => session_cwd_from_items(&forked.history),
         }
     }
 
@@ -2379,7 +2390,7 @@ impl InitialHistory {
         match self {
             InitialHistory::New | InitialHistory::Cleared => Vec::new(),
             InitialHistory::Resumed(resumed) => resumed.history.clone(),
-            InitialHistory::Forked(items) => items.clone(),
+            InitialHistory::Forked(forked) => forked.history.clone(),
         }
     }
 
@@ -2396,8 +2407,9 @@ impl InitialHistory {
                     })
                     .collect(),
             ),
-            InitialHistory::Forked(items) => Some(
-                items
+            InitialHistory::Forked(forked) => Some(
+                forked
+                    .history
                     .iter()
                     .filter_map(|ri| match ri {
                         RolloutItem::EventMsg(ev) => Some(ev.clone()),
@@ -2418,7 +2430,7 @@ impl InitialHistory {
                     _ => None,
                 })
             }
-            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+            InitialHistory::Forked(forked) => forked.history.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
                 _ => None,
             }),
@@ -2434,7 +2446,7 @@ impl InitialHistory {
                     _ => None,
                 })
             }
-            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+            InitialHistory::Forked(forked) => forked.history.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
                 _ => None,
             }),

@@ -17,6 +17,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ForkedHistory;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -223,7 +224,10 @@ impl GuardianReviewSession {
                 let prior_review_count = state.prior_review_count;
                 let last_reviewed_transcript_cursor = state.last_reviewed_transcript_cursor;
                 state.last_committed_fork_snapshot = Some(GuardianReviewForkSnapshot {
-                    initial_history: InitialHistory::Forked(items),
+                    initial_history: InitialHistory::Forked(ForkedHistory {
+                        source_thread_id: Some(self.codex.session.conversation_id),
+                        history: items,
+                    }),
                     prior_review_count,
                     last_reviewed_transcript_cursor,
                 });
@@ -476,7 +480,7 @@ impl GuardianReviewSessionManager {
         let state = trunk.state.lock().await;
         let snapshot = state.last_committed_fork_snapshot.as_ref()?;
         match &snapshot.initial_history {
-            InitialHistory::Forked(items) => Some(items.clone()),
+            InitialHistory::Forked(forked) => Some(forked.history.clone()),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Resumed(_) => None,
         }
     }
