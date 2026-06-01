@@ -38,6 +38,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -283,6 +284,7 @@ async fn run_code_mode_turn_with_rmcp_config(
             .expect("test mcp servers should accept any configuration");
     });
     let test = builder.build(server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     responses::mount_sse_once(
         server,

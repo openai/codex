@@ -18,6 +18,7 @@ use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolPayload;
+use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_goal_extension::GoalObjectiveUpdate;
@@ -30,6 +31,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
@@ -402,7 +404,7 @@ async fn budget_limited_goal_keeps_accounting_after_later_tool_finish() -> anyho
 }
 
 #[tokio::test]
-async fn usage_limit_active_goal_accounts_progress_and_clears_accounting() -> anyhow::Result<()> {
+async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -429,11 +431,18 @@ async fn usage_limit_active_goal_accounts_progress_and_clears_accounting() -> an
             ),
         )
         .await;
-    harness
-        .runtime_handle()
-        .usage_limit_active_goal_for_turn("turn-1")
-        .await
-        .map_err(anyhow::Error::msg)?;
+    let turn_store = ExtensionData::new("turn-1");
+    for contributor in harness.registry.turn_lifecycle_contributors() {
+        contributor
+            .on_turn_error(TurnErrorInput {
+                turn_id: "turn-1",
+                error: CodexErrorInfo::UsageLimitExceeded,
+                session_store: &harness.session_store,
+                thread_store: &harness.thread_store,
+                turn_store: &turn_store,
+            })
+            .await;
+    }
 
     let goal = runtime
         .thread_goals()
@@ -1205,6 +1214,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         turn_id: "turn-1".to_string(),
         call_id: call_id.to_string(),
         tool_name: codex_extension_api::ToolName::plain(tool_name),
+        model: "gpt-test".to_string(),
         truncation_policy: TruncationPolicy::Bytes(1024),
         conversation_history: codex_extension_api::ConversationHistory::default(),
         turn_item_emitter: Arc::new(NoopTurnItemEmitter),

@@ -173,6 +173,7 @@ struct ModelClientState {
     provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
+    parent_thread_id: Option<ThreadId>,
     model_verbosity: Option<VerbosityConfig>,
     enable_request_compression: bool,
     include_timing_metrics: bool,
@@ -321,6 +322,7 @@ impl ModelClient {
         installation_id: String,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
+        parent_thread_id: Option<ThreadId>,
         model_verbosity: Option<VerbosityConfig>,
         enable_request_compression: bool,
         include_timing_metrics: bool,
@@ -344,6 +346,7 @@ impl ModelClient {
                 provider: model_provider,
                 auth_env_telemetry,
                 session_source,
+                parent_thread_id,
                 model_verbosity,
                 enable_request_compression,
                 include_timing_metrics,
@@ -637,7 +640,7 @@ impl ModelClient {
 
     fn build_responses_identity_headers(&self) -> ApiHeaderMap {
         let mut extra_headers = self.build_subagent_headers();
-        if let Some(parent_thread_id) = parent_thread_id_header_value(&self.state.session_source)
+        if let Some(parent_thread_id) = parent_thread_id_header_value(self.state.parent_thread_id)
             && let Ok(val) = HeaderValue::from_str(&parent_thread_id)
         {
             extra_headers.insert(X_CODEX_PARENT_THREAD_ID_HEADER, val);
@@ -664,7 +667,7 @@ impl ModelClient {
         if let Some(subagent) = subagent_header_value(&self.state.session_source) {
             client_metadata.insert(X_OPENAI_SUBAGENT_HEADER.to_string(), subagent);
         }
-        if let Some(parent_thread_id) = parent_thread_id_header_value(&self.state.session_source) {
+        if let Some(parent_thread_id) = parent_thread_id_header_value(self.state.parent_thread_id) {
             client_metadata.insert(
                 X_CODEX_PARENT_THREAD_ID_HEADER.to_string(),
                 parent_thread_id,
@@ -1733,20 +1736,8 @@ fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
     }
 }
 
-fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) => Some(parent_thread_id.to_string()),
-        SessionSource::Cli
-        | SessionSource::VSCode
-        | SessionSource::Exec
-        | SessionSource::Mcp
-        | SessionSource::Custom(_)
-        | SessionSource::Internal(_)
-        | SessionSource::SubAgent(_)
-        | SessionSource::Unknown => None,
-    }
+fn parent_thread_id_header_value(parent_thread_id: Option<ThreadId>) -> Option<String> {
+    parent_thread_id.map(|parent_thread_id| parent_thread_id.to_string())
 }
 
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;

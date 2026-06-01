@@ -2430,8 +2430,6 @@ dependencies = [
 name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
- "async-channel",
- "async-trait",
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",
@@ -2987,6 +2985,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-tools",
+ "codex-utils-template",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3033,7 +3032,6 @@ name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
  "codex-api",
  "codex-core",
  "codex-extension-api",
@@ -3048,9 +3046,6 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -4174,6 +4169,7 @@ dependencies = [
  "pretty_assertions",
  "schemars 0.8.22",
  "serde_json",
+ "url",
 ]
 
 [[package]]

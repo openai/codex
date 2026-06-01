@@ -35,6 +35,7 @@ use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
+use codex_utils_cli::SharedCliOptions;
 use codex_utils_cli::resume_hint;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
@@ -50,6 +51,8 @@ mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
 mod remote_control_cmd;
+#[cfg(target_os = "windows")]
+mod sandbox_setup;
 mod state_db_recovery;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -173,6 +176,12 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
+    /// Archive a saved session by id or session name.
+    Archive(SessionArchiveCommand),
+
+    /// Unarchive a saved session by id or session name.
+    Unarchive(SessionArchiveCommand),
+
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
 
@@ -294,7 +303,7 @@ struct DebugTraceReduceCommand {
 
 #[derive(Debug, Parser)]
 struct ResumeCommand {
-    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
+    /// Session id (UUID) or session name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
@@ -316,6 +325,32 @@ struct ResumeCommand {
 
     #[clap(flatten)]
     config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct SessionArchiveCommand {
+    /// Session id (UUID) or session name. UUIDs take precedence if it parses.
+    #[arg(value_name = "SESSION")]
+    target: String,
+
+    #[clap(flatten)]
+    remote: InteractiveRemoteOptions,
+
+    #[clap(flatten)]
+    config_overrides: SessionArchiveConfigOverrides,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+struct SessionArchiveConfigOverrides {
+    #[clap(flatten)]
+    shared: SharedCliOptions,
+
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", default_value_t = false)]
+    strict_config: bool,
+
+    #[clap(flatten)]
+    config_overrides: CliConfigOverrides,
 }
 
 #[derive(Debug, Parser)]
@@ -734,6 +769,39 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
+async fn run_session_archive_cli_command(
+    action: codex_tui::SessionArchiveAction,
+    cmd: SessionArchiveCommand,
+    mut interactive: TuiCli,
+    root_config_overrides: CliConfigOverrides,
+    root_remote: Option<String>,
+    root_remote_auth_token_env: Option<String>,
+    arg0_paths: Arg0DispatchPaths,
+) -> anyhow::Result<String> {
+    let SessionArchiveCommand {
+        target,
+        remote,
+        config_overrides,
+    } = cmd;
+    interactive =
+        finalize_session_archive_interactive(interactive, root_config_overrides, config_overrides);
+    let explicit_remote_endpoint = resolve_remote_endpoint(
+        remote.remote.or(root_remote),
+        remote.remote_auth_token_env.or(root_remote_auth_token_env),
+    )?;
+    codex_tui::run_session_archive_command(
+        action,
+        target,
+        codex_tui::SessionArchiveCommandOptions {
+            cli: interactive,
+            arg0_paths,
+            explicit_remote_endpoint,
+        },
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("{err}"))
+}
+
 async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
     match cmd.subcommand {
         DebugAppServerSubcommand::SendMessageV2(cmd) => {
@@ -1124,6 +1192,32 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?;
             handle_app_exit(exit_info)?;
         }
+        Some(Subcommand::Archive(cmd)) => {
+            let output = run_session_archive_cli_command(
+                codex_tui::SessionArchiveAction::Archive,
+                cmd,
+                interactive,
+                root_config_overrides.clone(),
+                root_remote.clone(),
+                root_remote_auth_token_env.clone(),
+                arg0_paths.clone(),
+            )
+            .await?;
+            println!("{output}");
+        }
+        Some(Subcommand::Unarchive(cmd)) => {
+            let output = run_session_archive_cli_command(
+                codex_tui::SessionArchiveAction::Unarchive,
+                cmd,
+                interactive,
+                root_config_overrides.clone(),
+                root_remote.clone(),
+                root_remote_auth_token_env.clone(),
+                arg0_paths.clone(),
+            )
+            .await?;
+            println!("{output}");
+        }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
             last,
@@ -1250,6 +1344,16 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 .await?;
         }
         Some(Subcommand::Sandbox(mut sandbox_cli)) => {
+            #[cfg(target_os = "windows")]
+            if let Some(setup_cli) = sandbox_setup::parse_setup_command(&sandbox_cli.command)? {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "sandbox setup",
+                )?;
+                sandbox_setup::run(setup_cli).await?;
+                return Ok(());
+            }
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
@@ -1463,6 +1567,8 @@ fn profile_v2_for_subcommand<'a>(
         Subcommand::Exec(_)
         | Subcommand::Review(_)
         | Subcommand::Resume(_)
+        | Subcommand::Archive(_)
+        | Subcommand::Unarchive(_)
         | Subcommand::Fork(_)
         | Subcommand::Mcp(_)
         | Subcommand::Sandbox(_)
@@ -1470,7 +1576,7 @@ fn profile_v2_for_subcommand<'a>(
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
         ),
     }
 }
@@ -1890,6 +1996,8 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::McpServer(_))
         | Some(Subcommand::ExecServer(_))
         | Some(Subcommand::Resume(_))
+        | Some(Subcommand::Archive(_))
+        | Some(Subcommand::Unarchive(_))
         | Some(Subcommand::Fork(_))
         | Some(Subcommand::Doctor(_)) => None,
         Some(Subcommand::AppServer(app_server)) if app_server.subcommand.is_none() => None,
@@ -2037,34 +2145,13 @@ async fn run_interactive_tui(
         }
     }
 
-    let mut remote_endpoint = remote
-        .as_deref()
-        .map(codex_tui::resolve_remote_addr)
-        .transpose()
-        .map_err(std::io::Error::other)?;
-    if let Some(remote_auth_token_env) = remote_auth_token_env {
-        let Some(endpoint) = remote_endpoint.as_mut() else {
-            return Ok(AppExitInfo::fatal(
-                "`--remote-auth-token-env` requires `--remote`.",
-            ));
-        };
-        if !codex_tui::remote_addr_supports_auth_token(endpoint) {
-            return Ok(AppExitInfo::fatal(
-                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
-            ));
+    let remote_endpoint = match resolve_remote_endpoint(remote, remote_auth_token_env) {
+        Ok(remote_endpoint) => remote_endpoint,
+        Err(err) if is_remote_auth_usage_error(&err) => {
+            return Ok(AppExitInfo::fatal(err.to_string()));
         }
-        let auth_token = read_remote_auth_token_from_env_var(&remote_auth_token_env)
-            .map_err(std::io::Error::other)?;
-        let codex_tui::RemoteAppServerEndpoint::WebSocket {
-            auth_token: slot, ..
-        } = endpoint
-        else {
-            return Ok(AppExitInfo::fatal(
-                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
-            ));
-        };
-        *slot = Some(auth_token);
-    }
+        Err(err) => return Err(err),
+    };
     let start_tui = || {
         codex_tui::run_main(
             interactive.clone(),
@@ -2106,6 +2193,46 @@ async fn run_interactive_tui(
         }
         attempted_repair = true;
     }
+}
+
+fn resolve_remote_endpoint(
+    remote: Option<String>,
+    remote_auth_token_env: Option<String>,
+) -> std::io::Result<Option<codex_tui::RemoteAppServerEndpoint>> {
+    let mut remote_endpoint = remote
+        .as_deref()
+        .map(codex_tui::resolve_remote_addr)
+        .transpose()
+        .map_err(std::io::Error::other)?;
+    if let Some(remote_auth_token_env) = remote_auth_token_env {
+        let Some(endpoint) = remote_endpoint.as_mut() else {
+            return Err(std::io::Error::other(
+                "`--remote-auth-token-env` requires `--remote`.",
+            ));
+        };
+        if !codex_tui::remote_addr_supports_auth_token(endpoint) {
+            return Err(std::io::Error::other(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
+            ));
+        }
+        let auth_token = read_remote_auth_token_from_env_var(&remote_auth_token_env)
+            .map_err(std::io::Error::other)?;
+        let codex_tui::RemoteAppServerEndpoint::WebSocket {
+            auth_token: slot, ..
+        } = endpoint
+        else {
+            return Err(std::io::Error::other(
+                "`--remote-auth-token-env` requires a `wss://` or loopback `ws://` remote.",
+            ));
+        };
+        *slot = Some(auth_token);
+    }
+    Ok(remote_endpoint)
+}
+
+fn is_remote_auth_usage_error(err: &std::io::Error) -> bool {
+    err.to_string()
+        .starts_with("`--remote-auth-token-env` requires")
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -2171,9 +2298,31 @@ fn finalize_fork_interactive(
     interactive
 }
 
-/// Merge flags provided to `codex resume`/`codex fork` so they take precedence over any
-/// root-level flags. Only overrides fields explicitly set on the subcommand-scoped
-/// CLI. Also appends `-c key=value` overrides with highest precedence.
+fn finalize_session_archive_interactive(
+    mut interactive: TuiCli,
+    root_config_overrides: CliConfigOverrides,
+    archive_cli: SessionArchiveConfigOverrides,
+) -> TuiCli {
+    let SessionArchiveConfigOverrides {
+        shared,
+        strict_config,
+        config_overrides,
+    } = archive_cli;
+    interactive.shared.apply_subcommand_overrides(shared);
+    if strict_config {
+        interactive.strict_config = true;
+    }
+    interactive
+        .config_overrides
+        .raw_overrides
+        .extend(config_overrides.raw_overrides);
+    prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
+    interactive
+}
+
+/// Merge flags provided to runtime wrapper commands so they take precedence over any root-level
+/// flags. Only overrides fields explicitly set on the subcommand-scoped CLI. Also appends
+/// `-c key=value` overrides with highest precedence.
 fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli) {
     let TuiCli {
         shared,
@@ -2333,6 +2482,32 @@ mod tests {
         };
 
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+    }
+
+    fn finalize_archive_from_args(args: &[&str]) -> (String, TuiCli, InteractiveRemoteOptions) {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let MultitoolCli {
+            interactive,
+            config_overrides: root_overrides,
+            subcommand,
+            feature_toggles: _,
+            remote: _,
+        } = cli;
+
+        let Subcommand::Archive(SessionArchiveCommand {
+            target,
+            remote,
+            config_overrides: archive_cli,
+        }) = subcommand.expect("archive present")
+        else {
+            unreachable!()
+        };
+
+        (
+            target,
+            finalize_session_archive_interactive(interactive, root_overrides, archive_cli),
+            remote,
+        )
     }
 
     fn profile_v2_for_args(args: &[&str]) -> anyhow::Result<Option<String>> {
@@ -2603,6 +2778,41 @@ mod tests {
     fn update_parses_as_update_subcommand() {
         let cli = MultitoolCli::try_parse_from(["codex", "update"]).expect("parse");
         assert!(matches!(cli.subcommand, Some(Subcommand::Update)));
+    }
+
+    #[test]
+    fn archive_merges_scoped_tui_flags() {
+        let (target, interactive, remote) = finalize_archive_from_args(
+            [
+                "codex",
+                "-C",
+                "/root",
+                "archive",
+                "--remote",
+                "unix://archive.sock",
+                "--strict-config",
+                "--dangerously-bypass-hook-trust",
+                "-m",
+                "gpt-5.1-test",
+                "-p",
+                "work",
+                "-C",
+                "/archive",
+                "my-thread",
+            ]
+            .as_ref(),
+        );
+
+        assert_eq!(target, "my-thread");
+        assert_eq!(remote.remote.as_deref(), Some("unix://archive.sock"));
+        assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
+        assert_eq!(interactive.config_profile_v2.as_deref(), Some("work"));
+        assert_eq!(
+            interactive.cwd.as_deref(),
+            Some(std::path::Path::new("/archive"))
+        );
+        assert!(interactive.strict_config);
+        assert!(interactive.bypass_hook_trust);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]

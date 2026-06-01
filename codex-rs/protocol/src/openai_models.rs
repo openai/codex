@@ -8,7 +8,9 @@ use std::str::FromStr;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
@@ -228,6 +230,25 @@ pub enum TruncationMode {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolMode {
+    Direct,
+    CodeMode,
+    CodeModeOnly,
+}
+
+fn deserialize_optional_model_selector<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let Some(value) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(serde_json::Value::String(value)).ok())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 pub struct TruncationPolicyConfig {
     pub mode: TruncationMode,
     pub limit: i64,
@@ -318,6 +339,12 @@ pub struct ModelInfo {
     pub used_fallback_model_metadata: bool,
     #[serde(default)]
     pub supports_search_tool: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_model_selector"
+    )]
+    pub tool_mode: Option<ToolMode>,
 }
 
 impl ModelInfo {
@@ -612,6 +639,7 @@ mod tests {
             input_modalities: default_input_modalities(),
             used_fallback_model_metadata: false,
             supports_search_tool: false,
+            tool_mode: None,
         }
     }
 
@@ -829,6 +857,44 @@ mod tests {
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
+        assert_eq!(model.tool_mode, None);
+    }
+
+    #[test]
+    fn model_info_deserializes_known_tool_mode() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        let object = value
+            .as_object_mut()
+            .expect("model info should be an object");
+        object.insert(
+            "tool_mode".to_string(),
+            serde_json::Value::String("code_mode_only".to_string()),
+        );
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert_eq!(model.tool_mode, Some(ToolMode::CodeModeOnly));
+    }
+
+    #[test]
+    fn model_info_treats_unknown_tool_mode_as_omitted() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        let object = value
+            .as_object_mut()
+            .expect("model info should be an object");
+        object.insert(
+            "tool_mode".to_string(),
+            serde_json::Value::String("future_tool_mode".to_string()),
+        );
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert_eq!(model.tool_mode, None);
+        let serialized = serde_json::to_value(model).expect("serialize model info");
+        let object = serialized
+            .as_object()
+            .expect("model info should be an object");
+        assert!(!object.contains_key("tool_mode"));
     }
 
     #[test]
