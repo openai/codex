@@ -1,7 +1,7 @@
 use codex_core::config::Config;
 use codex_model_provider_info::WireApi;
 
-use crate::sandbox_summary::summarize_sandbox_policy;
+use crate::sandbox_summary::summarize_permission_profile;
 
 /// Build a list of key/value pairs summarizing the effective configuration.
 pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'static str, String)> {
@@ -15,10 +15,10 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
         ),
         (
             "sandbox",
-            summarize_sandbox_policy(
-                &config
-                    .permissions
-                    .legacy_sandbox_policy(config.cwd.as_path()),
+            summarize_permission_profile(
+                &config.permissions.effective_permission_profile(),
+                &config.cwd,
+                &config.effective_workspace_roots(),
             ),
         ),
     ];

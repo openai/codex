@@ -68,6 +68,32 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::execute_user_shell_command;
+
+fn legacy_sandbox_policy_for_turn_context(turn_context: &TurnContext) -> SandboxPolicy {
+    let file_system_sandbox_policy = turn_context.file_system_sandbox_policy();
+    #[allow(deprecated)]
+    let cwd = turn_context.cwd.as_path();
+    turn_context
+        .permission_profile()
+        .compatibility_sandbox_policy(
+            &file_system_sandbox_policy,
+            turn_context.network_sandbox_policy(),
+            cwd,
+        )
+}
+
+fn legacy_sandbox_policy_for_session_configuration(
+    session_configuration: &SessionConfiguration,
+) -> SandboxPolicy {
+    let file_system_sandbox_policy = session_configuration.file_system_sandbox_policy();
+    session_configuration
+        .permission_profile()
+        .compatibility_sandbox_policy(
+            &file_system_sandbox_policy,
+            session_configuration.network_sandbox_policy(),
+            session_configuration.cwd.as_path(),
+        )
+}
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -913,7 +939,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
         .new_turn_with_sub_id(
             "sandbox-policy-change".to_string(),
             SessionSettingsUpdate {
-                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                permission_profile: Some(PermissionProfile::Disabled),
                 ..Default::default()
             },
         )
@@ -2267,9 +2293,6 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 async fn session_configured_reports_permission_profile_for_external_sandbox() -> anyhow::Result<()>
 {
     let server = start_mock_server().await;
-    let sandbox_policy = SandboxPolicy::ExternalSandbox {
-        network_access: codex_protocol::protocol::NetworkAccess::Restricted,
-    };
     let permission_profile = PermissionProfile::External {
         network: NetworkSandboxPolicy::Restricted,
     };
@@ -2277,11 +2300,8 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
     let mut builder = test_codex().with_config(move |config| {
         config
             .permissions
-            .set_permission_profile(permission_profile.clone())
+            .set_permission_profile(permission_profile)
             .expect("set permission profile");
-        config
-            .set_legacy_sandbox_policy(sandbox_policy)
-            .expect("set sandbox policy");
     });
 
     let test = builder.build(&server).await?;
@@ -2465,7 +2485,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy(),
+        sandbox_policy: legacy_sandbox_policy_for_turn_context(&turn_context),
         permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
@@ -3902,7 +3922,7 @@ async fn session_configuration_apply_permission_profile_accepts_direct_write_roo
         file_system_sandbox_policy
     );
     assert_eq!(
-        updated.sandbox_policy(),
+        legacy_sandbox_policy_for_session_configuration(&updated),
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![external_write_path],
             network_access: false,
@@ -5582,7 +5602,7 @@ async fn user_turn_updates_approvals_reviewer() {
                 cwd: Some(config.cwd.to_path_buf()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
-                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                permission_profile: Some(config.permissions.effective_permission_profile()),
                 summary: config.model_reasoning_summary,
                 personality: config.personality,
                 collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
@@ -7596,7 +7616,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
 fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSystemSandboxPolicy {
     #[allow(deprecated)]
     let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-        &turn_context.sandbox_policy(),
+        &legacy_sandbox_policy_for_turn_context(turn_context),
         &turn_context.cwd,
     );
     #[allow(deprecated)]
@@ -10398,11 +10418,10 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
 #[tokio::test]
 async fn shell_tool_cancellation_waits_for_runtime_cleanup() -> anyhow::Result<()> {
     let session = make_session_with_config(|config| {
-        let cwd = config.cwd.clone();
         config
             .permissions
-            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
-            .expect("test setup should allow sandbox policy");
+            .set_permission_profile(PermissionProfile::Disabled)
+            .expect("test setup should allow permission profile");
     })
     .await?;
     let turn_context = session.new_default_turn().await;

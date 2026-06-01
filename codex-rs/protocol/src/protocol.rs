@@ -475,6 +475,39 @@ pub struct ThreadSettingsOverrides {
     pub personality: Option<Personality>,
 }
 
+impl ThreadSettingsOverrides {
+    pub fn permission_profile_update_for_cwd(
+        &self,
+        cwd: &Path,
+        current_file_system_sandbox_policy: Option<&FileSystemSandboxPolicy>,
+    ) -> Option<PermissionProfile> {
+        if let Some(permission_profile) = self.permission_profile.clone() {
+            return Some(permission_profile);
+        }
+
+        self.sandbox_policy.as_ref().map(|sandbox_policy| {
+            let file_system_sandbox_policy = if let Some(current_file_system_sandbox_policy) =
+                current_file_system_sandbox_policy
+            {
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                    sandbox_policy,
+                    cwd,
+                    current_file_system_sandbox_policy,
+                )
+            } else {
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd)
+            };
+            let file_system_sandbox_policy =
+                file_system_sandbox_policy.materialize_project_roots_with_cwd(cwd);
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(sandbox_policy),
+            )
+        })
+    }
+}
+
 /// Source classification for client-supplied context.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -4103,6 +4136,48 @@ mod tests {
                 .matches_product_restriction(&[Product::Atlas])
         );
         assert!(SessionSource::Custom("atlas-dev".to_string()).matches_product_restriction(&[]));
+    }
+
+    #[test]
+    fn thread_settings_legacy_sandbox_policy_binds_project_roots_to_update_cwd() {
+        let cwd = TempDir::new().expect("tempdir");
+        let other_workspace_root = TempDir::new().expect("tempdir");
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let thread_settings = ThreadSettingsOverrides {
+            sandbox_policy: Some(sandbox_policy.clone()),
+            ..Default::default()
+        };
+
+        let actual = thread_settings
+            .permission_profile_update_for_cwd(
+                cwd.path(),
+                /*current_file_system_sandbox_policy*/ None,
+            )
+            .expect("legacy sandbox policy should produce a permission profile update");
+        let expected_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                &sandbox_policy,
+                cwd.path(),
+            )
+            .materialize_project_roots_with_cwd(cwd.path());
+        let expected = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+            &expected_file_system_sandbox_policy,
+            NetworkSandboxPolicy::from(&sandbox_policy),
+        );
+
+        assert_eq!(actual, expected);
+        let actual_file_system_sandbox_policy = actual.file_system_sandbox_policy();
+        assert!(actual_file_system_sandbox_policy.can_write_path_with_cwd(cwd.path(), cwd.path()));
+        assert!(
+            !actual_file_system_sandbox_policy
+                .can_write_path_with_cwd(other_workspace_root.path(), cwd.path())
+        );
     }
 
     fn sandbox_policy_probe_paths(policy: &SandboxPolicy, cwd: &Path) -> Vec<PathBuf> {

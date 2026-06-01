@@ -10,7 +10,6 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use std::sync::atomic::AtomicBool;
@@ -112,18 +111,6 @@ impl TurnContext {
 
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
         self.permission_profile.network_sandbox_policy()
-    }
-
-    pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
-        let file_system_sandbox_policy = self.file_system_sandbox_policy();
-        let network_sandbox_policy = self.network_sandbox_policy();
-        compatibility_sandbox_policy_for_permission_profile(
-            &self.permission_profile,
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-            #[allow(deprecated)]
-            &self.cwd,
-        )
     }
 
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
@@ -319,13 +306,20 @@ impl TurnContext {
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
         // this comparison and the legacy projection should go away.
+        let file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let network_sandbox_policy = self.network_sandbox_policy();
+        let sandbox_policy = self.permission_profile.compatibility_sandbox_policy(
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+            #[allow(deprecated)]
+            &self.cwd,
+        );
         let legacy_file_system_sandbox_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                &self.sandbox_policy(),
+                &sandbox_policy,
                 #[allow(deprecated)]
                 &self.cwd,
             );
-        let file_system_sandbox_policy = self.file_system_sandbox_policy();
         (file_system_sandbox_policy != legacy_file_system_sandbox_policy)
             .then_some(file_system_sandbox_policy)
     }
@@ -338,6 +332,14 @@ impl TurnContext {
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let workspace_roots = self.config.effective_workspace_roots();
+        let file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let network_sandbox_policy = self.network_sandbox_policy();
+        let sandbox_policy = self.permission_profile.compatibility_sandbox_policy(
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+            #[allow(deprecated)]
+            &self.cwd,
+        );
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             #[allow(deprecated)]
@@ -346,7 +348,7 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
-            sandbox_policy: self.sandbox_policy(),
+            sandbox_policy,
             permission_profile: Some(self.permission_profile()),
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),

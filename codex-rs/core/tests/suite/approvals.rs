@@ -37,6 +37,8 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::set_legacy_sandbox_policy_for_config;
+use core_test_support::set_legacy_sandbox_policy_for_permissions;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -1898,8 +1900,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy.clone())
+        set_legacy_sandbox_policy_for_config(config, sandbox_policy.clone())
             .expect("set sandbox policy");
         for feature in features {
             config
@@ -2073,8 +2074,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         .with_model("gpt-5.4")
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-            config
-                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+            set_legacy_sandbox_policy_for_config(config, sandbox_policy_for_config)
                 .expect("set sandbox policy");
             config.approvals_reviewer = ApprovalsReviewer::User;
         });
@@ -2184,8 +2184,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+        set_legacy_sandbox_policy_for_config(config, sandbox_policy_for_config)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
@@ -2357,8 +2356,7 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+        set_legacy_sandbox_policy_for_config(config, sandbox_policy_for_config)
             .expect("set sandbox policy");
         config
             .features
@@ -2809,8 +2807,7 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+        set_legacy_sandbox_policy_for_config(config, sandbox_policy_for_config)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
@@ -2862,8 +2859,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+        set_legacy_sandbox_policy_for_config(config, sandbox_policy_for_config)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
@@ -3002,8 +2998,7 @@ allow_local_binding = true
         .with_cloud_requirements(managed_network_requirements_loader())
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-            config
-                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+            set_legacy_sandbox_policy_for_config(config, sandbox_policy_for_config)
                 .expect("set sandbox policy");
         });
     let test = builder.build(&server).await?;
@@ -3488,10 +3483,12 @@ allow_local_binding = true
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             let cwd = config.cwd.clone();
-            config
-                .permissions
-                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
-                .expect("test setup should allow sandbox policy");
+            set_legacy_sandbox_policy_for_permissions(
+                &mut config.permissions,
+                SandboxPolicy::DangerFullAccess,
+                cwd.as_path(),
+            )
+            .expect("test setup should allow sandbox policy");
         });
     let test = builder.build(&server).await?;
     assert!(
@@ -3611,8 +3608,7 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-        config
-            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+        set_legacy_sandbox_policy_for_config(config, sandbox_policy_for_config)
             .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
