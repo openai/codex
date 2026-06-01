@@ -751,7 +751,8 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             initial_history: InitialHistory::New,
             session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
             thread_source: None,
-            code_mode_session_provider_selection: Default::default(),
+            code_mode_session_provider_selection:
+                codex_code_mode::SessionProviderSelection::InProcess,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,

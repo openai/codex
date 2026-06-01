@@ -577,7 +577,8 @@ impl ThreadManager {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
-            code_mode_session_provider_selection: Default::default(),
+            code_mode_session_provider_selection:
+                codex_code_mode::SessionProviderSelection::InProcess,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name: None,
@@ -948,7 +949,9 @@ impl ThreadManager {
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
-        self.agent_control_with_code_mode_session_provider_selection(Default::default())
+        self.agent_control_with_code_mode_session_provider_selection(
+            codex_code_mode::SessionProviderSelection::InProcess,
+        )
     }
 
     fn agent_control_with_code_mode_session_provider_selection(

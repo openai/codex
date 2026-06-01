@@ -348,7 +348,8 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
-            code_mode_session_provider_selection: Default::default(),
+            code_mode_session_provider_selection:
+                codex_code_mode::SessionProviderSelection::InProcess,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -532,7 +533,8 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
                 InternalSessionSource::MemoryConsolidation,
             )),
             thread_source: None,
-            code_mode_session_provider_selection: Default::default(),
+            code_mode_session_provider_selection:
+                codex_code_mode::SessionProviderSelection::InProcess,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,

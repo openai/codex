@@ -1105,7 +1105,8 @@ impl ThreadRequestProcessor {
                 },
                 session_source: None,
                 thread_source,
-                code_mode_session_provider_selection: Default::default(),
+                code_mode_session_provider_selection:
+                    codex_code_mode::SessionProviderSelection::InProcess,
                 dynamic_tools: core_dynamic_tools,
                 persist_extended_history: false,
                 metrics_service_name: service_name,

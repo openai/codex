@@ -247,7 +247,8 @@ impl MemoryStartupContext {
                     InternalSessionSource::MemoryConsolidation,
                 )),
                 thread_source: Some(ThreadSource::MemoryConsolidation),
-                code_mode_session_provider_selection: Default::default(),
+                code_mode_session_provider_selection:
+                    codex_code_mode::SessionProviderSelection::InProcess,
                 dynamic_tools: Vec::new(),
                 persist_extended_history: false,
                 metrics_service_name: None,
