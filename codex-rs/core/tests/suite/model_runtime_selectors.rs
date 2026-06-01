@@ -397,8 +397,16 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
     }
     test.codex.submit(Op::Interrupt).await?;
 
-    let root_request = root_mock.single_request();
-    let guardian_request = guardian_mock.single_request();
+    let root_request = root_mock
+        .requests()
+        .into_iter()
+        .next()
+        .expect("expected root request");
+    let guardian_request = guardian_mock
+        .requests()
+        .into_iter()
+        .next()
+        .expect("expected guardian request");
     assert_eq!(
         (
             models_mock.requests().len(),
