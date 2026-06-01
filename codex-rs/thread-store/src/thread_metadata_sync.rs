@@ -545,17 +545,17 @@ mod tests {
     }
 
     fn session_meta(thread_id: ThreadId) -> SessionMetaLine {
-    SessionMetaLine {
-        meta: SessionMeta {
-            id: thread_id,
-            timestamp: "2025-01-03T12:00:00Z".to_string(),
-            source: SessionSource::Exec,
-            ..Default::default()
-        },
-        git: None,
-        artifacts: std::collections::HashMap::new(),
+        SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                timestamp: "2025-01-03T12:00:00Z".to_string(),
+                source: SessionSource::Exec,
+                ..Default::default()
+            },
+            git: None,
+            artifacts: std::collections::HashMap::new(),
+        }
     }
-}
 
     fn goal_update(thread_id: ThreadId, objective: &str) -> ThreadGoalUpdatedEvent {
         ThreadGoalUpdatedEvent {
