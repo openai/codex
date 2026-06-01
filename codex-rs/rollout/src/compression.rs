@@ -45,24 +45,60 @@ pub fn plain_rollout_path(path: &Path) -> PathBuf {
     path::plain_rollout_path(path)
 }
 
-/// Returns whether the path names a compressed rollout file.
-pub(crate) fn is_compressed_rollout_path(path: &Path) -> bool {
-    path::is_compressed_rollout_path(path)
-}
-
-/// Returns whether the file name is a rollout file name.
-pub(crate) fn is_rollout_file_name(name: &str) -> bool {
-    file_name::is_rollout_file_name(name)
-}
-
 /// Parses a rollout file name, returning its plain `.jsonl` name when valid.
 pub(crate) fn parse_rollout_file_name(name: &str) -> Option<&str> {
     file_name::parse_rollout_file_name(name)
 }
 
-/// Returns whether a compressed rollout should be skipped because the plain sibling exists.
-pub(crate) fn should_skip_compressed_sibling(path: &Path) -> bool {
-    path::should_skip_compressed_sibling(path)
+/// A discovered rollout file, represented by exactly one physical path.
+///
+/// This keeps directory walkers from reimplementing the plain/compressed
+/// precedence rules. The physical path may point at either `.jsonl` or
+/// `.jsonl.zst`, while `plain_file_name` is always the canonical `.jsonl`
+/// filename used for timestamp and id parsing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RolloutFile {
+    path: PathBuf,
+    plain_file_name: String,
+}
+
+impl RolloutFile {
+    /// Creates a logical rollout file from a physical path found during discovery.
+    ///
+    /// Returns `None` for non-rollout names and for compressed siblings hidden by
+    /// an existing plain `.jsonl` file.
+    pub(crate) fn from_path(path: PathBuf) -> Option<Self> {
+        let file_name = path.file_name().and_then(|name| name.to_str())?;
+        let plain_file_name = file_name::parse_rollout_file_name(file_name)?.to_string();
+        if path::should_skip_compressed_sibling(path.as_path()) {
+            return None;
+        }
+
+        Some(Self {
+            path,
+            plain_file_name,
+        })
+    }
+
+    /// Returns the physical path that should be opened for reads.
+    pub(crate) fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+
+    /// Returns the canonical `.jsonl` filename for timestamp and id parsing.
+    pub(crate) fn plain_file_name(&self) -> &str {
+        self.plain_file_name.as_str()
+    }
+
+    /// Returns whether the physical path is the compressed representation.
+    pub(crate) fn is_compressed(&self) -> bool {
+        path::is_compressed_rollout_path(self.path.as_path())
+    }
+
+    /// Consumes the entry and returns the physical path that should be read.
+    pub(crate) fn into_path(self) -> PathBuf {
+        self.path
+    }
 }
 
 /// Line-oriented rollout reader returned by [`open_rollout_line_reader`].
@@ -163,10 +199,6 @@ mod path {
 
 mod file_name {
     use super::COMPRESSED_SUFFIX;
-
-    pub(super) fn is_rollout_file_name(name: &str) -> bool {
-        parse_rollout_file_name(name).is_some()
-    }
 
     pub(super) fn parse_rollout_file_name(name: &str) -> Option<&str> {
         let name = name.strip_suffix(COMPRESSED_SUFFIX).unwrap_or(name);

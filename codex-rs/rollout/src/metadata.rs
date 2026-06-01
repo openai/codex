@@ -417,14 +417,8 @@ async fn collect_rollout_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
             if !file_type.is_file() {
                 continue;
             }
-            let file_name = entry.file_name();
-            let Some(name) = file_name.to_str() else {
-                continue;
-            };
-            if compression::is_rollout_file_name(name)
-                && !compression::should_skip_compressed_sibling(path.as_path())
-            {
-                paths.push(path);
+            if let Some(rollout_file) = compression::RolloutFile::from_path(path) {
+                paths.push(rollout_file.into_path());
             }
         }
     }

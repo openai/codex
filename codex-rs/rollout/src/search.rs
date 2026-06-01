@@ -109,17 +109,14 @@ async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSe
                 dirs.push(path);
                 continue;
             }
-            if !file_type.is_file()
-                || !path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(compression::is_rollout_file_name)
-                || compression::should_skip_compressed_sibling(path.as_path())
-            {
+            if !file_type.is_file() {
                 continue;
             }
-            if rollout_contains(path.as_path(), &search_term).await? {
-                matches.insert(path);
+            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
+                continue;
+            };
+            if rollout_contains(rollout_file.path(), &search_term).await? {
+                matches.insert(rollout_file.into_path());
             }
         }
     }
@@ -175,14 +172,17 @@ async fn scan_compressed_rollout_paths(
                 dirs.push(path);
                 continue;
             }
-            if !file_type.is_file()
-                || !compression::is_compressed_rollout_path(path.as_path())
-                || compression::should_skip_compressed_sibling(path.as_path())
-            {
+            if !file_type.is_file() {
                 continue;
             }
-            if rollout_contains(path.as_path(), &search_term).await? {
-                matches.insert(path);
+            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
+                continue;
+            };
+            if !rollout_file.is_compressed() {
+                continue;
+            }
+            if rollout_contains(rollout_file.path(), &search_term).await? {
+                matches.insert(rollout_file.into_path());
             }
         }
     }

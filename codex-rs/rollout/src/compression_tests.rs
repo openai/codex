@@ -35,6 +35,38 @@ async fn load_rollout_items_reads_compressed_rollout() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn rollout_file_from_path_normalizes_compressed_file_names() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(7);
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    let compressed_path = compressed_rollout_path(&rollout_path);
+
+    assert_eq!(
+        RolloutFile::from_path(compressed_path.clone()),
+        Some(RolloutFile {
+            path: compressed_path,
+            plain_file_name: format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"),
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn rollout_file_from_path_hides_compressed_sibling_when_plain_exists() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(8);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "plain wins")?;
+
+    assert_eq!(
+        RolloutFile::from_path(compressed_rollout_path(&rollout_path)),
+        None
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn find_thread_path_by_id_handles_compressed_rollout_filenames() -> anyhow::Result<()> {
     let home = TempDir::new()?;

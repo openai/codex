@@ -892,23 +892,18 @@ async fn collect_flat_rollout_files(
         {
             continue;
         }
-        let file_name = entry.file_name();
-        let Some(name_str) = file_name.to_str() else {
+        let Some(rollout_file) = compression::RolloutFile::from_path(entry.path()) else {
             continue;
         };
-        if !compression::is_rollout_file_name(name_str)
-            || compression::should_skip_compressed_sibling(entry.path().as_path())
-        {
-            continue;
-        }
-        let Some((ts, id)) = parse_timestamp_uuid_from_filename(name_str) else {
+        let Some((ts, id)) = parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
+        else {
             continue;
         };
         *scanned_files += 1;
         if *scanned_files > MAX_SCAN_FILES {
             break;
         }
-        collected.push((ts, id, entry.path()));
+        collected.push((ts, id, rollout_file.into_path()));
     }
     collected.sort_by_key(|(ts, sid, _path)| (Reverse(*ts), Reverse(*sid)));
     Ok(collected)
@@ -917,14 +912,10 @@ async fn collect_flat_rollout_files(
 async fn collect_rollout_day_files(
     day_path: &Path,
 ) -> io::Result<Vec<(OffsetDateTime, Uuid, PathBuf)>> {
-    let mut day_files = collect_files(day_path, |name_str, path| {
-        if !compression::is_rollout_file_name(name_str)
-            || compression::should_skip_compressed_sibling(path)
-        {
-            return None;
-        }
-
-        parse_timestamp_uuid_from_filename(name_str).map(|(ts, id)| (ts, id, path.to_path_buf()))
+    let mut day_files = collect_files(day_path, |_name_str, path| {
+        let rollout_file = compression::RolloutFile::from_path(path.to_path_buf())?;
+        parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
+            .map(|(ts, id)| (ts, id, rollout_file.into_path()))
     })
     .await?;
     // Stable ordering within the same second: (timestamp desc, uuid desc)
@@ -987,25 +978,22 @@ async fn collect_flat_files_by_updated_at(
         {
             continue;
         }
-        let file_name = entry.file_name();
-        let Some(name_str) = file_name.to_str() else {
+        let Some(rollout_file) = compression::RolloutFile::from_path(entry.path()) else {
             continue;
         };
-        if !compression::is_rollout_file_name(name_str)
-            || compression::should_skip_compressed_sibling(entry.path().as_path())
-        {
-            continue;
-        }
-        let Some((_ts, id)) = parse_timestamp_uuid_from_filename(name_str) else {
+        let Some((_ts, id)) = parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
+        else {
             continue;
         };
         *scanned_files += 1;
         if *scanned_files > MAX_SCAN_FILES {
             break;
         }
-        let updated_at = file_modified_time(&entry.path()).await.unwrap_or(None);
+        let updated_at = file_modified_time(rollout_file.path())
+            .await
+            .unwrap_or(None);
         candidates.push(ThreadCandidate {
-            path: entry.path(),
+            path: rollout_file.into_path(),
             id,
             updated_at,
         });
@@ -1376,13 +1364,9 @@ async fn find_thread_path_by_id_str_in_subdir(
         .matches
         .into_iter()
         .map(|m| m.full_path())
-        .find(|path| {
-            path.file_name()
-                .and_then(OsStr::to_str)
-                .is_some_and(|name| !name.ends_with(".tmp"))
-                && !compression::should_skip_compressed_sibling(path)
-        }) {
-        Some(path) => Some(path),
+        .find_map(compression::RolloutFile::from_path)
+    {
+        Some(rollout_file) => Some(rollout_file.into_path()),
         None => find_rollout_path_by_id_from_filenames(root.as_path(), id_str).await?,
     };
     if let Some(found_path) = found.as_ref() {
@@ -1430,18 +1414,19 @@ async fn find_rollout_path_by_id_from_filenames(
                 stack.push(path);
                 continue;
             }
-            if !file_type.is_file() || compression::should_skip_compressed_sibling(path.as_path()) {
+            if !file_type.is_file() {
                 continue;
             }
-            let file_name = entry.file_name();
-            let Some(name) = file_name.to_str() else {
+            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
                 continue;
             };
-            let Some((_ts, id)) = parse_timestamp_uuid_from_filename(name) else {
+            let Some((_ts, id)) =
+                parse_timestamp_uuid_from_filename(rollout_file.plain_file_name())
+            else {
                 continue;
             };
             if id == target {
-                return Ok(Some(path));
+                return Ok(Some(rollout_file.into_path()));
             }
         }
     }
