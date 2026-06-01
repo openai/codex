@@ -328,6 +328,7 @@ fn stored_thread_from_state(
             .and_then(|metadata| metadata.rollout_path.clone())
             .or(rollout_path),
         forked_from_id: created.forked_from_id,
+        parent_thread_id: created.parent_thread_id,
         preview: metadata
             .and_then(|metadata| metadata.preview.clone())
             .unwrap_or_default(),

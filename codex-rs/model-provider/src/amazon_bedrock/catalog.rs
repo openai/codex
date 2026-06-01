@@ -9,7 +9,7 @@ const GPT_5_5_OPENAI_MODEL_ID: &str = "gpt-5.5";
 const GPT_5_4_OPENAI_MODEL_ID: &str = "gpt-5.4";
 
 pub(crate) fn static_model_catalog() -> ModelsResponse {
-    ModelsResponse {
+    with_default_only_service_tier(ModelsResponse {
         models: vec![
             gpt_5_bedrock_model(
                 GPT_5_5_OPENAI_MODEL_ID,
@@ -22,7 +22,17 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
                 /*priority*/ 1,
             ),
         ],
+    })
+}
+
+pub(crate) fn with_default_only_service_tier(mut catalog: ModelsResponse) -> ModelsResponse {
+    for model in &mut catalog.models {
+        // Amazon Bedrock currently only supports the implicit "default" tier for GPT models.
+        model.additional_speed_tiers.clear();
+        model.service_tiers.clear();
+        model.default_service_tier = None;
     }
+    catalog
 }
 
 fn gpt_5_bedrock_model(openai_slug: &str, bedrock_slug: &str, priority: i32) -> ModelInfo {
@@ -45,6 +55,7 @@ fn bundled_openai_model(slug: &str) -> ModelInfo {
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -86,5 +97,25 @@ mod tests {
                 Some(GPT_5_BEDROCK_CONTEXT_WINDOW)
             )
         );
+    }
+
+    #[test]
+    fn gpt_5_bedrock_models_only_allow_default_service_tier() {
+        let catalog = static_model_catalog();
+
+        for model in catalog.models {
+            assert_eq!(model.additional_speed_tiers, Vec::<String>::new());
+            assert_eq!(model.service_tiers, Vec::new());
+            assert_eq!(model.default_service_tier, None);
+            assert_eq!(
+                model.service_tier_for_request(Some("priority".to_string())),
+                None
+            );
+            assert_eq!(
+                model
+                    .service_tier_for_request(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
+                None
+            );
+        }
     }
 }

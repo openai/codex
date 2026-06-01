@@ -2669,6 +2669,7 @@ dependencies = [
  "codex-utils-plugins",
  "dirs",
  "flate2",
+ "indexmap 2.13.0",
  "libc",
  "pretty_assertions",
  "reqwest 0.12.28",
@@ -2985,6 +2986,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-tools",
+ "codex-utils-template",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3590,6 +3592,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zstd 0.13.3",
 ]
 
 [[package]]

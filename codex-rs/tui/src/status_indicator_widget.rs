@@ -101,7 +101,8 @@ impl StatusIndicatorWidget {
     }
 
     pub(crate) fn interrupt(&self) {
-        self.app_event_tx.interrupt();
+        self.app_event_tx
+            .interrupt_and_restore_prompt_if_no_output();
     }
 
     /// Update the animated header label (left of the brackets).

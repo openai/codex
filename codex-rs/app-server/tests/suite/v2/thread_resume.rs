@@ -51,6 +51,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
@@ -776,6 +777,57 @@ async fn thread_resume_can_skip_turns_for_metadata_only_resume() -> Result<()> {
 
     assert_eq!(thread.id, conversation_id);
     assert!(thread.turns.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_rejects_archived_session_by_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "Archived saved user message",
+        Vec::new(),
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let active_rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    let archived_dir = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    std::fs::create_dir_all(&archived_dir)?;
+    std::fs::rename(
+        &active_rollout_path,
+        archived_dir.join(active_rollout_path.file_name().expect("rollout file name")),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+
+    let message = resume_err.error.message;
+    assert!(
+        message.contains(&format!("session {conversation_id} is archived"))
+            && message.contains(&format!(
+                "codex unarchive {conversation_id}` to unarchive it first"
+            )),
+        "unexpected resume error: {message}"
+    );
 
     Ok(())
 }
@@ -1739,6 +1791,7 @@ stream_max_retries = 0
     let session_meta = SessionMeta {
         id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         timestamp: "2025-01-05T12:00:00Z".to_string(),
         cwd: repo_path.clone(),
         originator: "codex".to_string(),

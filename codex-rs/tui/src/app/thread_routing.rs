@@ -497,7 +497,7 @@ impl App {
         op: &AppCommand,
     ) -> Result<bool> {
         match op {
-            AppCommand::Interrupt => {
+            AppCommand::Interrupt { .. } => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     app_server.turn_interrupt(thread_id, turn_id).await?;
                 } else {

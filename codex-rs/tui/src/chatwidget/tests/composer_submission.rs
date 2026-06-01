@@ -7,6 +7,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 
 #[tokio::test]
@@ -927,6 +928,69 @@ async fn empty_enter_during_task_does_not_queue() {
 }
 
 #[tokio::test]
+async fn output_free_interrupted_turn_requests_prompt_restore() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let prompt = UserMessage::from("revise this prompt");
+    chat.record_cancel_edit_candidate(prompt.clone());
+    handle_turn_started(&mut chat, "turn-1");
+
+    chat.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::Interrupt {
+            behavior: crate::app_command::InterruptBehavior::RestorePromptIfNoOutput,
+        })
+    );
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RestoreCancelledTurn(restored)) if restored == prompt);
+}
+
+#[tokio::test]
+async fn visible_output_prevents_cancelled_turn_prompt_restore() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.record_cancel_edit_candidate(UserMessage::from("revise this prompt"));
+    handle_turn_started(&mut chat, "turn-1");
+    chat.on_agent_message_delta("visible output".to_string());
+    chat.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
+
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    while let Ok(event) = rx.try_recv() {
+        assert!(!matches!(event, AppEvent::RestoreCancelledTurn(_)));
+    }
+}
+
+#[tokio::test]
+async fn thinking_status_keeps_cancelled_turn_prompt_restore_eligible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let prompt = UserMessage::from("revise this prompt");
+    chat.record_cancel_edit_candidate(prompt.clone());
+    handle_turn_started(&mut chat, "turn-1");
+    chat.on_agent_reasoning_delta("**Thinking**".to_string());
+    chat.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
+
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RestoreCancelledTurn(restored)) if restored == prompt);
+}
+
+#[tokio::test]
+async fn patch_activity_prevents_cancelled_turn_prompt_restore() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.record_cancel_edit_candidate(UserMessage::from("revise this prompt"));
+    handle_turn_started(&mut chat, "turn-1");
+    chat.on_patch_apply_begin(HashMap::new());
+    chat.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
+
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    while let Ok(event) = rx.try_recv() {
+        assert!(!matches!(event, AppEvent::RestoreCancelledTurn(_)));
+    }
+}
+
+#[tokio::test]
 async fn pending_steer_esc_does_not_steal_vim_insert_escape() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
@@ -949,7 +1013,7 @@ async fn pending_steer_esc_does_not_steal_vim_insert_escape() {
     chat.handle_key_event(esc);
 
     match op_rx.try_recv() {
-        Ok(Op::Interrupt) => {}
+        Ok(Op::Interrupt { .. }) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(chat.input_queue.submit_pending_steers_after_interrupt);
@@ -975,7 +1039,7 @@ async fn pending_steer_interrupt_uses_remapped_binding() {
     chat.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
 
     match op_rx.try_recv() {
-        Ok(Op::Interrupt) => {}
+        Ok(Op::Interrupt { .. }) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(chat.input_queue.submit_pending_steers_after_interrupt);

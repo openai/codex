@@ -12,6 +12,7 @@ use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::steering::continuation_steering_item;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 
@@ -157,10 +158,8 @@ impl GoalRuntimeHandle {
         self.inner
             .metrics
             .record_terminal_if_status_changed(previous_status, &goal);
-        let should_steer_active_turn = previous_goal.as_ref().is_none_or(|previous_goal| {
-            previous_goal.goal_id != goal.goal_id
-                || previous_goal.status != codex_state::ThreadGoalStatus::Active
-                || previous_goal.objective != goal.objective
+        let objective_changed = previous_goal.as_ref().is_some_and(|previous_goal| {
+            !replaced_existing_goal && previous_goal.objective != goal.objective
         });
         match goal.status {
             codex_state::ThreadGoalStatus::Active => {
@@ -174,10 +173,11 @@ impl GoalRuntimeHandle {
                         .accounting_state
                         .mark_idle_goal_active(goal.goal_id.clone());
                 }
-                if should_steer_active_turn {
+                if objective_changed {
                     let item = objective_updated_steering_item(&protocol_goal_from_state(goal));
                     self.inject_active_turn_steering(item).await;
                 }
+                self.continue_if_idle().await?;
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
                 if self.inner.accounting_state.current_turn_id().is_none() {
@@ -271,6 +271,57 @@ impl GoalRuntimeHandle {
                 self.inner.metrics.record_resumed();
             }
             Some(_) | None => self.inner.accounting_state.clear_active_goal(),
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
+        if !self.tools_visible() {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        }
+
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        };
+        if goal.status != codex_state::ThreadGoalStatus::Active {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        }
+
+        let item = continuation_steering_item(&protocol_goal_from_state(goal));
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            tracing::debug!("skipping goal continuation because thread manager is unavailable");
+            return Ok(());
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            tracing::debug!("skipping goal continuation because live thread is unavailable");
+            return Ok(());
+        };
+
+        if thread.try_start_turn_if_idle(vec![item]).await.is_err() {
+            tracing::debug!("skipping goal continuation because the thread is no longer idle");
+        }
+
+        let current_turn_is_goal_active = self
+            .inner
+            .accounting_state
+            .current_turn_id()
+            .is_some_and(|turn_id| {
+                self.inner
+                    .accounting_state
+                    .turn_is_current_active_goal(turn_id.as_str())
+            });
+        if !current_turn_is_goal_active {
+            self.inner.accounting_state.clear_active_goal();
         }
         Ok(())
     }

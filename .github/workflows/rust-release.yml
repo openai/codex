@@ -152,6 +152,11 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: full
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ contains(matrix.target, 'apple-darwin') && 'packed' || 'off' }}
       CARGO_PROFILE_RELEASE_STRIP: "false"
+      # Use the git CLI instead of Cargo's libgit2 path for git dependencies.
+      # macOS release runners have intermittently failed to fetch nested
+      # submodules through SecureTransport/libgit2, especially libwebrtc's
+      # libyuv submodule from chromium.googlesource.com.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' }}
 
     strategy:
@@ -314,6 +319,10 @@ jobs:
       - name: Cargo build
         shell: bash
         run: |
+          target="${{ matrix.target }}"
+          if [[ "$target" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
           build_args=()
           for binary in ${{ matrix.binaries }}; do
             if [[ "$binary" == "bwrap" ]]; then
@@ -322,7 +331,7 @@ jobs:
             build_args+=(--bin "$binary")
           done
           echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
-          cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
+          cargo build --target "$target" --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

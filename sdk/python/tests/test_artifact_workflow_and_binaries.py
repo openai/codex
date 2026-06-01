@@ -81,14 +81,16 @@ def test_root_fmt_recipe_formats_rust_and_python_sdk() -> None:
     fmt_recipe = lines[fmt_index:next_recipe_index]
     actual = {
         "working_directory": lines[0],
-        "previous_attribute": lines[fmt_index - 1],
+        "previous_comment": next(
+            line for line in reversed(lines[:fmt_index]) if line.startswith("#")
+        ),
         "commands": [line.strip() for line in fmt_recipe[1:] if line.strip()],
     }
     expected = {
         "working_directory": 'set working-directory := "codex-rs"',
-        "previous_attribute": "# Format Rust and Python SDK code.",
+        "previous_comment": "# Format Rust and Python SDK code.",
         "commands": [
-            "cargo fmt -- --config imports_granularity=Item 2>/dev/null",
+            "cargo fmt -- --config imports_granularity=Item {stderr-null}",
             "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
             "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python",
         ],

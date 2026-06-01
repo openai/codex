@@ -115,7 +115,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     accessible_connectors: &[AppInfo],
     loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
-    let connector_ids = tool_suggest_connector_ids(config).await;
+    let connector_ids = tool_suggest_connector_ids(config, loaded_plugin_app_connector_ids);
     let directory_connectors = codex_connectors::merge::merge_plugin_connectors(
         cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await,
         connector_ids.iter().cloned(),
@@ -406,15 +406,13 @@ fn write_cached_accessible_connectors(
     });
 }
 
-async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
-    let plugins_input = config.plugins_config_input();
-    let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
-        .plugins_for_config(&plugins_input)
-        .await
-        .capability_summaries()
+fn tool_suggest_connector_ids(
+    config: &Config,
+    loaded_plugin_app_connector_ids: &[String],
+) -> HashSet<String> {
+    let mut connector_ids = loaded_plugin_app_connector_ids
         .iter()
-        .flat_map(|plugin| plugin.app_connector_ids.iter())
-        .map(|connector_id| connector_id.0.clone())
+        .cloned()
         .collect::<HashSet<_>>();
     connector_ids.extend(
         config

@@ -22,6 +22,7 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::empty_extension_registry;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
@@ -187,6 +188,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) initial_history: InitialHistory,
     pub(crate) agent_control: AgentControl,
     pub(crate) session_source: SessionSource,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
@@ -230,10 +232,18 @@ pub fn thread_store_from_config(
     state_db: Option<StateDbHandle>,
 ) -> Arc<dyn ThreadStore> {
     match &config.experimental_thread_store {
-        ThreadStoreConfig::Local => Arc::new(LocalThreadStore::new(
-            LocalThreadStoreConfig::from_config(config),
-            state_db,
-        )),
+        ThreadStoreConfig::Local => {
+            if config
+                .features
+                .enabled(Feature::LocalThreadStoreCompression)
+            {
+                codex_rollout::spawn_rollout_compression_worker(config.codex_home.to_path_buf());
+            }
+            Arc::new(LocalThreadStore::new(
+                LocalThreadStoreConfig::from_config(config),
+                state_db,
+            ))
+        }
         ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
 }
@@ -601,6 +611,7 @@ impl ThreadManager {
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             session_source,
+            /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
             options.dynamic_tools,
@@ -685,6 +696,7 @@ impl ThreadManager {
             auth_manager,
             self.agent_control(),
             session_source,
+            /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
@@ -713,6 +725,7 @@ impl ThreadManager {
             InitialHistory::New,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             Vec::new(),
@@ -746,6 +759,7 @@ impl ThreadManager {
             auth_manager,
             self.agent_control(),
             session_source,
+            /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
@@ -916,6 +930,7 @@ impl ThreadManager {
             history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1039,6 +1054,7 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
+            /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             /*persist_extended_history*/ false,
@@ -1056,6 +1072,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
+        parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         persist_extended_history: bool,
@@ -1073,6 +1090,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            parent_thread_id,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1096,6 +1114,7 @@ impl ThreadManagerState {
             initial_history,
             agent_control,
             session_source,
+            parent_thread_id,
             inherited_shell_snapshot,
             inherited_exec_policy,
         } = options;
@@ -1108,6 +1127,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            parent_thread_id,
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
@@ -1130,6 +1150,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         thread_source: Option<ThreadSource>,
+        parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1145,6 +1166,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            parent_thread_id,
             forked_from_thread_id,
             thread_source,
             Vec::new(),
@@ -1167,6 +1189,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
+        parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
@@ -1182,6 +1205,7 @@ impl ThreadManagerState {
             auth_manager,
             agent_control,
             self.session_source.clone(),
+            parent_thread_id,
             forked_from_thread_id,
             thread_source,
             dynamic_tools,
@@ -1204,6 +1228,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
+        parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
@@ -1258,6 +1283,7 @@ impl ThreadManagerState {
             conversation_history: initial_history,
             session_source,
             forked_from_thread_id,
+            parent_thread_id,
             thread_source,
             agent_control,
             dynamic_tools,
