@@ -28,7 +28,6 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
-use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
@@ -46,6 +45,7 @@ use wiremock::Request;
 const CHILD_PROMPT: &str = "inspect the child runtime";
 const CHILD_MODEL: &str = "test-multi-agent-child";
 const GUARDIAN_REASON: &str = "Allow a narrowly scoped network request";
+const GUARDIAN_ROOT_PROMPT: &str = "request an escalated command";
 const ROOT_MODEL: &str = "test-multi-agent-root";
 const ROOT_PROMPT: &str = "spawn a child";
 const SPAWN_CALL_ID: &str = "spawn-call-1";
@@ -341,34 +341,33 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
         "justification": GUARDIAN_REASON,
     }))?;
-    let responses = mount_sse_sequence(
+    let root_mock = mount_sse_once_match(
         &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-root-1"),
-                ev_function_call("exec-call", "exec_command", &exec_args),
-                ev_completed("resp-root-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-guardian"),
-                ev_assistant_message(
-                    "msg-guardian",
-                    &json!({
-                        "risk_level": "low",
-                        "user_authorization": "high",
-                        "outcome": "deny",
-                        "rationale": "Keep the test command from executing.",
-                    })
-                    .to_string(),
-                ),
-                ev_completed("resp-guardian"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-root-2"),
-                ev_assistant_message("msg-root-2", "done"),
-                ev_completed("resp-root-2"),
-            ]),
-        ],
+        |req: &Request| body_contains(req, GUARDIAN_ROOT_PROMPT),
+        sse(vec![
+            ev_response_created("resp-root"),
+            ev_function_call("exec-call", "exec_command", &exec_args),
+            ev_completed("resp-root"),
+        ]),
+    )
+    .await;
+    let guardian_mock = mount_sse_once_match(
+        &server,
+        |req: &Request| body_contains(req, GUARDIAN_REASON),
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message(
+                "msg-guardian",
+                &json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "deny",
+                    "rationale": "Keep the test command from executing.",
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-guardian"),
+        ]),
     )
     .await;
 
@@ -384,16 +383,18 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
                 .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
-    test.submit_turn("request network access").await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    test.submit_turn(GUARDIAN_ROOT_PROMPT).await?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while guardian_mock.requests().is_empty() {
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for guardian request");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    test.codex.submit(Op::Interrupt).await?;
 
-    let requests = responses.requests();
-    let [root_request, guardian_request, _root_followup] = requests.as_slice() else {
-        panic!("expected root, guardian, and root follow-up requests: {requests:?}");
-    };
+    let root_request = root_mock.single_request();
+    let guardian_request = guardian_mock.single_request();
     assert_eq!(
         (
             models_mock.requests().len(),
