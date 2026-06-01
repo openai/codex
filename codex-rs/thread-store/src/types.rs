@@ -42,16 +42,6 @@ mod optional_option {
     }
 }
 
-/// Controls how many event variants should be persisted for future replay.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ThreadEventPersistenceMode {
-    /// Persist only the legacy minimal replay surface.
-    #[default]
-    Limited,
-    /// Persist the richer event surface used by app-server history reconstruction.
-    Extended,
-}
-
 /// Thread-scoped metadata used when opening live persistence.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadPersistenceMetadata {
@@ -84,8 +74,6 @@ pub struct CreateThreadParams {
     pub dynamic_tools: Vec<DynamicToolSpec>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
-    /// Whether persistence should include the extended event surface.
-    pub event_persistence_mode: ThreadEventPersistenceMode,
 }
 
 /// Parameters required to reopen persistence for an existing thread.
@@ -101,8 +89,6 @@ pub struct ResumeThreadParams {
     pub include_archived: bool,
     /// Metadata for future writes appended to the resumed live thread.
     pub metadata: ThreadPersistenceMetadata,
-    /// Whether persistence should include the extended event surface.
-    pub event_persistence_mode: ThreadEventPersistenceMode,
 }
 
 /// Parameters for appending rollout items to a live thread.

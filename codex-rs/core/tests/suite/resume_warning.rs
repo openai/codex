@@ -107,7 +107,6 @@ async fn emits_warning_when_resumed_model_differs() {
             config.clone(),
             initial_history,
             auth_manager,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await

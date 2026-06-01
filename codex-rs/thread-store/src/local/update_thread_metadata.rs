@@ -625,7 +625,6 @@ mod tests {
     use crate::ListThreadsParams;
     use crate::ResumeThreadParams;
     use crate::SortDirection;
-    use crate::ThreadEventPersistenceMode;
     use crate::ThreadMetadataPatch;
     use crate::ThreadPersistenceMetadata;
     use crate::ThreadSortKey;
@@ -788,7 +787,6 @@ mod tests {
                 history: None,
                 include_archived: true,
                 metadata: test_thread_metadata(),
-                event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
             .expect("resume external live thread");
@@ -1590,7 +1588,6 @@ mod tests {
                 history: None,
                 include_archived: true,
                 metadata: test_thread_metadata(),
-                event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
             .expect("resume archived live thread");

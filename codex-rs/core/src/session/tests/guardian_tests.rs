@@ -697,7 +697,6 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         thread_source: None,
         agent_control: AgentControl::default(),
         dynamic_tools: Vec::new(),
-        persist_extended_history: false,
         metrics_service_name: None,
         inherited_shell_snapshot: None,
         inherited_exec_policy: Some(Arc::new(parent_exec_policy)),

@@ -5,10 +5,6 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
-const PERSIST_EXTENDED_HISTORY_DEPRECATION_SUMMARY: &str =
-    "persistExtendedHistory is deprecated and ignored";
-const PERSIST_EXTENDED_HISTORY_DEPRECATION_DETAILS: &str =
-    "Remove this parameter. App-server always uses limited history persistence.";
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -849,16 +845,11 @@ impl ThreadRequestProcessor {
             session_start_source,
             thread_source,
             environments,
-            persist_extended_history,
         } = params;
         if sandbox.is_some() && permissions.is_some() {
             return Err(invalid_request(
                 "`permissions` cannot be combined with `sandbox`",
             ));
-        }
-        if persist_extended_history {
-            self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
-                .await;
         }
         let environment_selections = self.parse_environment_selections(environments)?;
         let mut typesafe_overrides = self.build_thread_config_overrides(
@@ -950,18 +941,6 @@ impl ThreadRequestProcessor {
         request_id: &ConnectionRequestId,
     ) -> Option<codex_protocol::protocol::W3cTraceContext> {
         self.outgoing.request_trace_context(request_id).await
-    }
-
-    async fn send_persist_extended_history_deprecation_notice(&self, connection_id: ConnectionId) {
-        self.outgoing
-            .send_server_notification_to_connections(
-                &[connection_id],
-                ServerNotification::DeprecationNotice(DeprecationNoticeNotification {
-                    summary: PERSIST_EXTENDED_HISTORY_DEPRECATION_SUMMARY.to_string(),
-                    details: Some(PERSIST_EXTENDED_HISTORY_DEPRECATION_DETAILS.to_string()),
-                }),
-            )
-            .await;
     }
 
     async fn submit_core_op(
@@ -1106,7 +1085,6 @@ impl ThreadRequestProcessor {
                 session_source: None,
                 thread_source,
                 dynamic_tools: core_dynamic_tools,
-                persist_extended_history: false,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
@@ -1115,7 +1093,6 @@ impl ThreadRequestProcessor {
                 "app_server.thread_start.create_thread",
                 otel.name = "app_server.thread_start.create_thread",
                 thread_start.dynamic_tool_count = core_dynamic_tool_count,
-                thread_start.persist_extended_history = false,
             ))
             .await
             .map_err(|err| match err {
@@ -2446,10 +2423,6 @@ impl ThreadRequestProcessor {
                 .await;
             return Ok(());
         }
-        if params.persist_extended_history {
-            self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
-                .await;
-        }
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
@@ -2496,7 +2469,6 @@ impl ThreadRequestProcessor {
             personality,
             exclude_turns,
             initial_turns_page,
-            persist_extended_history: _persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
 
@@ -2561,7 +2533,6 @@ impl ThreadRequestProcessor {
                 config.clone(),
                 thread_history,
                 self.auth_manager.clone(),
-                /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
             )
             .await
@@ -3191,7 +3162,6 @@ impl ThreadRequestProcessor {
             ephemeral,
             thread_source,
             exclude_turns,
-            persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
         if sandbox.is_some() && permissions.is_some() {
@@ -3199,11 +3169,6 @@ impl ThreadRequestProcessor {
                 "`permissions` cannot be combined with `sandbox`",
             ));
         }
-        if persist_extended_history {
-            self.send_persist_extended_history_deprecation_notice(request_id.connection_id)
-                .await;
-        }
-
         let source_thread = self
             .read_stored_thread_for_resume(&thread_id, path.as_ref(), /*include_history*/ true)
             .await?;
@@ -3282,7 +3247,6 @@ impl ThreadRequestProcessor {
                     rollout_path: source_thread.rollout_path.clone(),
                 }),
                 thread_source.map(Into::into),
-                /*persist_extended_history*/ false,
                 self.request_trace_context(&request_id).await,
             )
             .await

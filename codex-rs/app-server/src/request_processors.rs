@@ -50,7 +50,6 @@ use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
-use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
 use codex_app_server_protocol::EnvironmentAddParams;
 use codex_app_server_protocol::EnvironmentAddResponse;
@@ -404,7 +403,6 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
-use codex_rollout::EventPersistenceMode;
 use codex_rollout::is_persisted_rollout_item;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::reconcile_rollout;
@@ -536,7 +534,7 @@ pub(crate) use self::thread_summary::thread_settings_from_core_snapshot;
 pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
     for item in items {
-        if is_persisted_rollout_item(item, EventPersistenceMode::Limited) {
+        if is_persisted_rollout_item(item) {
             builder.handle_rollout_item(item);
         }
     }

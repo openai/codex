@@ -2707,7 +2707,6 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
                 phase: None,
             })]),
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await

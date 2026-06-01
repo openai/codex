@@ -64,10 +64,7 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            persist_extended_history: true,
-            ..Default::default()
-        })
+        .send_thread_start_request(ThreadStartParams::default())
         .await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -259,10 +256,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            persist_extended_history: true,
-            ..Default::default()
-        })
+        .send_thread_start_request(ThreadStartParams::default())
         .await?;
     let start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,

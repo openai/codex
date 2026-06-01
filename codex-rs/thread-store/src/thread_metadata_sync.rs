@@ -382,7 +382,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::ThreadEventPersistenceMode;
     use crate::ThreadPersistenceMetadata;
 
     #[test]
@@ -529,7 +528,6 @@ mod tests {
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::Limited,
         }
     }
 

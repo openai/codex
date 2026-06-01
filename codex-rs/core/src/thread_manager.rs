@@ -177,7 +177,6 @@ pub struct StartThreadOptions {
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-    pub persist_extended_history: bool,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
@@ -554,19 +553,13 @@ impl ThreadManager {
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.
-        Box::pin(self.start_thread_with_tools(
-            config,
-            Vec::new(),
-            /*persist_extended_history*/ false,
-        ))
-        .await
+        Box::pin(self.start_thread_with_tools(config, Vec::new())).await
     }
 
     pub async fn start_thread_with_tools(
         &self,
         config: Config,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -578,7 +571,6 @@ impl ThreadManager {
             session_source: None,
             thread_source: None,
             dynamic_tools,
-            persist_extended_history,
             metrics_service_name: None,
             parent_trace: None,
             environments,
@@ -615,7 +607,6 @@ impl ThreadManager {
             forked_from_thread_id,
             thread_source,
             options.dynamic_tools,
-            options.persist_extended_history,
             options.metrics_service_name,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
@@ -669,7 +660,6 @@ impl ThreadManager {
             config,
             initial_history,
             auth_manager,
-            /*persist_extended_history*/ false,
             parent_trace,
         ))
         .await
@@ -680,7 +670,6 @@ impl ThreadManager {
         config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
-        persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let environments = default_thread_environment_selections(
@@ -700,7 +689,6 @@ impl ThreadManager {
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
-            persist_extended_history,
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
@@ -729,7 +717,6 @@ impl ThreadManager {
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
             Vec::new(),
-            /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             environments,
@@ -763,7 +750,6 @@ impl ThreadManager {
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
-            /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
@@ -842,7 +828,6 @@ impl ThreadManager {
         config: Config,
         path: PathBuf,
         thread_source: Option<ThreadSource>,
-        persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
     where
@@ -850,15 +835,8 @@ impl ThreadManager {
     {
         let snapshot = snapshot.into();
         let history = self.initial_history_from_rollout_path(path).await?;
-        self.fork_thread_from_history(
-            snapshot,
-            config,
-            history,
-            thread_source,
-            persist_extended_history,
-            parent_trace,
-        )
-        .await
+        self.fork_thread_from_history(snapshot, config, history, thread_source, parent_trace)
+            .await
     }
 
     async fn initial_history_from_rollout_path(
@@ -886,7 +864,6 @@ impl ThreadManager {
         config: Config,
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
-        persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
     where
@@ -897,7 +874,6 @@ impl ThreadManager {
             config,
             history,
             thread_source,
-            persist_extended_history,
             parent_trace,
         )
         .await
@@ -909,7 +885,6 @@ impl ThreadManager {
         config: Config,
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
-        persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
@@ -934,7 +909,6 @@ impl ThreadManager {
             forked_from_thread_id,
             thread_source,
             Vec::new(),
-            persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
             environments,
@@ -1057,7 +1031,6 @@ impl ThreadManagerState {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
-            /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
@@ -1075,7 +1048,6 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
-        persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
@@ -1094,7 +1066,6 @@ impl ThreadManagerState {
             forked_from_thread_id,
             thread_source,
             Vec::new(),
-            persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
@@ -1131,7 +1102,6 @@ impl ThreadManagerState {
             /*forked_from_thread_id*/ None,
             thread_source,
             Vec::new(),
-            /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
@@ -1152,7 +1122,6 @@ impl ThreadManagerState {
         thread_source: Option<ThreadSource>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
-        persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -1170,7 +1139,6 @@ impl ThreadManagerState {
             forked_from_thread_id,
             thread_source,
             Vec::new(),
-            persist_extended_history,
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
@@ -1193,7 +1161,6 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-        persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
@@ -1209,7 +1176,6 @@ impl ThreadManagerState {
             forked_from_thread_id,
             thread_source,
             dynamic_tools,
-            persist_extended_history,
             metrics_service_name,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
@@ -1232,7 +1198,6 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-        persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
@@ -1287,7 +1252,6 @@ impl ThreadManagerState {
             thread_source,
             agent_control,
             dynamic_tools,
-            persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,

@@ -26,7 +26,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
-use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -134,7 +133,6 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::default(),
         })
         .await?;
 
