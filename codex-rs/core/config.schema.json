@@ -493,6 +493,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "local_thread_store_compression": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -767,6 +770,16 @@
       "properties": {
         "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
+        }
+      },
+      "type": "object"
+    },
+    "ExperimentalRequestUserInput": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2720,6 +2733,9 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "experimental_request_user_input": {
+          "$ref": "#/definitions/ExperimentalRequestUserInput"
+        },
         "web_search": {
           "allOf": [
             {
@@ -4595,6 +4611,9 @@
           "type": "boolean"
         },
         "js_repl_tools_only": {
+          "type": "boolean"
+        },
+        "local_thread_store_compression": {
           "type": "boolean"
         },
         "memories": {

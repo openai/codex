@@ -339,6 +339,8 @@ pub struct ModelInfo {
     pub used_fallback_model_metadata: bool,
     #[serde(default)]
     pub supports_search_tool: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_review_model_override: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -639,6 +641,7 @@ mod tests {
             input_modalities: default_input_modalities(),
             used_fallback_model_metadata: false,
             supports_search_tool: false,
+            auto_review_model_override: None,
             tool_mode: None,
         }
     }
@@ -857,6 +860,7 @@ mod tests {
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
+        assert_eq!(model.auto_review_model_override, None);
         assert_eq!(model.tool_mode, None);
     }
 

@@ -76,6 +76,8 @@ pub(crate) async fn run_codex_thread_interactive(
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let conversation_history = initial_history.unwrap_or(InitialHistory::New);
+    let forked_from_thread_id = conversation_history.forked_from_id();
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         installation_id: parent_session.installation_id.clone(),
@@ -86,9 +88,10 @@ pub(crate) async fn run_codex_thread_interactive(
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         extensions: Arc::clone(&parent_session.services.extensions),
-        conversation_history: initial_history.unwrap_or(InitialHistory::New),
+        conversation_history,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
-        forked_from_thread_id: Some(parent_session.conversation_id),
+        forked_from_thread_id,
+        parent_thread_id: Some(parent_session.conversation_id),
         thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),

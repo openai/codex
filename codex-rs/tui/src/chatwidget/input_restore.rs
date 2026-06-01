@@ -3,11 +3,50 @@
 use super::*;
 
 impl ChatWidget {
+    pub(super) fn record_cancel_edit_candidate(&mut self, prompt: UserMessage) {
+        self.cancel_edit.prompt = Some(prompt);
+        self.cancel_edit.eligible = true;
+        self.cancel_edit.armed = false;
+    }
+
+    pub(super) fn record_visible_turn_activity(&mut self) {
+        self.cancel_edit.eligible = false;
+        self.cancel_edit.armed = false;
+    }
+
+    pub(super) fn arm_cancel_edit(&mut self) {
+        self.cancel_edit.armed = self.cancel_edit.eligible
+            && self.cancel_edit.prompt.is_some()
+            && self.bottom_pane.composer_is_empty()
+            && self.input_queue.pending_steers.is_empty()
+            && !self.has_queued_follow_up_messages()
+            && !self.active_side_conversation;
+    }
+
+    fn take_armed_cancel_edit_prompt(&mut self, reason: TurnAbortReason) -> Option<UserMessage> {
+        (reason == TurnAbortReason::Interrupted
+            && self.cancel_edit.armed
+            && self.cancel_edit.eligible)
+            .then(|| self.cancel_edit.prompt.take())
+            .flatten()
+    }
+
+    pub(super) fn clear_cancel_edit(&mut self) {
+        self.cancel_edit = CancelEditState::default();
+    }
+
     pub(crate) fn set_initial_user_message_submit_suppressed(&mut self, suppressed: bool) {
         self.suppress_initial_user_message_submit = suppressed;
     }
 
     pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
+        if self.suppress_initial_user_message_submit {
+            return;
+        }
+        #[cfg(any(target_os = "windows", test))]
+        if self.elevated_windows_sandbox_setup_required() {
+            return;
+        }
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -97,12 +136,15 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto-submitting the next one.
     pub(super) fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
+        let cancelled_prompt = self.take_armed_cancel_edit_prompt(reason);
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
         let send_pending_steers_immediately =
             self.input_queue.submit_pending_steers_after_interrupt;
         self.input_queue.submit_pending_steers_after_interrupt = false;
-        if self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress {
+        if cancelled_prompt.is_none()
+            && self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress
+        {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
                     "Model interrupted to submit steer instructions.".to_owned(),
@@ -136,6 +178,10 @@ impl ChatWidget {
             self.restore_user_message_to_composer(combined);
         }
         self.refresh_pending_input_preview();
+        if let Some(prompt) = cancelled_prompt {
+            self.app_event_tx
+                .send(AppEvent::RestoreCancelledTurn(prompt));
+        }
 
         self.request_redraw();
     }

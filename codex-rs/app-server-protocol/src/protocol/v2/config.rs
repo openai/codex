@@ -1,6 +1,7 @@
 use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::SandboxMode;
+use super::WindowsSandboxSetupMode;
 use super::shared::default_enabled;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
@@ -40,6 +41,19 @@ pub enum ConfigLayerSource {
         /// This is the path to the system config.toml file, though it is not
         /// guaranteed to exist.
         file: AbsolutePathBuf,
+    },
+
+    /// Enterprise-managed config layer delivered by the cloud config bundle.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    EnterpriseManaged {
+        /// Stable identifier for the delivered layer.
+        id: String,
+
+        /// Admin-facing name for the delivered layer. This is surfaced in
+        /// diagnostics so users know which cloud layer needs administrator
+        /// attention.
+        name: String,
     },
 
     /// User config layer from $CODEX_HOME/config.toml. This layer is special
@@ -89,6 +103,7 @@ impl ConfigLayerSource {
         match self {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
+            ConfigLayerSource::EnterpriseManaged { .. } => 15,
             ConfigLayerSource::User { profile, .. } => {
                 if profile.is_some() {
                     21
@@ -359,6 +374,7 @@ pub struct ConfigRequirements {
     #[experimental("configRequirements/read.allowedApprovalsReviewers")]
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
+    pub allowed_windows_sandbox_implementations: Option<Vec<WindowsSandboxSetupMode>>,
     pub allowed_permissions: Option<Vec<String>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub allow_managed_hooks_only: Option<bool>,

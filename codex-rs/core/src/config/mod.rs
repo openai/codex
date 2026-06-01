@@ -189,6 +189,44 @@ pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usiz
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
+const DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT: &str = r#"You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+At the start of your turn, you are the active agent.
+You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
+Child agents can also spawn their own sub-agents.
+You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
+
+You will receive messages in the analysis channel in the form:
+```
+Message Type: MESSAGE | FINAL_ANSWER
+Sender: <author>
+Payload:
+<payload text>
+```
+They may be addressed as to=/root
+"#;
+const DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT: &str = r#"You are an agent in a team of agents collaborating to complete a task.
+
+You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
+Child agents can also spawn their own sub-agents.
+
+When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
+
+You will receive messages in the analysis channel in the form:
+```
+Message Type: NEW_TASK | MESSAGE | FINAL_ANSWER
+Task name: <recipient>   # only for NEW_TASK -- this determines your identity
+Sender: <author>
+Payload:
+<payload text>
+```
+You may also see them addressed as to=/root/..., which indicates your identity is /root/...
+"#;
 pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
     DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
@@ -939,6 +977,9 @@ pub struct Config {
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
 
+    /// Whether to register the experimental request_user_input tool.
+    pub experimental_request_user_input_enabled: bool,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1016,11 +1057,15 @@ impl Default for MultiAgentV2Config {
             default_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS,
             usage_hint_enabled: true,
             usage_hint_text: None,
-            root_agent_usage_hint_text: None,
-            subagent_usage_hint_text: None,
+            root_agent_usage_hint_text: Some(
+                DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT.to_string(),
+            ),
+            subagent_usage_hint_text: Some(
+                DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT.to_string(),
+            ),
             tool_namespace: None,
             hide_spawn_agent_metadata: false,
-            non_code_mode_only: false,
+            non_code_mode_only: true,
         }
     }
 }
@@ -2205,6 +2250,14 @@ fn resolve_web_search_config(config_toml: &ConfigToml) -> Option<WebSearchConfig
         .map(Into::into)
 }
 
+fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> bool {
+    config_toml
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.experimental_request_user_input.as_ref())
+        .is_none_or(|config| config.enabled)
+}
+
 fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config {
     let base = multi_agent_v2_toml_config(config_toml.features.as_ref());
     let default = MultiAgentV2Config::default();
@@ -2228,14 +2281,14 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         .and_then(|config| config.usage_hint_text.as_ref())
         .cloned()
         .or(default.usage_hint_text);
-    let root_agent_usage_hint_text = base
-        .and_then(|config| config.root_agent_usage_hint_text.as_ref())
-        .cloned()
-        .or(default.root_agent_usage_hint_text);
-    let subagent_usage_hint_text = base
-        .and_then(|config| config.subagent_usage_hint_text.as_ref())
-        .cloned()
-        .or(default.subagent_usage_hint_text);
+    let root_agent_usage_hint_text = resolve_optional_prompt_text(
+        base.map(|config| &config.root_agent_usage_hint_text),
+        default.root_agent_usage_hint_text,
+    );
+    let subagent_usage_hint_text = resolve_optional_prompt_text(
+        base.map(|config| &config.subagent_usage_hint_text),
+        default.subagent_usage_hint_text,
+    );
     let tool_namespace = base
         .and_then(|config| config.tool_namespace.as_ref())
         .cloned()
@@ -2273,6 +2326,17 @@ fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalRe
             Some(rows) => TerminalResizeReflowMaxRows::Limit(rows),
             None => TerminalResizeReflowMaxRows::Auto,
         },
+    }
+}
+
+fn resolve_optional_prompt_text(
+    configured: Option<&Option<String>>,
+    default: Option<String>,
+) -> Option<String> {
+    match configured {
+        Some(Some(value)) if value.is_empty() => None,
+        Some(Some(value)) => Some(value.clone()),
+        Some(None) | None => default,
     }
 }
 
@@ -2457,6 +2521,7 @@ impl Config {
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
             permission_profile: mut constrained_permission_profile,
+            windows_sandbox_mode: mut constrained_windows_sandbox_mode,
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
             allow_appshots: _,
@@ -2568,7 +2633,28 @@ impl Config {
             &mut startup_warnings,
         )?;
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
-        let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
+        let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
+        // Keep the configured mode separate so a requirement-constrained mode
+        // does not look like it was explicitly selected in config.
+        let selected_windows_sandbox_mode = configured_windows_sandbox_mode.or_else(|| {
+            match WindowsSandboxLevel::from_features(&features) {
+                WindowsSandboxLevel::Elevated => Some(WindowsSandboxModeToml::Elevated),
+                WindowsSandboxLevel::RestrictedToken => Some(WindowsSandboxModeToml::Unelevated),
+                WindowsSandboxLevel::Disabled => None,
+            }
+        });
+        apply_requirement_constrained_value(
+            "windows.sandbox",
+            selected_windows_sandbox_mode,
+            &mut constrained_windows_sandbox_mode,
+            &mut startup_warnings,
+        )?;
+        let effective_windows_sandbox_mode = *constrained_windows_sandbox_mode.get();
+        let windows_sandbox_mode = if constrained_windows_sandbox_mode.source.is_some() {
+            effective_windows_sandbox_mode
+        } else {
+            configured_windows_sandbox_mode
+        };
         let windows_sandbox_private_desktop = resolve_windows_sandbox_private_desktop(&cfg);
         let resolved_cwd = AbsolutePathBuf::try_from(normalize_for_native_workdir({
             use std::env;
@@ -2626,10 +2712,10 @@ impl Config {
             ));
         }
 
-        let windows_sandbox_level = match windows_sandbox_mode {
+        let windows_sandbox_level = match effective_windows_sandbox_mode {
             Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
-            None => WindowsSandboxLevel::from_features(&features),
+            None => WindowsSandboxLevel::Disabled,
         };
         let memories_config: MemoriesConfig = cfg.memories.clone().unwrap_or_default().into();
         let memories_root = memory_root(&codex_home);
@@ -2894,6 +2980,8 @@ impl Config {
         let web_search_mode =
             resolve_web_search_mode(&cfg, &features).unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg);
+        let experimental_request_user_input_enabled =
+            resolve_experimental_request_user_input_enabled(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let apps_mcp_path_override = if features.enabled(Feature::AppsMcpPathOverride) {
             let base = apps_mcp_path_override_toml_config(cfg.features.as_ref());
@@ -3450,6 +3538,7 @@ impl Config {
             forced_login_method,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
+            experimental_request_user_input_enabled,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,

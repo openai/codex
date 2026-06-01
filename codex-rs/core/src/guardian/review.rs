@@ -164,8 +164,8 @@ pub(crate) fn is_guardian_reviewer_source(
 ) -> bool {
     matches!(
         session_source,
-        codex_protocol::protocol::SessionSource::SubAgent(SubAgentSource::Other(name))
-            if name == GUARDIAN_REVIEWER_NAME
+        codex_protocol::protocol::SessionSource::SubAgent(SubAgentSource::Other(label))
+            if label == GUARDIAN_REVIEWER_NAME
     )
 }
 
@@ -690,11 +690,13 @@ pub(super) async fn run_guardian_review_session(
             fallback
         }
     };
-    let preferred_model_id = turn.provider.approval_review_preferred_model();
-    let preferred_model = available_models
+    let model_override = turn.model_info.auto_review_model_override.as_deref();
+    let review_model_id =
+        model_override.unwrap_or_else(|| turn.provider.approval_review_preferred_model());
+    let review_model = available_models
         .iter()
-        .find(|preset| preset.model == preferred_model_id);
-    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
+        .find(|preset| preset.model == review_model_id);
+    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
         let reasoning_effort = preferred_reasoning_effort(
             preset
                 .supported_reasoning_efforts
@@ -702,7 +704,7 @@ pub(super) async fn run_guardian_review_session(
                 .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
             Some(preset.default_reasoning_effort),
         );
-        (preferred_model_id.to_string(), reasoning_effort)
+        (review_model_id.to_string(), reasoning_effort)
     } else {
         let reasoning_effort = preferred_reasoning_effort(
             turn.model_info
@@ -712,7 +714,12 @@ pub(super) async fn run_guardian_review_session(
             turn.reasoning_effort
                 .or(turn.model_info.default_reasoning_level),
         );
-        (turn.model_info.slug.clone(), reasoning_effort)
+        (
+            model_override
+                .unwrap_or(turn.model_info.slug.as_str())
+                .to_string(),
+            reasoning_effort,
+        )
     };
     let guardian_config = build_guardian_review_session_config(
         turn.config.as_ref(),

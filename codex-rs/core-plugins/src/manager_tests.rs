@@ -985,6 +985,50 @@ async fn effective_apps_dedupes_connector_ids_across_plugins() {
     );
 }
 
+#[tokio::test]
+async fn effective_apps_preserves_app_config_order() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    );
+    write_file(
+        &plugin_root.join(".app.json"),
+        r#"{
+  "apps": {
+    "slack": {
+      "id": "connector_slack"
+    },
+    "github": {
+      "id": "connector_github"
+    },
+    "slack-copy": {
+      "id": "connector_slack"
+    }
+  }
+}"#,
+    );
+
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    )
+    .await;
+
+    assert_eq!(
+        outcome.effective_apps(),
+        vec![
+            AppConnectorId("connector_slack".to_string()),
+            AppConnectorId("connector_github".to_string()),
+        ]
+    );
+}
+
 #[test]
 fn capability_index_filters_inactive_and_zero_capability_plugins() {
     let codex_home = TempDir::new().unwrap();

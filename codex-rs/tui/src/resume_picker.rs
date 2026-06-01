@@ -7,6 +7,7 @@ use std::sync::Arc;
 mod transcript;
 
 use crate::app_server_session::AppServerSession;
+use crate::clipboard_paste::normalize_pasted_search_query;
 use crate::color::blend;
 use crate::color::is_light;
 use crate::git_action_directives::parse_assistant_markdown;
@@ -546,11 +547,6 @@ fn picker_cwd_filter(
     } else {
         Some(config_cwd.to_path_buf())
     }
-}
-
-fn normalize_pasted_query(pasted: &str) -> Option<String> {
-    let normalized = pasted.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn spawn_app_server_page_loader(
@@ -1237,7 +1233,7 @@ impl PickerState {
         if self.is_transcript_loading() {
             return;
         }
-        let Some(pasted) = normalize_pasted_query(&pasted) else {
+        let Some(pasted) = normalize_pasted_search_query(&pasted) else {
             return;
         };
         let mut new_query = self.query.clone();
@@ -5726,6 +5722,7 @@ session_picker_view = "dense"
             id: thread_id.to_string(),
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::from("remote thread"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -5760,6 +5757,7 @@ session_picker_view = "dense"
             id: thread_id.to_string(),
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -5828,6 +5826,7 @@ session_picker_view = "dense"
             id: thread_id.to_string(),
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -5885,6 +5884,7 @@ session_picker_view = "dense"
             id: thread_id.to_string(),
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -6222,14 +6222,6 @@ session_picker_view = "dense"
         state.handle_paste(String::from("results"));
 
         assert_eq!(state.query, "resize results");
-    }
-
-    #[test]
-    fn normalize_pasted_query_collapses_whitespace() {
-        assert_eq!(
-            normalize_pasted_query("  alpha\n\tbeta\r\n gamma  "),
-            Some(String::from("alpha beta gamma"))
-        );
     }
 
     #[tokio::test]

@@ -2550,6 +2550,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-otel",
  "codex-plugin",
+ "codex-prompts",
  "codex-protocol",
  "codex-response-debug-context",
  "codex-rmcp-client",
@@ -2574,7 +2575,6 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-stream-parser",
  "codex-utils-string",
- "codex-utils-template",
  "codex-windows-sandbox",
  "core_test_support",
  "csv",
@@ -2669,6 +2669,7 @@ dependencies = [
  "codex-utils-plugins",
  "dirs",
  "flate2",
+ "indexmap 2.13.0",
  "libc",
  "pretty_assertions",
  "reqwest 0.12.28",
@@ -2985,6 +2986,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-tools",
+ "codex-utils-template",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3452,6 +3454,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-prompts"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-execpolicy",
+ "codex-git-utils",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-template",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
@@ -3590,6 +3605,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zstd 0.13.3",
 ]
 
 [[package]]

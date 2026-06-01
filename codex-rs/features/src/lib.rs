@@ -114,6 +114,8 @@ pub enum Feature {
     RuntimeMetrics,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
+    /// Compress cold local thread-store rollout files.
+    LocalThreadStoreCompression,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
     /// Append additional AGENTS.md guidance to user instructions.
@@ -829,6 +831,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
             announcement: "NEW: Codex can now generate and use memories. Try it now with `/memories`",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::LocalThreadStoreCompression,
+        key: "local_thread_store_compression",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

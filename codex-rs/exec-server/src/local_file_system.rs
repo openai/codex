@@ -79,6 +79,27 @@ impl LocalFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.canonicalize(path, sandbox).await
+    }
+
+    async fn join(
+        &self,
+        base_path: &AbsolutePathBuf,
+        path: &Path,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        self.unsandboxed.join(base_path, path).await
+    }
+
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+        self.unsandboxed.parent(path).await
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,
@@ -152,6 +173,27 @@ impl ExecutorFileSystem for LocalFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for UnsandboxedFileSystem {
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system.canonicalize(path, /*sandbox*/ None).await
+    }
+
+    async fn join(
+        &self,
+        base_path: &AbsolutePathBuf,
+        path: &Path,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        self.file_system.join(base_path, path).await
+    }
+
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+        self.file_system.parent(path).await
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,
@@ -238,6 +280,27 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for DirectFileSystem {
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        reject_sandbox_context(sandbox)?;
+        AbsolutePathBuf::from_absolute_path(tokio::fs::canonicalize(path.as_path()).await?)
+    }
+
+    async fn join(
+        &self,
+        base_path: &AbsolutePathBuf,
+        path: &Path,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        Ok(base_path.join(path))
+    }
+
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+        Ok(path.parent())
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,

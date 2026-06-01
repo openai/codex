@@ -69,13 +69,14 @@ pub(super) async fn update_thread_metadata(
     if live_writer::rollout_path(store, thread_id).await.is_ok() {
         live_writer::persist_thread(store, thread_id).await?;
     }
-    let resolved_rollout_path =
+    let mut resolved_rollout_path =
         resolve_rollout_path(store, thread_id, params.include_archived).await?;
     let name = patch.name;
     let git_info = patch.git_info;
     if let Some(memory_mode) = patch.memory_mode {
         apply_thread_memory_mode(resolved_rollout_path.path.as_path(), thread_id, memory_mode)
             .await?;
+        refresh_resolved_rollout_path(&mut resolved_rollout_path).await;
     }
 
     let state_db_ctx = store.state_db().await;
@@ -143,6 +144,7 @@ pub(super) async fn update_thread_metadata(
             memory_mode.as_deref(),
         )
         .await?;
+        refresh_resolved_rollout_path(&mut resolved_rollout_path).await;
         apply_thread_git_info(store, thread_id, sha, branch, origin_url).await?;
     }
 
@@ -171,6 +173,12 @@ pub(super) async fn update_thread_metadata(
         thread.git_info = git_info_from_parts(sha, branch, origin_url);
     }
     Ok(thread)
+}
+
+async fn refresh_resolved_rollout_path(resolved: &mut ResolvedRolloutPath) {
+    if let Some(path) = codex_rollout::existing_rollout_path(resolved.path.as_path()).await {
+        resolved.path = path;
+    }
 }
 
 async fn apply_metadata_update(
