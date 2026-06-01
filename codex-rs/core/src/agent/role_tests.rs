@@ -337,7 +337,14 @@ writable_roots = ["./sandbox-root"]
         false
     );
 
-    match &config.legacy_sandbox_policy() {
+    let permission_profile = config.permissions.effective_permission_profile();
+    let file_system_policy = permission_profile.file_system_sandbox_policy();
+    let sandbox_policy = permission_profile.compatibility_sandbox_policy(
+        &file_system_policy,
+        permission_profile.network_sandbox_policy(),
+        config.cwd.as_path(),
+    );
+    match &sandbox_policy {
         SandboxPolicy::WorkspaceWrite { network_access, .. } => {
             assert_eq!(*network_access, true);
         }

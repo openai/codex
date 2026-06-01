@@ -65,6 +65,38 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+fn legacy_sandbox_policy_for_permissions(
+    permissions: &crate::config::Permissions,
+    cwd: &std::path::Path,
+) -> SandboxPolicy {
+    let permission_profile = permissions.effective_permission_profile();
+    let file_system_policy = permission_profile.file_system_sandbox_policy();
+    permission_profile.compatibility_sandbox_policy(
+        &file_system_policy,
+        permission_profile.network_sandbox_policy(),
+        cwd,
+    )
+}
+
+fn can_set_legacy_sandbox_policy(
+    permissions: &crate::config::Permissions,
+    sandbox_policy: &SandboxPolicy,
+    cwd: &std::path::Path,
+) -> crate::config::ConstraintResult<()> {
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd);
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::from(sandbox_policy),
+    );
+    permissions.can_set_permission_profile(&permission_profile)
+}
+
+fn legacy_sandbox_policy_for_config(config: &crate::config::Config) -> SandboxPolicy {
+    legacy_sandbox_policy_for_permissions(&config.permissions, config.cwd.as_path())
+}
+
 fn invocation(
     session: Arc<crate::session::session::Session>,
     turn: Arc<TurnContext>,
@@ -2221,7 +2253,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
-    let expected_sandbox = turn.config.legacy_sandbox_policy();
+    let expected_sandbox = legacy_sandbox_policy_for_config(&turn.config);
     #[allow(deprecated)]
     let mut expected_file_system_sandbox_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&expected_sandbox, &turn.cwd);
@@ -2279,7 +2311,14 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .expect("spawned agent thread should exist")
         .config_snapshot()
         .await;
-    assert_eq!(snapshot.sandbox_policy(), expected_sandbox);
+    let snapshot_file_system_sandbox_policy =
+        snapshot.permission_profile.file_system_sandbox_policy();
+    let snapshot_sandbox_policy = snapshot.permission_profile.compatibility_sandbox_policy(
+        &snapshot_file_system_sandbox_policy,
+        snapshot.permission_profile.network_sandbox_policy(),
+        snapshot.cwd.as_path(),
+    );
+    assert_eq!(snapshot_sandbox_policy, expected_sandbox);
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     assert_eq!(snapshot.permission_profile, expected_permission_profile);
     let child_thread = manager
@@ -4188,9 +4227,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
                 if *candidate == base {
                     return false;
                 }
-                permissions
-                    .can_set_legacy_sandbox_policy(candidate, cwd)
-                    .is_ok()
+                can_set_legacy_sandbox_policy(permissions, candidate, cwd).is_ok()
             })
             .unwrap_or(base)
     }
@@ -4215,7 +4252,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     let turn_cwd = turn.cwd.clone();
     let sandbox_policy = pick_allowed_sandbox_policy(
         &turn.config.permissions,
-        turn.config.legacy_sandbox_policy(),
+        legacy_sandbox_policy_for_config(&turn.config),
         turn_cwd.as_path(),
     );
     let file_system_sandbox_policy =

@@ -17,9 +17,10 @@ use codex_config::Constrained;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::Stage1Output;
@@ -320,18 +321,18 @@ mod agent {
             .features
             .disable(Feature::SkillMcpDependencyInstall);
 
-        // Sandbox policy
-        let writable_roots = vec![root];
         // The consolidation agent only needs local memory-root write access and no network.
-        let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
+        agent_config.workspace_roots = vec![root.clone()];
+        agent_config.workspace_roots_explicit = true;
+        agent_config.permissions.set_workspace_roots(vec![root]);
         agent_config
             .permissions
-            .set_legacy_sandbox_policy(consolidation_sandbox_policy, agent_config.cwd.as_path())
+            .set_permission_profile(PermissionProfile::workspace_write_with(
+                &[],
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            ))
             .ok()?;
 
         agent_config.model = Some(
@@ -573,4 +574,26 @@ fn emit_token_usage_metrics(context: &MemoryStartupContext, token_usage: &TokenU
         token_usage.reasoning_output_tokens.max(0),
         &[("token_type", "reasoning_output")],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_test_support::load_default_config_for_test;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn consolidation_agent_config_uses_memory_root_as_workspace_root() {
+        let home = TempDir::new().expect("temp dir");
+        let config = load_default_config_for_test(&home).await;
+        let root = memory_root(&config.codex_home);
+
+        let agent_config = agent::get_config(&config).expect("agent config");
+
+        assert_eq!(agent_config.cwd, root);
+        assert_eq!(agent_config.workspace_roots, vec![root.clone()]);
+        assert_eq!(agent_config.permissions.workspace_roots(), &[root]);
+        assert!(agent_config.workspace_roots_explicit);
+    }
 }

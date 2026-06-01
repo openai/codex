@@ -15,6 +15,7 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::WarningEvent;
 use core::time::Duration;
+use core_test_support::legacy_sandbox_policy_for_config;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
@@ -32,7 +33,7 @@ fn resume_history(
         current_date: None,
         timezone: None,
         approval_policy: config.permissions.approval_policy.value(),
-        sandbox_policy: config.legacy_sandbox_policy(),
+        sandbox_policy: legacy_sandbox_policy_for_config(config),
         permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,

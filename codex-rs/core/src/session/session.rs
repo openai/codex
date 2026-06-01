@@ -13,6 +13,15 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use tokio::sync::Semaphore;
 
+fn sandbox_mode_label(permission_profile: &PermissionProfile) -> &'static str {
+    match codex_config::sandbox_mode_requirement_for_permission_profile(permission_profile) {
+        codex_config::SandboxModeRequirement::ReadOnly => "read-only",
+        codex_config::SandboxModeRequirement::WorkspaceWrite => "workspace-write",
+        codex_config::SandboxModeRequirement::DangerFullAccess => "danger-full-access",
+        codex_config::SandboxModeRequirement::ExternalSandbox => "external-sandbox",
+    }
+}
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
@@ -147,20 +156,6 @@ impl SessionConfiguration {
             .set_legacy_permission_profile(permission_profile)
     }
 
-    pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
-        self.permission_profile()
-            .to_legacy_sandbox_policy(&self.cwd)
-            .unwrap_or_else(|_| {
-                let file_system_sandbox_policy = self.file_system_sandbox_policy();
-                codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-                    self.permission_profile_state.permission_profile(),
-                    &file_system_sandbox_policy,
-                    self.network_sandbox_policy(),
-                    &self.cwd,
-                )
-            })
-    }
-
     pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
         self.permission_profile().file_system_sandbox_policy()
     }
@@ -196,9 +191,20 @@ impl SessionConfiguration {
 
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
-        let current_sandbox_policy = self.sandbox_policy();
         let current_file_system_sandbox_policy = self.file_system_sandbox_policy();
         let current_network_sandbox_policy = self.network_sandbox_policy();
+        let current_sandbox_policy = self
+            .permission_profile()
+            .to_legacy_sandbox_policy(&self.cwd)
+            .unwrap_or_else(|_| {
+                self.permission_profile_state
+                    .permission_profile()
+                    .compatibility_sandbox_policy(
+                        &current_file_system_sandbox_policy,
+                        current_network_sandbox_policy,
+                        &self.cwd,
+                    )
+            });
         let legacy_file_system_projection =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
                 &current_sandbox_policy,
@@ -328,23 +334,6 @@ impl SessionConfiguration {
                     )?;
                 next_configuration.original_config_do_not_use = Arc::new(config);
             }
-        } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
-            let file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
-                    &sandbox_policy,
-                    &next_configuration.cwd,
-                    &current_file_system_sandbox_policy,
-                );
-            let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-            next_configuration
-                .permission_profile_state
-                .set_legacy_permission_profile(
-                    PermissionProfile::from_runtime_permissions_with_enforcement(
-                        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
-                    ),
-                )?;
         } else if cwd_changed
             && file_system_policy_matches_legacy
             && file_system_policy_has_rebindable_project_root_write
@@ -421,7 +410,6 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
-    pub(crate) sandbox_policy: Option<SandboxPolicy>,
     pub(crate) permission_profile: Option<PermissionProfile>,
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
@@ -709,7 +697,8 @@ impl Session {
                 model: session_configuration.collaboration_mode.model().to_string(),
                 provider_name: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value().to_string(),
-                sandbox_policy: format!("{:?}", session_configuration.sandbox_policy()),
+                sandbox_policy: sandbox_mode_label(&session_configuration.permission_profile())
+                    .to_string(),
             };
             let rollout_thread_trace = if matches!(
                 session_configuration.session_source,
@@ -825,9 +814,7 @@ impl Session {
                 config.model_context_window,
                 config.model_auto_compact_token_limit,
                 config.permissions.approval_policy.value(),
-                config
-                    .permissions
-                    .legacy_sandbox_policy(session_configuration.cwd.as_path()),
+                sandbox_mode_label(&session_configuration.permission_profile()),
                 mcp_servers.keys().map(String::as_str).collect(),
             );
 

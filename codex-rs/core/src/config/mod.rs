@@ -93,13 +93,11 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use rmcp::model::ElicitationCapability;
@@ -147,7 +145,6 @@ pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
 pub use codex_config::LoaderOverrides;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
-use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
@@ -438,79 +435,6 @@ impl Permissions {
     /// Effective network sandbox policy derived from the canonical profile.
     pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
         self.permission_profile().network_sandbox_policy()
-    }
-
-    /// Legacy compatibility projection derived from the canonical profile.
-    pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
-        let permission_profile = self.materialized_permission_profile();
-        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-        compatibility_sandbox_policy_for_permission_profile(
-            &permission_profile,
-            &file_system_sandbox_policy,
-            permission_profile.network_sandbox_policy(),
-            cwd,
-        )
-    }
-
-    /// Check whether a legacy sandbox policy can be applied to this permission
-    /// set after projecting it into the canonical permission profile.
-    pub fn can_set_legacy_sandbox_policy(
-        &self,
-        sandbox_policy: &SandboxPolicy,
-        cwd: &Path,
-    ) -> ConstraintResult<()> {
-        let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd);
-        let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
-        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
-        self.permission_profile_state
-            .can_set_legacy_permission_profile(&permission_profile)
-    }
-
-    /// Set permissions from a legacy sandbox policy and keep every permission
-    /// projection in sync.
-    pub fn set_legacy_sandbox_policy(
-        &mut self,
-        sandbox_policy: SandboxPolicy,
-        cwd: &Path,
-    ) -> ConstraintResult<()> {
-        self.can_set_legacy_sandbox_policy(&sandbox_policy, cwd)?;
-        let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
-        let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
-        self.workspace_roots = match &sandbox_policy {
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                let mut workspace_roots = vec![
-                    AbsolutePathBuf::from_absolute_path(cwd)
-                        .unwrap_or_else(|_| AbsolutePathBuf::resolve_path_against_base(cwd, "/")),
-                ];
-                for root in writable_roots {
-                    if !workspace_roots.iter().any(|existing| existing == root) {
-                        workspace_roots.push(root.clone());
-                    }
-                }
-                workspace_roots
-            }
-            SandboxPolicy::DangerFullAccess
-            | SandboxPolicy::ExternalSandbox { .. }
-            | SandboxPolicy::ReadOnly { .. } => vec![
-                AbsolutePathBuf::from_absolute_path(cwd)
-                    .unwrap_or_else(|_| AbsolutePathBuf::resolve_path_against_base(cwd, "/")),
-            ],
-        };
-
-        self.permission_profile_state
-            .set_legacy_permission_profile(permission_profile)?;
-        Ok(())
     }
 
     /// Set permissions from the canonical profile.
@@ -1281,24 +1205,6 @@ impl ConfigBuilder {
 }
 
 impl Config {
-    pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
-        self.permissions.legacy_sandbox_policy(self.cwd.as_path())
-    }
-
-    pub fn set_legacy_sandbox_policy(
-        &mut self,
-        sandbox_policy: SandboxPolicy,
-    ) -> ConstraintResult<()> {
-        self.workspace_roots_explicit = matches!(
-            &sandbox_policy,
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } if !writable_roots.is_empty()
-        );
-        self.permissions
-            .set_legacy_sandbox_policy(sandbox_policy, self.cwd.as_path())?;
-        self.workspace_roots = self.permissions.workspace_roots().to_vec();
-        Ok(())
-    }
-
     pub fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
         let mut workspace_roots = self.workspace_roots.clone();
         workspace_roots.extend(self.permissions.profile_workspace_roots().iter().cloned());
@@ -2899,7 +2805,7 @@ impl Config {
             // should still flow through the canonical profile representation.
             // Derive the old `sandbox_mode` defaults as a profile first, then
             // keep a legacy-compatible projection only for the remaining code
-            // paths that still speak `SandboxPolicy`.
+            // paths that still speak `sandbox_mode`.
             let mut permission_profile = cfg
                 .derive_permission_profile(
                     sandbox_mode,
@@ -2910,7 +2816,7 @@ impl Config {
                 )
                 .await;
             // The legacy-derived profiles above are expected to be
-            // representable as `SandboxPolicy`. This guard keeps the old safe
+            // representable as a legacy sandbox mode. This guard keeps the old safe
             // fallback behavior if future changes make this branch derive a
             // profile with split-only filesystem semantics, such as root write
             // with carveouts or writes that are not expressible as
