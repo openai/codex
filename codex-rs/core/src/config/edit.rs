@@ -1,10 +1,10 @@
-use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestDisabledTool;
+use codex_config::with_config_write_lock;
 use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -701,41 +701,44 @@ fn apply_blocking_to_resolved_file(
         return Ok(());
     }
 
-    let write_paths = resolve_symlink_write_paths(resolved_config_file)?;
-    let serialized = match write_paths.read_path {
-        Some(path) => match std::fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(err) => return Err(err.into()),
-        },
-        None => String::new(),
-    };
+    with_config_write_lock(resolved_config_file, |write_paths| {
+        let serialized = match write_paths.read_path.as_ref() {
+            Some(path) => match std::fs::read_to_string(path) {
+                Ok(contents) => contents,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(err) => return Err(err.into()),
+            },
+            None => String::new(),
+        };
 
-    let doc = if serialized.is_empty() {
-        DocumentMut::new()
-    } else {
-        serialized.parse::<DocumentMut>()?
-    };
+        let doc = if serialized.is_empty() {
+            DocumentMut::new()
+        } else {
+            serialized.parse::<DocumentMut>()?
+        };
 
-    let mut document = ConfigDocument::new(doc);
-    let mut mutated = false;
+        let mut document = ConfigDocument::new(doc);
+        let mut mutated = false;
 
-    for edit in edits {
-        mutated |= document.apply(edit)?;
-    }
+        for edit in edits {
+            mutated |= document.apply(edit)?;
+        }
 
-    if !mutated {
-        return Ok(());
-    }
+        if !mutated {
+            return Ok(());
+        }
 
-    write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(|| {
-        format!(
-            "failed to persist config at {}",
-            write_paths.write_path.display()
-        )
-    })?;
+        write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(
+            || {
+                format!(
+                    "failed to persist config at {}",
+                    write_paths.write_path.display()
+                )
+            },
+        )?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Persist edits asynchronously by offloading the blocking writer.
