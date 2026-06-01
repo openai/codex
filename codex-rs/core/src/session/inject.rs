@@ -4,7 +4,6 @@ use super::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ResponseItem;
 use std::sync::Arc;
 
@@ -40,9 +39,6 @@ impl Session {
     ) -> Result<(), Vec<ResponseItem>> {
         if input.is_empty() {
             return Ok(());
-        }
-        if self.collaboration_mode().await.mode == ModeKind::Plan {
-            return Err(input);
         }
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             return Err(input);
