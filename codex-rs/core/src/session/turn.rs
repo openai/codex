@@ -513,11 +513,10 @@ async fn build_skills_and_plugins(
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
-    let disabled_skill_paths = skills_outcome.disabled_path_values();
     let mentioned_skills = collect_explicit_skill_mentions(
         &user_input,
         &skills_outcome.skills,
-        &disabled_skill_paths,
+        &skills_outcome.disabled_paths,
         &connector_slug_counts,
     );
     maybe_prompt_and_install_mcp_dependencies(
