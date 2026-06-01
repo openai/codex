@@ -1,5 +1,6 @@
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
+use crate::wrapping::wrap_ranges_trim;
 use ratatui::text::Line;
 use unicode_width::UnicodeWidthChar;
 
@@ -48,7 +49,9 @@ pub(crate) struct SearchLine {
     scroll_line_index: usize,
     width: u16,
     folded_text: String,
+    plain_text: String,
     display_cols_by_byte: Vec<u16>,
+    source_bytes_by_folded_byte: Vec<usize>,
     owning_user_prompt_cell: Option<usize>,
 }
 
@@ -71,13 +74,18 @@ impl SearchLine {
             line_index,
             scroll_line_index,
             width,
-            folded_text: plain_text.to_lowercase(),
-            display_cols_by_byte: display_cols_by_byte(&plain_text),
+            folded_text: folded_text(&plain_text),
+            display_cols_by_byte: display_cols_by_folded_byte(&plain_text),
+            source_bytes_by_folded_byte: source_bytes_by_folded_byte(&plain_text),
+            plain_text,
             owning_user_prompt_cell,
         }
     }
 
     fn find_matches(&self, query: &str) -> Vec<SearchMatch> {
+        if query.is_empty() {
+            return Vec::new();
+        }
         let mut matches = Vec::new();
         let mut start = 0usize;
         while let Some(found) = self.folded_text[start..].find(query) {
@@ -88,12 +96,15 @@ impl SearchLine {
                 line_index: self.line_index,
                 scroll_line_index: self
                     .scroll_line_index
-                    .saturating_add(usize::from(self.display_col(match_start) / self.width)),
+                    .saturating_add(self.wrapped_row(match_start)),
                 start_col: self.display_col(match_start),
                 end_col: self.display_col(match_end),
                 owning_user_prompt_cell: self.owning_user_prompt_cell,
             });
-            start = match_start.saturating_add(1);
+            let Some(ch) = self.folded_text[match_start..].chars().next() else {
+                break;
+            };
+            start = match_start.saturating_add(ch.len_utf8());
         }
         matches
     }
@@ -102,6 +113,18 @@ impl SearchLine {
         self.display_cols_by_byte
             .get(byte_index)
             .copied()
+            .unwrap_or_default()
+    }
+
+    fn wrapped_row(&self, folded_byte_index: usize) -> usize {
+        let source_byte_index = self
+            .source_bytes_by_folded_byte
+            .get(folded_byte_index)
+            .copied()
+            .unwrap_or(self.plain_text.len());
+        wrap_ranges_trim(&self.plain_text, usize::from(self.width.max(/*other*/ 1)))
+            .iter()
+            .position(|range| range.contains(&source_byte_index))
             .unwrap_or_default()
     }
 }
@@ -171,13 +194,67 @@ fn push_search_lines(
     }
 }
 
-fn display_cols_by_byte(text: &str) -> Vec<u16> {
-    let mut cols = vec![0; text.len().saturating_add(1)];
+fn folded_text(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
+}
+
+fn display_cols_by_folded_byte(text: &str) -> Vec<u16> {
+    let mut cols = vec![0];
     let mut col = 0u16;
-    for (byte_index, ch) in text.char_indices() {
-        cols[byte_index] = col;
-        col = col.saturating_add(u16::try_from(ch.width().unwrap_or(0)).unwrap_or(u16::MAX));
+    for ch in text.chars() {
+        let next_col =
+            col.saturating_add(u16::try_from(ch.width().unwrap_or(0)).unwrap_or(u16::MAX));
+        cols.extend(std::iter::repeat_n(
+            next_col,
+            ch.to_lowercase().map(char::len_utf8).sum(),
+        ));
+        col = next_col;
     }
-    cols[text.len()] = col;
     cols
+}
+
+fn source_bytes_by_folded_byte(text: &str) -> Vec<usize> {
+    let mut source_bytes = vec![0];
+    for (source_byte_index, ch) in text.char_indices() {
+        let next_source_byte = source_byte_index.saturating_add(ch.len_utf8());
+        source_bytes.extend(std::iter::repeat_n(
+            next_source_byte,
+            ch.to_lowercase().map(char::len_utf8).sum(),
+        ));
+    }
+    source_bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn search_match_iteration_advances_on_utf8_boundaries() {
+        let line = SearchLine::from_line(
+            /*renderable_index*/ 0,
+            /*line_index*/ 0,
+            /*scroll_line_index*/ 0,
+            /*width*/ 80,
+            &Line::from("éé"),
+            /*owning_user_prompt_cell*/ None,
+        );
+
+        assert_eq!(line.find_matches("é").len(), 2);
+    }
+
+    #[test]
+    fn search_match_scroll_offset_uses_word_wrapping() {
+        let line = SearchLine::from_line(
+            /*renderable_index*/ 0,
+            /*line_index*/ 0,
+            /*scroll_line_index*/ 0,
+            /*width*/ 10,
+            &Line::from("aaaaa aaaaa needle"),
+            /*owning_user_prompt_cell*/ None,
+        );
+
+        assert_eq!(line.find_matches("needle")[0].scroll_line_index, 2);
+    }
 }

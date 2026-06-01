@@ -1862,9 +1862,7 @@ impl TranscriptOverlay {
                         self.view.keymap.next_search_match.is_pressed(key_event);
                     let previous_match_pressed =
                         self.view.keymap.previous_search_match.is_pressed(key_event);
-                    if self.view.keymap.start_search.is_pressed(key_event) {
-                        self.activate_search();
-                    } else if matches!(key_event.code, KeyCode::Esc) {
+                    if matches!(key_event.code, KeyCode::Esc) {
                         self.cancel_search_mode();
                     } else if matches!(key_event.code, KeyCode::Backspace) {
                         self.search_backspace();
@@ -1888,6 +1886,8 @@ impl TranscriptOverlay {
                             text.push(ch);
                             self.append_search_text(&text);
                         }
+                    } else if self.view.keymap.start_search.is_pressed(key_event) {
+                        self.activate_search();
                     } else {
                         return self.handle_viewport_key_event(tui, key_event);
                     }
