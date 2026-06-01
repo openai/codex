@@ -141,6 +141,12 @@ async fn worker_compresses_old_archived_rollouts_only() -> anyhow::Result<()> {
     assert!(!compressed_rollout_path(&fresh_path).exists());
     assert!(!stale_temp.exists());
     assert!(fresh_temp.exists());
+    assert!(
+        home.path()
+            .join(".tmp")
+            .join("rollout-compression.lock")
+            .exists()
+    );
     Ok(())
 }
 
@@ -323,16 +329,16 @@ async fn worker_skips_existing_compressed_archived_rollouts() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn worker_skips_when_fresh_lock_exists() -> anyhow::Result<()> {
+async fn worker_skips_when_fresh_run_marker_exists() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let uuid = Uuid::from_u128(11);
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
     let rollout_path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
-    write_rollout(&rollout_path, thread_id, "locked worker")?;
+    write_rollout(&rollout_path, thread_id, "throttled worker")?;
     set_old_mtime(&rollout_path)?;
-    let lock_dir = home.path().join(".tmp");
-    fs::create_dir_all(lock_dir.as_path())?;
-    fs::write(lock_dir.join("rollout-compression.lock"), "locked")?;
+    let marker_dir = home.path().join(".tmp");
+    fs::create_dir_all(marker_dir.as_path())?;
+    fs::write(marker_dir.join("rollout-compression.lock"), "recent run")?;
 
     worker::run(home.path().to_path_buf()).await?;
 

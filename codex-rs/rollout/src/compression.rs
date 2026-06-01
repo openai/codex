@@ -24,8 +24,8 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Starts a best-effort background job that compresses cold local rollout files.
 ///
 /// The worker is fire-and-forget: failures are logged, startup is not blocked,
-/// and a process-wide lock under `codex_home` prevents overlapping compression
-/// runs from the same local store.
+/// and a run marker under `codex_home` prevents overlapping or too-frequent
+/// compression runs from the same local store.
 pub fn spawn_rollout_compression_worker(codex_home: PathBuf) {
     worker::spawn(codex_home)
 }
@@ -246,10 +246,10 @@ mod worker {
     const TEMP_SUFFIX: &str = ".tmp";
     const COMPRESSION_LEVEL: i32 = 3;
     const MIN_ROLLOUT_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-    const GLOBAL_LOCK_STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
-    const TEMP_FILE_STALE_AFTER: Duration = GLOBAL_LOCK_STALE_AFTER;
+    const RUN_MARKER_STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
+    const TEMP_FILE_STALE_AFTER: Duration = RUN_MARKER_STALE_AFTER;
     const WORKER_MAX_RUNTIME: Duration = Duration::from_secs(5 * 60 * 60);
-    const LOCK_FILE_NAME: &str = "rollout-compression.lock";
+    const RUN_MARKER_FILE_NAME: &str = "rollout-compression.lock";
     const MAX_CONCURRENT_COMPRESSION_JOBS: usize = 2;
 
     #[derive(Default)]
@@ -260,17 +260,15 @@ mod worker {
         failed: usize,
     }
 
-    struct CompressionLock {
-        path: PathBuf,
-    }
+    struct CompressionRunMarker;
 
-    impl CompressionLock {
-        fn try_acquire(codex_home: &Path) -> io::Result<Option<Self>> {
-            let lock_dir = codex_home.join(".tmp");
-            std::fs::create_dir_all(lock_dir.as_path())?;
-            let path = lock_dir.join(LOCK_FILE_NAME);
-            match create_lock_file(path.as_path()) {
-                Ok(()) => return Ok(Some(Self { path })),
+    impl CompressionRunMarker {
+        fn try_claim(codex_home: &Path) -> io::Result<Option<Self>> {
+            let marker_dir = codex_home.join(".tmp");
+            std::fs::create_dir_all(marker_dir.as_path())?;
+            let path = marker_dir.join(RUN_MARKER_FILE_NAME);
+            match create_run_marker_file(path.as_path()) {
+                Ok(()) => return Ok(Some(Self)),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(err),
             }
@@ -279,7 +277,7 @@ mod worker {
                 .and_then(|metadata| metadata.modified())
                 .ok()
                 .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-                .is_some_and(|age| age >= GLOBAL_LOCK_STALE_AFTER);
+                .is_some_and(|age| age >= RUN_MARKER_STALE_AFTER);
             if !stale {
                 return Ok(None);
             }
@@ -288,17 +286,11 @@ mod worker {
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err),
             }
-            match create_lock_file(path.as_path()) {
-                Ok(()) => Ok(Some(Self { path })),
+            match create_run_marker_file(path.as_path()) {
+                Ok(()) => Ok(Some(Self)),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(None),
                 Err(err) => Err(err),
             }
-        }
-    }
-
-    impl Drop for CompressionLock {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(self.path.as_path());
         }
     }
 
@@ -321,9 +313,9 @@ mod worker {
     }
 
     pub(super) async fn run(codex_home: PathBuf) -> io::Result<()> {
-        let Some(_lock) = CompressionLock::try_acquire(codex_home.as_path())? else {
+        let Some(_marker) = CompressionRunMarker::try_claim(codex_home.as_path())? else {
             debug!(
-                "rollout compression worker already running for {}",
+                "rollout compression worker recently ran or is already running for {}",
                 codex_home.display()
             );
             return Ok(());
@@ -343,7 +335,7 @@ mod worker {
         Ok(())
     }
 
-    fn create_lock_file(path: &Path) -> io::Result<()> {
+    fn create_run_marker_file(path: &Path) -> io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
