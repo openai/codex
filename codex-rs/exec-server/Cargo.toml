@@ -17,6 +17,7 @@ axum = { workspace = true, features = ["http1", "tokio", "ws"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-api = { workspace = true }
 codex-client = { workspace = true }
 codex-file-system = { workspace = true }
 codex-protocol = { workspace = true }
@@ -51,6 +52,7 @@ uuid = { workspace = true, features = ["v4"] }
 anyhow = { workspace = true }
 codex-test-binary-support = { workspace = true }
 ctor = { workspace = true }
+http = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

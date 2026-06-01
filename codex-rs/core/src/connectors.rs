@@ -35,7 +35,7 @@ use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
-use codex_mcp::McpRuntimeEnvironment;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
@@ -113,8 +113,9 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,
     accessible_connectors: &[AppInfo],
+    loaded_plugin_app_connector_ids: &[String],
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
-    let connector_ids = tool_suggest_connector_ids(config).await;
+    let connector_ids = tool_suggest_connector_ids(config, loaded_plugin_app_connector_ids);
     let directory_connectors = codex_connectors::merge::merge_plugin_connectors(
         cached_directory_connectors_for_tool_suggest_with_auth(config, auth).await,
         connector_ids.iter().cloned(),
@@ -128,10 +129,11 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
         )
         .into_iter()
         .map(DiscoverableTool::from);
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(config)
-        .await?
-        .into_iter()
-        .map(DiscoverableTool::from);
+    let discoverable_plugins =
+        list_tool_suggest_discoverable_plugins(config, loaded_plugin_app_connector_ids)
+            .await?
+            .into_iter()
+            .map(DiscoverableTool::from);
     Ok(discoverable_connectors
         .chain(discoverable_plugins)
         .collect())
@@ -198,11 +200,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager =
-        EnvironmentManager::from_codex_home(config.codex_home.clone(), local_runtime_paths).await?;
+        EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
+            .await?;
     list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config,
         force_refetch,
-        &environment_manager,
+        Arc::new(environment_manager),
     )
     .await
 }
@@ -210,7 +213,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
 pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     config: &Config,
     force_refetch: bool,
-    environment_manager: &EnvironmentManager,
+    environment_manager: Arc<EnvironmentManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
@@ -261,10 +264,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let environment = environment_manager
-        .default_environment()
-        .unwrap_or_else(|| environment_manager.local_environment());
-
     let (mut mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -273,10 +272,13 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         PermissionProfile::default(),
-        McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
+        // Connector discovery is threadless. Use an actually configured env if
+        // one exists, but do not reintroduce the old hidden-local fallback.
+        McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         host_owned_codex_apps_enabled,
+        mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         ToolPluginProvenance::default(),
         auth.as_ref(),
@@ -404,15 +406,13 @@ fn write_cached_accessible_connectors(
     });
 }
 
-async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
-    let plugins_input = config.plugins_config_input();
-    let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
-        .plugins_for_config(&plugins_input)
-        .await
-        .capability_summaries()
+fn tool_suggest_connector_ids(
+    config: &Config,
+    loaded_plugin_app_connector_ids: &[String],
+) -> HashSet<String> {
+    let mut connector_ids = loaded_plugin_app_connector_ids
         .iter()
-        .flat_map(|plugin| plugin.app_connector_ids.iter())
-        .map(|connector_id| connector_id.0.clone())
+        .cloned()
         .collect::<HashSet<_>>();
     connector_ids.extend(
         config

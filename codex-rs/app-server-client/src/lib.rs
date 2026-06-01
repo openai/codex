@@ -176,6 +176,7 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
     matches!(
         notification,
         ServerNotification::TurnCompleted(_)
+            | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ItemCompleted(_)
             | ServerNotification::AgentMessageDelta(_)
             | ServerNotification::PlanDelta(_)
@@ -1121,7 +1122,9 @@ mod tests {
             websocket,
             JSONRPCMessage::Response(JSONRPCResponse {
                 id: request.id,
-                result: serde_json::json!({}),
+                result: serde_json::json!({
+                    "userAgent": "codex_cli_rs/9.8.7-test (Test OS; x86_64) rust",
+                }),
             }),
         )
         .await;
@@ -1456,6 +1459,7 @@ mod tests {
             .await
             .expect("remote client should connect");
 
+        assert_eq!(client.server_version(), Some("9.8.7-test"));
         let response: GetAccountResponse = client
             .request_typed(ClientRequest::GetAccount {
                 request_id: RequestId::Integer(1),
@@ -2178,11 +2182,13 @@ mod tests {
         let environment_manager = Arc::new(
             EnvironmentManager::create_for_tests(
                 Some("ws://127.0.0.1:8765".to_string()),
-                ExecServerRuntimePaths::new(
-                    std::env::current_exe().expect("current exe"),
-                    /*codex_linux_sandbox_exe*/ None,
-                )
-                .expect("runtime paths"),
+                Some(
+                    ExecServerRuntimePaths::new(
+                        std::env::current_exe().expect("current exe"),
+                        /*codex_linux_sandbox_exe*/ None,
+                    )
+                    .expect("runtime paths"),
+                ),
             )
             .await,
         );

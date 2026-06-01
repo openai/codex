@@ -5,7 +5,7 @@
 # Usage (source-only):
 #   source scripts/test-remote-env.sh
 #   cd codex-rs
-#   cargo test -p codex-core --test all remote_env_connects_creates_temp_dir_and_runs_sample_script
+#   just test -p codex-core --test all remote_test_env_can_connect_and_use_filesystem
 #   codex_remote_env_cleanup
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

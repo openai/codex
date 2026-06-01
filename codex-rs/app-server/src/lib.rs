@@ -31,7 +31,10 @@ use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
+use crate::transport::acquire_app_server_startup_lock;
+use crate::transport::app_server_startup_lock_path;
 use crate::transport::auth::policy_from_settings;
+use crate::transport::prepare_control_socket_path;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
@@ -41,7 +44,6 @@ use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
@@ -401,6 +403,7 @@ pub enum PluginStartupTasks {
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_enabled: bool,
+    pub install_shutdown_signal_handler: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -408,6 +411,7 @@ impl Default for AppServerRuntimeOptions {
         Self {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_enabled: false,
+            install_shutdown_signal_handler: true,
         }
     }
 }
@@ -444,9 +448,9 @@ pub async fn run_main_with_transport_options(
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
     let environment_manager = if loader_overrides.ignore_user_config {
-        EnvironmentManager::from_env(local_runtime_paths).await
+        EnvironmentManager::from_env(Some(local_runtime_paths)).await
     } else {
-        EnvironmentManager::from_codex_home(codex_home.clone(), local_runtime_paths).await
+        EnvironmentManager::from_codex_home(codex_home.clone(), Some(local_runtime_paths)).await
     }
     .map(Arc::new)
     .map_err(std::io::Error::other)?;
@@ -515,13 +519,21 @@ pub async fn run_main_with_transport_options(
     })?;
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
+    let unix_socket_startup_lock = match &transport {
+        AppServerTransport::UnixSocket { socket_path } => {
+            let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
+            let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
+            prepare_control_socket_path(socket_path.as_path()).await?;
+            Some(startup_lock)
+        }
+        _ => None,
+    };
     let state_db = match rollout_state_db::try_init(&config).await {
         Ok(state_db) => Some(state_db),
         Err(err) => {
-            let state_db_path = codex_state::state_db_path(config.sqlite_home.as_path());
             return Err(std::io::Error::other(format!(
-                "failed to initialize sqlite state db at {}: {err}",
-                state_db_path.display()
+                "failed to initialize sqlite state runtime under {}: {err}",
+                config.sqlite_home.display()
             )));
         }
     };
@@ -589,7 +601,7 @@ pub async fn run_main_with_transport_options(
         });
     }
     if let Some(warning) =
-        codex_core::config::system_bwrap_warning(config.permissions.permission_profile.get())
+        codex_core::config::system_bwrap_warning(config.permissions.permission_profile())
     {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
@@ -646,7 +658,8 @@ pub async fn run_main_with_transport_options(
 
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let shutdown_when_no_connections = single_client_mode;
-    let graceful_signal_restart_enabled = !single_client_mode;
+    let graceful_signal_restart_enabled =
+        runtime_options.install_shutdown_signal_handler && !single_client_mode;
     let mut app_server_client_name_rx = None;
 
     match &transport {
@@ -681,6 +694,7 @@ pub async fn run_main_with_transport_options(
         }
         AppServerTransport::Off => {}
     }
+    drop(unix_socket_startup_lock);
 
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
@@ -772,8 +786,7 @@ pub async fn run_main_with_transport_options(
     });
 
     let processor_handle = tokio::spawn({
-        let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        let auth_manager = Arc::clone(&auth_manager);
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
@@ -1003,14 +1016,9 @@ pub async fn run_main_with_transport_options(
                             continue;
                         }
                         remote_control_status = status.clone();
+                        let notification = ServerNotification::RemoteControlStatusChanged(status);
                         initialize_notification_sender
-                            .send_server_notification(ServerNotification::RemoteControlStatusChanged(
-                                RemoteControlStatusChangedNotification {
-                                    status: status.status,
-                                    installation_id: status.installation_id,
-                                    environment_id: status.environment_id,
-                                },
-                            ))
+                            .send_server_notification(notification)
                             .await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {

@@ -13,6 +13,8 @@ use std::path::Path;
 use tracing::warn;
 use url::Url;
 
+use crate::mitm_hook::MitmHookConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct NetworkProxyConfig {
     #[serde(default)]
@@ -105,7 +107,7 @@ impl NetworkDomainPermissions {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkUnixSocketPermission {
     Allow,
-    None,
+    Deny,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -139,6 +141,8 @@ pub struct NetworkProxySettings {
     pub allow_local_binding: bool,
     #[serde(default)]
     pub mitm: bool,
+    #[serde(default)]
+    pub mitm_hooks: Vec<MitmHookConfig>,
 }
 
 impl Default for NetworkProxySettings {
@@ -157,6 +161,7 @@ impl Default for NetworkProxySettings {
             unix_sockets: None,
             allow_local_binding: false,
             mitm: false,
+            mitm_hooks: Vec::new(),
         }
     }
 }
@@ -273,8 +278,8 @@ pub enum NetworkMode {
     /// blocked unless MITM is enabled so the proxy can enforce method policy on inner requests.
     /// SOCKS5 remains blocked in limited mode.
     Limited,
-    /// Full network access: all HTTP methods are allowed, and HTTPS CONNECTs are tunneled without
-    /// MITM interception.
+    /// Full network access: all HTTP methods are allowed. HTTPS CONNECTs are tunneled directly.
+    /// MITM hooks do not currently make full mode enter MITM.
     #[default]
     Full,
 }
@@ -588,6 +593,7 @@ mod tests {
                 unix_sockets: None,
                 allow_local_binding: false,
                 mitm: false,
+                mitm_hooks: Vec::new(),
             }
         );
     }
@@ -652,6 +658,7 @@ mod tests {
                     "unix_sockets": null,
                     "allow_local_binding": false,
                     "mitm": false,
+                    "mitm_hooks": [],
                 }
             })
         );

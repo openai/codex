@@ -78,7 +78,7 @@ pub struct RemotePluginCacheMutationGuard {
     key: RemotePluginCacheMutationKey,
 }
 
-pub fn maybe_start_remote_installed_plugin_bundle_sync(
+pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
@@ -208,6 +208,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                 &plugin.name,
                 release_version,
                 plugin.release.bundle_download_url.as_deref(),
+                plugin.release.app_manifest.clone(),
             ) {
                 Ok(bundle) => bundle,
                 Err(err) => {
@@ -511,7 +512,7 @@ mod tests {
             &installed_plugin_names_by_marketplace,
         )
         .expect("cleanup after install guard is dropped");
-        assert_eq!(removed, vec!["linear@chatgpt-global".to_string()]);
+        assert_eq!(removed, vec!["linear@openai-curated-remote".to_string()]);
         assert!(!cached_manifest.exists());
     }
 

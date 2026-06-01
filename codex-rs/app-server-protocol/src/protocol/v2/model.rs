@@ -98,6 +98,9 @@ pub struct Model {
     pub additional_speed_tiers: Vec<String>,
     #[serde(default)]
     pub service_tiers: Vec<ModelServiceTier>,
+    /// Catalog default service tier id for this model, when one is configured.
+    #[serde(default)]
+    pub default_service_tier: Option<String>,
     // Only one model should be marked as default.
     pub is_default: bool,
 }

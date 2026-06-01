@@ -24,7 +24,7 @@ fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMod
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_permissions_update() -> Result<()>
+async fn thread_settings_update_without_user_turn_does_not_record_permissions_update() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
 
@@ -34,22 +34,14 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
     });
     let test = builder.build(&server).await?;
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             approval_policy: Some(AskForApproval::Never),
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
@@ -64,7 +56,7 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_environment_update() -> Result<()>
+async fn thread_settings_update_without_user_turn_does_not_record_environment_update() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
 
@@ -72,22 +64,14 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
     let test = test_codex().build(&server).await?;
     let new_cwd = TempDir::new()?;
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(new_cwd.path().to_path_buf()),
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
@@ -102,8 +86,8 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_collaboration_update() -> Result<()>
-{
+async fn thread_settings_update_without_user_turn_does_not_record_collaboration_update()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -111,22 +95,14 @@ async fn override_turn_context_without_user_turn_does_not_record_collaboration_u
     let collab_text = "override collaboration instructions";
     let collaboration_mode = collab_mode_with_instructions(Some(collab_text));
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             collaboration_mode: Some(collaboration_mode),
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;

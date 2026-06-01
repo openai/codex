@@ -376,6 +376,62 @@ async fn exec_resume_accepts_global_flags_after_subcommand() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_resume_includes_output_schema_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let test = test_codex_exec();
+    let server = MockServer::start().await;
+    let response_mock = mount_exec_responses(&server, /*count*/ 2).await;
+
+    let schema_contents = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "answer": { "type": "string" }
+        },
+        "required": ["answer"],
+        "additionalProperties": false
+    });
+    let schema_path = test.cwd_path().join("schema.json");
+    std::fs::write(&schema_path, serde_json::to_vec_pretty(&schema_contents)?)?;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("echo seed-resume-session")
+        .assert()
+        .success();
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("resume")
+        .arg("--last")
+        .arg("--json")
+        .arg("--output-schema")
+        .arg(&schema_path)
+        .arg("echo resume-with-schema")
+        .assert()
+        .success();
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let payload: Value = requests[1].body_json();
+    let text = payload.get("text").expect("request missing text field");
+    let format = text
+        .get("format")
+        .expect("request missing text.format field");
+    assert_eq!(
+        format,
+        &serde_json::json!({
+            "name": "codex_output_schema",
+            "type": "json_schema",
+            "strict": true,
+            "schema": schema_contents,
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

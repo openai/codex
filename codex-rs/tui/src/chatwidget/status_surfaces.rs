@@ -6,6 +6,8 @@
 use super::*;
 use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
+use crate::chatwidget::limit_label_for_window;
+use crate::chatwidget::rate_limits::get_limits_duration;
 use crate::legacy_core::config::Config;
 use crate::status::format_tokens_compact;
 use codex_app_server_protocol::AskForApproval;
@@ -560,6 +562,7 @@ impl ChatWidget {
         match item {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
+            StatusLineItem::Reasoning => Some(self.reasoning_display_name().to_string()),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
@@ -603,26 +606,20 @@ impl ChatWidget {
                 .status_line_context_used_percent()
                 .map(|used| format!("Context {used}% used")),
             StatusLineItem::FiveHourLimit => {
-                let window = self
+                let (window, is_secondary) = self
                     .rate_limit_snapshots_by_limit_id
                     .get("codex")
-                    .and_then(|s| s.primary.as_ref());
-                let label = window
-                    .and_then(|window| window.window_minutes)
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string());
-                self.status_line_limit_display(window, &label)
+                    .and_then(five_hour_status_window)?;
+                let label = limit_label_for_window(window.window_minutes, is_secondary);
+                self.status_line_limit_display(Some(window), &label)
             }
             StatusLineItem::WeeklyLimit => {
-                let window = self
+                let (window, is_secondary) = self
                     .rate_limit_snapshots_by_limit_id
                     .get("codex")
-                    .and_then(|s| s.secondary.as_ref());
-                let label = window
-                    .and_then(|window| window.window_minutes)
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
-                self.status_line_limit_display(window, &label)
+                    .and_then(weekly_status_window)?;
+                let label = limit_label_for_window(window.window_minutes, is_secondary);
+                self.status_line_limit_display(Some(window), &label)
             }
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
             StatusLineItem::ContextWindowSize => self
@@ -698,6 +695,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
+            StatusSurfacePreviewItem::Reasoning => StatusLineItem::Reasoning,
         };
         self.status_line_value_for_item(status_line_item)
     }
@@ -763,12 +761,20 @@ impl ChatWidget {
                 self.model_with_reasoning_display_name(),
                 /*max_chars*/ 32,
             )),
+            TerminalTitleItem::Reasoning => Some(Self::truncate_terminal_title_part(
+                self.reasoning_display_name().to_string(),
+                /*max_chars*/ 32,
+            )),
             TerminalTitleItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
 
+    fn reasoning_display_name(&self) -> &'static str {
+        Self::status_line_reasoning_effort_label(self.effective_reasoning_effort())
+    }
+
     fn model_with_reasoning_display_name(&self) -> String {
-        let label = Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
+        let label = self.reasoning_display_name();
         let service_tier_label = self
             .current_service_tier()
             .and_then(|service_tier| {
@@ -893,6 +899,102 @@ impl ChatWidget {
     }
 }
 
+fn five_hour_status_window(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    find_primary_codex_window(snapshot, "5h")
+        .or_else(|| secondary_window_with_label_when_weekly_is_available(snapshot, "5h"))
+        .or_else(|| non_weekly_primary_window(snapshot))
+        .or_else(|| non_weekly_secondary_window_when_primary_is_weekly(snapshot))
+}
+
+fn weekly_status_window(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    find_codex_window(snapshot, "weekly")
+        .or_else(|| snapshot.secondary.as_ref().map(|window| (window, true)))
+}
+
+fn find_codex_window<'a>(
+    snapshot: &'a RateLimitSnapshotDisplay,
+    label: &str,
+) -> Option<(&'a RateLimitWindowDisplay, bool)> {
+    if let Some(primary) = snapshot.primary.as_ref()
+        && matches_window_label(primary, label)
+    {
+        return Some((primary, false));
+    }
+
+    if let Some(secondary) = snapshot.secondary.as_ref()
+        && matches_window_label(secondary, label)
+    {
+        return Some((secondary, true));
+    }
+
+    None
+}
+
+fn find_primary_codex_window<'a>(
+    snapshot: &'a RateLimitSnapshotDisplay,
+    label: &str,
+) -> Option<(&'a RateLimitWindowDisplay, bool)> {
+    let primary = snapshot.primary.as_ref()?;
+    if matches_window_label(primary, label) {
+        Some((primary, false))
+    } else {
+        None
+    }
+}
+
+fn secondary_window_with_label_when_weekly_is_available<'a>(
+    snapshot: &'a RateLimitSnapshotDisplay,
+    label: &str,
+) -> Option<(&'a RateLimitWindowDisplay, bool)> {
+    find_codex_window(snapshot, "weekly")?;
+
+    let secondary = snapshot.secondary.as_ref()?;
+    if matches_window_label(secondary, label) {
+        Some((secondary, true))
+    } else {
+        None
+    }
+}
+
+fn non_weekly_primary_window(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    let primary = snapshot.primary.as_ref()?;
+    if matches_window_label(primary, "weekly") {
+        None
+    } else {
+        Some((primary, false))
+    }
+}
+
+fn non_weekly_secondary_window_when_primary_is_weekly(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    let primary = snapshot.primary.as_ref()?;
+    if !matches_window_label(primary, "weekly") {
+        return None;
+    }
+
+    let secondary = snapshot.secondary.as_ref()?;
+    if matches_window_label(secondary, "weekly") {
+        None
+    } else {
+        Some((secondary, true))
+    }
+}
+
+fn matches_window_label(window: &RateLimitWindowDisplay, label: &str) -> bool {
+    window
+        .window_minutes
+        .and_then(get_limits_duration)
+        .as_deref()
+        == Some(label)
+}
+
 fn permissions_display(config: &Config) -> String {
     let active_permission_profile = config.permissions.active_permission_profile();
     if let Some(active_permission_profile) = active_permission_profile.as_ref()
@@ -901,8 +1003,10 @@ fn permissions_display(config: &Config) -> String {
         return active_permission_profile.id.clone();
     }
 
-    let permission_profile = config.permissions.permission_profile();
-    let summary = summarize_permission_profile(&permission_profile, config.cwd.as_path());
+    let permission_profile = config.permissions.effective_permission_profile();
+    let workspace_roots = config.effective_workspace_roots();
+    let summary =
+        summarize_permission_profile(&permission_profile, &config.cwd, workspace_roots.as_slice());
     if let Some(details) = summary.strip_prefix("read-only")
         && !details.contains("(network access enabled)")
     {
@@ -922,13 +1026,14 @@ fn permissions_display(config: &Config) -> String {
 
 fn approval_mode_display(config: &Config) -> String {
     let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
-    if approval_policy == AskForApproval::OnRequest
-        && config.approvals_reviewer == ApprovalsReviewer::AutoReview
-    {
-        "auto-review".to_string()
-    } else {
-        config.permissions.approval_policy.value().to_string()
+    if approval_policy == AskForApproval::OnRequest {
+        return match config.approvals_reviewer {
+            ApprovalsReviewer::AutoReview => "Approve for me".to_string(),
+            ApprovalsReviewer::User => "Ask for approval".to_string(),
+        };
     }
+
+    config.permissions.approval_policy.value().to_string()
 }
 
 fn parse_items_with_invalids<T>(ids: impl IntoIterator<Item = String>) -> (Vec<T>, Vec<String>)

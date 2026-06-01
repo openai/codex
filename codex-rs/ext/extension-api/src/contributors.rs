@@ -4,22 +4,29 @@ use std::sync::Arc;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_tools::ToolCall;
+use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
 
 mod prompt;
 mod thread_lifecycle;
-mod tools;
+mod tool_lifecycle;
 mod turn_lifecycle;
 
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
+pub use thread_lifecycle::ThreadIdleInput;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
-pub use tools::ExtensionToolExecutor;
-pub use tools::ExtensionToolOutput;
+pub use tool_lifecycle::ToolCallOutcome;
+pub use tool_lifecycle::ToolCallSource;
+pub use tool_lifecycle::ToolFinishInput;
+pub use tool_lifecycle::ToolLifecycleFuture;
+pub use tool_lifecycle::ToolStartInput;
 pub use turn_lifecycle::TurnAbortInput;
+pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
 
@@ -37,16 +44,24 @@ pub trait ContextContributor: Send + Sync {
 /// Implementations should use these callbacks to seed, rehydrate, or flush
 /// extension-private thread state. Heavy dependencies belong on the extension
 /// value created by the host, not in these inputs.
-pub trait ThreadLifecycleContributor<C>: Send + Sync {
+#[async_trait::async_trait]
+pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
     /// Called after thread-scoped extension stores are created, before later
     /// contributors can read from them.
-    fn on_thread_start(&self, _input: ThreadStartInput<'_, C>) {}
+    async fn on_thread_start(&self, _input: ThreadStartInput<'_, C>) {}
 
     /// Called after the host constructs a runtime from persisted history.
-    fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
+    async fn on_thread_resume(&self, _input: ThreadResumeInput<'_>) {}
+
+    /// Called after the host has drained immediately pending thread work.
+    ///
+    /// Implementations may use host capabilities captured by the extension to
+    /// submit follow-up input. The host remains responsible for deciding
+    /// whether that input starts a turn, is queued, or is ignored.
+    async fn on_thread_idle(&self, _input: ThreadIdleInput<'_>) {}
 
     /// Called before the host drops the thread runtime and thread-scoped store.
-    fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
+    async fn on_thread_stop(&self, _input: ThreadStopInput<'_>) {}
 }
 
 /// Contributor for host-owned turn lifecycle gates.
@@ -54,16 +69,20 @@ pub trait ThreadLifecycleContributor<C>: Send + Sync {
 /// Implementations should use these callbacks to seed, observe, or clear
 /// extension-private turn state. The host exposes stable identifiers and
 /// extension stores instead of core runtime objects.
+#[async_trait::async_trait]
 pub trait TurnLifecycleContributor: Send + Sync {
     /// Called after turn-scoped extension stores are created, before the task
     /// for the turn starts running.
-    fn on_turn_start(&self, _input: TurnStartInput<'_>) {}
+    async fn on_turn_start(&self, _input: TurnStartInput<'_>) {}
 
     /// Called before the host drops the completed turn runtime and turn store.
-    fn on_turn_stop(&self, _input: TurnStopInput<'_>) {}
+    async fn on_turn_stop(&self, _input: TurnStopInput<'_>) {}
 
     /// Called after the host aborts a running turn.
-    fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
+    async fn on_turn_abort(&self, _input: TurnAbortInput<'_>) {}
+
+    /// Called when the host observes an error for a running turn.
+    async fn on_turn_error(&self, _input: TurnErrorInput<'_>) {}
 }
 
 /// Contributor for host-owned configuration changes.
@@ -87,9 +106,10 @@ pub trait ConfigContributor<C>: Send + Sync {
 /// Implementations should keep this callback cheap. The host calls it after
 /// updating cached token usage and before emitting the corresponding client
 /// token-count notification.
+#[async_trait::async_trait]
 pub trait TokenUsageContributor: Send + Sync {
     /// Called each time the host records token usage from a model response.
-    fn on_token_usage(
+    async fn on_token_usage(
         &self,
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
@@ -106,37 +126,48 @@ pub trait ToolContributor: Send + Sync {
         &self,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn ExtensionToolExecutor>>;
+    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>>;
 }
 
-/// Future returned by one claimed approval-review contribution.
-pub type ApprovalReviewFuture<'a> =
-    std::pin::Pin<Box<dyn Future<Output = ReviewDecision> + Send + 'a>>;
+/// Contributor for host-owned tool lifecycle gates.
+///
+/// Implementations should use these callbacks to observe tool execution without
+/// inspecting or rewriting tool input/output. Use `ToolContributor` for owning a
+/// tool implementation and hooks for policy that needs tool payloads.
+pub trait ToolLifecycleContributor: Send + Sync {
+    /// Called once the host has accepted a tool call for execution.
+    fn on_tool_start<'a>(&'a self, _input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(std::future::ready(()))
+    }
+
+    /// Called after the tool call returns, is blocked, fails, or is cancelled.
+    fn on_tool_finish<'a>(&'a self, _input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(std::future::ready(()))
+    }
+}
 
 /// Extension contribution that can claim rendered approval-review prompts.
+#[async_trait::async_trait]
 pub trait ApprovalReviewContributor: Send + Sync {
-    fn contribute<'a>(
-        &'a self,
-        session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
-        prompt: &'a str,
-    ) -> Option<ApprovalReviewFuture<'a>>;
+    async fn contribute(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        prompt: &str,
+    ) -> Option<ReviewDecision>;
 }
-
-/// Future returned by one ordered turn-item contribution.
-pub type TurnItemContributionFuture<'a> =
-    std::pin::Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
 /// Ordered post-processing contribution for one parsed turn item.
 ///
 /// Implementations may mutate the item before it is emitted and may use the
 /// explicitly exposed thread- and turn-lifetime stores when they need durable
 /// extension-private state.
+#[async_trait::async_trait]
 pub trait TurnItemContributor: Send + Sync {
-    fn contribute<'a>(
-        &'a self,
-        thread_store: &'a ExtensionData,
-        turn_store: &'a ExtensionData,
-        item: &'a mut TurnItem,
-    ) -> TurnItemContributionFuture<'a>;
+    async fn contribute(
+        &self,
+        thread_store: &ExtensionData,
+        turn_store: &ExtensionData,
+        item: &mut TurnItem,
+    ) -> Result<(), String>;
 }

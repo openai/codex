@@ -1,6 +1,8 @@
 mod layer_io;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(test)]
+mod tests;
 
 use self::layer_io::LoadedConfigLayers;
 use crate::CONFIG_TOML_FILE;
@@ -59,6 +61,7 @@ const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
 const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "openai_base_url",
     "chatgpt_base_url",
+    "apps_mcp_product_sku",
     "model_provider",
     "model_providers",
     "notify",
@@ -211,19 +214,40 @@ pub async fn load_config_layers_state(
     // Add the base user config layer. When profile-v2 is selected, add the
     // profile config as a second user layer on top so the profile only needs to
     // contain overrides.
-    let base_user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
-    layers.push(
-        load_user_config_layer(
-            fs,
-            &base_user_file,
-            /*profile*/ None,
-            ignore_user_config,
-            strict_config,
-        )
-        .await?,
-    );
-
     let active_user_file = overrides.user_config_path(codex_home)?;
+    let base_user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
+    let base_user_layer = load_user_config_layer(
+        fs,
+        &base_user_file,
+        /*profile*/ None,
+        ignore_user_config,
+        strict_config,
+    )
+    .await?;
+    if let Some(active_user_profile) = active_user_profile.as_ref()
+        && let Some(base_user_config) = base_user_layer.config.as_table()
+    {
+        let legacy_profile_is_selected = base_user_config
+            .get("profile")
+            .and_then(TomlValue::as_str)
+            .is_some_and(|profile| profile == active_user_profile.as_str());
+        let legacy_profile_table_exists = base_user_config
+            .get("profiles")
+            .and_then(TomlValue::as_table)
+            .is_some_and(|profiles| profiles.contains_key(active_user_profile.as_str()));
+        if legacy_profile_is_selected || legacy_profile_table_exists {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "--profile `{active_user_profile}` cannot be used while {} contains legacy `profile = \"{active_user_profile}\"` or `[profiles.{active_user_profile}]` config; move those settings into {} and remove the legacy profile selector/table. See https://developers.openai.com/codex/config-advanced#profiles for more information.",
+                    base_user_file.as_path().display(),
+                    active_user_file.as_path().display()
+                ),
+            ));
+        }
+    }
+    layers.push(base_user_layer);
+
     if active_user_file != base_user_file {
         layers.push(
             load_user_config_layer(
@@ -342,13 +366,18 @@ pub async fn load_config_layers_state(
         // paths, starting with `./`, but a path starting with `~/` _is_ a
         // supported use case. Because resolve_relative_paths_in_config_toml()
         // relies on AbsolutePathBufGuard to resolve `~/`, we must supply a
-        // value for base_dir, so codex_home is as good a value as any.
-        let managed_config =
-            resolve_relative_paths_in_config_toml(config.managed_config, codex_home)?;
+        // value for base_dir. Preserve that same base on the layer so later
+        // raw-TOML diagnostics parse with the same path semantics.
+        let raw_toml_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
+        let managed_config = resolve_relative_paths_in_config_toml(
+            config.managed_config,
+            raw_toml_base_dir.as_path(),
+        )?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
             managed_config,
             config.raw_toml,
+            raw_toml_base_dir,
         ));
     }
 
@@ -982,7 +1011,7 @@ fn project_trust_for_lookup_key(
         .iter()
         .filter(|(key, _)| normalize_project_trust_lookup_key((*key).clone()) == lookup_key)
         .collect();
-    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches.sort_by_key(|(key, _)| *key);
     normalized_matches
         .first()
         .map(|(key, trust_level)| ((**key).clone(), **trust_level))

@@ -224,7 +224,7 @@ pub struct GetAccountParams {
     /// In managed auth mode this triggers the normal refresh-token flow. In
     /// external auth mode this flag is ignored. Clients should refresh tokens
     /// themselves and call `account/login/start` with `chatgptAuthTokens`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refresh_token: bool,
 }
 

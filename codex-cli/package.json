@@ -1,6 +1,7 @@
 {
   "name": "@openai/codex",
   "version": "0.0.0-dev",
+  "description": "Codex CLI is a coding agent from OpenAI that runs locally on your computer.",
   "license": "Apache-2.0",
   "bin": {
     "codex": "bin/codex.js"
@@ -10,8 +11,7 @@
     "node": ">=16"
   },
   "files": [
-    "bin",
-    "vendor"
+    "bin/codex.js"
   ],
   "repository": {
     "type": "git",

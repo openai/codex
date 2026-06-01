@@ -182,6 +182,7 @@ async fn live_app_server_review_prompt_item_is_not_rendered() {
             completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: "review-prompt".to_string(),
+                client_id: None,
                 content: vec![AppServerUserInput::Text {
                     text: "Review the code changes against the base branch 'main'.".to_string(),
                     text_elements: Vec::new(),
@@ -597,6 +598,7 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
         vec![
             UserInput::Image {
                 url: "data:image/png;base64,placeholder".to_string(),
+                detail: None,
             },
             UserInput::Text {
                 text,
@@ -874,6 +876,7 @@ async fn manual_interrupt_restores_pending_steer_mention_bindings_to_composer() 
     chat.on_agent_message_delta("Final answer line\n".to_string());
 
     let mention_bindings = vec![MentionBinding {
+        sigil: '$',
         mention: "figma".to_string(),
         path: "/tmp/skills/figma/SKILL.md".to_string(),
     }];

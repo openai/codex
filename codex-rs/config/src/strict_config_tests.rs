@@ -110,3 +110,18 @@ foo = true"#;
         )
     );
 }
+
+#[test]
+fn strict_config_accepts_opaque_desktop_keys() {
+    let path = Path::new("/tmp/config.toml");
+    let contents = r#"
+[desktop]
+appearanceTheme = "dark"
+
+[desktop.workspace]
+collapsed = true"#;
+
+    let error = config_error_from_ignored_toml_fields::<ConfigToml>(path, contents);
+
+    assert_eq!(error, None);
+}

@@ -33,6 +33,11 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -42,7 +47,6 @@ use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnCompleteEvent;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
@@ -192,7 +196,8 @@ async fn guardian_test_session_and_turn_with_base_url(
 
 async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnContext>) {
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -226,7 +231,6 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
 }
@@ -359,11 +363,70 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Result<()> {
+    let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
+    session.conversation_id = fixed_guardian_parent_session_id();
+    let denied_root = test_path_buf("/repo/private").abs();
+    let denied_glob = test_path_buf("/repo/private/**").display().to_string();
+    turn.permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: denied_root.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: denied_glob.clone(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let prompt = build_guardian_prompt_items_with_parent_turn(
+        session.as_ref(),
+        Some(turn.as_ref()),
+        Some("Sandbox denied reading /repo/private/secret.txt.".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["cat".to_string(), "/repo/private/secret.txt".to_string()],
+            cwd: test_path_buf("/repo").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::RequireEscalated,
+            additional_permissions: None,
+            justification: Some("Need to inspect the secret file.".to_string()),
+        },
+        GuardianPromptMode::Full,
+    )
+    .await?;
+
+    let text = guardian_prompt_text(&prompt.items);
+    assert!(text.contains("PARENT TURN PERMISSION CONTEXT START"));
+    assert!(text.contains("do not approve escalation whose purpose is to read them"));
+    assert!(text.contains(denied_root.to_string_lossy().as_ref()));
+    assert!(text.contains(&format!("glob `{denied_glob}`")));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyhow::Result<()> {
     let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
     seed_guardian_parent_history(&session, &turn).await;
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -382,7 +445,6 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
 
@@ -517,7 +579,8 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
         )
         .await;
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -536,7 +599,6 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
 
@@ -1226,6 +1288,95 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
     );
 }
 
+async fn guardian_request_model_for_auto_review_override(
+    auto_review_model_override: Option<String>,
+) -> anyhow::Result<(String, String, String)> {
+    let server = start_mock_server().await;
+    let guardian_assessment = serde_json::json!({
+        "outcome": "allow",
+    })
+    .to_string();
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message("msg-guardian", &guardian_assessment),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    Arc::get_mut(&mut turn)
+        .expect("turn should be unique")
+        .model_info
+        .auto_review_model_override = auto_review_model_override;
+    let parent_model = turn.model_info.slug.clone();
+    let preferred_model = turn.provider.approval_review_preferred_model().to_string();
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        turn,
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+        },
+        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let (GuardianReviewOutcome::Completed(_), _) = outcome else {
+        panic!("expected guardian assessment");
+    };
+
+    let request_model = request_log
+        .single_request()
+        .body_json()
+        .get("model")
+        .and_then(|value| value.as_str())
+        .expect("guardian request should include a model")
+        .to_string();
+
+    Ok((request_model, parent_model, preferred_model))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_uses_model_catalog_override_when_preferred_review_model_exists()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let override_model = "guardian-review-model-override".to_string();
+    let (request_model, parent_model, preferred_model) =
+        guardian_request_model_for_auto_review_override(Some(override_model.clone())).await?;
+
+    assert_eq!(request_model, override_model);
+    assert_ne!(request_model, parent_model);
+    assert_ne!(request_model, preferred_model);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_uses_preferred_review_model_without_model_catalog_override()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (request_model, parent_model, preferred_model) =
+        guardian_request_model_for_auto_review_override(/*auto_review_model_override*/ None)
+            .await?;
+
+    assert_eq!(request_model, preferred_model);
+    assert_ne!(request_model, parent_model);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 -> anyhow::Result<()> {
@@ -1470,7 +1621,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -1489,7 +1641,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
     let second_request = GuardianApprovalRequest::Shell {
@@ -1514,7 +1665,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
     session
-        .record_into_history(
+        .record_conversation_items(
+            turn.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -1533,7 +1685,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     phase: None,
                 },
             ],
-            turn.as_ref(),
         )
         .await;
     let third_request = GuardianApprovalRequest::Shell {
@@ -2006,7 +2157,8 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
             ReviewDecision::Approved
         );
         session
-            .record_into_history(
+            .record_conversation_items(
+                turn.as_ref(),
                 &[
                     ResponseItem::Message {
                         id: None,
@@ -2025,7 +2177,6 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                         phase: None,
                     },
                 ],
-                turn.as_ref(),
             )
             .await;
 
@@ -2073,7 +2224,8 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
             "second guardian request was not observed"
         );
         session
-            .record_into_history(
+            .record_conversation_items(
+                turn.as_ref(),
                 &[
                     ResponseItem::Message {
                         id: None,
@@ -2092,7 +2244,6 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                         phase: None,
                     },
                 ],
-                turn.as_ref(),
             )
             .await;
 
@@ -2107,7 +2258,13 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         assert_eq!(third_decision, ReviewDecision::Approved);
         let requests = server.requests().await;
         assert_eq!(requests.len(), 3);
+        let second_request_body = serde_json::from_slice::<serde_json::Value>(&requests[1])?;
         let third_request_body = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
+        assert_eq!(
+            second_request_body["prompt_cache_key"],
+            third_request_body["prompt_cache_key"],
+            "forked guardian review should reuse the trunk guardian prompt cache key"
+        );
         let third_request_body_text = third_request_body.to_string();
         assert!(
             third_request_body_text.contains("first guardian rationale"),
@@ -2163,7 +2320,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
             }),
             ..Default::default()
         }),
-        parent_config.permissions.permission_profile.get(),
+        parent_config.permissions.permission_profile(),
     )
     .expect("network proxy spec");
     parent_config.permissions.network = Some(network.clone());
@@ -2190,10 +2347,8 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
         Constrained::allow_only(AskForApproval::Never)
     );
     assert_eq!(
-        guardian_config.permissions.permission_profile,
-        Constrained::allow_only(PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::new_read_only_policy(),
-        ))
+        guardian_config.permissions.permission_profile(),
+        &PermissionProfile::read_only()
     );
 }
 
@@ -2219,6 +2374,25 @@ async fn guardian_review_session_config_clears_parent_developer_instructions() {
 }
 
 #[tokio::test]
+async fn guardian_review_session_config_clears_legacy_notify() {
+    let mut parent_config = test_config().await;
+    parent_config.notify = Some(vec![
+        "/path/to/notify".to_string(),
+        "turn-ended".to_string(),
+    ]);
+
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
+
+    assert_eq!(guardian_config.notify, None);
+}
+
+#[tokio::test]
 async fn guardian_review_session_config_uses_live_network_proxy_state() {
     let mut parent_config = test_config().await;
     let mut parent_network = NetworkProxyConfig::default();
@@ -2230,7 +2404,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
         NetworkProxySpec::from_config_and_constraints(
             parent_network,
             /*requirements*/ None,
-            parent_config.permissions.permission_profile.get(),
+            parent_config.permissions.permission_profile(),
         )
         .expect("parent network proxy spec"),
     );
@@ -2255,9 +2429,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
             NetworkProxySpec::from_config_and_constraints(
                 live_network,
                 /*requirements*/ None,
-                &PermissionProfile::from_legacy_sandbox_policy(
-                    &SandboxPolicy::new_read_only_policy(),
-                ),
+                &PermissionProfile::read_only(),
             )
             .expect("live network proxy spec")
         )

@@ -366,12 +366,14 @@ pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const PROXY_ACTIVE_ENV_KEY: &str = "CODEX_NETWORK_PROXY_ACTIVE";
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
+const NODE_USE_ENV_PROXY_ENV_KEY: &str = "NODE_USE_ENV_PROXY";
 #[cfg(any(target_os = "macos", test))]
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
 pub const PROXY_ENV_KEYS: &[&str] = &[
     PROXY_ACTIVE_ENV_KEY,
     ALLOW_LOCAL_BINDING_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
+    NODE_USE_ENV_PROXY_ENV_KEY,
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "http_proxy",
@@ -525,6 +527,8 @@ fn apply_proxy_env_overrides(
         ELECTRON_GET_USE_PROXY_ENV_KEY.to_string(),
         "true".to_string(),
     );
+    // Node.js built-in HTTP clients only honor proxy environment variables when this is enabled.
+    env.insert(NODE_USE_ENV_PROXY_ENV_KEY.to_string(), "1".to_string());
 
     // Keep HTTP_PROXY/HTTPS_PROXY as HTTP endpoints. A lot of clients break if
     // those vars contain SOCKS URLs. We only switch ALL_PROXY here.
@@ -1016,6 +1020,7 @@ mod tests {
             env.get(ELECTRON_GET_USE_PROXY_ENV_KEY),
             Some(&"true".to_string())
         );
+        assert_eq!(env.get(NODE_USE_ENV_PROXY_ENV_KEY), Some(&"1".to_string()));
         #[cfg(target_os = "macos")]
         assert_eq!(
             env.get(GIT_SSH_COMMAND_ENV_KEY),

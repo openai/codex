@@ -28,7 +28,7 @@ pub fn normalize_additional_permissions(
             let glob_scan_max_depth = file_system.glob_scan_max_depth;
             for entry in file_system.entries {
                 if matches!(&entry.path, FileSystemPath::GlobPattern { .. })
-                    && entry.access != FileSystemAccessMode::None
+                    && entry.access != FileSystemAccessMode::Deny
                 {
                     return Err(
                         "glob file system permissions only support deny-read entries".to_string(),
@@ -221,7 +221,7 @@ fn effective_glob_scan_depth(
     entries
         .iter()
         .any(|entry| {
-            entry.access == FileSystemAccessMode::None
+            entry.access == FileSystemAccessMode::Deny
                 && matches!(&entry.path, FileSystemPath::GlobPattern { .. })
         })
         .then_some(match depth {
@@ -273,7 +273,7 @@ fn retain_constraining_deny_entries(
     let mut retained_entries = Vec::new();
     for entry in source_entries
         .iter()
-        .filter(|entry| entry.access == FileSystemAccessMode::None)
+        .filter(|entry| entry.access == FileSystemAccessMode::Deny)
     {
         if !deny_entry_constrains_accepted_grant(entry, accepted_entries, cwd) {
             continue;
@@ -340,7 +340,7 @@ fn access_covers(requested: FileSystemAccessMode, granted: FileSystemAccessMode)
     match granted {
         FileSystemAccessMode::Read => requested.can_read(),
         FileSystemAccessMode::Write => requested.can_write(),
-        FileSystemAccessMode::None => false,
+        FileSystemAccessMode::Deny => false,
     }
 }
 

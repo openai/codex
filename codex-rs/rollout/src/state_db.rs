@@ -8,7 +8,6 @@ use crate::sqlite_metrics;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 pub use codex_state::LogEntry;
@@ -413,10 +412,11 @@ pub async fn list_threads_db(
         Ok(mut page) => {
             let mut valid_items = Vec::with_capacity(page.items.len());
             for item in page.items {
-                if tokio::fs::try_exists(&item.rollout_path)
-                    .await
-                    .unwrap_or(false)
+                if let Some(existing_path) =
+                    crate::compression::existing_rollout_path(item.rollout_path.as_path()).await
                 {
+                    let mut item = item;
+                    item.rollout_path = existing_path;
                     valid_items.push(item);
                 } else {
                     warn!(
@@ -454,37 +454,6 @@ pub async fn find_rollout_path_by_id(
         })
 }
 
-/// Get dynamic tools for a thread id using SQLite.
-pub async fn get_dynamic_tools(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    stage: &str,
-) -> Option<Vec<DynamicToolSpec>> {
-    let ctx = context?;
-    match ctx.get_dynamic_tools(thread_id).await {
-        Ok(tools) => tools,
-        Err(err) => {
-            warn!("state db get_dynamic_tools failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
-/// Persist dynamic tools for a thread id using SQLite, if none exist yet.
-pub async fn persist_dynamic_tools(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    tools: Option<&[DynamicToolSpec]>,
-    stage: &str,
-) {
-    let Some(ctx) = context else {
-        return;
-    };
-    if let Err(err) = ctx.persist_dynamic_tools(thread_id, tools).await {
-        warn!("state db persist_dynamic_tools failed during {stage}: {err}");
-    }
-}
-
 pub async fn mark_thread_memory_mode_polluted(
     context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
@@ -493,8 +462,12 @@ pub async fn mark_thread_memory_mode_polluted(
     let Some(ctx) = context else {
         return;
     };
-    if let Err(err) = ctx.mark_thread_memory_mode_polluted(thread_id).await {
-        warn!("state db mark_thread_memory_mode_polluted failed during {stage}: {err}");
+    if let Err(err) = ctx
+        .memories()
+        .mark_thread_memory_mode_polluted(thread_id)
+        .await
+    {
+        warn!("memories db mark_thread_memory_mode_polluted failed during {stage}: {err}");
     }
 }
 
@@ -541,6 +514,7 @@ pub async fn reconcile_rollout(
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     if let Ok(Some(existing_metadata)) = ctx.get_thread(metadata.id).await {
         metadata.prefer_existing_git_info(&existing_metadata);
+        metadata.prefer_existing_explicit_title(&existing_metadata);
     }
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
@@ -564,21 +538,6 @@ pub async fn reconcile_rollout(
     {
         warn!(
             "state db reconcile_rollout memory_mode update failed {}: {err}",
-            rollout_path.display()
-        );
-        return;
-    }
-    if let Ok(meta_line) = crate::list::read_session_meta_line(rollout_path).await {
-        persist_dynamic_tools(
-            Some(ctx),
-            meta_line.meta.id,
-            meta_line.meta.dynamic_tools.as_deref(),
-            "reconcile_rollout",
-        )
-        .await;
-    } else {
-        warn!(
-            "state db reconcile_rollout missing session meta {}",
             rollout_path.display()
         );
     }

@@ -132,7 +132,7 @@ pub fn collect_explicit_skill_mentions(
     let mut blocked_plain_names: HashSet<String> = HashSet::new();
 
     for input in inputs {
-        if let UserInput::Skill { name, path } = input {
+        if let UserInput::Skill { name, path, .. } = input {
             blocked_plain_names.insert(name.clone());
             let Ok(path) = AbsolutePathBuf::relative_to_current_dir(path) else {
                 continue;

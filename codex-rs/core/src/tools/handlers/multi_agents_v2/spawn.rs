@@ -26,18 +26,19 @@ impl Handler {
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
-    type Output = SpawnAgentResult;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("spawn_agent")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_spawn_agent_tool_v2(self.options.clone()))
+    fn spec(&self) -> ToolSpec {
+        create_spawn_agent_tool_v2(self.options.clone())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        handle_spawn_agent(invocation).await
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        handle_spawn_agent(invocation).await.map(boxed_tool_output)
     }
 }
 
@@ -81,6 +82,9 @@ async fn handle_spawn_agent(
         .await;
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+    if let Some(service_tier) = args.service_tier.as_ref() {
+        config.service_tier = Some(service_tier.clone());
+    }
     if matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory)) {
         reject_full_fork_spawn_overrides(role_name, args.model.as_deref(), args.reasoning_effort)?;
     } else {
@@ -140,6 +144,7 @@ async fn handle_spawn_agent(
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                 fork_mode,
+                parent_thread_id: Some(session.conversation_id),
                 environments: Some(turn.environments.to_selections()),
             },
         ),
@@ -229,7 +234,7 @@ async fn handle_spawn_agent(
     }
 }
 
-impl ToolHandler for Handler {
+impl CoreToolRuntime for Handler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

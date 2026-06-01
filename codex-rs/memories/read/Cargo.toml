@@ -16,11 +16,6 @@ workspace = true
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-codex-utils-output-truncation = { workspace = true }
-codex-utils-template = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true, features = ["fs", "macros"] }

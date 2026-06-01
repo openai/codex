@@ -68,27 +68,6 @@ async fn responses_mode_stream_cli() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
-
-    // TODO(jif) fix
-    // // Verify a new session rollout was created and is discoverable via list_conversations
-    // let provider_filter = vec!["mock".to_string()];
-    // let page = RolloutRecorder::list_threads(
-    //     home.path(),
-    //     10,
-    //     None,
-    //     codex_core::ThreadSortKey::UpdatedAt,
-    //     &[],
-    //     Some(provider_filter.as_slice()),
-    //     "mock",
-    // )
-    // .await
-    // .expect("list conversations");
-    // assert!(
-    //     !page.items.is_empty(),
-    //     "expected at least one session to be listed"
-    // );
-    // assert!(page.items[0].thread_id.is_some(), "missing thread_id");
-    // assert!(page.items[0].created_at.is_some(), "missing created_at");
 }
 
 /// Ensures `openai_base_url` config override routes built-in openai provider requests.
@@ -196,9 +175,9 @@ async fn exec_cli_applies_model_instructions_file() {
     );
 }
 
-/// Verify that `codex exec --profile ...` preserves the active profile when it
-/// starts the in-process app-server thread, so profile-scoped
-/// `model_instructions_file` is applied to the outbound request.
+/// Verify that `codex exec --profile ...` preserves the active user config
+/// profile when it starts the in-process app-server thread, so the selected
+/// profile's `model_instructions_file` reaches the outbound request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_cli_profile_applies_model_instructions_file() {
     skip_if_no_network!();
@@ -223,8 +202,8 @@ async fn exec_cli_profile_applies_model_instructions_file() {
 
     let home = TempDir::new().unwrap();
     std::fs::write(
-        home.path().join("config.toml"),
-        format!("[profiles.default]\nmodel_instructions_file = \"{custom_path_str}\"\n",),
+        home.path().join("default.config.toml"),
+        format!("model_instructions_file = \"{custom_path_str}\"\n"),
     )
     .unwrap();
 

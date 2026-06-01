@@ -33,8 +33,7 @@ allow_upstream_proxy = true
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false
 mode = "full" # default when unset; use "limited" for read-only mode
-# When true, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
-mitm = false
+# HTTPS MITM is enabled automatically when `mode = "limited"` or when MITM hooks are configured.
 # CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
 
 # If false, local/private networking is rejected. Explicit allowlisting of local IP literals
@@ -56,6 +55,17 @@ dangerously_allow_all_unix_sockets = false
 "127.0.0.1" = "allow"
 "::1" = "allow"
 "evil.example" = "deny"
+
+# MITM hooks match HTTPS requests after CONNECT is terminated.
+[permissions.workspace.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST", "PUT"]
+path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+# Named actions can be shared across hooks and overridden by higher-precedence config layers.
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 [permissions.workspace.network.unix_sockets]

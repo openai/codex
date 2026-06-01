@@ -57,6 +57,8 @@ async fn fork_thread_twice_drops_to_first_message() {
                 }],
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
             })
             .await
             .unwrap();
@@ -180,6 +182,8 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();

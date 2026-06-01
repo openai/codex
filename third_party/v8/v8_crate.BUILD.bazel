@@ -6,6 +6,11 @@ filegroup(
 )
 
 filegroup(
+    name = "crdtp_binding_cc",
+    srcs = ["src/crdtp_binding.cc"],
+)
+
+filegroup(
     name = "support_h",
     srcs = ["src/support.h"],
 )

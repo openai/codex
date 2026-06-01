@@ -12,7 +12,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::OnceCell;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
@@ -41,19 +41,28 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_JOIN_METHOD;
+use crate::protocol::FS_PARENT_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FsCanonicalizeParams;
+use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsJoinParams;
+use crate::protocol::FsJoinResponse;
+use crate::protocol::FsParentParams;
+use crate::protocol::FsParentResponse;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
@@ -162,7 +171,7 @@ struct Inner {
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
-    // Once the transport closes, every executor operation should fail quickly
+    // Once the transport closes, every environment operation should fail quickly
     // with the same canonical message. This client never reconnects, so the
     // latch only moves from unset to set once.
     disconnected: OnceLock<String>,
@@ -192,27 +201,62 @@ pub struct ExecServerClient {
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
     transport_params: ExecServerTransportParams,
-    client: Arc<OnceCell<ExecServerClient>>,
+    client: Arc<StdMutex<Option<ExecServerClient>>>,
+    connect_lock: Arc<Semaphore>,
 }
 
 impl LazyRemoteExecServerClient {
     pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
         Self {
             transport_params,
-            client: Arc::new(OnceCell::new()),
+            client: Arc::new(StdMutex::new(None)),
+            connect_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
+        if let Some(client) = self.connected_client() {
+            return Ok(client);
+        }
+
+        let _connect_permit = self.connect_lock.acquire().await.map_err(|_| {
+            ExecServerError::Protocol("exec-server connect lock closed".to_string())
+        })?;
+        if let Some(client) = self.connected_client() {
+            return Ok(client);
+        }
+
+        let next_client = match self.cached_client() {
+            Some(_client)
+                if matches!(
+                    &self.transport_params,
+                    ExecServerTransportParams::WebSocketUrl { .. }
+                ) =>
+            {
+                ExecServerClient::connect_for_transport(self.transport_params.clone()).await?
+            }
+            Some(client) => return Ok(client),
+            None => ExecServerClient::connect_for_transport(self.transport_params.clone()).await?,
+        };
+
+        let mut cached_client = self
+            .client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *cached_client = Some(next_client.clone());
+        Ok(next_client)
+    }
+
+    fn connected_client(&self) -> Option<ExecServerClient> {
+        self.cached_client()
+            .filter(|client| !client.is_disconnected())
+    }
+
+    fn cached_client(&self) -> Option<ExecServerClient> {
         self.client
-            // TODO: Add reconnect/disconnect handling here instead of reusing
-            // the first successfully initialized connection forever.
-            .get_or_try_init(|| {
-                let transport_params = self.transport_params.clone();
-                async move { ExecServerClient::connect_for_transport(transport_params).await }
-            })
-            .await
-            .cloned()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -261,18 +305,18 @@ pub enum ExecServerError {
     Protocol(String),
     #[error("exec-server rejected request ({code}): {message}")]
     Server { code: i64, message: String },
-    #[error("executor registry request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
-    ExecutorRegistryHttp {
+    #[error("environment registry request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
+    EnvironmentRegistryHttp {
         status: reqwest::StatusCode,
         code: Option<String>,
         message: String,
     },
-    #[error("executor registry configuration error: {0}")]
-    ExecutorRegistryConfig(String),
-    #[error("executor registry authentication error: {0}")]
-    ExecutorRegistryAuth(String),
-    #[error("executor registry request failed: {0}")]
-    ExecutorRegistryRequest(#[from] reqwest::Error),
+    #[error("environment registry configuration error: {0}")]
+    EnvironmentRegistryConfig(String),
+    #[error("environment registry authentication error: {0}")]
+    EnvironmentRegistryAuth(String),
+    #[error("environment registry request failed: {0}")]
+    EnvironmentRegistryRequest(#[from] reqwest::Error),
 }
 
 impl ExecServerClient {
@@ -379,6 +423,24 @@ impl ExecServerClient {
         self.call(FS_GET_METADATA_METHOD, &params).await
     }
 
+    pub async fn fs_canonicalize(
+        &self,
+        params: FsCanonicalizeParams,
+    ) -> Result<FsCanonicalizeResponse, ExecServerError> {
+        self.call(FS_CANONICALIZE_METHOD, &params).await
+    }
+
+    pub async fn fs_join(&self, params: FsJoinParams) -> Result<FsJoinResponse, ExecServerError> {
+        self.call(FS_JOIN_METHOD, &params).await
+    }
+
+    pub async fn fs_parent(
+        &self,
+        params: FsParentParams,
+    ) -> Result<FsParentResponse, ExecServerError> {
+        self.call(FS_PARENT_METHOD, &params).await
+    }
+
     pub async fn fs_read_directory(
         &self,
         params: FsReadDirectoryParams,
@@ -422,6 +484,10 @@ impl ExecServerClient {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    fn is_disconnected(&self) -> bool {
+        self.inner.disconnected.get().is_some() || self.inner.client.is_disconnected()
     }
 
     pub(crate) async fn connect(
@@ -495,7 +561,7 @@ impl ExecServerClient {
     {
         // Reject new work before allocating a JSON-RPC request id. MCP tool
         // calls, process writes, and fs operations all pass through here, so
-        // this is the shared low-level failure path after executor disconnect.
+        // this is the shared low-level failure path after environment disconnect.
         if let Some(error) = self.inner.disconnected_error() {
             return Err(error);
         }
@@ -720,7 +786,7 @@ impl Inner {
         session: Arc<SessionState>,
     ) -> Result<(), ExecServerError> {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
-        // Do not register a process session that can never receive executor
+        // Do not register a process session that can never receive environment
         // notifications. Without this check, remote MCP startup could create a
         // dead session and wait for process output that will never arrive.
         if let Some(error) = self.disconnected_error() {
@@ -795,7 +861,7 @@ async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
     for (_, session) in sessions {
         // Sessions synthesize a closed read response and emit a pushed Failed
         // event. That covers both polling consumers and streaming consumers
-        // such as executor-backed MCP stdio.
+        // such as environment-backed MCP stdio.
         session.set_failure(message.clone()).await;
     }
 }
@@ -873,30 +939,38 @@ mod tests {
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCResponse;
+    use futures::SinkExt;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     #[cfg(unix)]
     use std::path::Path;
     #[cfg(unix)]
     use std::process::Command;
+    use std::sync::Arc;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWrite;
     use tokio::io::AsyncWriteExt;
     use tokio::io::BufReader;
     use tokio::io::duplex;
+    use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
     use tokio::time::Duration;
     #[cfg(unix)]
     use tokio::time::sleep;
     use tokio::time::timeout;
+    use tokio_tungstenite::WebSocketStream;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message;
 
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
+    use super::LazyRemoteExecServerClient;
     use crate::ProcessId;
     #[cfg(not(windows))]
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
-    #[cfg(not(windows))]
     use crate::client_api::ExecServerTransportParams;
     use crate::client_api::StdioExecServerCommand;
     use crate::client_api::StdioExecServerConnectArgs;
@@ -935,6 +1009,96 @@ mod tests {
             .write_all(format!("{encoded}\n").as_bytes())
             .await
             .expect("json-rpc line should write");
+    }
+
+    async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {
+        let (stream, _) = listener.accept().await.expect("listener should accept");
+        accept_async(stream)
+            .await
+            .expect("websocket handshake should succeed")
+    }
+
+    async fn read_jsonrpc_websocket(websocket: &mut WebSocketStream<TcpStream>) -> JSONRPCMessage {
+        loop {
+            match timeout(Duration::from_secs(1), websocket.next())
+                .await
+                .expect("json-rpc websocket read should not time out")
+                .expect("websocket should stay open")
+                .expect("websocket frame should read")
+            {
+                Message::Text(text) => {
+                    return serde_json::from_str(text.as_ref())
+                        .expect("json-rpc text frame should parse");
+                }
+                Message::Binary(bytes) => {
+                    return serde_json::from_slice(bytes.as_ref())
+                        .expect("json-rpc binary frame should parse");
+                }
+                Message::Ping(_) | Message::Pong(_) => {}
+                other => panic!("expected json-rpc websocket frame, got {other:?}"),
+            }
+        }
+    }
+
+    async fn write_jsonrpc_websocket(
+        websocket: &mut WebSocketStream<TcpStream>,
+        message: JSONRPCMessage,
+    ) {
+        let encoded = serde_json::to_string(&message).expect("json-rpc should serialize");
+        websocket
+            .send(Message::Text(encoded.into()))
+            .await
+            .expect("json-rpc websocket frame should write");
+    }
+
+    async fn complete_websocket_initialize(
+        websocket: &mut WebSocketStream<TcpStream>,
+        session_id: &str,
+        expected_resume_session_id: Option<&str>,
+    ) {
+        let initialize = read_jsonrpc_websocket(websocket).await;
+        let request = match initialize {
+            JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+            other => panic!("expected initialize request, got {other:?}"),
+        };
+        let params: crate::protocol::InitializeParams =
+            serde_json::from_value(request.params.expect("initialize params should exist"))
+                .expect("initialize params should deserialize");
+        assert_eq!(
+            params.resume_session_id.as_deref(),
+            expected_resume_session_id
+        );
+        write_jsonrpc_websocket(
+            websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::to_value(InitializeResponse {
+                    session_id: session_id.to_string(),
+                })
+                .expect("initialize response should serialize"),
+            }),
+        )
+        .await;
+
+        let initialized = read_jsonrpc_websocket(websocket).await;
+        match initialized {
+            JSONRPCMessage::Notification(notification)
+                if notification.method == INITIALIZED_METHOD => {}
+            other => panic!("expected initialized notification, got {other:?}"),
+        }
+    }
+
+    async fn wait_for_disconnect(client: &ExecServerClient) {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if client.is_disconnected() {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("client should observe disconnect");
     }
 
     #[cfg(not(windows))]
@@ -1351,6 +1515,57 @@ mod tests {
         ));
 
         drop(client);
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn remote_websocket_client_replaces_disconnected_client_with_fresh_session() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let websocket_url = format!(
+            "ws://{}",
+            listener.local_addr().expect("listener should have address")
+        );
+        let server = tokio::spawn({
+            async move {
+                let mut first = accept_websocket(&listener).await;
+                complete_websocket_initialize(
+                    &mut first,
+                    "session-1",
+                    /*expected_resume_session_id*/ None,
+                )
+                .await;
+                first
+                    .close(None)
+                    .await
+                    .expect("first websocket should close");
+
+                let mut second = accept_websocket(&listener).await;
+                complete_websocket_initialize(
+                    &mut second,
+                    "session-2",
+                    /*expected_resume_session_id*/ None,
+                )
+                .await;
+            }
+        });
+
+        let client = LazyRemoteExecServerClient::new(ExecServerTransportParams::WebSocketUrl {
+            websocket_url,
+            connect_timeout: Duration::from_secs(1),
+            initialize_timeout: Duration::from_secs(1),
+        });
+        let first = client.get().await.expect("first client should connect");
+        wait_for_disconnect(&first).await;
+
+        let (replacement_a, replacement_b) = tokio::join!(client.get(), client.get());
+        let replacement_a = replacement_a.expect("first replacement should connect");
+        let replacement_b = replacement_b.expect("second replacement should reuse client");
+        assert_eq!(replacement_a.session_id().as_deref(), Some("session-2"));
+        assert_eq!(replacement_b.session_id().as_deref(), Some("session-2"));
+        assert!(Arc::ptr_eq(&replacement_a.inner, &replacement_b.inner));
+
         server.await.expect("server task should finish");
     }
 

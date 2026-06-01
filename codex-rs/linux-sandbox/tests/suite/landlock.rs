@@ -190,6 +190,7 @@ async fn run_cmd_result_with_permission_profile_for_cwd(
         params,
         &permission_profile,
         &sandbox_cwd,
+        std::slice::from_ref(&sandbox_cwd),
         &codex_linux_sandbox_exe,
         use_legacy_landlock,
         /*stdout_stream*/ None,
@@ -448,6 +449,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         params,
         &permission_profile,
         &sandbox_cwd,
+        std::slice::from_ref(&sandbox_cwd),
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
         /*stdout_stream*/ None,
@@ -805,7 +807,7 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(
@@ -873,7 +875,7 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
@@ -931,7 +933,7 @@ async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(

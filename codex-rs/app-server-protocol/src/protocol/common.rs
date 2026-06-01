@@ -223,6 +223,7 @@ macro_rules! client_request_definitions {
 
         /// Typed response from the server to the client.
         #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientResponse {
             $(
@@ -493,19 +494,16 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadSetNameResponse,
     },
-    #[experimental("thread/goal/set")]
     ThreadGoalSet => "thread/goal/set" {
         params: v2::ThreadGoalSetParams,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalSetResponse,
     },
-    #[experimental("thread/goal/get")]
     ThreadGoalGet => "thread/goal/get" {
         params: v2::ThreadGoalGetParams,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalGetResponse,
     },
-    #[experimental("thread/goal/clear")]
     ThreadGoalClear => "thread/goal/clear" {
         params: v2::ThreadGoalClearParams,
         serialization: thread_id(params.thread_id),
@@ -520,6 +518,13 @@ client_request_definitions! {
         params: v2::ThreadArtifactCreateParams,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadArtifactCreateResponse,
+    },
+    #[experimental("thread/settings/update")]
+    ThreadSettingsUpdate => "thread/settings/update" {
+        params: v2::ThreadSettingsUpdateParams,
+        inspect_params: true,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadSettingsUpdateResponse,
     },
     #[experimental("thread/memoryMode/set")]
     ThreadMemoryModeSet => "thread/memoryMode/set" {
@@ -569,6 +574,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadListResponse,
     },
+    #[experimental("thread/search")]
+    ThreadSearch => "thread/search" {
+        params: v2::ThreadSearchParams,
+        serialization: None,
+        response: v2::ThreadSearchResponse,
+    },
     ThreadLoadedList => "thread/loaded/list" {
         params: v2::ThreadLoadedListParams,
         serialization: None,
@@ -604,6 +615,11 @@ client_request_definitions! {
         serialization: global_shared_read("config"),
         response: v2::SkillsListResponse,
     },
+    SkillsExtraRootsSet => "skills/extraRoots/set" {
+        params: v2::SkillsExtraRootsSetParams,
+        serialization: global("config"),
+        response: v2::SkillsExtraRootsSetResponse,
+    },
     HooksList => "hooks/list" {
         params: v2::HooksListParams,
         serialization: global("config"),
@@ -628,6 +644,11 @@ client_request_definitions! {
         params: v2::PluginListParams,
         serialization: None,
         response: v2::PluginListResponse,
+    },
+    PluginInstalled => "plugin/installed" {
+        params: v2::PluginInstalledParams,
+        serialization: None,
+        response: v2::PluginInstalledResponse,
     },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
@@ -799,6 +820,11 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::ExperimentalFeatureListResponse,
     },
+    PermissionProfileList => "permissionProfile/list" {
+        params: v2::PermissionProfileListParams,
+        serialization: global_shared_read("config"),
+        response: v2::PermissionProfileListResponse,
+    },
     ExperimentalFeatureEnablementSet => "experimentalFeature/enablement/set" {
         params: v2::ExperimentalFeatureEnablementSetParams,
         serialization: global("config"),
@@ -815,6 +841,12 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global("remote-control"),
         response: v2::RemoteControlDisableResponse,
+    },
+    #[experimental("remoteControl/status/read")]
+    RemoteControlStatusRead => "remoteControl/status/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global_shared_read("remote-control"),
+        response: v2::RemoteControlStatusReadResponse,
     },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
@@ -1454,11 +1486,12 @@ server_notification_definitions! {
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
-    #[experimental("thread/goal/updated")]
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
     ThreadArtifactsUpdated => "thread/artifacts/updated" (v2::ThreadArtifactsUpdatedNotification),
     #[experimental("thread/goal/cleared")]
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
+    #[experimental("thread/settings/updated")]
+    ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),
@@ -1549,6 +1582,7 @@ mod tests {
     use anyhow::Result;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
@@ -1699,6 +1733,17 @@ mod tests {
             Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
         );
 
+        let skills_extra_roots_set = ClientRequest::SkillsExtraRootsSet {
+            request_id: request_id(),
+            params: v2::SkillsExtraRootsSetParams {
+                extra_roots: vec![absolute_path("/tmp/skills")],
+            },
+        };
+        assert_eq!(
+            skills_extra_roots_set.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("config"))
+        );
+
         let plugin_list = ClientRequest::PluginList {
             request_id: request_id(),
             params: v2::PluginListParams {
@@ -1717,6 +1762,15 @@ mod tests {
             },
         };
         assert_eq!(plugin_read.serialization_scope(), None);
+
+        let plugin_installed = ClientRequest::PluginInstalled {
+            request_id: request_id(),
+            params: v2::PluginInstalledParams {
+                cwds: None,
+                install_suggestion_plugin_names: None,
+            },
+        };
+        assert_eq!(plugin_installed.serialization_scope(), None);
 
         let plugin_uninstall = ClientRequest::PluginUninstall {
             request_id: request_id(),
@@ -2281,6 +2335,7 @@ mod tests {
                     id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
                     session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
                     forked_from_id: None,
+                    parent_thread_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
                     model_provider: "openai".to_string(),
@@ -2303,11 +2358,11 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd,
+                runtime_workspace_roots: Vec::new(),
                 instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
-                permission_profile: None,
                 active_permission_profile: None,
                 reasoning_effort: None,
             },
@@ -2324,6 +2379,7 @@ mod tests {
                         "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                         "sessionId": "67e55044-10b1-426f-9247-bb680e5fe0c7",
                         "forkedFromId": null,
+                        "parentThreadId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
                         "modelProvider": "openai",
@@ -2347,13 +2403,13 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": absolute_path_string("tmp"),
+                    "runtimeWorkspaceRoots": [],
                     "instructionSources": [absolute_path_string("tmp/AGENTS.md")],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {
                         "type": "dangerFullAccess"
                     },
-                    "permissionProfile": null,
                     "activePermissionProfile": null,
                     "reasoningEffort": null
                 }
@@ -2517,8 +2573,22 @@ mod tests {
             json!({
                 "method": "account/read",
                 "id": 6,
+                "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        let request = ClientRequest::GetAccount {
+            request_id: RequestId::Integer(7),
+            params: v2::GetAccountParams {
+                refresh_token: true,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/read",
+                "id": 7,
                 "params": {
-                    "refreshToken": false
+                    "refreshToken": true
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2707,7 +2777,33 @@ mod tests {
                 "id": 8,
                 "params": {
                     "cursor": null,
-                    "limit": null
+                    "limit": null,
+                    "threadId": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_experimental_features_with_thread_id() -> Result<()> {
+        let request = ClientRequest::ExperimentalFeatureList {
+            request_id: RequestId::Integer(8),
+            params: v2::ExperimentalFeatureListParams {
+                cursor: Some("3".to_string()),
+                limit: Some(2),
+                thread_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "experimentalFeature/list",
+                "id": 8,
+                "params": {
+                    "cursor": "3",
+                    "limit": 2,
+                    "threadId": "00000000-0000-4000-8000-000000000001"
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2954,7 +3050,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
-                permission_profile: Some(v2::PermissionProfile::Disabled),
+                permission_profile: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
             },
         };
 
@@ -2980,7 +3076,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_goal_methods_are_marked_experimental() {
+    fn thread_goal_methods_are_not_marked_experimental() {
         let set_request = ClientRequest::ThreadGoalSet {
             request_id: RequestId::Integer(1),
             params: v2::ThreadGoalSetParams {
@@ -3005,20 +3101,20 @@ mod tests {
 
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&set_request),
-            Some("thread/goal/set")
+            None
         );
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&get_request),
-            Some("thread/goal/get")
+            None
         );
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&clear_request),
-            Some("thread/goal/clear")
+            None
         );
     }
 
     #[test]
-    fn thread_goal_notifications_are_marked_experimental() {
+    fn thread_goal_notifications_are_not_marked_experimental() {
         let goal = v2::ThreadGoal {
             thread_id: "thr_123".to_string(),
             objective: "ship goal mode".to_string(),
@@ -3040,11 +3136,45 @@ mod tests {
 
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&updated),
-            Some("thread/goal/updated")
+            None
         );
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&cleared),
-            Some("thread/goal/cleared")
+            None
+        );
+    }
+
+    #[test]
+    fn thread_settings_updated_notification_is_marked_experimental() {
+        let notification =
+            ServerNotification::ThreadSettingsUpdated(v2::ThreadSettingsUpdatedNotification {
+                thread_id: "thr_123".to_string(),
+                thread_settings: v2::ThreadSettings {
+                    cwd: absolute_path("/tmp/repo"),
+                    approval_policy: v2::AskForApproval::Never,
+                    approvals_reviewer: v2::ApprovalsReviewer::User,
+                    sandbox_policy: v2::SandboxPolicy::DangerFullAccess,
+                    active_permission_profile: None,
+                    model: "gpt-5.4".to_string(),
+                    model_provider: "openai".to_string(),
+                    service_tier: None,
+                    effort: None,
+                    summary: None,
+                    collaboration_mode: codex_protocol::config_types::CollaborationMode {
+                        mode: codex_protocol::config_types::ModeKind::Default,
+                        settings: codex_protocol::config_types::Settings {
+                            model: "gpt-5.4".to_string(),
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    },
+                    personality: None,
+                },
+            });
+
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&notification),
+            Some("thread/settings/updated")
         );
     }
 

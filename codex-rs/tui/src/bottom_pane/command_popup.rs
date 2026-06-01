@@ -18,8 +18,9 @@ use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 
 // Hide alias commands in the default popup list so each unique action appears once.
-// `quit` is an alias of `exit`, so we skip `quit` here.
-const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit];
+// `quit` is an alias of `exit`, and `btw` is an alias of `side`, so we skip
+// those aliases here.
+const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Btw];
 const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
     ColumnWidthMode::AutoAllRows,
     /*name_column_width*/ None,
@@ -97,6 +98,7 @@ impl CommandPopup {
     /// to narrow down the list of available commands.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
+        let previous_filter = self.command_filter.clone();
 
         if let Some(stripped) = first_line.strip_prefix('/') {
             // Extract the *first* token (sequence of non-whitespace
@@ -113,6 +115,10 @@ impl CommandPopup {
             // popup shows the *full* command list if it is still displayed
             // for some reason.
             self.command_filter.clear();
+        }
+
+        if self.command_filter != previous_filter {
+            self.state.reset();
         }
 
         // Reset or clamp selected index based on new filtered list.
@@ -407,6 +413,38 @@ mod tests {
     }
 
     #[test]
+    fn changing_filter_resets_selection_after_scrolling() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/".to_string());
+
+        for _ in 0..MAX_POPUP_ROWS {
+            popup.move_down();
+        }
+        assert!(popup.state.scroll_top > 0);
+
+        popup.on_composer_text_change("/st".to_string());
+
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::Status))
+        );
+        assert_eq!(popup.state.scroll_top, 0);
+        let width = 72;
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            width,
+            popup.calculate_required_height(width),
+        );
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+        insta::assert_snapshot!(
+            "command_popup_filter_reset_after_scroll",
+            format!("{buf:?}")
+        );
+    }
+
+    #[test]
     fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
         let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
         popup.on_composer_text_change("/".to_string());
@@ -416,6 +454,18 @@ mod tests {
         popup.on_composer_text_change("/qu".to_string());
         let items = popup.filtered_items();
         assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+
+    #[test]
+    fn btw_hidden_in_empty_filter_but_shown_for_prefix() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Btw)));
+
+        popup.on_composer_text_change("/bt".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Btw)));
     }
 
     #[test]

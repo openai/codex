@@ -193,5 +193,10 @@ common --@v8//:v8_enable_sandbox=True
 common:v8-release-compat --@v8//:v8_enable_pointer_compression=False
 common:v8-release-compat --@v8//:v8_enable_sandbox=False
 
+# Match rusty_v8's upstream GN release contract for published artifacts: every
+# target object uses Chromium's custom libc++ headers and the archive folds in
+# the matching runtime objects.
+common:rusty-v8-upstream-libcxx --@v8//:v8_use_rusty_v8_custom_libcxx=True
+
 # Optional per-user local overrides.
 try-import %workspace%/user.bazelrc

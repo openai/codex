@@ -130,9 +130,26 @@ fn file_system_policy_has_cwd_dependent_entries(
 pub type FileSystemResult<T> = io::Result<T>;
 
 /// Abstract filesystem access used by components that may operate locally or via
-/// a remote executor.
+/// a remote environment.
 #[async_trait]
 pub trait ExecutorFileSystem: Send + Sync {
+    /// Resolves a path within this filesystem.
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf>;
+
+    /// Lexically joins a path onto an existing bound path.
+    async fn join(
+        &self,
+        base_path: &AbsolutePathBuf,
+        path: &Path,
+    ) -> FileSystemResult<AbsolutePathBuf>;
+
+    /// Returns the parent directory of a bound path.
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>>;
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,

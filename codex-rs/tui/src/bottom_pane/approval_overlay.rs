@@ -960,7 +960,7 @@ pub(crate) fn format_additional_permissions_rule(
                 .entries
                 .iter()
                 .flatten()
-                .filter(|entry| entry.access == FileSystemAccessMode::None),
+                .filter(|entry| entry.access == FileSystemAccessMode::Deny),
         );
         if !denied_reads.is_empty() {
             parts.push(format!("deny read {denied_reads}"));
@@ -1820,7 +1820,7 @@ mod tests {
                         path: FileSystemPath::GlobPattern {
                             pattern: "**/*.env".to_string(),
                         },
-                        access: FileSystemAccessMode::None,
+                        access: FileSystemAccessMode::Deny,
                     },
                 ]),
                 glob_scan_max_depth: None,

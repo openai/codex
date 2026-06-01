@@ -1,19 +1,24 @@
 use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
+use super::protocol::RefreshRemoteServerRequest;
 use super::protocol::RemoteControlTarget;
 use axum::http::HeaderMap;
 use codex_api::SharedAuthProvider;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
-use gethostname::gethostname;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::io;
 use std::io::ErrorKind;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tracing::info;
 use tracing::warn;
 
 const REMOTE_CONTROL_ENROLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES: usize = 4096;
+const REMOTE_CONTROL_SERVER_TOKEN_REFRESH_SKEW_SECS: i64 = 30;
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
@@ -27,6 +32,24 @@ pub(super) struct RemoteControlEnrollment {
     pub(super) environment_id: String,
     pub(super) server_id: String,
     pub(super) server_name: String,
+    pub(super) remote_control_token: Option<String>,
+    pub(super) expires_at: Option<OffsetDateTime>,
+}
+
+impl RemoteControlEnrollment {
+    pub(super) fn should_refresh_server_token(&self) -> bool {
+        self.remote_control_token.is_none()
+            || self.expires_at.is_none_or(|expires_at| {
+                expires_at.unix_timestamp()
+                    <= OffsetDateTime::now_utc().unix_timestamp()
+                        + REMOTE_CONTROL_SERVER_TOKEN_REFRESH_SKEW_SECS
+            })
+    }
+
+    pub(super) fn clear_server_token(&mut self) {
+        self.remote_control_token = None;
+        self.expires_at = None;
+    }
 }
 
 pub(super) struct RemoteControlConnectionAuth {
@@ -82,6 +105,8 @@ pub(super) async fn load_persisted_remote_control_enrollment(
                 environment_id: enrollment.environment_id,
                 server_id: enrollment.server_id,
                 server_name: enrollment.server_name,
+                remote_control_token: None,
+                expires_at: None,
             }))
         }
         None => {
@@ -165,17 +190,31 @@ pub(crate) fn preview_remote_control_response_body(body: &[u8]) -> String {
     if trimmed.is_empty() {
         return "<empty>".to_string();
     }
-    if trimmed.len() <= REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES {
-        return trimmed.to_string();
+    let redacted = redact_remote_control_response_body(trimmed);
+    if redacted.len() <= REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES {
+        return redacted;
     }
 
     let mut cut = REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES;
-    while !trimmed.is_char_boundary(cut) {
+    while !redacted.is_char_boundary(cut) {
         cut = cut.saturating_sub(1);
     }
-    let mut truncated = trimmed[..cut].to_string();
+    let mut truncated = redacted[..cut].to_string();
     truncated.push_str("...");
     truncated
+}
+
+fn redact_remote_control_response_body(body: &str) -> String {
+    let Ok(mut body_json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return body.to_string();
+    };
+    let Some(body_object) = body_json.as_object_mut() else {
+        return body.to_string();
+    };
+    if let Some(remote_control_token) = body_object.get_mut("remote_control_token") {
+        *remote_control_token = serde_json::Value::String("<redacted>".to_string());
+    }
+    body_json.to_string()
 }
 
 pub(crate) fn format_headers(headers: &HeaderMap) -> String {
@@ -195,68 +234,156 @@ pub(super) async fn enroll_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
     installation_id: &str,
+    server_name: &str,
 ) -> io::Result<RemoteControlEnrollment> {
     let enroll_url = &remote_control_target.enroll_url;
-    let server_name = gethostname().to_string_lossy().trim().to_string();
     let request = EnrollRemoteServerRequest {
-        name: server_name.clone(),
+        name: server_name.to_string(),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         app_server_version: env!("CARGO_PKG_VERSION"),
         installation_id: installation_id.to_string(),
     };
+    let enrollment_response = send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
+        enroll_url,
+        auth,
+        installation_id,
+        &request,
+        "enroll",
+        "server enrollment",
+    )
+    .await?;
+    let mut enrollment = RemoteControlEnrollment {
+        account_id: auth.account_id.clone(),
+        environment_id: enrollment_response.environment_id,
+        server_id: enrollment_response.server_id,
+        server_name: server_name.to_string(),
+        remote_control_token: None,
+        expires_at: None,
+    };
+    update_remote_control_server_token(
+        &mut enrollment,
+        enroll_url,
+        enrollment_response.remote_control_token,
+        enrollment_response.expires_at,
+    )?;
+    Ok(enrollment)
+}
+
+pub(super) async fn refresh_remote_control_server(
+    remote_control_target: &RemoteControlTarget,
+    auth: &RemoteControlConnectionAuth,
+    installation_id: &str,
+    enrollment: &mut RemoteControlEnrollment,
+) -> io::Result<()> {
+    let refresh_url = &remote_control_target.refresh_url;
+    let request = RefreshRemoteServerRequest {
+        server_id: enrollment.server_id.clone(),
+        installation_id: installation_id.to_string(),
+    };
+    let refreshed = send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
+        refresh_url,
+        auth,
+        installation_id,
+        &request,
+        "refresh",
+        "server refresh",
+    )
+    .await?;
+    if refreshed.server_id != enrollment.server_id
+        || refreshed.environment_id != enrollment.environment_id
+    {
+        return Err(io::Error::other(format!(
+            "remote control server refresh returned mismatched enrollment: expected server_id={}, environment_id={}; got server_id={}, environment_id={}",
+            enrollment.server_id,
+            enrollment.environment_id,
+            refreshed.server_id,
+            refreshed.environment_id
+        )));
+    }
+
+    update_remote_control_server_token(
+        enrollment,
+        refresh_url,
+        refreshed.remote_control_token,
+        refreshed.expires_at,
+    )
+}
+
+async fn send_remote_control_server_request<Request, Response>(
+    url: &str,
+    auth: &RemoteControlConnectionAuth,
+    installation_id: &str,
+    request: &Request,
+    action: &str,
+    response_kind: &str,
+) -> io::Result<Response>
+where
+    Request: Serialize,
+    Response: DeserializeOwned,
+{
     let client = build_reqwest_client();
     let mut auth_headers = HeaderMap::new();
     auth.auth_provider.add_auth_headers(&mut auth_headers);
-    let http_request = client
-        .post(enroll_url)
+    let response = client
+        .post(url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
         .headers(auth_headers)
         .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
         .header(REMOTE_CONTROL_INSTALLATION_ID_HEADER, installation_id)
-        .json(&request);
-
-    let response = http_request.send().await.map_err(|err| {
-        io::Error::other(format!(
-            "failed to enroll remote control server at `{enroll_url}`: {err}"
-        ))
-    })?;
+        .json(request)
+        .send()
+        .await
+        .map_err(|err| {
+            io::Error::other(format!(
+                "failed to {action} remote control server at `{url}`: {err}"
+            ))
+        })?;
     let headers = response.headers().clone();
     let status = response.status();
     let body = response.bytes().await.map_err(|err| {
         io::Error::other(format!(
-            "failed to read remote control enrollment response from `{enroll_url}`: {err}"
+            "failed to read remote control {response_kind} response from `{url}`: {err}"
         ))
     })?;
     let body_preview = preview_remote_control_response_body(&body);
     if !status.is_success() {
         let headers_str = format_headers(&headers);
-        let error_kind = if matches!(status.as_u16(), 401 | 403) {
-            ErrorKind::PermissionDenied
-        } else {
-            ErrorKind::Other
+        let error_kind = match status.as_u16() {
+            401 | 403 => ErrorKind::PermissionDenied,
+            404 => ErrorKind::NotFound,
+            _ => ErrorKind::Other,
         };
         return Err(io::Error::new(
             error_kind,
             format!(
-                "remote control server enrollment failed at `{enroll_url}`: HTTP {status}, {headers_str}, body: {body_preview}"
+                "remote control {response_kind} failed at `{url}`: HTTP {status}, {headers_str}, body: {body_preview}"
             ),
         ));
     }
 
-    let enrollment = serde_json::from_slice::<EnrollRemoteServerResponse>(&body).map_err(|err| {
+    serde_json::from_slice::<Response>(&body).map_err(|err| {
         let headers_str = format_headers(&headers);
         io::Error::other(format!(
-            "failed to parse remote control enrollment response from `{enroll_url}`: HTTP {status}, {headers_str}, body: {body_preview}, decode error: {err}"
+            "failed to parse remote control {response_kind} response from `{url}`: HTTP {status}, {headers_str}, body: {body_preview}, decode error: {err}"
+        ))
+    })
+}
+
+fn update_remote_control_server_token(
+    enrollment: &mut RemoteControlEnrollment,
+    url: &str,
+    token: String,
+    expires_at: String,
+) -> io::Result<()> {
+    let expires_at = OffsetDateTime::parse(&expires_at, &Rfc3339).map_err(|err| {
+        io::Error::other(format!(
+            "failed to parse remote control server token expiry from `{url}`: {err}"
         ))
     })?;
-
-    Ok(RemoteControlEnrollment {
-        account_id: auth.account_id.clone(),
-        environment_id: enrollment.environment_id,
-        server_id: enrollment.server_id,
-        server_name,
-    })
+    enrollment.remote_control_token = Some(token);
+    enrollment.expires_at = Some(expires_at);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -282,6 +409,40 @@ mod tests {
             .expect("state runtime should initialize")
     }
 
+    #[test]
+    fn remote_control_enrollment_refreshes_server_token_before_expiry() {
+        let expires_soon = RemoteControlEnrollment {
+            account_id: "account-a".to_string(),
+            environment_id: "env_first".to_string(),
+            server_id: "srv_e_first".to_string(),
+            server_name: "first-server".to_string(),
+            remote_control_token: Some("expires-soon".to_string()),
+            expires_at: Some(OffsetDateTime::now_utc() + time::Duration::seconds(29)),
+        };
+        let expires_later = RemoteControlEnrollment {
+            expires_at: Some(OffsetDateTime::now_utc() + time::Duration::seconds(31)),
+            remote_control_token: Some("expires-later".to_string()),
+            ..expires_soon.clone()
+        };
+
+        assert!(expires_soon.should_refresh_server_token());
+        assert!(!expires_later.should_refresh_server_token());
+    }
+
+    #[test]
+    fn preview_remote_control_response_body_redacts_server_token() {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&preview_remote_control_response_body(
+                br#"{"server_id":"srv_e_test","remote_control_token":"secret"}"#
+            ))
+            .expect("redacted response preview should stay valid json"),
+            json!({
+                "server_id": "srv_e_test",
+                "remote_control_token": "<redacted>",
+            })
+        );
+    }
+
     #[tokio::test]
     async fn persisted_remote_control_enrollment_round_trips_by_target_and_account() {
         let codex_home = TempDir::new().expect("temp dir should create");
@@ -296,12 +457,16 @@ mod tests {
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
             server_name: "first-server".to_string(),
+            remote_control_token: None,
+            expires_at: None,
         };
         let second_enrollment = RemoteControlEnrollment {
             account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
             server_name: "second-server".to_string(),
+            remote_control_token: None,
+            expires_at: None,
         };
 
         update_persisted_remote_control_enrollment(
@@ -372,12 +537,16 @@ mod tests {
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
             server_name: "first-server".to_string(),
+            remote_control_token: None,
+            expires_at: None,
         };
         let second_enrollment = RemoteControlEnrollment {
             account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
             server_name: "second-server".to_string(),
+            remote_control_token: None,
+            expires_at: None,
         };
 
         update_persisted_remote_control_enrollment(
@@ -449,7 +618,8 @@ mod tests {
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let enroll_url = remote_control_target.enroll_url.clone();
         let response_body = json!({
-            "error": "not enrolled",
+            "server_id": "srv_e_test",
+            "environment_id": "env_test",
         });
         let expected_body = response_body.to_string();
         let server_task = tokio::spawn(async move {
@@ -464,6 +634,7 @@ mod tests {
                 account_id: "account_id".to_string(),
             },
             "11111111-1111-4111-8111-111111111111",
+            "test-server",
         )
         .await
         .expect_err("invalid response should fail to parse");
@@ -472,7 +643,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!(
-                "failed to parse remote control enrollment response from `{enroll_url}`: HTTP 200 OK, request-id: <none>, cf-ray: <none>, body: {expected_body}, decode error: missing field `server_id` at line 1 column {}",
+                "failed to parse remote control server enrollment response from `{enroll_url}`: HTTP 200 OK, request-id: <none>, cf-ray: <none>, body: {expected_body}, decode error: missing field `remote_control_token` at line 1 column {}",
                 expected_body.len()
             )
         );

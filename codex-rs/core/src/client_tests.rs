@@ -61,6 +61,13 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
+    test_model_client_with_parent(session_source, /*parent_thread_id*/ None)
+}
+
+fn test_model_client_with_parent(
+    session_source: SessionSource,
+    parent_thread_id: Option<ThreadId>,
+) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let thread_id = ThreadId::new();
     ModelClient::new(
@@ -70,6 +77,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         session_source,
+        parent_thread_id,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
@@ -272,13 +280,16 @@ fn build_subagent_headers_sets_internal_memory_consolidation_label() {
 #[test]
 fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
     let parent_thread_id = ThreadId::new();
-    let client = test_model_client(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id,
-        depth: 2,
-        agent_path: None,
-        agent_nickname: None,
-        agent_role: None,
-    }));
+    let client = test_model_client_with_parent(
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 2,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        }),
+        Some(parent_thread_id),
+    );
 
     client.advance_window_generation();
 
@@ -520,6 +531,7 @@ fn model_client_with_counting_attestation(
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         SessionSource::Exec,
+        /*parent_thread_id*/ None,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,

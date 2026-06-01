@@ -47,11 +47,12 @@ impl GuardianThreadContext {
     }
 }
 
+#[async_trait::async_trait]
 impl<S> ThreadLifecycleContributor<Config> for GuardianExtension<S>
 where
     S: Send + Sync,
 {
-    fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
+    async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
         let Ok(forked_from_thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
             return;
         };

@@ -15,6 +15,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio::sync::Semaphore;
+use tokio::sync::watch;
 
 use codex_agent_identity::decode_agent_identity_jwt;
 use codex_agent_identity::fetch_agent_identity_jwks;
@@ -83,6 +84,7 @@ struct ChatgptAuthState {
 }
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
+const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;
 
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
 const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
@@ -843,8 +845,8 @@ async fn request_chatgpt_token_refresh(
     } else {
         let body = response.text().await.unwrap_or_default();
         tracing::error!("Failed to refresh token: {status}: {body}");
-        if status == StatusCode::UNAUTHORIZED {
-            let failed = classify_refresh_token_failure(&body);
+        let failed = classify_refresh_token_failure(&body);
+        if status == StatusCode::UNAUTHORIZED || failed.reason != RefreshTokenFailedReason::Other {
             Err(RefreshTokenError::Permanent(failed))
         } else {
             let message = try_parse_error_message(&body);
@@ -870,7 +872,7 @@ fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
         tracing::warn!(
             backend_code = normalized_code.as_deref(),
             backend_body = body,
-            "Encountered unknown 401 response while refreshing token"
+            "Encountered unknown response while refreshing token"
         );
     }
 
@@ -1252,6 +1254,7 @@ impl UnauthorizedRecovery {
 pub struct AuthManager {
     codex_home: PathBuf,
     inner: RwLock<CachedAuth>,
+    auth_change_tx: watch::Sender<u64>,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<Vec<String>>>,
@@ -1320,12 +1323,14 @@ impl AuthManager {
         .await
         .ok()
         .flatten();
+        let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Self {
             codex_home,
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
                 permanent_refresh_failure: None,
             }),
+            auth_change_tx,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
@@ -1341,10 +1346,12 @@ impl AuthManager {
             auth: Some(auth),
             permanent_refresh_failure: None,
         };
+        let (auth_change_tx, _auth_change_rx) = watch::channel(0);
 
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(cached),
+            auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
@@ -1360,9 +1367,11 @@ impl AuthManager {
             auth: Some(auth),
             permanent_refresh_failure: None,
         };
+        let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
             codex_home,
             inner: RwLock::new(cached),
+            auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
@@ -1373,12 +1382,14 @@ impl AuthManager {
     }
 
     pub fn external_bearer_only(config: ModelProviderAuthInfo) -> Arc<Self> {
+        let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(CachedAuth {
                 auth: None,
                 permanent_refresh_failure: None,
             }),
+            auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
@@ -1395,6 +1406,11 @@ impl AuthManager {
         self.inner.read().ok().and_then(|c| c.auth.clone())
     }
 
+    /// Subscribes to cached auth changes that can affect request recovery.
+    pub fn auth_change_receiver(&self) -> watch::Receiver<u64> {
+        self.auth_change_tx.subscribe()
+    }
+
     pub fn refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError> {
         self.inner.read().ok().and_then(|cached| {
             cached
@@ -1406,15 +1422,15 @@ impl AuthManager {
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
-    /// For stale managed ChatGPT auth, first performs a guarded reload and then
-    /// refreshes only if the on-disk auth is unchanged.
+    /// For managed ChatGPT auth that needs a proactive refresh, first performs
+    /// a guarded reload and then refreshes only if the on-disk auth is unchanged.
     pub async fn auth(&self) -> Option<CodexAuth> {
         if let Some(auth) = self.resolve_external_api_key_auth().await {
             return Some(auth);
         }
 
         let auth = self.auth_cached()?;
-        if Self::is_stale_for_proactive_refresh(&auth)
+        if Self::should_refresh_proactively(&auth)
             && let Err(err) = self.refresh_token().await
         {
             tracing::error!("Failed to refresh token: {}", err);
@@ -1537,6 +1553,9 @@ impl AuthManager {
             }
             tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;
+            if auth_changed_for_refresh {
+                self.auth_change_tx.send_modify(|revision| *revision += 1);
+            }
             changed
         } else {
             false
@@ -1790,7 +1809,7 @@ impl AuthManager {
         )
     }
 
-    fn is_stale_for_proactive_refresh(auth: &CodexAuth) -> bool {
+    fn should_refresh_proactively(auth: &CodexAuth) -> bool {
         let chatgpt_auth = match auth {
             CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,
             _ => return false,
@@ -1803,7 +1822,9 @@ impl AuthManager {
         if let Some(tokens) = auth_dot_json.tokens.as_ref()
             && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
         {
-            return expires_at <= Utc::now();
+            return expires_at
+                <= Utc::now()
+                    + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES);
         }
         let last_refresh = match auth_dot_json.last_refresh {
             Some(last_refresh) => last_refresh,

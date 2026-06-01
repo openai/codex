@@ -156,9 +156,9 @@ async fn sync_materialized_rollout_path(
     thread_id: ThreadId,
 ) -> ThreadStoreResult<()> {
     let rollout_path = rollout_path(store, thread_id).await?;
-    if !tokio::fs::try_exists(rollout_path.as_path())
+    if codex_rollout::existing_rollout_path(rollout_path.as_path())
         .await
-        .unwrap_or(false)
+        .is_none()
     {
         return Ok(());
     }

@@ -12,6 +12,8 @@ use super::epoch_millis_to_datetime;
 pub enum ThreadGoalStatus {
     Active,
     Paused,
+    Blocked,
+    UsageLimited,
     BudgetLimited,
     Complete,
 }
@@ -21,6 +23,8 @@ impl ThreadGoalStatus {
         match self {
             Self::Active => "active",
             Self::Paused => "paused",
+            Self::Blocked => "blocked",
+            Self::UsageLimited => "usage_limited",
             Self::BudgetLimited => "budget_limited",
             Self::Complete => "complete",
         }
@@ -42,6 +46,8 @@ impl TryFrom<&str> for ThreadGoalStatus {
         match value {
             "active" => Ok(Self::Active),
             "paused" => Ok(Self::Paused),
+            "blocked" => Ok(Self::Blocked),
+            "usage_limited" => Ok(Self::UsageLimited),
             "budget_limited" => Ok(Self::BudgetLimited),
             "complete" => Ok(Self::Complete),
             other => Err(anyhow!("unknown thread goal status `{other}`")),

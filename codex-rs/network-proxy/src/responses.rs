@@ -3,6 +3,7 @@ use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkProtocol;
 use crate::reasons::REASON_DENIED;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_MITM_HOOK_DENIED;
 use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
@@ -53,6 +54,7 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
         REASON_NOT_ALLOWED | REASON_NOT_ALLOWED_LOCAL => "blocked-by-allowlist",
         REASON_DENIED => "blocked-by-denylist",
         REASON_METHOD_NOT_ALLOWED => "blocked-by-method-policy",
+        REASON_MITM_HOOK_DENIED => "blocked-by-mitm-hook",
         REASON_MITM_REQUIRED => "blocked-by-mitm-required",
         _ => "blocked-by-policy",
     }
@@ -64,6 +66,7 @@ pub fn blocked_message(reason: &str) -> &'static str {
         REASON_NOT_ALLOWED_LOCAL => "Sandbox policy blocks local/private network addresses.",
         REASON_DENIED => "Domain denied by the sandbox policy.",
         REASON_METHOD_NOT_ALLOWED => "Method not allowed in limited mode.",
+        REASON_MITM_HOOK_DENIED => "HTTPS request denied by MITM hook policy.",
         REASON_MITM_REQUIRED => "MITM required for limited HTTPS.",
         REASON_PROXY_DISABLED => "network proxy is disabled",
         _ => "Request blocked by network policy.",

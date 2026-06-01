@@ -7,7 +7,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::GranularApprovalConfig;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -201,8 +200,7 @@ async fn file_system_sandbox_context_uses_active_attempt() {
         additional_permissions: Some(additional_permissions.clone()),
         permissions_preapproved: false,
     };
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let file_system_policy = FileSystemSandboxPolicy::default();
     let permissions = PermissionProfile::from_runtime_permissions(
         &file_system_policy,
         NetworkSandboxPolicy::Restricted,
@@ -214,6 +212,7 @@ async fn file_system_sandbox_context_uses_active_attempt() {
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &path,
+        workspace_roots: std::slice::from_ref(&path),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: true,
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
@@ -267,6 +266,7 @@ async fn no_sandbox_attempt_has_no_file_system_context() {
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &path,
+        workspace_roots: std::slice::from_ref(&path),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,

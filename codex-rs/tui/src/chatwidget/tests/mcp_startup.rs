@@ -57,6 +57,46 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 
     assert!(chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+}
+
+#[tokio::test]
+async fn turn_start_preserves_active_mcp_startup_header() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
+
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Starting);
+    handle_turn_started(&mut chat, "turn-1");
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Booting MCP server: schaltwerk"
+    );
+
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Ready);
+
+    assert_eq!(chat.status_state.current_status.header, "Working");
+}
+
+#[tokio::test]
+async fn turn_start_replaces_idle_completed_mcp_startup_header() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
+
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Ready);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Booting MCP server: schaltwerk"
+    );
+
+    handle_turn_started(&mut chat, "turn-1");
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_state.current_status.header, "Working");
 }
 
 #[tokio::test]
@@ -122,6 +162,82 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
     assert_chatwidget_snapshot!(
         "app_server_mcp_startup_failure_renders_warning_history",
         normalize_snapshot_paths(term.backend().vt100().screen().contents())
+    );
+}
+
+#[tokio::test]
+async fn mcp_startup_failure_restores_running_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+    handle_turn_started(&mut chat, "turn-1");
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+    assert!(
+        chat.status_state
+            .current_status
+            .header
+            .starts_with("Starting MCP servers")
+    );
+
+    notify_mcp_status_error(
+        &mut chat,
+        "alpha",
+        "MCP client for `alpha` failed to start: handshake failed",
+    );
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+    let _ = drain_insert_history(&mut rx);
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+}
+
+#[tokio::test]
+async fn mcp_startup_complete_preserves_review_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+    handle_turn_started(&mut chat, "turn-1");
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    assert!(
+        chat.status_state
+            .current_status
+            .header
+            .starts_with("Booting MCP server")
+    );
+
+    chat.on_guardian_assessment(GuardianAssessmentEvent {
+        id: "guardian-1".to_string(),
+        target_item_id: Some("guardian-target-1".to_string()),
+        turn_id: "turn-1".to_string(),
+        started_at_ms: 0,
+        completed_at_ms: None,
+        status: GuardianAssessmentStatus::InProgress,
+        risk_level: None,
+        user_authorization: None,
+        rationale: None,
+        decision_source: None,
+        action: GuardianAssessmentAction::Command {
+            source: GuardianCommandSource::Shell,
+            command: "rm -rf '/tmp/guardian target'".to_string(),
+            cwd: test_path_buf("/tmp").abs(),
+        },
+    });
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(
+        chat.status_state.current_status.header,
+        "Reviewing approval request"
+    );
+    assert_eq!(
+        chat.status_state.current_status.details,
+        Some("rm -rf '/tmp/guardian target'".to_string())
     );
 }
 

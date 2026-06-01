@@ -1,27 +1,39 @@
 use super::*;
+use crate::model::ThreadGoalRow;
 use uuid::Uuid;
 
-pub struct ThreadGoalUpdate {
+#[derive(Clone)]
+pub struct GoalStore {
+    pool: Arc<SqlitePool>,
+}
+
+impl GoalStore {
+    pub(crate) fn new(pool: Arc<SqlitePool>) -> Self {
+        Self { pool }
+    }
+}
+
+pub struct GoalUpdate {
     pub objective: Option<String>,
     pub status: Option<crate::ThreadGoalStatus>,
     pub token_budget: Option<Option<i64>>,
     pub expected_goal_id: Option<String>,
 }
 
-pub enum ThreadGoalAccountingOutcome {
+pub enum GoalAccountingOutcome {
     Unchanged(Option<crate::ThreadGoal>),
     Updated(crate::ThreadGoal),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ThreadGoalAccountingMode {
+pub enum GoalAccountingMode {
     ActiveStatusOnly,
     ActiveOnly,
     ActiveOrComplete,
     ActiveOrStopped,
 }
 
-impl StateRuntime {
+impl GoalStore {
     pub async fn get_thread_goal(
         &self,
         thread_id: ThreadId,
@@ -103,8 +115,6 @@ RETURNING
         .fetch_one(self.pool.as_ref())
         .await?;
 
-        self.set_thread_preview_if_empty(thread_id, objective)
-            .await?;
         thread_goal_from_row(&row)
     }
 
@@ -154,19 +164,15 @@ RETURNING
         .fetch_optional(self.pool.as_ref())
         .await?;
 
-        if row.is_some() {
-            self.set_thread_preview_if_empty(thread_id, objective)
-                .await?;
-        }
         row.map(|row| thread_goal_from_row(&row)).transpose()
     }
 
     pub async fn update_thread_goal(
         &self,
         thread_id: ThreadId,
-        update: ThreadGoalUpdate,
+        update: GoalUpdate,
     ) -> anyhow::Result<Option<crate::ThreadGoal>> {
-        let ThreadGoalUpdate {
+        let GoalUpdate {
             objective,
             status,
             token_budget,
@@ -183,7 +189,7 @@ UPDATE thread_goals
 SET
     objective = COALESCE(?, objective),
     status = CASE
-        WHEN status = ? AND ? = ? THEN status
+        WHEN status = ? AND ? IN (?, ?) THEN status
         WHEN ? = 'active' AND ? IS NOT NULL AND tokens_used >= ? THEN ?
         ELSE ?
     END,
@@ -197,6 +203,7 @@ WHERE thread_id = ?
                 .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
                 .bind(status.as_str())
                 .bind(crate::ThreadGoalStatus::Paused.as_str())
+                .bind(crate::ThreadGoalStatus::Blocked.as_str())
                 .bind(status.as_str())
                 .bind(token_budget)
                 .bind(token_budget)
@@ -217,7 +224,7 @@ UPDATE thread_goals
 SET
     objective = COALESCE(?, objective),
     status = CASE
-        WHEN status = ? AND ? = ? THEN status
+        WHEN status = ? AND ? IN (?, ?) THEN status
         WHEN ? = 'active' AND token_budget IS NOT NULL AND tokens_used >= token_budget THEN ?
         ELSE ?
     END,
@@ -230,6 +237,7 @@ WHERE thread_id = ?
                 .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
                 .bind(status.as_str())
                 .bind(crate::ThreadGoalStatus::Paused.as_str())
+                .bind(crate::ThreadGoalStatus::Blocked.as_str())
                 .bind(status.as_str())
                 .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
                 .bind(status.as_str())
@@ -308,32 +316,26 @@ WHERE thread_id = ?
         self.get_thread_goal(thread_id).await
     }
 
-    async fn set_thread_preview_if_empty(
-        &self,
-        thread_id: ThreadId,
-        preview: &str,
-    ) -> anyhow::Result<()> {
-        let preview = preview.trim();
-        if preview.is_empty() {
-            return Ok(());
-        }
-        sqlx::query(
-            r#"
-UPDATE threads
-SET preview = ?
-WHERE id = ? AND preview = ''
-            "#,
-        )
-        .bind(preview)
-        .bind(thread_id.to_string())
-        .execute(self.pool.as_ref())
-        .await?;
-        Ok(())
-    }
-
     pub async fn pause_active_thread_goal(
         &self,
         thread_id: ThreadId,
+    ) -> anyhow::Result<Option<crate::ThreadGoal>> {
+        self.update_active_thread_goal_status(thread_id, crate::ThreadGoalStatus::Paused)
+            .await
+    }
+
+    pub async fn usage_limit_active_thread_goal(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<crate::ThreadGoal>> {
+        self.update_active_thread_goal_status(thread_id, crate::ThreadGoalStatus::UsageLimited)
+            .await
+    }
+
+    async fn update_active_thread_goal_status(
+        &self,
+        thread_id: ThreadId,
+        status: crate::ThreadGoalStatus,
     ) -> anyhow::Result<Option<crate::ThreadGoal>> {
         let now_ms = datetime_to_epoch_millis(Utc::now());
         let result = sqlx::query(
@@ -343,12 +345,19 @@ SET
     status = ?,
     updated_at_ms = ?
 WHERE thread_id = ?
-  AND status = 'active'
+  AND (
+      status = 'active'
+      OR (
+          ? = 'usage_limited'
+          AND status = 'budget_limited'
+      )
+  )
             "#,
         )
-        .bind(crate::ThreadGoalStatus::Paused.as_str())
+        .bind(status.as_str())
         .bind(now_ms)
         .bind(thread_id.to_string())
+        .bind(status.as_str())
         .execute(self.pool.as_ref())
         .await?;
 
@@ -378,56 +387,90 @@ WHERE thread_id = ?
         thread_id: ThreadId,
         time_delta_seconds: i64,
         token_delta: i64,
-        mode: ThreadGoalAccountingMode,
+        mode: GoalAccountingMode,
         expected_goal_id: Option<&str>,
-    ) -> anyhow::Result<ThreadGoalAccountingOutcome> {
+    ) -> anyhow::Result<GoalAccountingOutcome> {
         let time_delta_seconds = time_delta_seconds.max(0);
         let token_delta = token_delta.max(0);
         if time_delta_seconds == 0 && token_delta == 0 {
-            return Ok(ThreadGoalAccountingOutcome::Unchanged(
+            return Ok(GoalAccountingOutcome::Unchanged(
                 self.get_thread_goal(thread_id).await?,
             ));
         }
 
         let now_ms = datetime_to_epoch_millis(Utc::now());
+        let active_or_stopped_status_filter =
+            "status IN ('active', 'paused', 'blocked', 'usage_limited', 'budget_limited')";
         let status_filter = match mode {
-            ThreadGoalAccountingMode::ActiveStatusOnly => "status = 'active'",
-            ThreadGoalAccountingMode::ActiveOnly => "status IN ('active', 'budget_limited')",
-            ThreadGoalAccountingMode::ActiveOrComplete => {
+            GoalAccountingMode::ActiveStatusOnly => "status = 'active'",
+            GoalAccountingMode::ActiveOnly => "status IN ('active', 'budget_limited')",
+            GoalAccountingMode::ActiveOrComplete => {
                 "status IN ('active', 'budget_limited', 'complete')"
             }
-            ThreadGoalAccountingMode::ActiveOrStopped => {
-                "status IN ('active', 'paused', 'budget_limited')"
-            }
+            GoalAccountingMode::ActiveOrStopped => active_or_stopped_status_filter,
         };
         let budget_limit_status_filter = match mode {
-            ThreadGoalAccountingMode::ActiveStatusOnly
-            | ThreadGoalAccountingMode::ActiveOnly
-            | ThreadGoalAccountingMode::ActiveOrComplete => "status = 'active'",
-            ThreadGoalAccountingMode::ActiveOrStopped => {
-                "status IN ('active', 'paused', 'budget_limited')"
-            }
+            GoalAccountingMode::ActiveStatusOnly
+            | GoalAccountingMode::ActiveOnly
+            | GoalAccountingMode::ActiveOrComplete => "status = 'active'",
+            GoalAccountingMode::ActiveOrStopped => active_or_stopped_status_filter,
         };
-        let goal_id_filter = if expected_goal_id.is_some() {
-            "goal_id = ?"
-        } else {
-            "1 = 1"
-        };
-        let query = format!(
+        let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 UPDATE thread_goals
 SET
-    time_used_seconds = time_used_seconds + ?,
-    tokens_used = tokens_used + ?,
+    time_used_seconds = time_used_seconds +
+            "#,
+        );
+        builder.push_bind(time_delta_seconds);
+        builder.push(
+            r#",
+    tokens_used = tokens_used +
+            "#,
+        );
+        builder.push_bind(token_delta);
+        builder.push(
+            r#",
     status = CASE
-        WHEN {budget_limit_status_filter} AND token_budget IS NOT NULL AND tokens_used + ? >= token_budget
-            THEN ?
+        WHEN
+            "#,
+        );
+        builder.push(budget_limit_status_filter);
+        builder.push(
+            r#"
+            AND token_budget IS NOT NULL
+            AND tokens_used +
+            "#,
+        );
+        builder.push_bind(token_delta);
+        builder.push(
+            r#"
+                >= token_budget
+            THEN
+            "#,
+        );
+        builder.push_bind(crate::ThreadGoalStatus::BudgetLimited.as_str());
+        builder.push(
+            r#"
         ELSE status
     END,
-    updated_at_ms = ?
-WHERE thread_id = ?
-  AND {status_filter}
-  AND {goal_id_filter}
+    updated_at_ms =
+            "#,
+        );
+        builder.push_bind(now_ms);
+        builder.push(
+            r#"
+WHERE thread_id =
+            "#,
+        );
+        builder.push_bind(thread_id.to_string());
+        builder.push(" AND ");
+        builder.push(status_filter);
+        if let Some(expected_goal_id) = expected_goal_id {
+            builder.push(" AND goal_id = ").push_bind(expected_goal_id);
+        }
+        builder.push(
+            r#"
 RETURNING
     thread_id,
     goal_id,
@@ -441,27 +484,16 @@ RETURNING
             "#,
         );
 
-        let mut query = sqlx::query(&query)
-            .bind(time_delta_seconds)
-            .bind(token_delta)
-            .bind(token_delta)
-            .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
-            .bind(now_ms)
-            .bind(thread_id.to_string());
-        if let Some(expected_goal_id) = expected_goal_id {
-            query = query.bind(expected_goal_id);
-        }
-
-        let row = query.fetch_optional(self.pool.as_ref()).await?;
+        let row = builder.build().fetch_optional(self.pool.as_ref()).await?;
 
         let Some(row) = row else {
-            return Ok(ThreadGoalAccountingOutcome::Unchanged(
+            return Ok(GoalAccountingOutcome::Unchanged(
                 self.get_thread_goal(thread_id).await?,
             ));
         };
 
         let updated = thread_goal_from_row(&row)?;
-        Ok(ThreadGoalAccountingOutcome::Updated(updated))
+        Ok(GoalAccountingOutcome::Updated(updated))
     }
 }
 
@@ -519,6 +551,7 @@ mod tests {
         upsert_test_thread(&runtime, thread_id).await;
 
         let goal = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "optimize the benchmark",
@@ -529,7 +562,11 @@ mod tests {
             .expect("goal replacement should succeed");
         assert_eq!(
             Some(goal.clone()),
-            runtime.get_thread_goal(thread_id).await.unwrap()
+            runtime
+                .thread_goals()
+                .get_thread_goal(thread_id)
+                .await
+                .unwrap()
         );
         let metadata = runtime
             .get_thread(thread_id)
@@ -539,9 +576,10 @@ mod tests {
         assert_eq!(metadata.preview.as_deref(), Some("hello"));
 
         let updated = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: Some(Some(200_000)),
@@ -560,6 +598,7 @@ mod tests {
         assert_eq!(expected, updated);
 
         let replaced = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "ship the new result",
@@ -574,44 +613,28 @@ mod tests {
         assert_eq!(0, replaced.tokens_used);
         assert_eq!(0, replaced.time_used_seconds);
 
-        assert!(runtime.delete_thread_goal(thread_id).await.unwrap());
-        assert_eq!(None, runtime.get_thread_goal(thread_id).await.unwrap());
-        assert!(!runtime.delete_thread_goal(thread_id).await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn replace_thread_goal_sets_preview_when_empty() {
-        let runtime = test_runtime().await;
-        let thread_id = test_thread_id();
-        let mut metadata = test_thread_metadata(
-            runtime.codex_home(),
-            thread_id,
-            runtime.codex_home().join("workspace"),
+        assert!(
+            runtime
+                .thread_goals()
+                .delete_thread_goal(thread_id)
+                .await
+                .unwrap()
         );
-        metadata.preview = None;
-        metadata.first_user_message = None;
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("test thread should be upserted");
-
-        runtime
-            .replace_thread_goal(
-                thread_id,
-                "optimize the benchmark",
-                crate::ThreadGoalStatus::Active,
-                /*token_budget*/ None,
-            )
-            .await
-            .expect("goal replacement should succeed");
-
-        let metadata = runtime
-            .get_thread(thread_id)
-            .await
-            .expect("thread metadata should load")
-            .expect("thread should exist");
-        assert_eq!(metadata.preview.as_deref(), Some("optimize the benchmark"));
-        assert_eq!(metadata.first_user_message, None);
+        assert_eq!(
+            None,
+            runtime
+                .thread_goals()
+                .get_thread_goal(thread_id)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !runtime
+                .thread_goals()
+                .delete_thread_goal(thread_id)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -621,6 +644,7 @@ mod tests {
         upsert_test_thread(&runtime, thread_id).await;
 
         let replaced = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "stay within budget",
@@ -643,6 +667,7 @@ mod tests {
         upsert_test_thread(&runtime, thread_id).await;
 
         let inserted = runtime
+            .thread_goals()
             .insert_thread_goal(
                 thread_id,
                 "optimize the benchmark",
@@ -654,6 +679,7 @@ mod tests {
             .expect("goal should be inserted");
 
         let duplicate = runtime
+            .thread_goals()
             .insert_thread_goal(
                 thread_id,
                 "replace the benchmark",
@@ -666,7 +692,11 @@ mod tests {
         assert_eq!(None, duplicate);
         assert_eq!(
             Some(inserted),
-            runtime.get_thread_goal(thread_id).await.unwrap()
+            runtime
+                .thread_goals()
+                .get_thread_goal(thread_id)
+                .await
+                .unwrap()
         );
     }
 
@@ -677,6 +707,7 @@ mod tests {
         upsert_test_thread(&runtime, thread_id).await;
 
         let inserted = runtime
+            .thread_goals()
             .insert_thread_goal(
                 thread_id,
                 "stay within budget",
@@ -700,6 +731,7 @@ mod tests {
         upsert_test_thread(&runtime, thread_id).await;
 
         let original = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "old objective",
@@ -709,6 +741,7 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         let replacement = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "new objective",
@@ -719,9 +752,10 @@ mod tests {
             .expect("goal replacement should succeed");
 
         let stale_update = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Complete),
                     token_budget: None,
@@ -735,15 +769,17 @@ mod tests {
         assert_eq!(
             Some(replacement.clone()),
             runtime
+                .thread_goals()
                 .get_thread_goal(thread_id)
                 .await
                 .expect("goal read should succeed")
         );
 
         let fresh_update = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Complete),
                     token_budget: None,
@@ -763,6 +799,7 @@ mod tests {
         upsert_test_thread(&runtime, thread_id).await;
 
         let original = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "old objective",
@@ -772,6 +809,7 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         let replacement = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "new objective",
@@ -782,17 +820,18 @@ mod tests {
             .expect("goal replacement should succeed");
 
         let outcome = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 Some(original.goal_id.as_str()),
             )
             .await
             .expect("usage accounting should succeed");
 
-        let ThreadGoalAccountingOutcome::Unchanged(Some(goal)) = outcome else {
+        let GoalAccountingOutcome::Unchanged(Some(goal)) = outcome else {
             panic!("stale goal version should not be updated");
         };
         assert_ne!(replacement.goal_id, original.goal_id);
@@ -809,6 +848,7 @@ mod tests {
         upsert_test_thread(&runtime, thread_id).await;
 
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "draft the report",
@@ -818,23 +858,25 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         let outcome = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 12,
                 /*token_delta*/ 30,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Updated(accounted) = outcome else {
+        let GoalAccountingOutcome::Updated(accounted) = outcome else {
             panic!("active goal should account usage");
         };
 
         let updated = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: Some("draft the report clearly".to_string()),
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: Some(Some(200)),
@@ -860,6 +902,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "optimize the benchmark",
@@ -869,18 +912,18 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
 
-        let status_update = runtime.update_thread_goal(
+        let status_update = runtime.thread_goals().update_thread_goal(
             thread_id,
-            ThreadGoalUpdate {
+            GoalUpdate {
                 objective: None,
                 status: Some(crate::ThreadGoalStatus::Paused),
                 token_budget: None,
                 expected_goal_id: None,
             },
         );
-        let budget_update = runtime.update_thread_goal(
+        let budget_update = runtime.thread_goals().update_thread_goal(
             thread_id,
-            ThreadGoalUpdate {
+            GoalUpdate {
                 objective: None,
                 status: None,
                 token_budget: Some(Some(200_000)),
@@ -892,6 +935,7 @@ mod tests {
         budget_update.expect("budget update should succeed");
 
         let goal = runtime
+            .thread_goals()
             .get_thread_goal(thread_id)
             .await
             .expect("goal read should succeed")
@@ -906,6 +950,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         let goal = runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "optimize the benchmark",
@@ -916,6 +961,7 @@ mod tests {
             .expect("goal replacement should succeed");
 
         let paused = runtime
+            .thread_goals()
             .pause_active_thread_goal(thread_id)
             .await
             .expect("active pause should succeed")
@@ -928,9 +974,10 @@ mod tests {
         assert_eq!(expected, paused);
 
         let complete = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Complete),
                     token_budget: None,
@@ -941,6 +988,7 @@ mod tests {
             .expect("goal update should succeed")
             .expect("goal should exist");
         let pause_result = runtime
+            .thread_goals()
             .pause_active_thread_goal(thread_id)
             .await
             .expect("terminal pause attempt should succeed");
@@ -948,10 +996,71 @@ mod tests {
         assert_eq!(
             Some(complete),
             runtime
+                .thread_goals()
                 .get_thread_goal(thread_id)
                 .await
                 .expect("goal read should succeed")
         );
+    }
+
+    #[tokio::test]
+    async fn usage_limit_active_thread_goal_updates_active_or_budget_limited_goals() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+        let goal = runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "optimize the benchmark",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let usage_limited = runtime
+            .thread_goals()
+            .usage_limit_active_thread_goal(thread_id)
+            .await
+            .expect("usage limiting should succeed")
+            .expect("active goal should become usage limited");
+        let expected = crate::ThreadGoal {
+            status: crate::ThreadGoalStatus::UsageLimited,
+            updated_at: usage_limited.updated_at,
+            ..goal
+        };
+        assert_eq!(expected, usage_limited);
+
+        let second_update = runtime
+            .thread_goals()
+            .usage_limit_active_thread_goal(thread_id)
+            .await
+            .expect("repeated usage limiting should succeed");
+        assert_eq!(None, second_update);
+
+        let budget_limited = runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "keep the usage failure visible",
+                crate::ThreadGoalStatus::BudgetLimited,
+                /*token_budget*/ Some(1),
+            )
+            .await
+            .expect("goal replacement should succeed");
+        let usage_limited = runtime
+            .thread_goals()
+            .usage_limit_active_thread_goal(thread_id)
+            .await
+            .expect("usage limiting should succeed")
+            .expect("budget-limited goal should become usage limited");
+        let expected = crate::ThreadGoal {
+            status: crate::ThreadGoalStatus::UsageLimited,
+            updated_at: usage_limited.updated_at,
+            ..budget_limited
+        };
+        assert_eq!(expected, usage_limited);
     }
 
     #[tokio::test]
@@ -960,6 +1069,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "stay within budget",
@@ -970,16 +1080,17 @@ mod tests {
             .expect("goal replacement should succeed");
 
         let outcome = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 7,
                 /*token_delta*/ 5,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Updated(goal) = outcome else {
+        let GoalAccountingOutcome::Updated(goal) = outcome else {
             panic!("active goal should be updated");
         };
         assert_eq!(crate::ThreadGoalStatus::Active, goal.status);
@@ -987,16 +1098,17 @@ mod tests {
         assert_eq!(7, goal.time_used_seconds);
 
         let outcome = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 3,
                 /*token_delta*/ 15,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Updated(goal) = outcome else {
+        let GoalAccountingOutcome::Updated(goal) = outcome else {
             panic!("budget crossing should update the goal");
         };
         assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
@@ -1004,16 +1116,17 @@ mod tests {
         assert_eq!(10, goal.time_used_seconds);
 
         let outcome = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Updated(goal) = outcome else {
+        let GoalAccountingOutcome::Updated(goal) = outcome else {
             panic!("budget-limited goal should still account in-flight active usage");
         };
         assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
@@ -1027,6 +1140,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "stay stopped",
@@ -1037,16 +1151,17 @@ mod tests {
             .expect("goal replacement should succeed");
 
         let outcome = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
-                ThreadGoalAccountingMode::ActiveStatusOnly,
+                GoalAccountingMode::ActiveStatusOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Unchanged(Some(goal)) = outcome else {
+        let GoalAccountingOutcome::Unchanged(Some(goal)) = outcome else {
             panic!("budget-limited goal should not be updated");
         };
         assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
@@ -1060,6 +1175,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "stop before overrun",
@@ -1069,9 +1185,10 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                crate::ThreadGoalUpdate {
+                crate::GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: None,
@@ -1082,16 +1199,17 @@ mod tests {
             .expect("goal update should succeed");
 
         let outcome = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 3,
                 /*token_delta*/ 25,
-                ThreadGoalAccountingMode::ActiveOrStopped,
+                GoalAccountingMode::ActiveOrStopped,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Updated(goal) = outcome else {
+        let GoalAccountingOutcome::Updated(goal) = outcome else {
             panic!("stopped goal should account final usage");
         };
         assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
@@ -1105,6 +1223,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "stay within budget",
@@ -1114,20 +1233,22 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
 
         let lowered = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: None,
                     token_budget: Some(Some(40)),
@@ -1149,6 +1270,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "stay within budget",
@@ -1158,20 +1280,22 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
 
         let reactivated = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: Some("stay within budget, with clearer wording".to_string()),
                     status: Some(crate::ThreadGoalStatus::Active),
                     token_budget: None,
@@ -1197,6 +1321,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "stay within budget",
@@ -1206,20 +1331,22 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
 
         let paused = runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: None,
@@ -1236,11 +1363,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn blocking_budget_limited_goal_preserves_terminal_status() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+        runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "stay within budget",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(40),
+            )
+            .await
+            .expect("goal replacement should succeed");
+        let outcome = runtime
+            .thread_goals()
+            .account_thread_goal_usage(
+                thread_id,
+                /*time_delta_seconds*/ 1,
+                /*token_delta*/ 50,
+                GoalAccountingMode::ActiveOnly,
+                /*expected_goal_id*/ None,
+            )
+            .await
+            .expect("usage accounting should succeed");
+        let GoalAccountingOutcome::Updated(budget_limited) = outcome else {
+            panic!("budget crossing should update the goal");
+        };
+
+        let blocked = runtime
+            .thread_goals()
+            .update_thread_goal(
+                thread_id,
+                GoalUpdate {
+                    objective: None,
+                    status: Some(crate::ThreadGoalStatus::Blocked),
+                    token_budget: None,
+                    expected_goal_id: None,
+                },
+            )
+            .await
+            .expect("goal update should succeed")
+            .expect("goal should exist");
+
+        let expected = crate::ThreadGoal {
+            updated_at: blocked.updated_at,
+            ..budget_limited
+        };
+        assert_eq!(expected, blocked);
+    }
+
+    #[tokio::test]
     async fn usage_accounting_can_finalize_completed_goal_for_completing_turn() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "finish the report",
@@ -1251,16 +1431,17 @@ mod tests {
             .expect("goal replacement should succeed");
 
         let active_only = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Unchanged(Some(goal)) = active_only else {
+        let GoalAccountingOutcome::Unchanged(Some(goal)) = active_only else {
             panic!("completed goal should not be updated by active-only accounting");
         };
         assert_eq!(crate::ThreadGoalStatus::Complete, goal.status);
@@ -1268,16 +1449,17 @@ mod tests {
         assert_eq!(0, goal.time_used_seconds);
 
         let completing_turn = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
-                ThreadGoalAccountingMode::ActiveOrComplete,
+                GoalAccountingMode::ActiveOrComplete,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Updated(goal) = completing_turn else {
+        let GoalAccountingOutcome::Updated(goal) = completing_turn else {
             panic!("completed goal should be updated for final accounting");
         };
         assert_eq!(crate::ThreadGoalStatus::Complete, goal.status);
@@ -1291,6 +1473,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "finish the report",
@@ -1300,9 +1483,10 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
         runtime
+            .thread_goals()
             .update_thread_goal(
                 thread_id,
-                ThreadGoalUpdate {
+                GoalUpdate {
                     objective: None,
                     status: Some(crate::ThreadGoalStatus::Paused),
                     token_budget: None,
@@ -1314,16 +1498,17 @@ mod tests {
             .expect("goal should exist");
 
         let active_only = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
-                ThreadGoalAccountingMode::ActiveOnly,
+                GoalAccountingMode::ActiveOnly,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Unchanged(Some(goal)) = active_only else {
+        let GoalAccountingOutcome::Unchanged(Some(goal)) = active_only else {
             panic!("paused goal should not be updated by active-only accounting");
         };
         assert_eq!(crate::ThreadGoalStatus::Paused, goal.status);
@@ -1331,16 +1516,17 @@ mod tests {
         assert_eq!(0, goal.time_used_seconds);
 
         let in_flight_turn = runtime
+            .thread_goals()
             .account_thread_goal_usage(
                 thread_id,
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
-                ThreadGoalAccountingMode::ActiveOrStopped,
+                GoalAccountingMode::ActiveOrStopped,
                 /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Updated(goal) = in_flight_turn else {
+        let GoalAccountingOutcome::Updated(goal) = in_flight_turn else {
             panic!("stopped goal should be updated for in-flight accounting");
         };
         assert_eq!(crate::ThreadGoalStatus::Paused, goal.status);
@@ -1354,6 +1540,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "count every token",
@@ -1363,18 +1550,18 @@ mod tests {
             .await
             .expect("goal replacement should succeed");
 
-        let first = runtime.account_thread_goal_usage(
+        let first = runtime.thread_goals().account_thread_goal_usage(
             thread_id,
             /*time_delta_seconds*/ 4,
             /*token_delta*/ 40,
-            ThreadGoalAccountingMode::ActiveOnly,
+            GoalAccountingMode::ActiveOnly,
             /*expected_goal_id*/ None,
         );
-        let second = runtime.account_thread_goal_usage(
+        let second = runtime.thread_goals().account_thread_goal_usage(
             thread_id,
             /*time_delta_seconds*/ 6,
             /*token_delta*/ 60,
-            ThreadGoalAccountingMode::ActiveOnly,
+            GoalAccountingMode::ActiveOnly,
             /*expected_goal_id*/ None,
         );
         let (first, second) = tokio::join!(first, second);
@@ -1382,6 +1569,7 @@ mod tests {
         second.expect("second usage accounting should succeed");
 
         let goal = runtime
+            .thread_goals()
             .get_thread_goal(thread_id)
             .await
             .expect("goal read should succeed")
@@ -1396,6 +1584,7 @@ mod tests {
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
         runtime
+            .thread_goals()
             .replace_thread_goal(
                 thread_id,
                 "clean up with the thread",
@@ -1413,6 +1602,7 @@ mod tests {
         assert_eq!(
             None,
             runtime
+                .thread_goals()
                 .get_thread_goal(thread_id)
                 .await
                 .expect("goal read should succeed")

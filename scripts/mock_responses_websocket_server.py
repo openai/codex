@@ -44,13 +44,23 @@ def _event_response_done() -> dict[str, Any]:
 
 
 def _event_response_completed(response_id: str) -> dict[str, Any]:
-    return {"type": "response.completed", "response": {"id": response_id, "usage": _default_usage()}}
+    return {
+        "type": "response.completed",
+        "response": {"id": response_id, "usage": _default_usage()},
+    }
 
 
-def _event_function_call(call_id: str, name: str, arguments_json: str) -> dict[str, Any]:
+def _event_function_call(
+    call_id: str, name: str, arguments_json: str
+) -> dict[str, Any]:
     return {
         "type": "response.output_item.done",
-        "item": {"type": "function_call", "call_id": call_id, "name": name, "arguments": arguments_json},
+        "item": {
+            "type": "function_call",
+            "call_id": call_id,
+            "name": name,
+            "arguments": arguments_json,
+        },
     }
 
 
@@ -75,6 +85,7 @@ def _print_request(prefix: str, payload: Any) -> None:
     sys.stdout.write(f"{prefix} {_utc_iso()}\n{pretty}\n")
     sys.stdout.flush()
 
+
 async def _handle_connection(
     websocket: Any,
     *,
@@ -91,7 +102,9 @@ async def _handle_connection(
 
     path_no_qs = path.split("?", 1)[0] if path != "(unknown)" else path
     if path_no_qs != "(unknown)" and path_no_qs != expected_path:
-        sys.stdout.write(f"[conn] {_utc_iso()} rejecting unexpected path (expected {expected_path})\n")
+        sys.stdout.write(
+            f"[conn] {_utc_iso()} rejecting unexpected path (expected {expected_path})\n"
+        )
         sys.stdout.flush()
         await websocket.close(code=1008, reason="unexpected websocket path")
         return

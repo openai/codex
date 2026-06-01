@@ -24,7 +24,7 @@ pub struct StartedExecProcess {
 /// stdout, stderr, or pty bytes. `Exited` reports the process exit status, while
 /// `Closed` means all output streams have ended and no more output events will
 /// arrive. `Failed` is used when the process session cannot continue, for
-/// example because the remote executor connection disconnected.
+/// example because the remote environment connection disconnected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecProcessEvent {
     Output(ProcessOutputChunk),

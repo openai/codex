@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 import subprocess
@@ -14,10 +12,19 @@ from pydantic import BaseModel
 
 from ._message_router import MessageRouter
 from ._version import __version__ as SDK_VERSION
-from .errors import AppServerError, TransportClosedError
+from .errors import CodexError, TransportClosedError
 from .generated.notification_registry import NOTIFICATION_MODELS
 from .generated.v2_all import (
+    AccountLoginCompletedNotification,
     AgentMessageDeltaNotification,
+    CancelLoginAccountResponse,
+    ChatgptDeviceCodeLoginAccountResponse,
+    ChatgptLoginAccountResponse,
+    GetAccountParams as V2GetAccountParams,
+    GetAccountResponse,
+    LoginAccountParams as V2LoginAccountParams,
+    LoginAccountResponse,
+    LogoutAccountResponse,
     ModelListResponse,
     ThreadArchiveResponse,
     ThreadCompactStartResponse,
@@ -59,6 +66,8 @@ def _params_dict(
         | V2ThreadListParams
         | V2ThreadForkParams
         | V2TurnStartParams
+        | V2GetAccountParams
+        | V2LoginAccountParams
         | JsonObject
         | None
     ),
@@ -85,11 +94,50 @@ def _installed_codex_path() -> Path:
     except ImportError as exc:
         raise FileNotFoundError(
             "Unable to locate the pinned Codex runtime. Install the published SDK build "
-            f"with its {RUNTIME_PKG_NAME} dependency, or set AppServerConfig.codex_bin "
+            f"with its {RUNTIME_PKG_NAME} dependency, or set CodexConfig.codex_bin "
             "explicitly."
         ) from exc
 
     return bundled_codex_path()
+
+
+def _installed_codex_path_dirs() -> tuple[Path, ...]:
+    try:
+        from codex_cli_bin import bundled_path_dir
+    except (ImportError, AttributeError):
+        return ()
+
+    path_dir = bundled_path_dir()
+    return (path_dir,) if path_dir is not None else ()
+
+
+def _prepend_path_dirs(env: dict[str, str], path_dirs: tuple[Path, ...]) -> None:
+    if not path_dirs:
+        return
+
+    path_key = _path_env_key(env)
+    if os.name == "nt":
+        for key in list(env):
+            if key.upper() == "PATH" and key != path_key:
+                env.pop(key)
+
+    path_sep = os.pathsep
+    existing_path = env.get(path_key, "")
+    path_dir_values = [str(path_dir) for path_dir in path_dirs]
+    existing_entries = [
+        entry for entry in existing_path.split(path_sep) if entry and entry not in path_dir_values
+    ]
+    env[path_key] = path_sep.join([*path_dir_values, *existing_entries])
+
+
+def _path_env_key(env: dict[str, str]) -> str:
+    if os.name != "nt":
+        return "PATH"
+
+    matching_keys = [key for key in env if key.upper() == "PATH"]
+    if "Path" in matching_keys:
+        return "Path"
+    return matching_keys[-1] if matching_keys else "PATH"
 
 
 @dataclass(frozen=True)
@@ -105,12 +153,12 @@ def _default_codex_bin_resolver_ops() -> CodexBinResolverOps:
     )
 
 
-def resolve_codex_bin(config: "AppServerConfig", ops: CodexBinResolverOps) -> Path:
+def resolve_codex_bin(config: "CodexConfig", ops: CodexBinResolverOps) -> Path:
     if config.codex_bin is not None:
         codex_bin = Path(config.codex_bin)
         if not ops.path_exists(codex_bin):
             raise FileNotFoundError(
-                f"Codex binary not found at {codex_bin}. Set AppServerConfig.codex_bin "
+                f"Codex binary not found at {codex_bin}. Set CodexConfig.codex_bin "
                 "to a valid binary path."
             )
         return codex_bin
@@ -118,12 +166,18 @@ def resolve_codex_bin(config: "AppServerConfig", ops: CodexBinResolverOps) -> Pa
     return ops.installed_codex_path()
 
 
-def _resolve_codex_bin(config: "AppServerConfig") -> Path:
+def _resolve_codex_bin(config: "CodexConfig") -> Path:
     return resolve_codex_bin(config, _default_codex_bin_resolver_ops())
 
 
 @dataclass(slots=True)
-class AppServerConfig:
+class CodexConfig:
+    """Configuration for launching and identifying the local Codex runtime.
+
+    Most callers can use ``Codex()`` without configuration. Set ``codex_bin``
+    only when intentionally using a specific local Codex executable.
+    """
+
     codex_bin: str | None = None
     launch_args_override: tuple[str, ...] | None = None
     config_overrides: tuple[str, ...] = ()
@@ -135,15 +189,15 @@ class AppServerConfig:
     experimental_api: bool = True
 
 
-class AppServerClient:
+class CodexClient:
     """Synchronous typed JSON-RPC client for `codex app-server` over stdio."""
 
     def __init__(
         self,
-        config: AppServerConfig | None = None,
+        config: CodexConfig | None = None,
         approval_handler: ApprovalHandler | None = None,
     ) -> None:
-        self.config = config or AppServerConfig()
+        self.config = config or CodexConfig()
         self._approval_handler = approval_handler or self._default_approval_handler
         self._proc: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
@@ -152,7 +206,7 @@ class AppServerClient:
         self._stderr_thread: threading.Thread | None = None
         self._reader_thread: threading.Thread | None = None
 
-    def __enter__(self) -> "AppServerClient":
+    def __enter__(self) -> "CodexClient":
         self.start()
         return self
 
@@ -163,10 +217,13 @@ class AppServerClient:
         if self._proc is not None:
             return
 
+        path_dirs: tuple[Path, ...] = ()
         if self.config.launch_args_override is not None:
             args = list(self.config.launch_args_override)
         else:
             codex_bin = _resolve_codex_bin(self.config)
+            if self.config.codex_bin is None:
+                path_dirs = _installed_codex_path_dirs()
             args = [str(codex_bin)]
             for kv in self.config.config_overrides:
                 args.extend(["--config", kv])
@@ -175,6 +232,7 @@ class AppServerClient:
         env = os.environ.copy()
         if self.config.env:
             env.update(self.config.env)
+        _prepend_path_dirs(env, path_dirs)
 
         self._proc = subprocess.Popen(
             args,
@@ -237,7 +295,7 @@ class AppServerClient:
     ) -> ModelT:
         result = self._request_raw(method, params)
         if not isinstance(result, dict):
-            raise AppServerError(f"{method} response must be a JSON object")
+            raise CodexError(f"{method} response must be a JSON object")
         return response_model.model_validate(result)
 
     def _request_raw(self, method: str, params: JsonObject | None = None) -> JsonValue:
@@ -246,7 +304,10 @@ class AppServerClient:
         waiter = self._router.create_response_waiter(request_id)
 
         try:
-            self._write_message({"id": request_id, "method": method, "params": params or {}})
+            message: JsonObject = {"id": request_id, "method": method}
+            if params is not None:
+                message["params"] = params
+            self._write_message(message)
         except BaseException:
             self._router.discard_response_waiter(request_id)
             raise
@@ -258,11 +319,26 @@ class AppServerClient:
 
     def notify(self, method: str, params: JsonObject | None = None) -> None:
         """Send a JSON-RPC notification without waiting for a response."""
-        self._write_message({"method": method, "params": params or {}})
+        message: JsonObject = {"method": method}
+        if params is not None:
+            message["params"] = params
+        self._write_message(message)
 
     def next_notification(self) -> Notification:
         """Return the next notification that is not scoped to an active turn."""
         return self._router.next_global_notification()
+
+    def register_login_notifications(self, login_id: str) -> None:
+        """Start routing notifications for one interactive login attempt."""
+        self._router.register_login(login_id)
+
+    def unregister_login_notifications(self, login_id: str) -> None:
+        """Stop routing notifications for one interactive login attempt."""
+        self._router.unregister_login(login_id)
+
+    def next_login_notification(self, login_id: str) -> Notification:
+        """Return the next routed notification for the requested login id."""
+        return self._router.next_login_notification(login_id)
 
     def register_turn_notifications(self, turn_id: str) -> None:
         """Start routing notifications for one turn into its dedicated queue."""
@@ -275,6 +351,43 @@ class AppServerClient:
     def next_turn_notification(self, turn_id: str) -> Notification:
         """Return the next routed notification for the requested turn id."""
         return self._router.next_turn_notification(turn_id)
+
+    def account_login_start(
+        self,
+        params: V2LoginAccountParams | JsonObject,
+    ) -> LoginAccountResponse:
+        response = self.request(
+            "account/login/start",
+            _params_dict(params),
+            response_model=LoginAccountResponse,
+        )
+        response_root = response.root
+        if isinstance(
+            response_root,
+            ChatgptLoginAccountResponse | ChatgptDeviceCodeLoginAccountResponse,
+        ):
+            self.register_login_notifications(response_root.login_id)
+        return response
+
+    def account_login_cancel(self, login_id: str) -> CancelLoginAccountResponse:
+        return self.request(
+            "account/login/cancel",
+            {"loginId": login_id},
+            response_model=CancelLoginAccountResponse,
+        )
+
+    def account_read(
+        self,
+        params: V2GetAccountParams | JsonObject | None = None,
+    ) -> GetAccountResponse:
+        return self.request(
+            "account/read",
+            _params_dict(params),
+            response_model=GetAccountResponse,
+        )
+
+    def account_logout(self) -> LogoutAccountResponse:
+        return self.request("account/logout", None, response_model=LogoutAccountResponse)
 
     def thread_start(
         self, params: V2ThreadStartParams | JsonObject | None = None
@@ -417,6 +530,24 @@ class AppServerClient:
         finally:
             self.unregister_turn_notifications(turn_id)
 
+    def wait_for_login_completed(
+        self,
+        login_id: str,
+    ) -> AccountLoginCompletedNotification:
+        """Block until the matching interactive login attempt completes."""
+        self.register_login_notifications(login_id)
+        try:
+            while True:
+                notification = self.next_login_notification(login_id)
+                if (
+                    notification.method == "account/login/completed"
+                    and isinstance(notification.payload, AccountLoginCompletedNotification)
+                    and notification.payload.login_id == login_id
+                ):
+                    return notification.payload
+        finally:
+            self.unregister_login_notifications(login_id)
+
     def stream_text(
         self,
         thread_id: str,
@@ -534,28 +665,28 @@ class AppServerClient:
 
     def _write_message(self, payload: JsonObject) -> None:
         if self._proc is None or self._proc.stdin is None:
-            raise TransportClosedError("app-server is not running")
+            raise TransportClosedError("Codex process is not running")
         with self._lock:
             self._proc.stdin.write(json.dumps(payload) + "\n")
             self._proc.stdin.flush()
 
     def _read_message(self) -> dict[str, JsonValue]:
         if self._proc is None or self._proc.stdout is None:
-            raise TransportClosedError("app-server is not running")
+            raise TransportClosedError("Codex process is not running")
 
         line = self._proc.stdout.readline()
         if not line:
             raise TransportClosedError(
-                f"app-server closed stdout. stderr_tail={self._stderr_tail()[:2000]}"
+                f"Codex process closed stdout. stderr_tail={self._stderr_tail()[:2000]}"
             )
 
         try:
             message = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise AppServerError(f"Invalid JSON-RPC line: {line!r}") from exc
+            raise CodexError(f"Invalid JSON-RPC line: {line!r}") from exc
 
         if not isinstance(message, dict):
-            raise AppServerError(f"Invalid JSON-RPC payload: {message!r}")
+            raise CodexError(f"Invalid JSON-RPC payload: {message!r}")
         return message
 
 

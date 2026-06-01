@@ -22,86 +22,36 @@ pub(super) struct ConnectorsState {
 
 impl ChatWidget {
     pub(crate) fn refresh_connectors(&mut self, force_refetch: bool) {
-        self.prefetch_connectors_with_options(force_refetch);
+        self.queue_connectors_refresh(force_refetch);
     }
 
     pub(super) fn prefetch_connectors(&mut self) {
-        self.prefetch_connectors_with_options(/*force_refetch*/ false);
+        self.queue_connectors_refresh(/*force_refetch*/ false);
     }
 
-    fn prefetch_connectors_with_options(&mut self, force_refetch: bool) {
+    fn queue_connectors_refresh(&mut self, force_refetch: bool) {
+        if self.begin_connectors_refresh(force_refetch) {
+            self.app_event_tx
+                .send(AppEvent::FetchConnectorsList { force_refetch });
+        }
+    }
+
+    fn begin_connectors_refresh(&mut self, force_refetch: bool) -> bool {
         if !self.connectors_enabled() {
-            return;
+            return false;
         }
         if self.connectors.prefetch_in_flight {
             if force_refetch {
                 self.connectors.force_refetch_pending = true;
             }
-            return;
+            return false;
         }
 
         self.connectors.prefetch_in_flight = true;
         if !matches!(self.connectors.cache, ConnectorsCacheState::Ready(_)) {
             self.connectors.cache = ConnectorsCacheState::Loading;
         }
-
-        let config = self.config.clone();
-        let environment_manager = Arc::clone(&self.environment_manager);
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let accessible_result =
-                match chatgpt_connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
-                    &config,
-                    force_refetch,
-                    &environment_manager,
-                )
-                .await
-                {
-                    Ok(connectors) => connectors,
-                    Err(err) => {
-                        app_event_tx.send(AppEvent::ConnectorsLoaded {
-                            result: Err(format!("Failed to load apps: {err}")),
-                            is_final: true,
-                        });
-                        return;
-                    }
-                };
-            let should_schedule_force_refetch =
-                !force_refetch && !accessible_result.codex_apps_ready;
-            let accessible_connectors = accessible_result.connectors;
-
-            app_event_tx.send(AppEvent::ConnectorsLoaded {
-                result: Ok(ConnectorsSnapshot {
-                    connectors: accessible_connectors.clone(),
-                }),
-                is_final: false,
-            });
-
-            let result: Result<ConnectorsSnapshot, String> = async {
-                let all_connectors =
-                    chatgpt_connectors::list_all_connectors_with_options(&config, force_refetch)
-                        .await?;
-                let connectors = chatgpt_connectors::merge_connectors_with_accessible(
-                    all_connectors,
-                    accessible_connectors,
-                    /*all_connectors_loaded*/ true,
-                );
-                Ok(ConnectorsSnapshot { connectors })
-            }
-            .await
-            .map_err(|err: anyhow::Error| format!("Failed to load apps: {err}"));
-
-            app_event_tx.send(AppEvent::ConnectorsLoaded {
-                result,
-                is_final: true,
-            });
-
-            if should_schedule_force_refetch {
-                app_event_tx.send(AppEvent::RefreshConnectors {
-                    force_refetch: true,
-                });
-            }
-        });
+        true
     }
 
     pub(super) fn connectors_enabled(&self) -> bool {
@@ -135,7 +85,7 @@ impl ChatWidget {
         let connectors_cache = self.connectors.cache.clone();
         let should_force_refetch = !self.connectors.prefetch_in_flight
             || matches!(connectors_cache, ConnectorsCacheState::Ready(_));
-        self.prefetch_connectors_with_options(should_force_refetch);
+        self.queue_connectors_refresh(should_force_refetch);
 
         match connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => {
@@ -353,15 +303,6 @@ impl ChatWidget {
 
         match result {
             Ok(mut snapshot) => {
-                if !is_final {
-                    snapshot.connectors = chatgpt_connectors::merge_connectors_with_accessible(
-                        Vec::new(),
-                        snapshot.connectors,
-                        /*all_connectors_loaded*/ false,
-                    );
-                }
-                snapshot.connectors =
-                    chatgpt_connectors::with_app_enabled_state(snapshot.connectors, &self.config);
                 if let ConnectorsCacheState::Ready(existing_snapshot) = &self.connectors.cache {
                     let enabled_by_id: HashMap<&str, bool> = existing_snapshot
                         .connectors
@@ -404,7 +345,7 @@ impl ChatWidget {
         }
 
         if trigger_pending_force_refetch {
-            self.prefetch_connectors_with_options(/*force_refetch*/ true);
+            self.queue_connectors_refresh(/*force_refetch*/ true);
         }
     }
 

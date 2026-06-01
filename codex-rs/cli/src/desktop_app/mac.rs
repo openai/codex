@@ -82,10 +82,11 @@ async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()>
         "Opening workspace {workspace}...",
         workspace = workspace.display()
     );
+    let url = codex_new_thread_url(workspace);
     let status = Command::new("open")
         .arg("-a")
         .arg(app_path)
-        .arg(workspace)
+        .arg(&url)
         .status()
         .await
         .context("failed to invoke `open`")?;
@@ -95,10 +96,18 @@ async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()>
     }
 
     anyhow::bail!(
-        "`open -a {app_path} {workspace}` exited with {status}",
+        "`open -a {app_path} {url}` exited with {status}",
         app_path = app_path.display(),
-        workspace = workspace.display()
+        url = url
     );
+}
+
+fn codex_new_thread_url(workspace: &Path) -> String {
+    let workspace = workspace.as_os_str().to_string_lossy();
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("path", workspace.as_ref());
+    let query = serializer.finish();
+    format!("codex://threads/new?{query}")
 }
 
 async fn download_and_install_codex_to_user_applications(dmg_url: &str) -> anyhow::Result<PathBuf> {
@@ -293,8 +302,10 @@ fn parse_hdiutil_attach_mount_point(output: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::codex_new_thread_url;
     use super::parse_hdiutil_attach_mount_point;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
 
     #[test]
     fn parses_mount_point_from_tab_separated_hdiutil_output() {
@@ -311,6 +322,27 @@ mod tests {
         assert_eq!(
             parse_hdiutil_attach_mount_point(output).as_deref(),
             Some("/Volumes/Codex Installer")
+        );
+    }
+
+    #[test]
+    fn codex_new_thread_url_encodes_workspace_path() {
+        let url = url::Url::parse(&codex_new_thread_url(Path::new("/tmp/codex workspace/#1")))
+            .expect("deep link should parse");
+
+        assert_eq!(
+            (
+                url.scheme().to_string(),
+                url.host_str().map(str::to_string),
+                url.path().to_string(),
+                url.query_pairs().into_owned().collect::<Vec<_>>(),
+            ),
+            (
+                "codex".to_string(),
+                Some("threads".to_string()),
+                "/new".to_string(),
+                vec![("path".to_string(), "/tmp/codex workspace/#1".to_string())],
+            )
         );
     }
 }

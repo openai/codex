@@ -1,24 +1,26 @@
 use super::*;
 use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v2;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_protocol::error::CodexErr;
 use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
-    type Output = CloseAgentResult;
-
     fn tool_name(&self) -> ToolName {
         ToolName::plain("close_agent")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_close_agent_tool_v2())
+    fn spec(&self) -> ToolSpec {
+        create_close_agent_tool_v2()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        handle_close_agent(invocation).await
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
+        handle_close_agent(invocation).await.map(boxed_tool_output)
     }
 }
 
@@ -35,11 +37,9 @@ async fn handle_close_agent(
     let arguments = function_arguments(payload)?;
     let args: CloseAgentArgs = parse_arguments(&arguments)?;
     let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
-    let receiver_agent = session
-        .services
-        .agent_control
-        .get_agent_metadata(agent_id)
-        .unwrap_or_default();
+    let receiver_agent = session.services.agent_control.get_agent_metadata(agent_id);
+    let known_agent = receiver_agent.is_some();
+    let receiver_agent = receiver_agent.unwrap_or_default();
     if receiver_agent
         .agent_path
         .as_ref()
@@ -68,6 +68,9 @@ async fn handle_close_agent(
         .await
     {
         Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
+        Err(CodexErr::ThreadNotFound(_)) if known_agent => {
+            session.services.agent_control.get_status(agent_id).await
+        }
         Err(err) => {
             let status = session.services.agent_control.get_status(agent_id).await;
             session
@@ -117,7 +120,7 @@ async fn handle_close_agent(
     })
 }
 
-impl ToolHandler for Handler {
+impl CoreToolRuntime for Handler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

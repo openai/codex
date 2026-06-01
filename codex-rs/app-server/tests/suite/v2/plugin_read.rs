@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
@@ -64,7 +64,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn plugin_read_rejects_missing_read_source() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -93,7 +93,7 @@ async fn plugin_read_rejects_missing_read_source() -> Result<()> {
 #[tokio::test]
 async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -101,7 +101,7 @@ async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
             marketplace_path: Some(AbsolutePathBuf::try_from(
                 codex_home.path().join("marketplace.json"),
             )?),
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
@@ -190,13 +190,13 @@ plugins = true
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
         .await?;
@@ -208,8 +208,8 @@ plugins = true
     .await??;
     let response: PluginReadResponse = to_response(response)?;
 
-    assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
-    assert_eq!(response.plugin.summary.id, "linear@chatgpt-global");
+    assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
+    assert_eq!(response.plugin.summary.id, "linear@openai-curated-remote");
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_00000000000000000000000000000000")
@@ -297,7 +297,7 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     for remote_marketplace_name in [
@@ -478,13 +478,13 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "plugins~Plugin_00000000000000000000000000000000".to_string(),
         })
         .await?;
@@ -496,10 +496,10 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     .await??;
     let response: PluginReadResponse = to_response(response)?;
 
-    assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
+    assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
     assert_eq!(response.plugin.marketplace_path, None);
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
-    assert_eq!(response.plugin.summary.id, "linear@chatgpt-global");
+    assert_eq!(response.plugin.summary.id, "linear@openai-curated-remote");
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_00000000000000000000000000000000")
@@ -563,12 +563,12 @@ async fn plugin_skill_read_reads_remote_skill_contents_when_remote_plugin_enable
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_skill_read_request(PluginSkillReadParams {
-            remote_marketplace_name: "chatgpt-global".to_string(),
+            remote_marketplace_name: "openai-curated-remote".to_string(),
             remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
             skill_name: "plan-work".to_string(),
         })
@@ -615,13 +615,13 @@ async fn plugin_read_maps_missing_remote_plugin_to_invalid_request() -> Result<(
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "plugins~Plugin_missing".to_string(),
         })
         .await?;
@@ -667,13 +667,13 @@ remote_plugin = true
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "linear".to_string(),
         })
         .await?;
@@ -697,13 +697,13 @@ remote_plugin = true
 async fn plugin_read_rejects_invalid_remote_plugin_name() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_remote_plugin_catalog_config(codex_home.path(), "https://example.invalid/backend-api/")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
             plugin_name: "linear/../../oops".to_string(),
         })
         .await?;
@@ -755,7 +755,7 @@ enabled = true
     )?;
     write_installed_plugin(&codex_home, "openai-curated", "demo-plugin")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let marketplace_path =
@@ -855,7 +855,7 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
         .expect(1)
         .mount(&server)
         .await;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -981,7 +981,7 @@ async fn plugin_read_keeps_remote_version_when_share_principals_are_missing() ->
         .expect(1)
         .mount(&server)
         .await;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1037,7 +1037,7 @@ async fn plugin_read_falls_back_to_local_share_context_without_remote_auth() -> 
     let plugin_path = AbsolutePathBuf::try_from(repo_root.path().join("demo-plugin"))?;
     write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &plugin_path)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1095,7 +1095,7 @@ async fn plugin_read_fails_on_malformed_share_mapping() -> Result<()> {
         "not valid json\n",
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1273,7 +1273,6 @@ description: Visible only for ChatGPT
         codex_home.path().join("config.toml"),
         r#"[features]
 plugins = true
-plugin_hooks = true
 
 [[skills.config]]
 name = "demo-plugin:thread-summarizer"
@@ -1288,7 +1287,7 @@ enabled = false
     )?;
     write_installed_plugin(&codex_home, "codex-curated", "demo-plugin")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let marketplace_path =
@@ -1459,7 +1458,7 @@ async fn plugin_read_returns_app_needs_auth() -> Result<()> {
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1526,7 +1525,7 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
     )?;
     write_plugins_enabled_config(&codex_home)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1588,7 +1587,7 @@ async fn plugin_read_describes_uninstalled_git_source_without_cloning() -> Resul
     )?;
     write_plugins_enabled_config(&codex_home)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1651,7 +1650,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<
     )?;
     write_plugins_enabled_config(&codex_home)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1704,7 +1703,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
     )?;
     write_plugins_enabled_config(&codex_home)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1769,10 +1768,7 @@ struct PluginReadMcpServer {
 
 impl ServerHandler for PluginReadMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..ServerInfo::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     fn list_tools(

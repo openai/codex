@@ -175,8 +175,8 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     if !config.enabled {
         entry["enabled"] = value(false);
     }
-    if let Some(environment) = &config.experimental_environment {
-        entry["experimental_environment"] = value(environment.clone());
+    if !config.is_local_environment() {
+        entry["environment_id"] = value(config.environment_id.clone());
     }
     if config.required {
         entry["required"] = value(true);
@@ -230,7 +230,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         let mut tools = TomlTable::new();
         tools.set_implicit(false);
         let mut tool_entries: Vec<_> = config.tools.iter().collect();
-        tool_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        tool_entries.sort_by_key(|(name, _)| *name);
         for (name, tool_config) in tool_entries {
             let mut tool_entry = TomlTable::new();
             tool_entry.set_implicit(false);
@@ -280,7 +280,7 @@ where
     I: IntoIterator<Item = (&'a String, &'a String)>,
 {
     let mut entries: Vec<_> = pairs.into_iter().collect();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    entries.sort_by_key(|(key, _)| *key);
     let mut table = TomlTable::new();
     table.set_implicit(false);
     for (key, value_str) in entries {

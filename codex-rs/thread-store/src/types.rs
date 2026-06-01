@@ -5,11 +5,11 @@ use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
@@ -73,6 +73,8 @@ pub struct CreateThreadParams {
     pub thread_id: ThreadId,
     /// Source thread id when this thread is created as a fork.
     pub forked_from_id: Option<ThreadId>,
+    /// The ID of the parent thread. This will only be set if this thread is a subagent.
+    pub parent_thread_id: Option<ThreadId>,
     /// Runtime source for the thread.
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
@@ -200,12 +202,46 @@ pub struct ListThreadsParams {
     pub use_state_db_only: bool,
 }
 
+/// Parameters for searching thread content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchThreadsParams {
+    /// Maximum number of threads to return.
+    pub page_size: usize,
+    /// Opaque cursor returned by a previous search call.
+    pub cursor: Option<String>,
+    /// Sort order requested by the caller.
+    pub sort_key: ThreadSortKey,
+    /// Sort direction requested by the caller.
+    pub sort_direction: SortDirection,
+    /// Allowed session sources. Empty means implementation default.
+    pub allowed_sources: Vec<SessionSource>,
+    /// Whether archived threads should be searched instead of active threads.
+    pub archived: bool,
+    /// Visible thread content to search for.
+    pub search_term: String,
+}
+
 /// A page of stored thread records.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThreadPage {
     /// Threads returned for this page.
     pub items: Vec<StoredThread>,
     /// Opaque cursor to continue listing.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredThreadSearchResult {
+    pub thread: StoredThread,
+    pub snippet: String,
+}
+
+/// A page of thread-search results.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ThreadSearchPage {
+    /// Search results returned for this page.
+    pub items: Vec<StoredThreadSearchResult>,
+    /// Opaque cursor to continue searching.
     pub next_cursor: Option<String>,
 }
 
@@ -329,6 +365,8 @@ pub struct StoredThread {
     pub rollout_path: Option<PathBuf>,
     /// Source thread id when this thread was forked from another thread.
     pub forked_from_id: Option<ThreadId>,
+    /// The ID of the parent thread. This will only be set if this thread is a subagent.
+    pub parent_thread_id: Option<ThreadId>,
     /// Best available user-facing preview, usually the first user message.
     pub preview: String,
     /// Optional user-facing thread name/title.
@@ -365,8 +403,8 @@ pub struct StoredThread {
     pub artifacts: Vec<StoredThreadArtifact>,
     /// Approval mode captured for the thread.
     pub approval_mode: AskForApproval,
-    /// Sandbox policy captured for the thread.
-    pub sandbox_policy: SandboxPolicy,
+    /// Canonical runtime permissions captured for the thread.
+    pub permission_profile: PermissionProfile,
     /// Last observed token usage.
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread, if any.
@@ -521,8 +559,8 @@ pub struct ThreadMetadataPatch {
     pub cli_version: Option<String>,
     /// Approval mode.
     pub approval_mode: Option<AskForApproval>,
-    /// Sandbox policy.
-    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Canonical runtime permissions.
+    pub permission_profile: Option<PermissionProfile>,
     /// Last observed token usage.
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread.
@@ -531,8 +569,6 @@ pub struct ThreadMetadataPatch {
     pub git_info: Option<GitInfoPatch>,
     /// Thread memory behavior.
     pub memory_mode: Option<MemoryMode>,
-    /// Dynamic tools available to this thread.
-    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 impl ThreadMetadataPatch {
@@ -593,8 +629,8 @@ impl ThreadMetadataPatch {
         if next.approval_mode.is_some() {
             self.approval_mode = next.approval_mode;
         }
-        if next.sandbox_policy.is_some() {
-            self.sandbox_policy = next.sandbox_policy;
+        if next.permission_profile.is_some() {
+            self.permission_profile = next.permission_profile;
         }
         if next.token_usage.is_some() {
             self.token_usage = next.token_usage;
@@ -609,9 +645,6 @@ impl ThreadMetadataPatch {
         }
         if next.memory_mode.is_some() {
             self.memory_mode = next.memory_mode;
-        }
-        if next.dynamic_tools.is_some() {
-            self.dynamic_tools = next.dynamic_tools;
         }
     }
 
@@ -633,12 +666,11 @@ impl ThreadMetadataPatch {
             && self.cwd.is_none()
             && self.cli_version.is_none()
             && self.approval_mode.is_none()
-            && self.sandbox_policy.is_none()
+            && self.permission_profile.is_none()
             && self.token_usage.is_none()
             && self.first_user_message.is_none()
             && self.git_info.is_none()
             && self.memory_mode.is_none()
-            && self.dynamic_tools.is_none()
     }
 }
 

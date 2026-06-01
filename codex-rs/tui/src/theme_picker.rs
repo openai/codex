@@ -199,10 +199,9 @@ fn render_preview(
         0
     };
 
-    let mut y = area.y.saturating_add(top_pad);
     let render_width = area.width.saturating_sub(left_pad);
     let style_context = current_diff_render_style_context();
-    for (idx, row) in preview_rows.iter().enumerate() {
+    for (y, (idx, row)) in (area.y.saturating_add(top_pad)..).zip(preview_rows.iter().enumerate()) {
         if y >= area.y + area.height {
             break;
         }
@@ -232,7 +231,6 @@ fn render_preview(
             Rect::new(area.x.saturating_add(left_pad), y, render_width, 1),
             buf,
         );
-        y += 1;
     }
 }
 

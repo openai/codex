@@ -86,17 +86,36 @@ use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
+use crate::schema::SubagentStartCommandOutputWire;
+use crate::schema::SubagentStopCommandOutputWire;
 use crate::schema::UserPromptSubmitCommandOutputWire;
 
 pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     let wire: SessionStartCommandOutputWire = parse_json(stdout)?;
-    let additional_context = wire
-        .hook_specific_output
-        .and_then(|output| output.additional_context);
-    Some(SessionStartOutput {
-        universal: UniversalOutput::from(wire.universal),
+    Some(session_start_output(
+        wire.universal,
+        wire.hook_specific_output
+            .and_then(|output| output.additional_context),
+    ))
+}
+
+pub(crate) fn parse_subagent_start(stdout: &str) -> Option<SessionStartOutput> {
+    let wire: SubagentStartCommandOutputWire = parse_json(stdout)?;
+    Some(session_start_output(
+        wire.universal,
+        wire.hook_specific_output
+            .and_then(|output| output.additional_context),
+    ))
+}
+
+fn session_start_output(
+    universal: HookUniversalOutputWire,
+    additional_context: Option<String>,
+) -> SessionStartOutput {
+    SessionStartOutput {
+        universal: UniversalOutput::from(universal),
         additional_context,
-    })
+    }
 }
 
 pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
@@ -263,22 +282,46 @@ pub(crate) fn parse_user_prompt_submit(stdout: &str) -> Option<UserPromptSubmitO
 
 pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
     let wire: StopCommandOutputWire = parse_json(stdout)?;
-    let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
+    Some(stop_output(
+        wire.universal,
+        wire.decision,
+        wire.reason,
+        "Stop",
+    ))
+}
+
+pub(crate) fn parse_subagent_stop(stdout: &str) -> Option<StopOutput> {
+    let wire: SubagentStopCommandOutputWire = parse_json(stdout)?;
+    Some(stop_output(
+        wire.universal,
+        wire.decision,
+        wire.reason,
+        "SubagentStop",
+    ))
+}
+
+fn stop_output(
+    universal: HookUniversalOutputWire,
+    decision: Option<BlockDecisionWire>,
+    reason: Option<String>,
+    event_name: &str,
+) -> StopOutput {
+    let should_block = matches!(decision, Some(BlockDecisionWire::Block));
     let invalid_block_reason = if should_block
-        && match wire.reason.as_deref() {
+        && match reason.as_deref() {
             Some(reason) => reason.trim().is_empty(),
             None => true,
         } {
-        Some(invalid_block_message("Stop"))
+        Some(invalid_block_message(event_name))
     } else {
         None
     };
-    Some(StopOutput {
-        universal: UniversalOutput::from(wire.universal),
+    StopOutput {
+        universal: UniversalOutput::from(universal),
         should_block: should_block && invalid_block_reason.is_none(),
-        reason: wire.reason,
+        reason,
         invalid_block_reason,
-    })
+    }
 }
 
 impl From<HookUniversalOutputWire> for UniversalOutput {

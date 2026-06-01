@@ -119,6 +119,53 @@ pub fn create_fake_rollout_with_source(
     git_info: Option<GitInfo>,
     source: SessionSource,
 ) -> Result<String> {
+    create_fake_rollout_with_source_and_parent_thread_id(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        model_provider,
+        git_info,
+        source,
+        /*parent_thread_id*/ None,
+    )
+}
+
+/// Create a minimal rollout file with an explicit session source and control parent.
+#[allow(clippy::too_many_arguments)]
+pub fn create_fake_parented_rollout_with_source(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    model_provider: Option<&str>,
+    git_info: Option<GitInfo>,
+    source: SessionSource,
+    parent_thread_id: ThreadId,
+) -> Result<String> {
+    create_fake_rollout_with_source_and_parent_thread_id(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        model_provider,
+        git_info,
+        source,
+        Some(parent_thread_id),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_fake_rollout_with_source_and_parent_thread_id(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    model_provider: Option<&str>,
+    git_info: Option<GitInfo>,
+    source: SessionSource,
+    parent_thread_id: Option<ThreadId>,
+) -> Result<String> {
     let uuid = Uuid::new_v4();
     let uuid_str = uuid.to_string();
     let conversation_id = ThreadId::from_string(&uuid_str)?;
@@ -133,6 +180,7 @@ pub fn create_fake_rollout_with_source(
     let meta = SessionMeta {
         id: conversation_id,
         forked_from_id: None,
+        parent_thread_id,
         timestamp: meta_rfc3339.to_string(),
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
@@ -218,6 +266,7 @@ pub fn create_fake_rollout_with_text_elements(
     let meta = SessionMeta {
         id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         timestamp: meta_rfc3339.to_string(),
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),

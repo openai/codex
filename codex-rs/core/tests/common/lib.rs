@@ -237,54 +237,6 @@ pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
     codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
 }
 
-/// Builds an SSE stream body from a JSON fixture.
-///
-/// The fixture must contain an array of objects where each object represents a
-/// single SSE event with at least a `type` field matching the `event:` value.
-/// Additional fields become the JSON payload for the `data:` line. An object
-/// with only a `type` field results in an event with no `data:` section. This
-/// makes it trivial to extend the fixtures as OpenAI adds new event kinds or
-/// fields.
-pub fn load_sse_fixture(path: impl AsRef<std::path::Path>) -> String {
-    let events: Vec<serde_json::Value> =
-        serde_json::from_reader(std::fs::File::open(path).expect("read fixture"))
-            .expect("parse JSON fixture");
-    events
-        .into_iter()
-        .map(|e| {
-            let kind = e
-                .get("type")
-                .and_then(|v| v.as_str())
-                .expect("fixture event missing type");
-            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
-                format!("event: {kind}\n\n")
-            } else {
-                format!("event: {kind}\ndata: {e}\n\n")
-            }
-        })
-        .collect()
-}
-
-pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
-    let replaced = raw.replace("__ID__", id);
-    let events: Vec<serde_json::Value> =
-        serde_json::from_str(&replaced).expect("parse JSON fixture");
-    events
-        .into_iter()
-        .map(|e| {
-            let kind = e
-                .get("type")
-                .and_then(|v| v.as_str())
-                .expect("fixture event missing type");
-            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
-                format!("event: {kind}\n\n")
-            } else {
-                format!("event: {kind}\ndata: {e}\n\n")
-            }
-        })
-        .collect()
-}
-
 pub async fn wait_for_event<F>(
     codex: &CodexThread,
     predicate: F,
@@ -294,6 +246,64 @@ where
 {
     use tokio::time::Duration;
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
+}
+
+/// Waits for a configured MCP server to finish startup and requires it to be ready.
+pub async fn wait_for_mcp_server(codex: &CodexThread, server_name: &str) -> anyhow::Result<()> {
+    use codex_protocol::protocol::EventMsg;
+
+    // Wait for the startup summary regardless of outcome, then interpret the
+    // requested server's ready, failed, or cancelled entry below.
+    let summary = loop {
+        let event = codex
+            .next_event()
+            .await
+            .expect("stream ended unexpectedly while waiting for MCP startup");
+        if let EventMsg::McpStartupComplete(summary) = event.msg {
+            break summary;
+        }
+    };
+    if let Some(failure) = summary
+        .failed
+        .iter()
+        .find(|failure| failure.server == server_name)
+    {
+        let error = &failure.error;
+        anyhow::bail!("MCP server {server_name} failed to start: {error}");
+    }
+    if summary.cancelled.iter().any(|server| server == server_name) {
+        anyhow::bail!("MCP server {server_name} startup was cancelled");
+    }
+    assert!(
+        summary.ready.iter().any(|server| server == server_name),
+        "expected MCP server {server_name} to be ready; startup summary: {summary:?}"
+    );
+    Ok(())
+}
+
+pub async fn submit_thread_settings(
+    codex: &CodexThread,
+    thread_settings: codex_protocol::protocol::ThreadSettingsOverrides,
+) -> anyhow::Result<()> {
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::Op;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    let submission_id = codex.submit(Op::ThreadSettings { thread_settings }).await?;
+    loop {
+        let ev = timeout(Duration::from_secs(10), codex.next_event())
+            .await
+            .expect("timeout waiting for thread settings update")
+            .expect("stream ended unexpectedly");
+        if ev.id == submission_id {
+            match ev.msg {
+                EventMsg::ThreadSettingsApplied(_) => return Ok(()),
+                EventMsg::Error(err) => panic!("thread settings update failed: {}", err.message),
+                other => panic!("unexpected thread settings update event: {other:?}"),
+            }
+        }
+    }
 }
 
 pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T

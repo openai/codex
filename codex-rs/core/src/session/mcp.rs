@@ -5,6 +5,7 @@ use codex_mcp::ElicitationReviewerHandle;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_ELICITATION_APPROVAL_KIND_MCP_TOOL_CALL;
+use codex_protocol::mcp_approval_meta::APPROVAL_KIND_TOOL_SUGGESTION as MCP_ELICITATION_APPROVAL_KIND_TOOL_SUGGESTION;
 use codex_protocol::mcp_approval_meta::APPROVALS_REVIEWER_KEY as MCP_ELICITATION_APPROVALS_REVIEWER_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_DESCRIPTION_KEY as MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY as MCP_ELICITATION_CONNECTOR_ID_KEY;
@@ -21,6 +22,10 @@ use rmcp::model::Meta;
 use serde_json::Map;
 
 const MCP_ELICITATION_DECLINE_MESSAGE_KEY: &str = "message";
+const TOOL_SUGGESTION_ACTION_INSTALL: &str = "install";
+const TOOL_SUGGESTION_ACTION_KEY: &str = "suggest_type";
+const TOOL_SUGGESTION_TOOL_ID_KEY: &str = "tool_id";
+const TOOL_SUGGESTION_TOOL_TYPE_KEY: &str = "tool_type";
 
 #[derive(Debug, PartialEq)]
 enum GuardianElicitationReview {
@@ -31,6 +36,18 @@ enum GuardianElicitationReview {
 
 struct GuardianMcpElicitationReviewer {
     session: std::sync::Weak<Session>,
+}
+
+pub(crate) struct McpServerElicitationOutcome {
+    pub(crate) response: Option<ElicitationResponse>,
+    pub(crate) sent: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PluginInstallElicitationTelemetryMetadata {
+    tool_type: String,
+    tool_id: String,
+    tool_name: String,
 }
 
 impl GuardianMcpElicitationReviewer {
@@ -70,7 +87,7 @@ impl Session {
         turn_context: &TurnContext,
         request_id: RequestId,
         params: McpServerElicitationRequestParams,
-    ) -> Option<ElicitationResponse> {
+    ) -> McpServerElicitationOutcome {
         if self
             .services
             .mcp_connection_manager
@@ -78,11 +95,14 @@ impl Session {
             .await
             .elicitations_auto_deny()
         {
-            return Some(ElicitationResponse {
-                action: codex_rmcp_client::ElicitationAction::Accept,
-                content: Some(serde_json::json!({})),
-                meta: None,
-            });
+            return McpServerElicitationOutcome {
+                response: Some(ElicitationResponse {
+                    action: codex_rmcp_client::ElicitationAction::Accept,
+                    content: Some(serde_json::json!({})),
+                    meta: None,
+                }),
+                sent: false,
+            };
         }
 
         let server_name = params.server_name.clone();
@@ -98,7 +118,10 @@ impl Session {
                         warn!(
                             "failed to serialize MCP elicitation schema for server_name: {server_name}, request_id: {request_id}: {err:#}"
                         );
-                        return None;
+                        return McpServerElicitationOutcome {
+                            response: None,
+                            sent: false,
+                        };
                     }
                 };
                 codex_protocol::approvals::ElicitationRequest::Form {
@@ -154,8 +177,24 @@ impl Session {
             id,
             request,
         });
+        let plugin_install_telemetry = plugin_install_elicitation_telemetry_metadata(&event);
+        turn_context
+            .turn_metadata_state
+            .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
-        rx_response.await.ok()
+        if let Some(plugin_install_telemetry) = plugin_install_telemetry {
+            turn_context
+                .session_telemetry
+                .record_plugin_install_elicitation_sent(
+                    plugin_install_telemetry.tool_type.as_str(),
+                    plugin_install_telemetry.tool_id.as_str(),
+                    plugin_install_telemetry.tool_name.as_str(),
+                );
+        }
+        McpServerElicitationOutcome {
+            response: rx_response.await.ok(),
+            sent: true,
+        }
     }
 
     #[expect(
@@ -286,16 +325,13 @@ impl Session {
             host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
         let auth_statuses =
             compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let mcp_runtime_environment = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeEnvironment::new(
-                Arc::clone(&turn_environment.environment),
+        let mcp_runtime_context = match turn_context.environments.primary() {
+            Some(turn_environment) => McpRuntimeContext::new(
+                Arc::clone(&self.services.environment_manager),
                 turn_environment.cwd.to_path_buf(),
             ),
-            None => McpRuntimeEnvironment::new(
-                self.services
-                    .environment_manager
-                    .default_environment()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
+            None => McpRuntimeContext::new(
+                Arc::clone(&self.services.environment_manager),
                 #[allow(deprecated)]
                 turn_context.cwd.to_path_buf(),
             ),
@@ -313,10 +349,11 @@ impl Session {
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.permission_profile(),
-            mcp_runtime_environment,
+            mcp_runtime_context,
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             host_owned_codex_apps_enabled,
+            mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
             tool_plugin_provenance,
             auth.as_ref(),
@@ -545,6 +582,33 @@ fn metadata_owned_string(meta: &Map<String, Value>, key: &str) -> Option<String>
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn plugin_install_elicitation_telemetry_metadata(
+    event: &EventMsg,
+) -> Option<PluginInstallElicitationTelemetryMetadata> {
+    let EventMsg::ElicitationRequest(ElicitationRequestEvent { request, .. }) = event else {
+        return None;
+    };
+    let codex_protocol::approvals::ElicitationRequest::Form {
+        meta: Some(Value::Object(meta)),
+        ..
+    } = request
+    else {
+        return None;
+    };
+    if metadata_str(meta, MCP_ELICITATION_APPROVAL_KIND_KEY)
+        != Some(MCP_ELICITATION_APPROVAL_KIND_TOOL_SUGGESTION)
+        || metadata_str(meta, TOOL_SUGGESTION_ACTION_KEY) != Some(TOOL_SUGGESTION_ACTION_INSTALL)
+    {
+        return None;
+    }
+
+    Some(PluginInstallElicitationTelemetryMetadata {
+        tool_type: metadata_owned_string(meta, TOOL_SUGGESTION_TOOL_TYPE_KEY)?,
+        tool_id: metadata_owned_string(meta, TOOL_SUGGESTION_TOOL_ID_KEY)?,
+        tool_name: metadata_owned_string(meta, MCP_ELICITATION_TOOL_NAME_KEY)?,
+    })
 }
 
 fn mcp_elicitation_request_id(id: &RequestId) -> String {

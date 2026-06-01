@@ -120,7 +120,7 @@ pub(super) async fn list_threads(
     Ok(ThreadPage { items, next_cursor })
 }
 
-async fn list_rollout_threads(
+pub(super) async fn list_rollout_threads(
     state_db: Option<codex_rollout::StateDbHandle>,
     config: &RolloutConfig,
     default_model_provider_id: &str,

@@ -6,7 +6,6 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use codex_otel::StatsigMetricsSettings;
-use codex_windows_sandbox::LOG_FILE_NAME;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
@@ -21,6 +20,7 @@ use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::install_wfp_filters;
 use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::log_note;
+use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
@@ -36,7 +36,6 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
-use std::fs::File;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -106,10 +105,11 @@ struct Payload {
 enum SetupMode {
     #[default]
     Full,
+    ProvisionOnly,
     ReadAclsOnly,
 }
 
-fn log_line(log: &mut File, msg: &str) -> Result<()> {
+fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
     let ts = chrono::Utc::now().to_rfc3339();
     writeln!(log, "[{ts}] {msg}").map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -156,7 +156,7 @@ fn workspace_write_cap_sids_for_path(
     Ok(sid_strs)
 }
 
-fn spawn_read_acl_helper(payload: &Payload, _log: &mut File) -> Result<()> {
+fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> {
     let mut read_payload = payload.clone();
     read_payload.mode = SetupMode::ReadAclsOnly;
     read_payload.refresh_only = true;
@@ -182,7 +182,7 @@ struct ReadAclSubjects<'a> {
 fn apply_read_acls(
     read_roots: &[PathBuf],
     subjects: &ReadAclSubjects<'_>,
-    log: &mut File,
+    log: &mut dyn Write,
     refresh_errors: &mut Vec<String>,
     access_mask: u32,
     access_label: &str,
@@ -259,7 +259,7 @@ fn read_mask_allows_or_log(
     read_mask: u32,
     access_label: &str,
     refresh_errors: &mut Vec<String>,
-    log: &mut File,
+    log: &mut dyn Write,
 ) -> Result<bool> {
     match path_mask_allows(root, psids, read_mask, /*require_all_bits*/ true) {
         Ok(has) => Ok(has),
@@ -294,7 +294,7 @@ fn lock_sandbox_dir(
     sandbox_group_access_mode: i32,
     sandbox_group_mask: u32,
     real_user_mask: u32,
-    _log: &mut File,
+    _log: &mut dyn Write,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let system_sid = resolve_sid("SYSTEM")?;
@@ -391,8 +391,7 @@ pub fn main() -> Result<()> {
         if let Ok(codex_home) = std::env::var("CODEX_HOME") {
             let sbx_dir = sandbox_dir(Path::new(&codex_home));
             let _ = std::fs::create_dir_all(&sbx_dir);
-            let log_path = sbx_dir.join(LOG_FILE_NAME);
-            if let Ok(mut f) = File::options().create(true).append(true).open(&log_path) {
+            if let Some(mut f) = log_writer(&sbx_dir) {
                 let _ = writeln!(
                     f,
                     "[{}] top-level error: {}",
@@ -442,17 +441,12 @@ fn real_main() -> Result<()> {
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         ))
     })?;
-    let log_path = sbx_dir.join(LOG_FILE_NAME);
-    let mut log = File::options()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperLogFailed,
-                format!("open log {} failed: {err}", log_path.display()),
-            ))
-        })?;
+    let mut log = log_writer(&sbx_dir).ok_or_else(|| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperLogFailed,
+            format!("open log in {} failed", sbx_dir.display()),
+        ))
+    })?;
     let result = run_setup(&payload, &mut log, &sbx_dir);
     if let Err(err) = &result {
         let _ = log_line(&mut log, &format!("setup error: {err:?}"));
@@ -480,14 +474,15 @@ fn real_main() -> Result<()> {
     result
 }
 
-fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
+fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     match payload.mode {
         SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
+        SetupMode::ProvisionOnly => run_provision_only(payload, log, sbx_dir),
         SetupMode::Full => run_setup_full(payload, log, sbx_dir),
     }
 }
 
-fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
+fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
     let _read_acl_guard = match acquire_read_acl_mutex()? {
         Some(guard) => guard,
         None => {
@@ -550,31 +545,182 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     Ok(())
 }
 
-fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
+fn provision_and_hide_sandbox_users(
+    payload: &Payload,
+    log: &mut dyn Write,
+    sbx_dir: &Path,
+) -> Result<()> {
+    let provision_result = provision_sandbox_users(
+        &payload.codex_home,
+        &payload.offline_username,
+        &payload.online_username,
+        &payload.proxy_ports,
+        payload.allow_local_binding,
+        log,
+    );
+    if let Err(err) = provision_result {
+        if extract_setup_failure(&err).is_some() {
+            return Err(err);
+        }
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProvisionFailed,
+            format!("provision sandbox users failed: {err}"),
+        )));
+    }
+    let users = vec![
+        payload.offline_username.clone(),
+        payload.online_username.clone(),
+    ];
+    hide_newly_created_users(&users, sbx_dir);
+    Ok(())
+}
+
+fn configure_offline_sandbox_network(
+    payload: &Payload,
+    offline_sid_str: &str,
+    log: &mut dyn Write,
+) -> Result<()> {
+    let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
+        offline_sid_str,
+        &payload.proxy_ports,
+        payload.allow_local_binding,
+        log,
+    );
+    if let Err(err) = proxy_allowlist_result {
+        if extract_setup_failure(&err).is_some() {
+            return Err(err);
+        }
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+            format!("ensure offline proxy allowlist failed: {err}"),
+        )));
+    }
+    let firewall_result = firewall::ensure_offline_outbound_block(offline_sid_str, log);
+    if let Err(err) = firewall_result {
+        if extract_setup_failure(&err).is_some() {
+            return Err(err);
+        }
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+            format!("ensure offline outbound block failed: {err}"),
+        )));
+    }
+    install_wfp_filters(
+        &payload.codex_home,
+        &payload.offline_username,
+        payload.otel.as_ref(),
+        |message| {
+            let _ = log_line(log, message);
+        },
+    );
+    Ok(())
+}
+
+fn lock_persistent_sandbox_dirs(
+    payload: &Payload,
+    sandbox_group_sid: &[u8],
+    log: &mut dyn Write,
+) -> Result<()> {
+    lock_sandbox_dir(
+        &sandbox_dir(&payload.codex_home),
+        &payload.real_user,
+        sandbox_group_sid,
+        GRANT_ACCESS,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
+        log,
+    )
+    .map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSandboxLockFailed,
+            format!(
+                "lock sandbox dir {} failed: {err}",
+                sandbox_dir(&payload.codex_home).display()
+            ),
+        ))
+    })?;
+    lock_sandbox_dir(
+        &sandbox_secrets_dir(&payload.codex_home),
+        &payload.real_user,
+        sandbox_group_sid,
+        DENY_ACCESS,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
+        log,
+    )
+    .map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSandboxLockFailed,
+            format!(
+                "lock sandbox secrets dir {} failed: {err}",
+                sandbox_secrets_dir(&payload.codex_home).display()
+            ),
+        ))
+    })?;
+    let legacy_users = sandbox_dir(&payload.codex_home).join("sandbox_users.json");
+    if legacy_users.exists() {
+        let _ = std::fs::remove_file(&legacy_users);
+    }
+    Ok(())
+}
+
+fn lock_sandbox_bin_dir(
+    payload: &Payload,
+    sandbox_group_sid: &[u8],
+    log: &mut dyn Write,
+) -> Result<()> {
+    lock_sandbox_dir(
+        &sandbox_bin_dir(&payload.codex_home),
+        &payload.real_user,
+        sandbox_group_sid,
+        GRANT_ACCESS,
+        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+        log,
+    )
+    .map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSandboxLockFailed,
+            format!(
+                "lock sandbox bin dir {} failed: {err}",
+                sandbox_bin_dir(&payload.codex_home).display()
+            ),
+        ))
+    })
+}
+
+fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
+    provision_and_hide_sandbox_users(payload, log, sbx_dir)?;
+    let offline_sid = resolve_sid(&payload.offline_username).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSidResolveFailed,
+            format!(
+                "resolve SID for offline user {} failed: {err}",
+                payload.offline_username
+            ),
+        ))
+    })?;
+    let offline_sid_str = string_from_sid_bytes(&offline_sid).map_err(anyhow::Error::msg)?;
+
+    let sandbox_group_sid = resolve_sandbox_users_group_sid().map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSidResolveFailed,
+            format!("resolve sandbox users group SID failed: {err}"),
+        ))
+    })?;
+
+    configure_offline_sandbox_network(payload, &offline_sid_str, log)?;
+
+    lock_sandbox_bin_dir(payload, &sandbox_group_sid, log)?;
+    lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
+    log_note("setup provisioning binary completed", Some(sbx_dir));
+    Ok(())
+}
+
+fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     let refresh_only = payload.refresh_only;
     if !refresh_only {
-        let provision_result = provision_sandbox_users(
-            &payload.codex_home,
-            &payload.offline_username,
-            &payload.online_username,
-            &payload.proxy_ports,
-            payload.allow_local_binding,
-            log,
-        );
-        if let Err(err) = provision_result {
-            if extract_setup_failure(&err).is_some() {
-                return Err(err);
-            }
-            return Err(anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperUserProvisionFailed,
-                format!("provision sandbox users failed: {err}"),
-            )));
-        }
-        let users = vec![
-            payload.offline_username.clone(),
-            payload.online_username.clone(),
-        ];
-        hide_newly_created_users(&users, sbx_dir);
+        provision_and_hide_sandbox_users(payload, log, sbx_dir)?;
     }
     let offline_sid = resolve_sid(&payload.offline_username).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -604,39 +750,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
 
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
-        let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
-            &offline_sid_str,
-            &payload.proxy_ports,
-            payload.allow_local_binding,
-            log,
-        );
-        if let Err(err) = proxy_allowlist_result {
-            if extract_setup_failure(&err).is_some() {
-                return Err(err);
-            }
-            return Err(anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                format!("ensure offline proxy allowlist failed: {err}"),
-            )));
-        }
-        let firewall_result = firewall::ensure_offline_outbound_block(&offline_sid_str, log);
-        if let Err(err) = firewall_result {
-            if extract_setup_failure(&err).is_some() {
-                return Err(err);
-            }
-            return Err(anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                format!("ensure offline outbound block failed: {err}"),
-            )));
-        }
-        install_wfp_filters(
-            &payload.codex_home,
-            &payload.offline_username,
-            payload.otel.as_ref(),
-            |message| {
-                let _ = log_line(log, message);
-            },
-        );
+        configure_offline_sandbox_network(payload, &offline_sid_str, log)?;
     }
 
     // Deny-read ACEs must be present before the sandboxed command starts. Apply
@@ -872,24 +986,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    lock_sandbox_dir(
-        &sandbox_bin_dir(&payload.codex_home),
-        &payload.real_user,
-        &sandbox_group_sid,
-        GRANT_ACCESS,
-        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-        log,
-    )
-    .map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperSandboxLockFailed,
-            format!(
-                "lock sandbox bin dir {} failed: {err}",
-                sandbox_bin_dir(&payload.codex_home).display()
-            ),
-        ))
-    })?;
+    lock_sandbox_bin_dir(payload, &sandbox_group_sid, log)?;
 
     if refresh_only {
         log_line(
@@ -902,46 +999,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         )?;
     }
     if !refresh_only {
-        lock_sandbox_dir(
-            &sandbox_dir(&payload.codex_home),
-            &payload.real_user,
-            &sandbox_group_sid,
-            GRANT_ACCESS,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-            log,
-        )
-        .map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperSandboxLockFailed,
-                format!(
-                    "lock sandbox dir {} failed: {err}",
-                    sandbox_dir(&payload.codex_home).display()
-                ),
-            ))
-        })?;
-        lock_sandbox_dir(
-            &sandbox_secrets_dir(&payload.codex_home),
-            &payload.real_user,
-            &sandbox_group_sid,
-            DENY_ACCESS,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-            log,
-        )
-        .map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperSandboxLockFailed,
-                format!(
-                    "lock sandbox secrets dir {} failed: {err}",
-                    sandbox_secrets_dir(&payload.codex_home).display()
-                ),
-            ))
-        })?;
-        let legacy_users = sandbox_dir(&payload.codex_home).join("sandbox_users.json");
-        if legacy_users.exists() {
-            let _ = std::fs::remove_file(&legacy_users);
-        }
+        lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
     }
 
     unsafe {
@@ -991,6 +1049,15 @@ mod tests {
         let payload: Payload = serde_json::from_value(payload_json()).expect("payload");
 
         assert_eq!(payload.otel, None);
+    }
+
+    #[test]
+    fn payload_accepts_provision_only_mode() {
+        let mut payload = payload_json();
+        payload["mode"] = json!("provision-only");
+        let payload: Payload = serde_json::from_value(payload).expect("payload");
+
+        assert_eq!(payload.mode, super::SetupMode::ProvisionOnly);
     }
 
     #[test]

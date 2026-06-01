@@ -1,8 +1,10 @@
 use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::SandboxMode;
+use super::WindowsSandboxSetupMode;
 use super::shared::default_enabled;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
@@ -39,6 +41,19 @@ pub enum ConfigLayerSource {
         /// This is the path to the system config.toml file, though it is not
         /// guaranteed to exist.
         file: AbsolutePathBuf,
+    },
+
+    /// Enterprise-managed config layer delivered by the cloud config bundle.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    EnterpriseManaged {
+        /// Stable identifier for the delivered layer.
+        id: String,
+
+        /// Admin-facing name for the delivered layer. This is surfaced in
+        /// diagnostics so users know which cloud layer needs administrator
+        /// attention.
+        name: String,
     },
 
     /// User config layer from $CODEX_HOME/config.toml. This layer is special
@@ -88,6 +103,7 @@ impl ConfigLayerSource {
         match self {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
+            ConfigLayerSource::EnterpriseManaged { .. } => 15,
             ConfigLayerSource::User { profile, .. } => {
                 if profile.is_some() {
                     21
@@ -130,30 +146,6 @@ pub struct SandboxWorkspaceWrite {
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "snake_case")]
-#[ts(export_to = "v2/")]
-pub struct ProfileV2 {
-    pub model: Option<String>,
-    pub model_provider: Option<String>,
-    #[experimental(nested)]
-    pub approval_policy: Option<AskForApproval>,
-    /// [UNSTABLE] Optional profile-level override for where approval requests
-    /// are routed for review. If omitted, the enclosing config default is
-    /// used.
-    #[experimental("config/read.approvalsReviewer")]
-    pub approvals_reviewer: Option<ApprovalsReviewer>,
-    pub service_tier: Option<String>,
-    pub model_reasoning_effort: Option<ReasoningEffort>,
-    pub model_reasoning_summary: Option<ReasoningSummary>,
-    pub model_verbosity: Option<Verbosity>,
-    pub web_search: Option<WebSearchMode>,
-    pub tools: Option<ToolsV2>,
-    pub chatgpt_base_url: Option<String>,
-    #[serde(default, flatten)]
-    pub additional: HashMap<String, JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -251,6 +243,7 @@ pub struct Config {
     pub review_model: Option<String>,
     pub model_context_window: Option<i64>,
     pub model_auto_compact_token_limit: Option<i64>,
+    pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
@@ -264,10 +257,6 @@ pub struct Config {
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,
-    pub profile: Option<String>,
-    #[experimental(nested)]
-    #[serde(default)]
-    pub profiles: HashMap<String, ProfileV2>,
     pub instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
@@ -279,6 +268,7 @@ pub struct Config {
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
+    pub desktop: Option<HashMap<String, JsonValue>>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
@@ -354,7 +344,7 @@ pub enum ConfigWriteErrorCode {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadParams {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_layers: bool,
     /// Optional working directory to resolve project config layers. If specified,
     /// return the effective config as seen from that directory (i.e., including any
@@ -383,14 +373,25 @@ pub struct ConfigRequirements {
     #[experimental("configRequirements/read.allowedApprovalsReviewers")]
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
+    pub allowed_windows_sandbox_implementations: Option<Vec<WindowsSandboxSetupMode>>,
+    pub allowed_permissions: Option<Vec<String>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub allow_managed_hooks_only: Option<bool>,
+    pub allow_appshots: Option<bool>,
+    pub computer_use: Option<ComputerUseRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ComputerUseRequirements {
+    pub allow_locked_computer_use: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -420,6 +421,12 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "UserPromptSubmit")]
     #[ts(rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStart")]
+    #[ts(rename = "SubagentStart")]
+    pub subagent_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStop")]
+    #[ts(rename = "SubagentStop")]
+    pub subagent_stop: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "Stop")]
     #[ts(rename = "Stop")]
     pub stop: Vec<ConfiguredHookMatcherGroup>,
@@ -499,7 +506,7 @@ pub enum NetworkDomainPermission {
 #[ts(export_to = "v2/")]
 pub enum NetworkUnixSocketPermission {
     Allow,
-    None,
+    Deny,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

@@ -20,9 +20,17 @@ impl From<&SkillInjection> for SkillInstructions {
 }
 
 impl ContextualUserFragment for SkillInstructions {
-    const ROLE: &'static str = "user";
-    const START_MARKER: &'static str = "<skill>";
-    const END_MARKER: &'static str = "</skill>";
+    fn role() -> &'static str {
+        "user"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<skill>", "</skill>")
+    }
 
     fn body(&self) -> String {
         format!(

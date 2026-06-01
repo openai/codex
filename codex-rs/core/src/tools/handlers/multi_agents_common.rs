@@ -105,7 +105,7 @@ pub(crate) fn build_wait_agent_statuses(
             status: status.clone(),
         })
         .collect::<Vec<_>>();
-    extras.sort_by(|left, right| left.thread_id.to_string().cmp(&right.thread_id.to_string()));
+    extras.sort_by_key(|entry| entry.thread_id.to_string());
     entries.extend(extras);
     entries
 }
@@ -344,9 +344,16 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     parent_service_tier: Option<&str>,
     requested_service_tier: Option<&str>,
 ) -> Result<(), FunctionCallError> {
-    let Some(candidate_service_tier) = requested_service_tier.or(parent_service_tier) else {
+    let candidate_service_tiers = [
+        config.service_tier.clone(),
+        requested_service_tier.map(str::to_string),
+        parent_service_tier.map(str::to_string),
+    ];
+    if candidate_service_tiers.iter().all(Option::is_none) {
+        config.service_tier = None;
         return Ok(());
-    };
+    }
+
     let model = config.model.clone().ok_or_else(|| {
         FunctionCallError::RespondToModel(
             "spawn_agent could not resolve the child model for service tier validation".to_string(),
@@ -358,29 +365,32 @@ pub(crate) async fn apply_spawn_agent_service_tier(
         .get_model_info(model.as_str(), &config.to_models_manager_config())
         .await;
 
-    if model_info.supports_service_tier(candidate_service_tier) {
-        config.service_tier = Some(candidate_service_tier.to_string());
-        return Ok(());
+    if let Some(requested_service_tier) = requested_service_tier
+        && !model_info.supports_service_tier(requested_service_tier)
+    {
+        let supported_service_tiers = if model_info.service_tiers.is_empty() {
+            "none".to_string()
+        } else {
+            model_info
+                .service_tiers
+                .iter()
+                .map(|tier| tier.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Service tier `{requested_service_tier}` is not supported for model `{model}`. Supported service tiers: {supported_service_tiers}"
+        )));
     }
 
-    if requested_service_tier.is_none() {
-        config.service_tier = None;
-        return Ok(());
-    }
-
-    let supported_service_tiers = if model_info.service_tiers.is_empty() {
-        "none".to_string()
-    } else {
-        model_info
-            .service_tiers
-            .iter()
-            .map(|tier| tier.id.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    Err(FunctionCallError::RespondToModel(format!(
-        "Service tier `{candidate_service_tier}` is not supported for model `{model}`. Supported service tiers: {supported_service_tiers}"
-    )))
+    config.service_tier =
+        candidate_service_tiers
+            .into_iter()
+            .flatten()
+            .find(|candidate_service_tier| {
+                model_info.supports_service_tier(candidate_service_tier.as_str())
+            });
+    Ok(())
 }
 
 fn find_spawn_agent_model_name(

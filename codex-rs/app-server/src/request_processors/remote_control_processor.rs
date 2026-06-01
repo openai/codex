@@ -5,6 +5,7 @@ use crate::transport::RemoteControlUnavailable;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RemoteControlDisableResponse;
 use codex_app_server_protocol::RemoteControlEnableResponse;
+use codex_app_server_protocol::RemoteControlStatusReadResponse;
 
 #[derive(Clone)]
 pub(crate) struct RemoteControlRequestProcessor {
@@ -29,6 +30,16 @@ impl RemoteControlRequestProcessor {
     pub(crate) fn disable(&self) -> Result<RemoteControlDisableResponse, JSONRPCErrorError> {
         let handle = self.handle()?;
         Ok(RemoteControlDisableResponse::from(handle.disable()))
+    }
+
+    pub(crate) fn status_read(&self) -> Result<RemoteControlStatusReadResponse, JSONRPCErrorError> {
+        let status = self.handle()?.status();
+        Ok(RemoteControlStatusReadResponse {
+            status: status.status,
+            server_name: status.server_name,
+            installation_id: status.installation_id,
+            environment_id: status.environment_id,
+        })
     }
 
     fn handle(&self) -> Result<&RemoteControlHandle, JSONRPCErrorError> {

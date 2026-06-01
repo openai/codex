@@ -247,6 +247,21 @@ impl ThreadMetadata {
         }
     }
 
+    /// Preserve an existing user-facing title when reconciling rollout-derived metadata.
+    pub fn prefer_existing_explicit_title(&mut self, existing: &Self) {
+        let existing_title = existing.title.trim();
+        if existing_title.is_empty()
+            || existing.first_user_message.as_deref().map(str::trim) == Some(existing_title)
+        {
+            return;
+        }
+
+        let title = self.title.trim();
+        if title.is_empty() || self.first_user_message.as_deref().map(str::trim) == Some(title) {
+            self.title = existing.title.clone();
+        }
+    }
+
     /// Return the list of field names that differ between `self` and `other`.
     pub fn diff_fields(&self, other: &Self) -> Vec<&'static str> {
         let mut diffs = Vec::new();

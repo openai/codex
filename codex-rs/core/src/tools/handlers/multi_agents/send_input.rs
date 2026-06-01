@@ -8,17 +8,25 @@ pub(crate) struct Handler;
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
-    type Output = SendInputResult;
-
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("send_input")
+        ToolName::namespaced(MULTI_AGENT_V1_NAMESPACE, "send_input")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_send_input_tool_v1())
+    fn spec(&self) -> ToolSpec {
+        create_send_input_tool_v1()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "send_input send message existing agent subagent follow up interrupt redirect queue target",
+            self.spec(),
+        )
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -85,11 +93,11 @@ impl ToolExecutor<ToolInvocation> for Handler {
             .await;
         let submission_id = result?;
 
-        Ok(SendInputResult { submission_id })
+        Ok(boxed_tool_output(SendInputResult { submission_id }))
     }
 }
 
-impl ToolHandler for Handler {
+impl CoreToolRuntime for Handler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

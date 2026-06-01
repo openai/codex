@@ -52,6 +52,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -317,7 +318,8 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
             })),
         ))
         .await
-        .expect_err("fork_context should reject agent_type overrides");
+        .err()
+        .expect("fork_context should reject agent_type overrides");
 
     assert_eq!(
         err,
@@ -351,7 +353,8 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
             })),
         ))
         .await
-        .expect_err("forked spawn should reject child model overrides");
+        .err()
+        .expect("forked spawn should reject child model overrides");
 
     assert_eq!(
         err,
@@ -395,7 +398,8 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
             })),
         ))
         .await
-        .expect_err("fork_turns=all should reject agent_type overrides");
+        .err()
+        .expect("fork_turns=all should reject agent_type overrides");
 
     assert_eq!(
         err,
@@ -435,7 +439,8 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
             })),
         ))
         .await
-        .expect_err("default full fork should reject child model overrides");
+        .err()
+        .expect("default full fork should reject child model overrides");
 
     assert_eq!(
         err,
@@ -505,7 +510,8 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
                 })),
             ))
             .await
-            .expect_err("unknown service tier should be rejected");
+            .err()
+            .expect("unknown service tier should be rejected");
 
         assert_eq!(
             err,
@@ -530,7 +536,8 @@ async fn spawn_agent_service_tier_override_validates_the_effective_child_model()
                 })),
             ))
             .await
-            .expect_err("tier unsupported by the final child model should be rejected");
+            .err()
+            .expect("tier unsupported by the final child model should be rejected");
 
         assert_eq!(
             err,
@@ -696,6 +703,128 @@ service_tier = "priority"
             Some(ServiceTier::Fast.request_value().to_string())
         );
     }
+}
+
+#[tokio::test]
+async fn spawn_agent_role_service_tier_falls_back_to_supported_parent_tier() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let (mut session, turn) = make_session_and_context().await;
+    let mut turn = turn
+        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
+        .await;
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn.config.codex_home.as_path().join("tiered-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"model = "gpt-5.4"
+service_tier = "turbo"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let role_name = "tiered-role".to_string();
+    let mut config = (*turn.config).clone();
+    config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Role with an unsupported child tier".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+
+    let output = SpawnAgentHandler::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name
+            })),
+        ))
+        .await
+        .expect("spawn_agent should fall back to the supported parent tier");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let snapshot = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(
+        snapshot.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_role_service_tier_does_not_hide_invalid_spawn_request() {
+    let (session, mut turn) = make_session_and_context().await;
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn.config.codex_home.as_path().join("tiered-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"model = "gpt-5.4"
+service_tier = "priority"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let role_name = "tiered-role".to_string();
+    let mut config = (*turn.config).clone();
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Role with a supported child tier".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    let result = SpawnAgentHandler::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name,
+                "service_tier": "turbo"
+            })),
+        ))
+        .await;
+
+    assert_eq!(
+        result.err(),
+        Some(FunctionCallError::RespondToModel(
+            "Service tier `turbo` is not supported for model `gpt-5.4`. Supported service tiers: priority"
+                .to_string()
+        ))
+    );
 }
 
 #[tokio::test]
@@ -1116,7 +1245,8 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
             })),
         ))
         .await
-        .expect_err("legacy fork_context should be rejected");
+        .err()
+        .expect("legacy fork_context should be rejected");
 
     assert_eq!(
         err,
@@ -1155,7 +1285,8 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
             })),
         ))
         .await
-        .expect_err("invalid fork_turns should be rejected");
+        .err()
+        .expect("invalid fork_turns should be rejected");
 
     assert_eq!(
         err,
@@ -1194,7 +1325,8 @@ async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
             })),
         ))
         .await
-        .expect_err("zero turn count should be rejected");
+        .err()
+        .expect("zero turn count should be rejected");
 
     assert_eq!(
         err,
@@ -1346,7 +1478,9 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
 
     assert_eq!(
         err,
-        FunctionCallError::RespondToModel("Tasks can't be assigned to the root agent".to_string())
+        FunctionCallError::RespondToModel(
+            "Follow-up tasks can't target the root agent".to_string()
+        )
     );
     let root_ops = manager
         .captured_ops()
@@ -2097,7 +2231,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
             path: FileSystemPath::GlobPattern {
                 pattern: "**/.env".to_string(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         });
     let expected_network_sandbox_policy = NetworkSandboxPolicy::from(&expected_sandbox);
     let expected_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
@@ -2111,7 +2245,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     turn.permission_profile = expected_permission_profile.clone();
     assert_ne!(
         expected_permission_profile,
-        turn.config.permissions.permission_profile(),
+        turn.config.permissions.effective_permission_profile(),
         "test requires a runtime profile override that differs from base config"
     );
 
@@ -2461,6 +2595,8 @@ async fn send_input_accepts_structured_items() {
         ],
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
+        thread_settings: Default::default(),
     };
     let captured = manager
         .captured_ops()
@@ -2782,13 +2918,16 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
     });
     tokio::task::yield_now().await;
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "hello from worker".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_path,
+            AgentPath::root(),
+            Vec::new(),
+            "hello from worker".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let output = wait_task
         .await
@@ -3267,13 +3406,16 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
     });
     tokio::task::yield_now().await;
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "completed".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_path,
+            AgentPath::root(),
+            Vec::new(),
+            "completed".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let wait_output = wait_task
         .await
@@ -3337,13 +3479,16 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
         .agent_path
         .expect("worker path");
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "already queued".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_path,
+            AgentPath::root(),
+            Vec::new(),
+            "already queued".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let output = timeout(
         Duration::from_millis(500),
@@ -3433,13 +3578,16 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
     });
     tokio::task::yield_now().await;
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_b_path,
-        AgentPath::root(),
-        Vec::new(),
-        "from worker b".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_b_path,
+            AgentPath::root(),
+            Vec::new(),
+            "from worker b".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let output = wait_task
         .await
@@ -3518,13 +3666,16 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
     });
     tokio::task::yield_now().await;
 
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "sensitive child output".to_string(),
-        /*trigger_turn*/ false,
-    ));
+    session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            worker_path,
+            AgentPath::root(),
+            Vec::new(),
+            "sensitive child output".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
 
     let output = wait_task
         .await
@@ -3604,6 +3755,126 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
 }
 
 #[tokio::test]
+async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.agent_max_threads = Some(1);
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("test config should allow sqlite");
+    let state_db = init_state_db(&config)
+        .await
+        .expect("sqlite state db should initialize");
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Some(state_db.clone()),
+    );
+    let root = manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    turn.config = Arc::new(config.clone());
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
+        .await
+        .expect("worker path should resolve");
+    let stale_thread = manager
+        .remove_thread(&agent_id)
+        .await
+        .expect("worker thread should be loaded before removal");
+    stale_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("removed worker thread should still accept shutdown");
+    stale_thread.wait_until_terminated().await;
+
+    let output = CloseAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "close_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("close_agent should reap stale v2 task names");
+    let (content, success) = expect_text_output(output);
+    let result: close_agent::CloseAgentResult =
+        serde_json::from_str(&content).expect("close_agent result should be json");
+    assert_eq!(result.previous_status, AgentStatus::NotFound);
+    assert_eq!(success, Some(true));
+
+    let open_children = state_db
+        .list_thread_spawn_children_with_status(
+            root.thread_id,
+            DirectionalThreadSpawnEdgeStatus::Open,
+        )
+        .await
+        .expect("open children should load");
+    assert_eq!(open_children, Vec::<ThreadId>::new());
+    let closed_children = state_db
+        .list_thread_spawn_children_with_status(
+            root.thread_id,
+            DirectionalThreadSpawnEdgeStatus::Closed,
+        )
+        .await
+        .expect("closed children should load");
+    assert_eq!(closed_children, vec![agent_id]);
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo again",
+                "task_name": "replacement"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed after stale close releases the slot");
+    let replacement_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "replacement")
+        .await
+        .expect("replacement path should resolve");
+    let _ = session
+        .services
+        .agent_control
+        .shutdown_live_agent(replacement_id)
+        .await
+        .expect("replacement should shut down");
+}
+
+#[tokio::test]
 async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
@@ -3630,7 +3901,8 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
             function_payload(json!({"target": "/root"})),
         ))
         .await
-        .expect_err("close_agent should reject the root path");
+        .err()
+        .expect("close_agent should reject the root path");
     assert_eq!(
         root_path_error,
         FunctionCallError::RespondToModel("root is not a spawned agent".to_string())
@@ -3644,7 +3916,8 @@ async fn multi_agent_v2_close_agent_rejects_root_target_and_id() {
             function_payload(json!({"target": root.thread_id.to_string()})),
         ))
         .await
-        .expect_err("close_agent should reject the root thread id");
+        .err()
+        .expect("close_agent should reject the root thread id");
     assert_eq!(
         root_id_error,
         FunctionCallError::RespondToModel("root is not a spawned agent".to_string())
@@ -3900,7 +4173,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
 #[tokio::test]
 async fn build_agent_spawn_config_uses_turn_context_values() {
     fn pick_allowed_sandbox_policy(
-        constraint: &crate::config::Constrained<PermissionProfile>,
+        permissions: &crate::config::Permissions,
         base: SandboxPolicy,
         cwd: &std::path::Path,
     ) -> SandboxPolicy {
@@ -3915,16 +4188,9 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
                 if *candidate == base {
                     return false;
                 }
-                let file_system_sandbox_policy =
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(candidate, cwd);
-                let network_sandbox_policy = NetworkSandboxPolicy::from(candidate);
-                let permission_profile =
-                    PermissionProfile::from_runtime_permissions_with_enforcement(
-                        SandboxEnforcement::from_legacy_sandbox_policy(candidate),
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
-                    );
-                constraint.can_set(&permission_profile).is_ok()
+                permissions
+                    .can_set_legacy_sandbox_policy(candidate, cwd)
+                    .is_ok()
             })
             .unwrap_or(base)
     }
@@ -3948,7 +4214,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     #[allow(deprecated)]
     let turn_cwd = turn.cwd.clone();
     let sandbox_policy = pick_allowed_sandbox_policy(
-        &turn.config.permissions.permission_profile,
+        &turn.config.permissions,
         turn.config.legacy_sandbox_policy(),
         turn_cwd.as_path(),
     );

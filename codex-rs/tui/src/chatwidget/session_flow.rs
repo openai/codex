@@ -20,6 +20,8 @@ impl ChatWidget {
         self.session_network_proxy = session.network_proxy.clone();
         let previous_thread_id = self.thread_id;
         self.thread_id = Some(session.thread_id);
+        self.bottom_pane
+            .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
             self.review.recent_auto_review_denials = RecentAutoReviewDenials::default();
         }
@@ -33,6 +35,11 @@ impl ChatWidget {
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
+        let runtime_workspace_roots = session.runtime_workspace_roots.clone();
+        self.config.workspace_roots = runtime_workspace_roots.clone();
+        self.config
+            .permissions
+            .set_workspace_roots(runtime_workspace_roots);
         self.effective_service_tier = session.service_tier.clone();
         if let Err(err) = self
             .config
@@ -44,33 +51,53 @@ impl ChatWidget {
             self.config.permissions.approval_policy =
                 Constrained::allow_only(session.approval_policy.to_core());
         }
+        let permission_snapshot = PermissionProfileSnapshot::from_session_snapshot(
+            session.permission_profile.clone(),
+            session.active_permission_profile.clone(),
+        );
         let permission_sync = self
             .config
             .permissions
-            .set_permission_profile_with_active_profile(
-                session.permission_profile.clone(),
-                session.active_permission_profile.clone(),
-            );
+            .set_permission_profile_from_session_snapshot(permission_snapshot.clone());
         if let Err(err) = permission_sync {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
-            self.config.permissions.permission_profile =
-                Constrained::allow_only(session.permission_profile.clone());
-            self.config.permissions.active_permission_profile =
-                session.active_permission_profile.clone();
+            if let Err(replace_err) = self
+                .config
+                .permissions
+                .replace_permission_profile_from_session_snapshot(permission_snapshot)
+            {
+                tracing::error!(
+                    %replace_err,
+                    "failed to replace permissions from SessionConfigured after constraint fallback"
+                );
+            }
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
+        self.config.personality = session.personality;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = session.forked_from_id;
-        let model_for_header = session.model.clone();
-        self.session_header.set_model(&model_for_header);
+        let default_model = session.model.clone();
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
-            Some(model_for_header.clone()),
+            Some(default_model.clone()),
             Some(session.reasoning_effort),
             /*developer_instructions*/ None,
         );
-        if let Some(mask) = self.active_collaboration_mask.as_mut() {
-            mask.model = Some(model_for_header.clone());
-            mask.reasoning_effort = Some(session.reasoning_effort);
+        match session.collaboration_mode.as_deref() {
+            Some(collaboration_mode) => {
+                self.set_effective_collaboration_mode(collaboration_mode.clone());
+            }
+            None => {
+                self.active_collaboration_mask = Self::initial_collaboration_mask(
+                    &self.config,
+                    self.model_catalog.as_ref(),
+                    Some(&default_model),
+                );
+                if let Some(mask) = self.active_collaboration_mask.as_mut() {
+                    mask.reasoning_effort = Some(session.reasoning_effort);
+                }
+                self.update_collaboration_mode_indicator();
+                self.refresh_plan_mode_nudge();
+            }
         }
         self.refresh_model_display();
         self.refresh_status_surfaces();
@@ -79,6 +106,7 @@ impl ChatWidget {
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
+        let model_for_header = self.current_model().to_string();
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status = self
@@ -107,13 +135,7 @@ impl ChatWidget {
         if self.connectors_enabled() {
             self.prefetch_connectors();
         }
-        if let Some(user_message) = self.initial_user_message.take() {
-            if self.suppress_initial_user_message_submit {
-                self.initial_user_message = Some(user_message);
-            } else {
-                self.submit_user_message(user_message);
-            }
-        }
+        self.submit_initial_user_message_if_pending();
         if display == SessionConfiguredDisplay::Normal
             && let Some(forked_from_id) = forked_from_id
         {

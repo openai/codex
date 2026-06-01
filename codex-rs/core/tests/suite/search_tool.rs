@@ -4,10 +4,8 @@
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
-use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
-use codex_models_manager::bundled_models_response;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -19,8 +17,21 @@ use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::AppsTestToolLoading;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
+use core_test_support::apps_test_server::DIRECT_CALENDAR_CREATE_EVENT_TOOL as CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::DIRECT_CALENDAR_LIST_EVENTS_TOOL as CALENDAR_LIST_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_APP_ONLY_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_LIST_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
+use core_test_support::apps_test_server::apps_enabled_builder;
+use core_test_support::apps_test_server::configure_search_capable_apps;
+use core_test_support::apps_test_server::configure_search_capable_model;
+use core_test_support::apps_test_server::recorded_apps_tool_call_by_call_id;
+use core_test_support::apps_test_server::recorded_apps_tool_calls;
+use core_test_support::apps_test_server::search_capable_apps_builder as configured_builder;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -34,9 +45,9 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
-use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -48,11 +59,6 @@ const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "- Calendar: Plan events and manage your calendar.",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
-const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
-const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
-const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
-const SEARCH_CALENDAR_LIST_TOOL: &str = "_list_events";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -111,46 +117,6 @@ fn tool_search_output_has_namespace_child(
     namespace_child_tool(&output, namespace, tool_name).is_some()
 }
 
-fn configure_search_capable_model(config: &mut Config) {
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
-    let model = model_catalog
-        .models
-        .iter_mut()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("gpt-5.4 exists in bundled models.json");
-    config.model = Some("gpt-5.4".to_string());
-    model.supports_search_tool = true;
-    config.model_catalog = Some(model_catalog);
-}
-
-fn configure_search_capable_apps(config: &mut Config, apps_base_url: &str) {
-    config
-        .features
-        .enable(Feature::Apps)
-        .expect("test config should allow feature update");
-    config.chatgpt_base_url = apps_base_url.to_string();
-    configure_search_capable_model(config);
-}
-
-fn configure_apps_without_tool_search(config: &mut Config, apps_base_url: &str) {
-    configure_search_capable_apps(config, apps_base_url);
-    config
-        .features
-        .disable(Feature::ToolSearch)
-        .expect("test config should allow feature update");
-}
-
-fn configure_apps(config: &mut Config, apps_base_url: &str) {
-    configure_search_capable_apps(config, apps_base_url);
-}
-
-fn configured_builder(apps_base_url: String) -> TestCodexBuilder {
-    test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| configure_apps(config, apps_base_url.as_str()))
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -198,7 +164,7 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query for deferred tools."},
-                    "limit": {"type": "number", "description": "Maximum number of tools to return (defaults to 8)."},
+                    "limit": {"type": "number", "description": "Maximum number of tools to return. Defaults to 8."},
                 },
                 "required": ["query"],
                 "additionalProperties": false,
@@ -256,55 +222,81 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_search_disabled_exposes_apps_tools_directly() -> Result<()> {
+async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount_searchable(&server).await?;
-    let mock = mount_sse_once(
+    let apps_server =
+        AppsTestServer::mount_with_app_only_tool(&server, AppsTestToolLoading::Direct).await?;
+    let call_id = "app-only-direct-call";
+    let mock = mount_sse_sequence(
         &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]),
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_APP_ONLY_TOOL,
+                    "{}",
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            configure_apps_without_tool_search(config, apps_server.chatgpt_base_url.as_str())
-        });
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
-
     test.submit_turn_with_approval_and_permission_profile(
-        "list tools",
+        "Try to call the app-only calendar tool.",
         AskForApproval::Never,
         PermissionProfile::Disabled,
     )
     .await?;
 
-    let body = mock.single_request().body_json();
-    let tools = tool_names(&body);
-    assert!(!tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
+    let requests = mock.requests();
     assert!(
         namespace_child_tool(
-            &body,
+            &requests[0].body_json(),
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_CREATE_TOOL
         )
-        .is_some()
+        .is_some(),
+        "visible tool from the app-only tool's connector should be declared"
     );
     assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some()
+        namespace_child_tool(
+            &requests[0].body_json(),
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_APP_ONLY_TOOL
+        )
+        .is_none(),
+        "app-only tool should not be declared to a direct model"
+    );
+    assert!(
+        requests[1]
+            .function_call_output(call_id)
+            .get("output")
+            .and_then(Value::as_str)
+            .is_some_and(|output| output.contains("unsupported call")),
+        "forced app-only direct call should not dispatch"
+    );
+    assert!(
+        recorded_apps_tool_calls(&server).await.is_empty(),
+        "forced app-only direct call should not reach the MCP server"
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
+async fn app_search_sources_are_hidden_for_api_key_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -321,7 +313,9 @@ async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
-        .with_config(move |config| configure_apps(config, apps_server.chatgpt_base_url.as_str()));
+        .with_config(move |config| {
+            configure_search_capable_apps(config, apps_server.chatgpt_base_url.as_str())
+        });
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -334,8 +328,13 @@ async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        !tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "tools list should not include {TOOL_SEARCH_TOOL_NAME} for API key auth: {tools:?}"
+        !tools.iter().any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "tools list should not include app tools for API key auth: {tools:?}"
+    );
+    let description = tool_search_description(&body).unwrap_or_default();
+    assert!(
+        !description.contains("Calendar"),
+        "tool_search description should not include app sources for API key auth: {description}"
     );
 
     Ok(())
@@ -420,7 +419,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> {
+async fn explicit_app_mentions_respect_always_defer() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -435,7 +434,13 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
     )
     .await;
 
-    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config
+                .features
+                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
+                .expect("test config should allow feature update");
+        });
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
@@ -448,17 +453,21 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
+        tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "explicit app mentions should leave app tools deferred when always-defer is active: {tools:?}"
+    );
+    assert!(
         namespace_child_tool(
             &body,
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_CREATE_TOOL
         )
-        .is_some(),
-        "expected explicit app mention to expose create tool, got tools: {tools:?}"
+        .is_none(),
+        "explicit app mentions should not directly expose create tool, got tools: {tools:?}"
     );
     assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some(),
-        "expected explicit app mention to expose list tool, got tools: {tools:?}"
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_none(),
+        "explicit app mentions should not directly expose list tool, got tools: {tools:?}"
     );
 
     Ok(())
@@ -522,6 +531,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -585,18 +596,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     assert_eq!(requests.len(), 3);
     let first_request_body = requests[0].body_json();
 
-    let apps_tool_call = server
-        .received_requests()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|request| {
-            let body: Value = serde_json::from_slice(&request.body).ok()?;
-            (request.url.path() == "/api/codex/apps"
-                && body.get("method").and_then(Value::as_str) == Some("tools/call"))
-            .then_some(body)
-        })
-        .expect("apps tools/call request should be recorded");
+    let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, "calendar-call-1").await;
 
     assert_eq!(
         apps_tool_call.pointer("/params/_meta/_codex_apps"),
@@ -757,6 +757,108 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "tool-search-spawn-agent";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    call_id,
+                    &json!({
+                        "query": "spawn agent",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(configure_search_capable_model);
+    let test = builder.build(&server).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "Find the spawn agent tool",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let first_request_body = requests[0].body_json();
+    let first_request_tools = tool_names(&first_request_body);
+    assert!(
+        first_request_tools
+            .iter()
+            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "first request should advertise tool_search: {first_request_tools:?}"
+    );
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        assert!(
+            !first_request_tools.iter().any(|name| name == tool_name),
+            "v1 multi-agent tools should be hidden before search: {first_request_tools:?}"
+        );
+    }
+    assert!(
+        !first_request_body
+            .to_string()
+            .contains("Only use `spawn_agent` if and only if"),
+        "deferred v1 multi-agent guidance should stay out of initial developer context"
+    );
+
+    let tools = tool_search_output_tools(&requests[1], call_id);
+    assert!(
+        !tools.iter().any(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("function")
+                && tool.get("name").and_then(Value::as_str) == Some("spawn_agent")
+        }),
+        "spawn_agent should be returned as a namespace child, not a flat function: {tools:?}"
+    );
+    assert!(
+        tools.iter().any(|tool| {
+            tool.get("type").and_then(Value::as_str) == Some("namespace")
+                && tool.get("name").and_then(Value::as_str) == Some("multi_agent_v1")
+        }),
+        "expected tool_search to return multi_agent_v1 namespace: {tools:?}"
+    );
+    let output = tool_search_output_item(&requests[1], call_id);
+    let spawn_agent = namespace_child_tool(&output, "multi_agent_v1", "spawn_agent")
+        .unwrap_or_else(|| {
+            panic!("expected tool_search to return multi_agent_v1.spawn_agent: {output:?}")
+        });
+    assert_eq!(
+        spawn_agent.get("defer_loading").and_then(Value::as_bool),
+        Some(true)
+    );
+    let description = spawn_agent
+        .get("description")
+        .and_then(Value::as_str)
+        .expect("spawn_agent description should be present");
+    assert!(description.contains("Only use `spawn_agent` if and only if"));
+    assert!(description.contains("### Designing delegated subtasks"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -843,6 +945,8 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -989,7 +1093,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                         env_vars: Vec::new(),
                         cwd: None,
                     },
-                    experimental_environment: None,
+                    environment_id: "local".to_string(),
                     enabled: true,
                     required: false,
                     disabled_reason: None,
@@ -1011,6 +1115,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                 .expect("test mcp servers should accept any configuration");
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Find the rmcp echo and image tools.",
@@ -1036,13 +1141,13 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
         "non-app MCP tools should be hidden before search in large-search mode: {first_request_tools:?}"
     );
     assert!(
-        !first_request_tools.iter().any(|name| name == "mcp__rmcp__"),
+        !first_request_tools.iter().any(|name| name == "mcp__rmcp"),
         "non-app MCP namespace should be hidden before search in large-search mode: {first_request_tools:?}"
     );
 
     let echo_tools = tool_search_output_tools(&requests[1], echo_call_id);
     let echo_output = json!({ "tools": echo_tools });
-    let rmcp_echo_tool = namespace_child_tool(&echo_output, "mcp__rmcp__", "echo")
+    let rmcp_echo_tool = namespace_child_tool(&echo_output, "mcp__rmcp", "echo")
         .expect("tool_search should return rmcp echo as a namespace child tool");
     assert_eq!(
         rmcp_echo_tool.get("type").and_then(Value::as_str),
@@ -1052,7 +1157,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
     let image_tools = tool_search_output_tools(&requests[1], image_call_id);
     let found_rmcp_image_tool = image_tools
         .iter()
-        .filter(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp__"))
+        .filter(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp"))
         .flat_map(|namespace| namespace.get("tools").and_then(Value::as_array))
         .flatten()
         .any(|tool| tool.get("name").and_then(Value::as_str).is_some());
@@ -1088,7 +1193,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_function_call_with_namespace(tool_call_id, "mcp__rmcp__", "echo", "{}"),
+                ev_function_call_with_namespace(tool_call_id, "mcp__rmcp", "echo", "{}"),
                 ev_completed("resp-2"),
             ]),
             sse(vec![
@@ -1118,7 +1223,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
                         env_vars: Vec::new(),
                         cwd: None,
                     },
-                    experimental_environment: None,
+                    environment_id: "local".to_string(),
                     enabled: true,
                     required: false,
                     disabled_reason: None,
@@ -1140,6 +1245,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
                 .expect("test mcp servers should accept any configuration");
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -1150,6 +1256,8 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -1189,12 +1297,12 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
         "first request should advertise tool_search: {first_request_tools:?}"
     );
     assert!(
-        !first_request_tools.iter().any(|name| name == "mcp__rmcp__"),
+        !first_request_tools.iter().any(|name| name == "mcp__rmcp"),
         "deferred rmcp namespace should not be directly exposed before search: {first_request_tools:?}"
     );
 
     assert!(
-        tool_search_output_has_namespace_child(&requests[1], search_call_id, "mcp__rmcp__", "echo"),
+        tool_search_output_has_namespace_child(&requests[1], search_call_id, "mcp__rmcp", "echo"),
         "tool_search should return the rmcp echo tool"
     );
 
@@ -1264,7 +1372,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                         env_vars: Vec::new(),
                         cwd: None,
                     },
-                    experimental_environment: None,
+                    environment_id: "local".to_string(),
                     enabled: true,
                     required: false,
                     disabled_reason: None,
@@ -1286,6 +1394,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                 .expect("test mcp servers should accept any configuration");
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Find the rmcp echo tool.",
@@ -1300,7 +1409,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
     let tools = tool_search_output_tools(&requests[1], search_call_id);
     let rmcp_namespace = tools
         .iter()
-        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp__"))
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp"))
         .expect("tool_search should return the rmcp namespace");
     assert_eq!(
         rmcp_namespace.get("description").and_then(Value::as_str),
@@ -1469,6 +1578,8 @@ async fn tool_search_matches_dynamic_tools_by_name_description_namespace_and_sch
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
         })
         .await?;
 

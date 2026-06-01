@@ -27,9 +27,6 @@ use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
 use crate::types::WindowsToml;
-use codex_app_server_protocol::ForcedChatgptWorkspaceIds as ApiForcedChatgptWorkspaceIds;
-use codex_app_server_protocol::Tools;
-use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -38,6 +35,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -58,6 +56,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
+use serde_json::Value as JsonValue;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
@@ -88,6 +87,10 @@ const fn default_hide_agent_reasoning() -> Option<bool> {
     Some(false)
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 /// Backward-compatible shape for ChatGPT workspace login restrictions in config.toml.
 #[derive(Serialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
@@ -101,13 +104,6 @@ impl ForcedChatgptWorkspaceIds {
         match self {
             Self::Single(value) => vec![value],
             Self::Multiple(values) => values,
-        }
-    }
-
-    pub fn into_api(self) -> ApiForcedChatgptWorkspaceIds {
-        match self {
-            Self::Single(value) => ApiForcedChatgptWorkspaceIds::Single(value),
-            Self::Multiple(values) => ApiForcedChatgptWorkspaceIds::Multiple(values),
         }
     }
 }
@@ -154,6 +150,10 @@ pub struct ConfigToml {
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
+
+    /// Controls whether the auto-compaction limit applies to the full context or
+    /// only to tokens after the carried prefix in the current compaction window.
+    pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
@@ -295,9 +295,6 @@ pub struct ConfigToml {
     #[schemars(skip)]
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
 
-    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
-    pub zsh_path: Option<AbsolutePathBuf>,
-
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
 
@@ -313,7 +310,8 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`.
     pub sqlite_home: Option<AbsolutePathBuf>,
 
-    /// Directory where Codex writes log files, for example `codex-tui.log`.
+    /// Directory where Codex writes log files. Setting this value explicitly
+    /// also enables the TUI text log in this directory.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
 
@@ -353,11 +351,14 @@ pub struct ConfigToml {
     pub personality: Option<Personality>,
 
     /// Optional explicit service tier request id for new turns (for example
-    /// `priority` or `flex`; legacy `fast` also works).
+    /// `default`, `priority`, or `flex`; legacy `fast` also works).
     pub service_tier: Option<String>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
+    pub apps_mcp_product_sku: Option<String>,
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,
@@ -474,6 +475,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
 
+    /// Opaque desktop settings stored alongside the rest of config.toml.
+    #[serde(default)]
+    pub desktop: Option<HashMap<String, JsonValue>>,
+
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,
 
@@ -485,10 +490,6 @@ pub struct ConfigToml {
     /// See [`crate::types::Notice`] for more details
     pub notice: Option<Notice>,
 
-    /// Legacy, now use features
-    /// Deprecated: ignored. Use `model_instructions_file`.
-    #[schemars(skip)]
-    pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
@@ -541,33 +542,6 @@ pub enum ThreadStoreToml {
 pub struct AutoReviewToml {
     /// Additional policy instructions inserted into the guardian prompt.
     pub policy: Option<String>,
-}
-
-impl From<ConfigToml> for UserSavedConfig {
-    fn from(config_toml: ConfigToml) -> Self {
-        let profiles = config_toml
-            .profiles
-            .into_iter()
-            .map(|(k, v)| (k, v.into()))
-            .collect();
-
-        Self {
-            approval_policy: config_toml.approval_policy,
-            sandbox_mode: config_toml.sandbox_mode,
-            sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            forced_chatgpt_workspace_id: config_toml
-                .forced_chatgpt_workspace_id
-                .map(ForcedChatgptWorkspaceIds::into_api),
-            forced_login_method: config_toml.forced_login_method,
-            model: config_toml.model,
-            model_reasoning_effort: config_toml.model_reasoning_effort,
-            model_reasoning_summary: config_toml.model_reasoning_summary,
-            model_verbosity: config_toml.model_verbosity,
-            tools: config_toml.tools.map(From::from),
-            profile: config_toml.profile,
-            profiles,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -647,6 +621,14 @@ pub struct ToolsToml {
         deserialize_with = "deserialize_optional_web_search_tool_config"
     )]
     pub web_search: Option<WebSearchToolConfig>,
+    pub experimental_request_user_input: Option<ExperimentalRequestUserInput>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ExperimentalRequestUserInput {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -718,14 +700,6 @@ pub struct AgentRoleToml {
 
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
-}
-
-impl From<ToolsToml> for Tools {
-    fn from(tools_toml: ToolsToml) -> Self {
-        Self {
-            web_search: tools_toml.web_search.is_some().then_some(true),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -859,27 +833,6 @@ impl ConfigToml {
 
         None
     }
-
-    pub fn get_config_profile(
-        &self,
-        override_profile: Option<String>,
-    ) -> Result<ConfigProfile, std::io::Error> {
-        let profile = override_profile.or_else(|| self.profile.clone());
-
-        match profile {
-            Some(key) => {
-                if let Some(profile) = self.profiles.get(key.as_str()) {
-                    return Ok(profile.clone());
-                }
-
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("config profile `{key}` not found"),
-                ))
-            }
-            None => Ok(ConfigProfile::default()),
-        }
-    }
 }
 
 /// Canonicalize the path and convert it to a string to be used as a key in the
@@ -920,7 +873,7 @@ fn project_config_for_lookup_key(
         .iter()
         .filter(|(key, _)| normalize_project_lookup_key((*key).clone()) == lookup_key)
         .collect();
-    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches.sort_by_key(|(key, _)| *key);
     normalized_matches
         .first()
         .map(|(_, project_config)| (**project_config).clone())

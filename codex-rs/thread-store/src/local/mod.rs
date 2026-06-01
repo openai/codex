@@ -4,6 +4,7 @@ mod helpers;
 mod list_threads;
 mod live_writer;
 mod read_thread;
+mod search_threads;
 mod thread_artifacts;
 mod unarchive_thread;
 mod update_thread_metadata;
@@ -31,10 +32,12 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadArtifact;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
+use crate::ThreadSearchPage;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -277,6 +280,13 @@ impl ThreadStore for LocalThreadStore {
         params: CreateThreadArtifactParams,
     ) -> ThreadStoreResult<StoredThreadArtifact> {
         thread_artifacts::create_thread_artifact(self, params).await
+    }
+
+    async fn search_threads(
+        &self,
+        params: SearchThreadsParams,
+    ) -> ThreadStoreResult<ThreadSearchPage> {
+        search_threads::search_threads(self, params).await
     }
 
     async fn update_thread_metadata(
@@ -1031,6 +1041,7 @@ mod tests {
         CreateThreadParams {
             thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             source: SessionSource::Exec,
             thread_source: None,
             base_instructions: BaseInstructions::default(),
@@ -1050,10 +1061,12 @@ mod tests {
 
     fn user_message_item(message: &str) -> RolloutItem {
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: message.to_string(),
             images: None,
             local_images: Vec::new(),
             text_elements: Vec::new(),
+            ..Default::default()
         }))
     }
 

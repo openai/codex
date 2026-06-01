@@ -16,6 +16,7 @@ workspace = true
 async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-git-utils = { workspace = true }
+codex-install-context = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
 codex-state = { workspace = true }

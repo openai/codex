@@ -209,20 +209,6 @@ pub struct UserSavedConfig {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub tools: Option<Tools>,
-    pub profile: Option<String>,
-    pub profiles: HashMap<String, Profile>,
-}
-
-#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct Profile {
-    pub model: Option<String>,
-    pub model_provider: Option<String>,
-    pub approval_policy: Option<AskForApproval>,
-    pub model_reasoning_effort: Option<ReasoningEffort>,
-    pub model_reasoning_summary: Option<ReasoningSummary>,
-    pub model_verbosity: Option<Verbosity>,
-    pub chatgpt_base_url: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]

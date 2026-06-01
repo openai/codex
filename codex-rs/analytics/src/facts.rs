@@ -199,6 +199,7 @@ pub struct AppInvocation {
 
 #[derive(Clone)]
 pub struct SubAgentThreadStartedInput {
+    pub session_id: String,
     pub thread_id: String,
     pub parent_thread_id: Option<String>,
     pub product_client_id: String,
@@ -229,6 +230,7 @@ pub enum CompactionReason {
 #[serde(rename_all = "snake_case")]
 pub enum CompactionImplementation {
     Responses,
+    ResponsesCompactionV2,
     ResponsesCompact,
 }
 

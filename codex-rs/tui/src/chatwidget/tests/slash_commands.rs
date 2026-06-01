@@ -15,6 +15,18 @@ fn force_tmux_pet_image_unsupported(chat: &mut ChatWidget) {
     ));
 }
 
+fn force_terminal_pet_image_unsupported(chat: &mut ChatWidget) {
+    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
+        crate::pets::PetImageUnsupportedReason::Terminal,
+    ));
+}
+
+fn force_old_iterm2_pet_image_unsupported(chat: &mut ChatWidget) {
+    chat.set_pet_image_support_for_tests(crate::pets::PetImageSupport::Unsupported(
+        crate::pets::PetImageUnsupportedReason::Iterm2TooOld,
+    ));
+}
+
 fn fast_tier_command() -> ServiceTierCommand {
     ServiceTierCommand {
         id: ServiceTier::Fast.request_value().to_string(),
@@ -79,8 +91,19 @@ fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEv
 async fn service_tier_commands_lowercase_catalog_names() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     let mut preset = get_available_model(&chat, "gpt-5.4");
-    let expected_description = preset.service_tiers[0].description.clone();
-    preset.service_tiers[0].name = "Fast".to_string();
+    let expected_description = preset
+        .service_tiers
+        .iter()
+        .find(|tier| tier.id == ServiceTier::Fast.request_value())
+        .expect("fast tier")
+        .description
+        .clone();
+    preset
+        .service_tiers
+        .iter_mut()
+        .find(|tier| tier.id == ServiceTier::Fast.request_value())
+        .expect("fast tier")
+        .name = "Fast".to_string();
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
 
     assert_eq!(
@@ -633,6 +656,7 @@ async fn goal_slash_command_uses_plain_text_for_mentions() {
         Vec::new(),
         Vec::new(),
         vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: "app://figma".to_string(),
         }],
@@ -894,6 +918,7 @@ fn merged_history_record_preserves_raw_text_and_rebased_elements() {
         remote_image_urls: Vec::new(),
         text_elements: vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
         mention_bindings: vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: "app://figma".to_string(),
         }],
@@ -1011,6 +1036,7 @@ async fn interrupted_merged_message_history_encodes_mentions_once() {
         Vec::new(),
         Vec::new(),
         vec![MentionBinding {
+            sigil: '$',
             mention: "figma".to_string(),
             path: "app://figma".to_string(),
         }],
@@ -1702,6 +1728,27 @@ async fn slash_clear_is_disabled_while_task_running() {
 }
 
 #[tokio::test]
+async fn slash_archive_is_disabled_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.dispatch_command(SlashCommand::Archive);
+
+    let event = rx.try_recv().expect("expected disabled command error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(
+                rendered.contains("'/archive' is disabled while a task is in progress."),
+                "expected /archive task-running error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+}
+
+#[tokio::test]
 async fn slash_memory_drop_reports_stubbed_feature() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1724,6 +1771,8 @@ async fn slash_memory_drop_reports_stubbed_feature() {
 #[tokio::test]
 async fn slash_mcp_requests_inventory_via_app_server() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
 
     chat.dispatch_command(SlashCommand::Mcp);
 
@@ -1731,8 +1780,9 @@ async fn slash_mcp_requests_inventory_via_app_server() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::FetchMcpInventory {
-            detail: McpServerStatusDetail::ToolsAndAuthOnly
-        })
+            detail: McpServerStatusDetail::ToolsAndAuthOnly,
+            thread_id: Some(actual_thread_id)
+        }) if actual_thread_id == thread_id
     );
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
@@ -1740,6 +1790,8 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 #[tokio::test]
 async fn slash_mcp_verbose_requests_full_inventory_via_app_server() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
 
     submit_composer_text(&mut chat, "/mcp verbose");
 
@@ -1747,8 +1799,9 @@ async fn slash_mcp_verbose_requests_full_inventory_via_app_server() {
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::FetchMcpInventory {
-            detail: McpServerStatusDetail::Full
-        })
+            detail: McpServerStatusDetail::Full,
+            thread_id: Some(actual_thread_id)
+        }) if actual_thread_id == thread_id
     );
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
@@ -1812,6 +1865,24 @@ async fn slash_resume_opens_picker() {
     chat.dispatch_command(SlashCommand::Resume);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_archive_confirmation_requests_current_thread_archive() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Archive);
+
+    assert!(chat.bottom_pane.has_active_view());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("slash_archive_confirmation_popup", popup);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ArchiveCurrentThread));
 }
 
 #[tokio::test]
@@ -1932,6 +2003,44 @@ async fn slash_pets_with_arg_on_unsupported_terminal_warns_without_selection() {
     assert!(rendered.contains("Pets are disabled in tmux."));
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+#[serial]
+async fn slash_pets_on_unsupported_terminal_shows_terminal_warning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    force_terminal_pet_image_unsupported(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Pets);
+
+    assert!(!chat.bottom_pane.has_active_view());
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Pets aren’t available in this terminal."));
+    assert!(rendered.contains("Kitty graphics or Sixel support"));
+}
+
+#[tokio::test]
+#[serial]
+async fn slash_pets_on_old_iterm2_shows_upgrade_warning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    force_old_iterm2_pet_image_unsupported(&mut chat);
+
+    chat.dispatch_command(SlashCommand::Pets);
+
+    assert!(!chat.bottom_pane.has_active_view());
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Pets require iTerm2 3.6 or newer."));
+    assert!(rendered.contains("Upgrade iTerm2 to use terminal pets."));
 }
 
 #[tokio::test]
@@ -2086,6 +2195,47 @@ async fn user_turn_carries_service_tier_after_fast_toggle() {
 }
 
 #[tokio::test]
+async fn model_switch_recomputes_catalog_default_service_tier() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+    set_fast_mode_test_catalog(&mut chat);
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+
+    let mut models = chat.model_catalog.try_list_models().expect("test catalog");
+    let default_model = models
+        .iter_mut()
+        .find(|model| model.model == "gpt-5.4")
+        .expect("gpt-5.4 test model");
+    default_model.default_service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(models));
+    chat.refresh_effective_service_tier();
+
+    assert_eq!(chat.current_service_tier(), None);
+
+    chat.set_model("gpt-5.4");
+    assert_eq!(
+        chat.current_service_tier(),
+        Some(ServiceTier::Fast.request_value())
+    );
+
+    chat.set_model("gpt-5.3-codex");
+    assert_eq!(chat.current_service_tier(), None);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            service_tier: Some(Some(service_tier)),
+            ..
+        } if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE => {}
+        other => panic!("expected Op::UserTurn with default service tier override, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn queued_fast_slash_applies_before_next_queued_message() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -2144,18 +2294,20 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
         events.iter().any(|event| matches!(
             event,
             AppEvent::CodexOp(Op::OverrideTurnContext {
-                service_tier: Some(None),
+                service_tier: Some(Some(service_tier)),
                 ..
-            })
+            }) if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
         )),
-        "expected fast-mode off override app event; events: {events:?}"
+        "expected fast-mode off default service tier app event; events: {events:?}"
     );
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::PersistServiceTierSelection { service_tier: None }
+            AppEvent::PersistServiceTierSelection {
+                service_tier: Some(service_tier)
+            } if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE
         )),
-        "expected fast-mode opt-out persistence app event; events: {events:?}"
+        "expected default service tier persistence app event; events: {events:?}"
     );
 
     chat.bottom_pane
@@ -2164,10 +2316,10 @@ async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            service_tier: Some(None),
+            service_tier: Some(Some(service_tier)),
             ..
-        } => {}
-        other => panic!("expected Op::UserTurn with standard service tier override, got {other:?}"),
+        } if service_tier == SERVICE_TIER_DEFAULT_REQUEST_VALUE => {}
+        other => panic!("expected Op::UserTurn with default service tier override, got {other:?}"),
     }
 }
 

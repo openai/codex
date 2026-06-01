@@ -46,6 +46,7 @@ pub(crate) async fn maybe_run_startup_hooks_review(
     app_server: &mut AppServerSession,
     tui: &mut Tui,
     config: &Config,
+    bypass_hook_trust: bool,
 ) -> Result<StartupHooksReviewOutcome> {
     let cwd = config.cwd.to_path_buf();
     let response = match fetch_hooks_list(app_server.request_handle(), cwd.clone()).await {
@@ -56,7 +57,7 @@ pub(crate) async fn maybe_run_startup_hooks_review(
         }
     };
     let entry = hooks_list_entry_for_cwd(response, &cwd);
-    if review_needed_count(&entry) == 0 {
+    if !review_is_needed(bypass_hook_trust, &entry) {
         return Ok(StartupHooksReviewOutcome::Continue);
     }
 
@@ -223,6 +224,10 @@ fn review_needed_count(entry: &HooksListEntry) -> usize {
         .count()
 }
 
+fn review_is_needed(bypass_hook_trust: bool, entry: &HooksListEntry) -> bool {
+    !bypass_hook_trust && review_needed_count(entry) > 0
+}
+
 fn selection_item(name: &str, is_disabled: bool) -> SelectionItem {
     SelectionItem {
         name: name.to_string(),
@@ -259,6 +264,7 @@ impl WidgetRef for &StandaloneSelectionView<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::review_is_needed;
     use super::selection_view;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
@@ -331,6 +337,16 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn bypass_hook_trust_suppresses_startup_review() {
+        assert!(!review_is_needed(/*bypass_hook_trust*/ true, &entry()));
+    }
+
+    #[test]
+    fn untrusted_hooks_need_review_without_bypass() {
+        assert!(review_is_needed(/*bypass_hook_trust*/ false, &entry()));
     }
 
     #[test]

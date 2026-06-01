@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -13,7 +13,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 pub(super) fn ensure_codex_app_runtime_bin_readable(
     sandbox_group_psid: *mut c_void,
     refresh_errors: &mut Vec<String>,
-    log: &mut File,
+    log: &mut dyn Write,
 ) -> Result<()> {
     let local_app_data = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)

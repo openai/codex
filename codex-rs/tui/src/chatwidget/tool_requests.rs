@@ -7,6 +7,7 @@ use super::*;
 
 impl ChatWidget {
     pub(super) fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
+        self.record_visible_turn_activity();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_exec_approval(ev),
@@ -19,6 +20,7 @@ impl ChatWidget {
         _id: String,
         ev: ApplyPatchApprovalRequestEvent,
     ) {
+        self.record_visible_turn_activity();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_apply_patch_approval(ev),
@@ -256,6 +258,7 @@ impl ChatWidget {
         request_id: AppServerRequestId,
         params: McpServerElicitationRequestParams,
     ) {
+        self.record_visible_turn_activity();
         let request_id2 = request_id.clone();
         let params2 = params.clone();
         self.defer_or_handle(
@@ -265,6 +268,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_request_user_input(&mut self, ev: ToolRequestUserInputParams) {
+        self.record_visible_turn_activity();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_user_input(ev),
@@ -273,6 +277,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
+        self.record_visible_turn_activity();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_request_permissions(ev),
@@ -341,7 +346,8 @@ impl ChatWidget {
             server_name: params.server_name.clone(),
         });
 
-        let thread_id = self.thread_id.unwrap_or_default();
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .unwrap_or_else(|_| self.thread_id.unwrap_or_default());
         if let Some(params) = crate::bottom_pane::AppLinkViewParams::from_url_app_server_request(
             thread_id,
             &params.server_name,

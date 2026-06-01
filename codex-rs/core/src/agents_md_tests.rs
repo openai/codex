@@ -7,12 +7,14 @@ use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 async fn get_user_instructions(config: &Config) -> Option<String> {
+    let mut warnings = Vec::new();
     AgentsMdManager::new(config)
-        .user_instructions_with_fs(LOCAL_FS.as_ref())
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
 }
 
@@ -20,6 +22,19 @@ async fn agents_md_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf
     AgentsMdManager::new(config)
         .agents_md_paths(LOCAL_FS.as_ref())
         .await
+}
+
+fn assert_invalid_utf8_warning(warnings: &[String], source: &str, path: &Path) {
+    let path_display = path.display().to_string();
+    assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+    let warning = &warnings[0];
+    assert!(
+        warning.contains(&format!("{source} AGENTS.md instructions"))
+            && warning.contains(&path_display)
+            && warning.contains("invalid UTF-8")
+            && warning.contains("Invalid byte sequences were replaced."),
+        "unexpected invalid UTF-8 warning: {warning:?}"
+    );
 }
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
@@ -105,8 +120,9 @@ async fn no_environment_returns_none() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
 
+    let mut warnings = Vec::new();
     let res = AgentsMdManager::new(&config)
-        .user_instructions(/*environment*/ None)
+        .user_instructions(/*environment*/ None, &mut warnings)
         .await;
 
     assert_eq!(res, None);
@@ -127,6 +143,45 @@ async fn doc_smaller_than_limit_is_returned() {
         res, "hello world",
         "The document should be returned verbatim when it is smaller than the limit and there are no existing instructions"
     );
+}
+
+#[tokio::test]
+async fn global_doc_invalid_utf8_warns_and_uses_lossy_text() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let codex_home_abs = codex_home.abs();
+    let path = codex_home_abs.join(DEFAULT_AGENTS_MD_FILENAME);
+    fs::write(&path, b"global\xFF doc").unwrap();
+
+    let mut warnings = Vec::new();
+    let loaded = AgentsMdManager::load_global_instructions(
+        LOCAL_FS.as_ref(),
+        Some(&codex_home_abs),
+        &mut warnings,
+    )
+    .await
+    .expect("global doc expected");
+
+    assert_eq!(loaded.contents, "global\u{FFFD} doc");
+    assert_eq!(loaded.path, path);
+    assert_invalid_utf8_warning(&warnings, "Global", path.as_path());
+}
+
+#[tokio::test]
+async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("AGENTS.md");
+    fs::write(&path, b"project\xFF doc").unwrap();
+
+    let config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    let mut warnings = Vec::new();
+    let res = AgentsMdManager::new(&config)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+        .await
+        .expect("doc expected");
+
+    assert_eq!(res, "project\u{FFFD} doc");
+    let canonical_path = dunce::canonicalize(&path).expect("canonical doc path");
+    assert_invalid_utf8_warning(&warnings, "Project", &canonical_path);
 }
 
 /// Oversize file is truncated to `project_doc_max_bytes`.

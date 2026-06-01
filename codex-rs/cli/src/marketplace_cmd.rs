@@ -6,14 +6,15 @@ use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core_plugins::PluginsManager;
-use codex_core_plugins::installed_marketplaces::marketplace_install_root;
-use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
+use codex_core_plugins::marketplace::marketplace_root_dir;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest;
 use codex_core_plugins::marketplace_remove::remove_marketplace;
-use codex_plugin::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
+use std::collections::HashSet;
+
+use crate::plugin_cmd::configured_marketplace_snapshot_issues;
 
 #[derive(Debug, Parser)]
 #[command(bin_name = "codex plugin marketplace")]
@@ -30,7 +31,7 @@ enum MarketplaceSubcommand {
     /// Add a local or Git marketplace to the configured marketplace sources.
     Add(AddMarketplaceArgs),
 
-    /// List configured marketplace names and their local snapshot roots.
+    /// List plugin marketplaces Codex is currently considering and their roots.
     List,
 
     /// Refresh configured Git marketplace snapshots.
@@ -150,39 +151,77 @@ async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
     let config = Config::load_with_cli_overrides(overrides)
         .await
         .context("failed to load configuration")?;
-    let configured_marketplaces = config
-        .config_layer_stack
-        .get_active_user_layer()
-        .and_then(|layer| layer.config.get("marketplaces"))
-        .and_then(toml::Value::as_table);
-    let Some(configured_marketplaces) = configured_marketplaces else {
-        println!("No configured plugin marketplaces.");
-        return Ok(());
-    };
-
-    if configured_marketplaces.is_empty() {
-        println!("No configured plugin marketplaces.");
+    let manager = PluginsManager::new(config.codex_home.to_path_buf());
+    let plugins_input = config.plugins_config_input();
+    let marketplace_listing = manager
+        .discover_marketplaces_for_config(&plugins_input, &[])
+        .context("failed to list plugin marketplaces")?;
+    let mut load_issues = configured_marketplace_snapshot_issues(
+        config.codex_home.as_path(),
+        &plugins_input,
+        &marketplace_listing.errors,
+        /*marketplace_name*/ None,
+    );
+    let mut issue_paths = load_issues
+        .iter()
+        .map(|issue| issue.path.clone())
+        .collect::<HashSet<_>>();
+    for error in &marketplace_listing.errors {
+        if issue_paths.insert(error.path.to_path_buf()) {
+            load_issues.push(crate::plugin_cmd::ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: error.path.display().to_string(),
+                path: error.path.to_path_buf(),
+                message: error.message.clone(),
+            });
+        }
+    }
+    if !load_issues.is_empty() {
+        let issue_lines = load_issues
+            .iter()
+            .map(|issue| {
+                format!(
+                    "- `{}` at {}: {}",
+                    issue.marketplace_name,
+                    issue.path.display(),
+                    issue.message
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!("failed to load marketplace(s):\n{issue_lines}");
+    }
+    let marketplaces = marketplace_listing.marketplaces;
+    if marketplaces.is_empty() {
+        println!("No plugin marketplaces in scope.");
         return Ok(());
     }
 
-    let default_install_root = marketplace_install_root(config.codex_home.as_path());
-    for (marketplace_name, marketplace) in configured_marketplaces {
-        if !marketplace.is_table() {
-            eprintln!("Ignoring invalid marketplace `{marketplace_name}`: expected table.");
+    let mut seen_roots = HashSet::new();
+    let mut rows = Vec::new();
+    for marketplace in marketplaces {
+        let Ok(root) = marketplace_root_dir(&marketplace.path) else {
+            continue;
+        };
+        if !seen_roots.insert(root.clone()) {
             continue;
         }
-        if let Err(err) = validate_plugin_segment(marketplace_name, "marketplace name") {
-            eprintln!("Ignoring invalid marketplace `{marketplace_name}`: {err}.");
-            continue;
-        }
-        let root = resolve_configured_marketplace_root(
+        rows.push((marketplace.name, root));
+    }
+
+    let marketplace_width = rows
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or("MARKETPLACE".len())
+        .max("MARKETPLACE".len());
+
+    println!("{:<marketplace_width$}  ROOT", "MARKETPLACE");
+    for (marketplace_name, root) in rows {
+        println!(
+            "{:<marketplace_width$}  {}",
             marketplace_name,
-            marketplace,
-            default_install_root.as_path(),
-        )
-        .map(|root| root.display().to_string())
-        .unwrap_or_else(|| "<invalid source>".to_string());
-        println!("{marketplace_name}\t{root}");
+            root.display()
+        );
     }
 
     Ok(())

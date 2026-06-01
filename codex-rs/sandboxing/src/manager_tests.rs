@@ -183,7 +183,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             path: FileSystemPath::Path {
                 path: denied_path.clone(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permissions = PermissionProfile::from_runtime_permissions(
@@ -228,7 +228,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: denied_path },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: allowed_path },

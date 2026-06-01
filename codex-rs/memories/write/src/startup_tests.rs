@@ -27,6 +27,21 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 
 #[tokio::test]
+async fn memories_startup_creates_memory_root() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let memory_root = home.path().join("memories");
+    let test = build_test_codex(&server, home).await?;
+
+    assert!(!memory_root.exists());
+    trigger_memories_startup(&test).await;
+    wait_for_dir(&memory_root).await?;
+
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
@@ -190,7 +205,8 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
-    db.enqueue_global_consolidation(/*input_watermark*/ 1)
+    db.memories()
+        .enqueue_global_consolidation(/*input_watermark*/ 1)
         .await?;
 
     let now = chrono::Utc::now();
@@ -236,28 +252,22 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
 }
 
 #[tokio::test]
-async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Result<()> {
+async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_metadata()
+-> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let test = build_test_codex(&server, home).await?;
     assert_eq!(test.config.service_tier, None);
+    reset_git_repository(&test.config.cwd).await?;
 
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: None,
-            sandbox_policy: None,
-            permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        codex_protocol::protocol::ThreadSettingsOverrides {
             service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
+            ..Default::default()
+        },
+    )
+    .await?;
 
     let config_snapshot =
         wait_for_service_tier(&test, Some(ServiceTier::Fast.request_value().to_string())).await?;
@@ -285,6 +295,35 @@ async fn memories_startup_phase1_uses_live_thread_service_tier() -> anyhow::Resu
         request_context.service_tier,
         Some(ServiceTier::Fast.request_value().to_string())
     );
+
+    let stage_one = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-phase1"),
+            ev_assistant_message("msg-phase1", "phase1 complete"),
+            ev_completed("resp-phase1"),
+        ]),
+    )
+    .await;
+    context
+        .stream_stage_one_prompt(
+            &test.config,
+            &codex_core::Prompt::default(),
+            &request_context,
+        )
+        .await?;
+    let request = wait_for_single_request(&stage_one).await;
+    let metadata_header = request
+        .header("x-codex-turn-metadata")
+        .expect("detached memory request should include workspace metadata");
+    let metadata: serde_json::Value =
+        serde_json::from_str(&metadata_header).expect("turn metadata json");
+    assert_eq!(metadata["request_kind"].as_str(), Some("memory"));
+    assert!(metadata.get("session_id").is_none());
+    assert!(metadata.get("thread_id").is_none());
+    assert!(metadata.get("turn_id").is_none());
+    assert!(metadata.get("window_id").is_none());
+    assert!(metadata.get("workspaces").is_some());
 
     shutdown_test_codex(&test).await?;
     Ok(())
@@ -384,6 +423,21 @@ async fn wait_for_file_removed(path: &Path) -> anyhow::Result<()> {
     }
 }
 
+async fn wait_for_dir(path: &Path) -> anyhow::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if tokio::fs::try_exists(path).await? && path.is_dir() {
+            return Ok(());
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {} to be created",
+            path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn wait_for_request(mock: &ResponseMock, expected_count: usize) -> Vec<ResponsesRequest> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -453,6 +507,7 @@ async fn seed_stage1_output_for_existing_thread(
 ) -> anyhow::Result<()> {
     let owner = ThreadId::new();
     let claim = db
+        .memories()
         .try_claim_stage1_job(
             thread_id, owner, updated_at, /*lease_seconds*/ 3_600,
             /*max_running_jobs*/ 64,
@@ -464,15 +519,16 @@ async fn seed_stage1_output_for_existing_thread(
     };
 
     assert!(
-        db.mark_stage1_job_succeeded(
-            thread_id,
-            &ownership_token,
-            updated_at,
-            raw_memory,
-            rollout_summary,
-            rollout_slug,
-        )
-        .await?,
+        db.memories()
+            .mark_stage1_job_succeeded(
+                thread_id,
+                &ownership_token,
+                updated_at,
+                raw_memory,
+                rollout_summary,
+                rollout_slug,
+            )
+            .await?,
         "stage-1 success should enqueue global consolidation"
     );
 
