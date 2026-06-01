@@ -10,6 +10,8 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::context_manager::is_codex_generated_item;
+use crate::context_manager::is_user_turn_boundary;
+use crate::event_mapping::is_contextual_user_message_content;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -372,14 +374,179 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
         let Some(last_item) = history.raw_items().last() else {
             break;
         };
-        if !is_codex_generated_item(last_item) {
+        if is_codex_generated_item(last_item) {
+            if !history.remove_last_item() {
+                break;
+            }
+            deleted_items += 1;
+            continue;
+        }
+
+        let Some(chunk_start) = last_runtime_owned_continuation_chunk_start(history.raw_items())
+        else {
+            break;
+        };
+        let removed_items = history.raw_items().len().saturating_sub(chunk_start);
+        if removed_items == 0 {
             break;
         }
-        if !history.remove_last_item() {
-            break;
-        }
-        deleted_items += 1;
+        history.replace(history.raw_items()[..chunk_start].to_vec());
+        deleted_items += removed_items;
     }
 
     deleted_items
+}
+
+fn last_runtime_owned_continuation_chunk_start(items: &[ResponseItem]) -> Option<usize> {
+    let search_start = items
+        .iter()
+        .rposition(is_user_turn_boundary)
+        .map(|idx| idx.saturating_add(1))?;
+
+    if search_start >= items.len() {
+        return None;
+    }
+
+    let mut saw_non_contextual_after = false;
+    for idx in (search_start..items.len()).rev() {
+        if is_contextual_user_item(&items[idx]) {
+            if saw_non_contextual_after {
+                return Some(idx);
+            }
+        } else {
+            saw_non_contextual_after = true;
+        }
+    }
+
+    let trailing_contextual_start = items[search_start..]
+        .iter()
+        .rposition(|item| !is_contextual_user_item(item))
+        .map(|idx| search_start + idx + 1)
+        .unwrap_or(search_start);
+
+    (trailing_contextual_start < items.len()).then_some(trailing_contextual_start)
+}
+
+fn is_contextual_user_item(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::Message { role, content, .. }
+            if role == "user" && is_contextual_user_message_content(content)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::ContextualUserFragment;
+    use crate::context::GoalContext;
+    use crate::context::TurnAborted;
+    use crate::session::tests::make_session_and_context;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::protocol::TruncationPolicy;
+    use pretty_assertions::assert_eq;
+
+    fn assistant_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            phase: None,
+        }
+    }
+
+    fn user_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            phase: None,
+        }
+    }
+
+    fn function_call(call_id: &str) -> ResponseItem {
+        ResponseItem::FunctionCall {
+            id: None,
+            call_id: call_id.to_string(),
+            name: "update_plan".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+        }
+    }
+
+    fn function_call_output(call_id: &str, text: &str) -> ResponseItem {
+        ResponseItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output: FunctionCallOutputPayload::from_text(text.to_string()),
+        }
+    }
+
+    fn create_history(items: Vec<ResponseItem>) -> ContextManager {
+        let mut history = ContextManager::new();
+        history.record_items(items.iter(), TruncationPolicy::Tokens(100_000));
+        history
+    }
+
+    #[tokio::test]
+    async fn trim_history_drops_runtime_owned_continuation_chunk() {
+        let base_instructions = BaseInstructions {
+            text: String::new(),
+        };
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.model_info.context_window = Some(32);
+        turn_context.model_info.effective_context_window_percent = 100;
+
+        let retained_prefix = vec![
+            user_message("real user request"),
+            assistant_message("reply before goal continuation"),
+        ];
+        let trimmed_chunk = vec![
+            ContextualUserFragment::into(GoalContext::new(
+                "Continue working toward the active thread goal.",
+            )),
+            assistant_message("goal follow-up"),
+            function_call("call-1"),
+            function_call_output("call-1", "plan updated"),
+            ContextualUserFragment::into(TurnAborted::new(TurnAborted::INTERRUPTED_GUIDANCE)),
+        ];
+        let mut history = create_history(
+            retained_prefix
+                .iter()
+                .chain(trimmed_chunk.iter())
+                .cloned()
+                .collect(),
+        );
+
+        let deleted_items = trim_function_call_history_to_fit_context_window(
+            &mut history,
+            &turn_context,
+            &base_instructions,
+        );
+
+        assert_eq!(deleted_items, trimmed_chunk.len());
+        assert_eq!(history.raw_items(), retained_prefix);
+        drop(session);
+    }
+
+    #[test]
+    fn continuation_chunk_start_prefers_contextual_anchor_before_runtime_suffix() {
+        let items = vec![
+            user_message("real user request"),
+            assistant_message("reply before goal continuation"),
+            ContextualUserFragment::into(GoalContext::new(
+                "Continue working toward the active thread goal.",
+            )),
+            assistant_message("goal follow-up"),
+            function_call("call-1"),
+            function_call_output("call-1", "plan updated"),
+            ContextualUserFragment::into(TurnAborted::new(TurnAborted::INTERRUPTED_GUIDANCE)),
+        ];
+
+        assert_eq!(last_runtime_owned_continuation_chunk_start(&items), Some(2));
+    }
 }
